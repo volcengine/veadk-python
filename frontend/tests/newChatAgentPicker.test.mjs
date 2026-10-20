@@ -52,15 +52,24 @@ test("keeps message actions disabled while leaving the Agent picker available", 
 });
 
 test("renders a two-level Agent type and runtime menu", () => {
-  assert.match(pickerSource, /label: "通用智能体"/);
-  assert.match(pickerSource, /label: "Codex 智能体"/);
-  assert.match(pickerSource, /label: "DeepSeek Harness"/);
-  assert.match(pickerSource, /label: "OpenClaw 智能体"/);
-  assert.match(pickerSource, /label: "Hermes 智能体"/);
-  assert.match(pickerSource, /aria-label="智能体类型"/);
-  assert.match(pickerSource, /aria-label=\{`\$\{activeTypeLabel\}列表`\}/);
-  assert.match(pickerSource, /getRuntimes\(\{[\s\S]*?region: "all"[\s\S]*?pageSize: PAGE_SIZE/);
+  assert.match(pickerSource, /labelKey: "agentPicker\.types\.general"/);
+  assert.match(pickerSource, /labelKey: "agentPicker\.types\.mpa"/);
+  assert.match(pickerSource, /labelKey: "agentPicker\.types\.codex"/);
+  assert.match(pickerSource, /labelKey: "agentPicker\.types\.deepseekHarness"/);
+  assert.match(pickerSource, /labelKey: "agentPicker\.types\.openclaw"/);
+  assert.match(pickerSource, /labelKey: "agentPicker\.types\.hermes"/);
+  assert.match(pickerSource, /aria-label=\{t\("agentPicker\.typesLabel"\)\}/);
+  assert.match(pickerSource, /aria-label=\{t\("agentPicker\.listLabel", \{ type: activeTypeLabel \}\)\}/);
+  assert.match(pickerSource, /getRuntimes\(\{[\s\S]*?agentCategory: activeType === "mpa" \? "mpa" : "general"[\s\S]*?region: "all"[\s\S]*?pageSize: PAGE_SIZE/);
+  assert.match(pickerSource, /const \[loadedRuntimeType, setLoadedRuntimeType\] = useState<"general" \| "mpa" \| null>\(null\)/);
+  assert.match(pickerSource, /setLoadedRuntimeType\(activeType === "mpa" \? "mpa" : "general"\)/);
+  assert.match(pickerSource, /loadedRuntimeType === activeType/);
   assert.match(pickerSource, /onSelectRuntime\(runtime\)/);
+  assert.match(appSource, /onSelectRuntime=\{async \(runtime\) => \{[\s\S]*?agentCategory: runtime\.agentCategory/);
+  assert.match(appSource, /connectRuntime\([\s\S]*?agentCategory: agent\.agentCategory[\s\S]*?mpaInstanceId: agent\.mpaInstanceId/);
+  assert.match(appSource, /mpaInstanceId: runtime\.mpaInstanceId/);
+  assert.doesNotMatch(pickerSource, /runtime\.agentCategory === "mpa"/);
+  assert.doesNotMatch(pickerSource, /runtime\.agentCategory !== "mpa"/);
   assert.match(pickerSource, /sandboxClient\.listSessions/);
   assert.match(pickerSource, /sandboxClient\.listAgentSessions/);
   assert.match(pickerSource, /onSelectSandboxSession\(session\)/);
@@ -69,6 +78,20 @@ test("renders a two-level Agent type and runtime menu", () => {
   assert.doesNotMatch(pickerSource, /暂未开放/);
   assert.match(pickerSource, /disabled/);
   assert.match(pickerStyles, /\.new-chat-agent-picker__submenu/);
+});
+
+test("lists local apps in the general Agent menu when Studio uses local agents", () => {
+  assert.match(pickerSource, /agentsSource\?: "local" \| "cloud"/);
+  assert.match(pickerSource, /localApps\?: string\[\]/);
+  assert.match(pickerSource, /agentsSource === "local" && activeType === "general"/);
+  assert.match(pickerSource, /const showingLocalApps = activeType === "general" && agentsSource === "local"/);
+  assert.doesNotMatch(pickerSource, /agentsSource === "local" \? localApps\.length : visibleRuntimes\.length/);
+  assert.match(pickerSource, /localApps\.map\(\(app, index\) =>/);
+  assert.match(pickerSource, /onSelectLocalApp\(app\)/);
+  assert.match(pickerSource, /t\("agentPicker\.emptyLocal"\)/);
+  assert.match(appSource, /agentsSource=\{agentsSource\}/);
+  assert.match(appSource, /localApps=\{apps\}/);
+  assert.match(appSource, /onSelectLocalApp=\{refreshCurrentAgentAndStartNewChat\}/);
 });
 
 test("keeps the Agent face in menu options but removes it from the compact trigger", () => {
@@ -101,9 +124,9 @@ test("uses compact official empty states without fake actions", () => {
   );
   assert.match(
     pickerSource,
-    /runtimes\.length === 0[\s\S]*?className="new-chat-agent-picker__empty"[\s\S]*?<EmptyMessage\.Icon[\s\S]*?size="sm"[\s\S]*?<AgentFaceIcon[\s\S]*?<EmptyMessage\.Title[^>]*>[\s\S]*?暂无通用智能体[\s\S]*?<\/EmptyMessage\.Title>/,
+    /visibleRuntimes\.length === 0[\s\S]*?className="new-chat-agent-picker__empty"[\s\S]*?<EmptyMessage\.Icon[\s\S]*?size="sm"[\s\S]*?<AgentFaceIcon[\s\S]*?<EmptyMessage\.Title[^>]*>[\s\S]*?agentPicker\.emptyGeneral[\s\S]*?<\/EmptyMessage\.Title>/,
   );
-  assert.match(pickerSource, /sandboxSessions\.length === 0[\s\S]*?暂无 \{activeTypeLabel\}[\s\S]*?请前往智能体页创建/);
+  assert.match(pickerSource, /sandboxSessions\.length === 0[\s\S]*?agentPicker\.empty[\s\S]*?agentPicker\.createHint/);
   assert.match(pickerSource, /sandboxSessions\.map\(\(session, index\) =>/);
   assert.doesNotMatch(pickerSource, /new-chat-agent-picker__empty[\s\S]*?<Button/);
   assert.match(pickerStyles, /\.new-chat-agent-picker__empty\s*\{[\s\S]*?min-height: 116px/);
@@ -111,9 +134,9 @@ test("uses compact official empty states without fake actions", () => {
 
 test("supports recovery, keyboard navigation, and focus return", () => {
   assert.match(pickerSource, /role="alert"/);
-  assert.match(pickerSource, /重新加载/);
-  assert.match(pickerSource, /正在加载智能体/);
-  assert.match(pickerSource, /正在连接/);
+  assert.match(pickerSource, /agentPicker\.reload/);
+  assert.match(pickerSource, /agentPicker\.loading/);
+  assert.match(pickerSource, /agentPicker\.connecting/);
   assert.match(pickerSource, /if \(connectingRuntimeId\) return/);
   assert.match(pickerSource, /event\.key === "ArrowDown"/);
   assert.match(pickerSource, /event\.key === "ArrowUp"/);
@@ -125,7 +148,7 @@ test("supports recovery, keyboard navigation, and focus return", () => {
   assert.match(pickerSource, /requestIdRef\.current/);
   assert.match(pickerSource, /RUNTIME_LOAD_TIMEOUT_MS = 15_000/);
   assert.match(pickerSource, /Promise\.race\(/);
-  assert.match(pickerSource, /window\.setTimeout\([\s\S]*?加载智能体超时/);
+  assert.match(pickerSource, /window\.setTimeout\([\s\S]*?agentPicker\.runtimeTimeout/);
   assert.match(pickerSource, /window\.clearTimeout\(timeoutId\)/);
   const errorBranch = pickerSource.slice(
     pickerSource.indexOf("error && runtimes.length === 0"),
@@ -166,7 +189,7 @@ test("does not open the general Agent list until a type is deliberately chosen",
   );
   assert.match(
     pickerSource,
-    /activeType === null \|\| activeType === "general" \|\| loadedSandboxType === activeType/,
+    /activeType === "general" \|\|[\s\S]*?activeType === "mpa" \|\|[\s\S]*?loadedSandboxType === activeType/,
   );
   assert.match(pickerSource, /if \(activeType === null\) activateType\(activeTypeIndex\)/);
   assert.match(pickerSource, /setKeyboardNavigating\(fromKeyboard\)/);
@@ -185,11 +208,40 @@ test("does not open the general Agent list until a type is deliberately chosen",
 
 test("shows request context and backend detail for every picker error", () => {
   assert.match(requestErrorSource, /export function formatRequestError/);
-  assert.match(requestErrorSource, /`详细信息：\$\{detail\}`/);
-  assert.match(requestErrorSource, /request \? `请求：\$\{request\}` : ""/);
-  assert.match(pickerSource, /formatRequestError\(cause, "加载通用智能体", "GET \/web\/runtimes"\)/);
-  assert.match(pickerSource, /formatRequestError\(cause, `加载 \$\{AGENT_TYPES\.find/);
-  assert.match(pickerSource, /formatRequestError\(cause, "连接通用智能体"\)/);
-  assert.match(pickerSource, /formatRequestError\(cause, `打开 \$\{activeTypeLabel\}`\)/);
+  assert.match(requestErrorSource, /adkT\("requestError\.detail", \{ detail \}\)/);
+  assert.match(requestErrorSource, /adkT\("requestError\.request", \{ request \}\)/);
+  assert.match(pickerSource, /formatRequestError\(cause, t\("agentPicker\.loadGeneral"\), "GET \/web\/runtimes"\)/);
+  assert.match(pickerSource, /t\("agentPicker\.loadType"/);
+  assert.match(pickerSource, /formatRequestError\(cause, t\("agentPicker\.connectGeneral"\)\)/);
+  assert.match(pickerSource, /t\("agentPicker\.openType", \{ type: activeTypeLabel \}\)/);
   assert.match(pickerStyles, /\.new-chat-agent-picker__error > span,[\s\S]*?white-space: pre-wrap/);
+});
+
+test("keeps optional environment storage failures out of Agent selection", () => {
+  assert.match(
+    appSource,
+    /const environmentResults = await Promise\.allSettled\(\[\s*listEnvironments\(controller\.signal\),\s*listWorkspaces\(controller\.signal\),?\s*\]\)/,
+  );
+  assert.match(appSource, /setSessionEnvironmentsError\(environmentErrors\.join/);
+  assert.match(appSource, /isOptionalStudioStorageUnavailable/);
+  assert.doesNotMatch(
+    appSource,
+    /Promise\.all\(\[\s*listEnvironments\(controller\.signal\),\s*listWorkspaces/,
+  );
+});
+
+test("commits a connected Runtime Agent before starting its fresh chat", () => {
+  const start = appSource.indexOf(
+    "const refreshCurrentAgentAndStartNewChat = async (id: string) => {",
+  );
+  const end = appSource.indexOf(
+    "const openIntelligentDeploymentChat",
+    start,
+  );
+  const refreshAgent = appSource.slice(start, end);
+  assert.ok(refreshAgent.includes("setAppName(id)"));
+  assert.ok(
+    refreshAgent.indexOf("startNewChat()") <
+      refreshAgent.indexOf("setAppName(id)"),
+  );
 });

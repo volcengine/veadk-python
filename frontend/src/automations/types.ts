@@ -2,15 +2,26 @@ import type {
   GitHubAutomationRegion,
   GitHubPullRequestResult,
 } from "../adk/githubIntegration";
+import type { CloudProvider } from "../adk/cloudProvider";
 
 export type AutomationId =
   | "template"
   | "delivery"
   | "review"
+  | "gitlab-review"
   | "feishu"
-  | "coding-agents";
+  | "coding-agents"
+  | "website-integration"
+  | "mpa-channels";
 
-export type GitHubAutomationId = Exclude<AutomationId, "feishu" | "coding-agents">;
+export type GitHubAutomationId = Exclude<
+  AutomationId,
+  | "gitlab-review"
+  | "feishu"
+  | "coding-agents"
+  | "website-integration"
+  | "mpa-channels"
+>;
 
 export type AutomationCategoryId = "development" | "channels";
 
@@ -20,7 +31,6 @@ export type AutomationFieldName =
   | "projectPath"
   | "runtimeName"
   | "runtimeId"
-  | "sandboxToolId"
   | "modelName"
   | "modelBaseUrl";
 
@@ -30,7 +40,6 @@ export interface AutomationFormValues {
   projectPath: string;
   runtimeName: string;
   runtimeId: string;
-  sandboxToolId: string;
   modelName: string;
   modelBaseUrl: string;
   region: GitHubAutomationRegion;
@@ -48,11 +57,21 @@ export interface AutomationFieldDefinition {
 export interface AutomationCardDefinition {
   id: AutomationId;
   category: AutomationCategoryId;
-  icon: "github" | "feishu" | "coding-agents";
+  icon:
+    | "github"
+    | "gitlab"
+    | "feishu"
+    | "coding-agents"
+    | "website-integration"
+    | "mpa-channels";
   name: string;
   badge?: string;
   badgeTone?: "default" | "success";
   description: string;
+}
+
+export interface GitHubAutomationContext {
+  cloudProvider: CloudProvider;
 }
 
 export interface GitHubAutomationDefinition extends AutomationCardDefinition {
@@ -63,11 +82,12 @@ export interface GitHubAutomationDefinition extends AutomationCardDefinition {
   panel: string;
   submitLabel: string;
   fields: readonly AutomationFieldDefinition[];
-  initialValues: AutomationFormValues;
+  initialValues: (context: GitHubAutomationContext) => AutomationFormValues;
   regionHelp: string;
-  secrets: readonly string[];
+  secrets: (context: GitHubAutomationContext) => readonly string[];
   submit: (
     values: AutomationFormValues,
+    context: GitHubAutomationContext,
     signal: AbortSignal,
   ) => Promise<GitHubPullRequestResult>;
 }
@@ -77,12 +97,30 @@ export interface FeishuAutomationDefinition extends AutomationCardDefinition {
   kind: "feishu";
 }
 
+export interface GitLabAutomationDefinition extends AutomationCardDefinition {
+  id: "gitlab-review";
+  kind: "gitlab";
+}
+
 export interface CodingAgentAutomationDefinition extends AutomationCardDefinition {
   id: "coding-agents";
   kind: "coding-agent";
 }
 
+export interface WebsiteIntegrationAutomationDefinition extends AutomationCardDefinition {
+  id: "website-integration";
+  kind: "website-integration";
+}
+
+export interface MpaChannelsAutomationDefinition extends AutomationCardDefinition {
+  id: "mpa-channels";
+  kind: "mpa-channels";
+}
+
 export type AutomationDefinition =
   | GitHubAutomationDefinition
+  | GitLabAutomationDefinition
   | FeishuAutomationDefinition
-  | CodingAgentAutomationDefinition;
+  | CodingAgentAutomationDefinition
+  | WebsiteIntegrationAutomationDefinition
+  | MpaChannelsAutomationDefinition;

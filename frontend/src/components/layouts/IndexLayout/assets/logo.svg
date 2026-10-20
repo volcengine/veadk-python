@@ -1,0 +1,15 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="60" height="60" viewBox="0 0 60 60" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Frame 2147240411">
+<g id="Union" opacity="0.6" filter="url(#filter0_f_0_508)">
+<path d="M39.8359 17.377C39.8361 18.7348 40.937 19.8359 42.2949 19.8359H50V29.6963L29.6963 50H18.8525C13.9635 50 10 46.0365 10 41.1475V18.8525C10 13.9635 13.9635 10 18.8525 10H39.8359V17.377ZM50 50H40.1641V40.1641H50V50ZM22.2949 19.8359C20.937 19.836 19.836 20.937 19.8359 22.2949V37.7051C19.836 39.063 20.937 40.164 22.2949 40.1641H37.7051C39.063 40.164 40.164 39.063 40.1641 37.7051V22.2949C40.164 20.937 39.063 19.836 37.7051 19.8359H22.2949Z" fill="white"/>
+</g>
+<path id="Union_2" d="M39.8359 17.377C39.8361 18.7348 40.937 19.8359 42.2949 19.8359H50V29.6963L29.6963 50H18.8525C13.9635 50 10 46.0365 10 41.1475V18.8525C10 13.9635 13.9635 10 18.8525 10H39.8359V17.377ZM50 50H40.1641V40.1641H50V50ZM22.2949 19.8359C20.937 19.836 19.836 20.937 19.8359 22.2949V37.7051C19.836 39.063 20.937 40.164 22.2949 40.1641H37.7051C39.063 40.164 40.164 39.063 40.1641 37.7051V22.2949C40.164 20.937 39.063 19.836 37.7051 19.8359H22.2949Z" fill="white"/>
+</g>
+<defs>
+<filter id="filter0_f_0_508" x="2" y="2" width="56" height="56" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feBlend mode="normal" in="SourceGraphic" in2="BackgroundImageFix" result="shape"/>
+<feGaussianBlur stdDeviation="4" result="effect1_foregroundBlur_0_508"/>
+</filter>
+</defs>
+</svg>

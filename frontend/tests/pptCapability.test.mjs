@@ -12,14 +12,15 @@ const renderer = fs.readFileSync(path.join(root, "src/ui/Blocks.tsx"), "utf8");
 
 test("mounts every selected generation task before its first run", () => {
   assert.match(app, /NEW_CHAT_TASK_TOOLS\[selectedTask\]/);
-  assert.match(app, /sessionCapabilities: runWithSessionCapabilities/);
+  assert.match(app, /platformTools = \[\.\.\.new Set\(\[/);
+  assert.match(app, /platformTools: studioToolRuntime \? platformTools : undefined/);
 });
 
 test("turns artifact deltas into previewable and downloadable PowerPoint cards", () => {
   assert.match(blocks, /kind: "artifact"/);
   assert.match(blocks, /artifactDelta \?\? ev\.actions\?\.artifact_delta/);
-  assert.match(renderer, /预览/);
-  assert.match(renderer, /下载/);
+  assert.match(renderer, /t\("blocks\.preview"\)/);
+  assert.match(renderer, /t\("blocks\.download"\)/);
   assert.match(renderer, /\.preview\.webp/);
   assert.match(client, /export async function downloadArtifact/);
   assert.match(client, /export async function previewArtifact/);

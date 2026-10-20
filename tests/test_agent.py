@@ -15,11 +15,13 @@
 import os
 from unittest.mock import Mock, PropertyMock, patch
 
+import pytest
 from google.adk.agents.llm_agent import LlmAgent
+from google.adk.agents.run_config import ToolThreadPoolConfig
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools import load_memory
 
-from veadk import Agent
+from veadk import Agent, ModelFallbackEndpoint
 from veadk.consts import (
     DEFAULT_AGENT_NAME,
     DEFAULT_MODEL_AGENT_API_BASE,
@@ -29,11 +31,24 @@ from veadk.consts import (
 )
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
+from veadk.models.retrying_lite_llm import RetryingLiteLlm
 from veadk.tools import load_knowledgebase_tool
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 
 
 def test_agent():
+    # `KnowledgeBase(backend="local")` and `LongTermMemory(backend="local")`
+    # import their llama-index-backed backend classes lazily, at construction
+    # time, so this test body -- not the module import -- is where the missing
+    # extra bites. The rest of this module runs without it.
+    pytest.importorskip(
+        "llama_index.core",
+        reason=(
+            "the local KnowledgeBase/LongTermMemory backends need llama-index: "
+            'pip install "veadk-python[extensions]"'
+        ),
+    )
+
     os.environ["MODEL_EMBEDDING_API_KEY"] = "mocked_api_key"
 
     knowledgebase = KnowledgeBase(index="test_index", backend="local")
@@ -120,7 +135,7 @@ def test_agent_without_long_term_memory():
     assert load_memory not in agent.tools
 
 
-@patch("veadk.agent.LiteLlm")
+@patch("veadk.agent.RetryingLiteLlm")
 def test_agent_model_creation(mock_lite_llm):
     mock_model = Mock()
     mock_lite_llm.return_value = mock_model
@@ -176,6 +191,138 @@ def test_agent_configures_responses_model_fallbacks(mock_ark_llm):
     ]
 
 
+@patch("veadk.agent.RetryingLiteLlm")
+def test_agent_configures_cross_provider_litellm_fallbacks(mock_lite_llm, monkeypatch):
+    monkeypatch.setenv("BACKUP_MODEL_API_KEY", "backup-key")
+
+    Agent(
+        model_name="primary-model",
+        model_provider="ark",
+        model_api_key="primary-key",
+        model_api_base="https://ark.example.com/api/v3",
+        model_fallbacks=[
+            {
+                "model_provider": "openai",
+                "model_name": "gpt-4o-mini",
+                "model_api_base": "https://api.openai.com/v1",
+                "model_api_key_env": "BACKUP_MODEL_API_KEY",
+                "model_extra_config": {
+                    "extra_headers": {"x-fallback": "1"},
+                    "temperature": 0.1,
+                },
+            }
+        ],
+    )
+
+    assert mock_lite_llm.call_args.kwargs["model"] == "ark/primary-model"
+    assert mock_lite_llm.call_args.kwargs["fallbacks"] == [
+        {
+            "model": "openai/gpt-4o-mini",
+            "api_key": "backup-key",
+            "api_base": "https://api.openai.com/v1",
+            "extra_headers": {
+                **DEFAULT_MODEL_EXTRA_CONFIG["extra_headers"],
+                "x-fallback": "1",
+            },
+            "temperature": 0.1,
+        }
+    ]
+
+
+@patch("veadk.agent.RetryingLiteLlm")
+def test_agent_combines_legacy_and_explicit_litellm_fallbacks(mock_lite_llm):
+    Agent(
+        model_name=["primary-model", "same-provider-a"],
+        model_provider="ark",
+        model_api_key="primary-key",
+        model_api_base="https://ark.example.com/api/v3",
+        model_fallbacks=[
+            "same-provider-b",
+            ModelFallbackEndpoint(
+                model_provider="anthropic",
+                model_name="claude-3-5-haiku-latest",
+                model_api_key="anthropic-key",
+            ),
+        ],
+    )
+
+    assert mock_lite_llm.call_args.kwargs["fallbacks"] == [
+        "ark/same-provider-a",
+        "ark/same-provider-b",
+        {
+            "model": "anthropic/claude-3-5-haiku-latest",
+            "api_key": "anthropic-key",
+            "api_base": None,
+        },
+    ]
+
+
+@patch("veadk.agent.RetryingLiteLlm")
+def test_agent_accepts_litellm_style_fallback_dict(mock_lite_llm):
+    Agent(
+        model_name="primary-model",
+        model_provider="ark",
+        model_api_key="primary-key",
+        model_api_base="https://ark.example.com/api/v3",
+        model_fallbacks=[
+            {
+                "model": "openai/gpt-4o-mini",
+                "api_key": "openai-key",
+                "api_base": "https://api.openai.com/v1",
+            }
+        ],
+    )
+
+    assert mock_lite_llm.call_args.kwargs["fallbacks"] == [
+        {
+            "model": "openai/gpt-4o-mini",
+            "api_key": "openai-key",
+            "api_base": "https://api.openai.com/v1",
+        }
+    ]
+
+
+def test_agent_rejects_endpoint_fallbacks_for_responses_model():
+    with pytest.raises(ValueError, match="Endpoint model_fallbacks"):
+        Agent(
+            model_name="primary-model",
+            model_provider="ark",
+            model_api_key="primary-key",
+            model_api_base="https://ark.example.com/api/v3",
+            enable_responses=True,
+            model_fallbacks=[
+                {
+                    "model_provider": "openai",
+                    "model_name": "gpt-4o-mini",
+                }
+            ],
+        )
+
+
+def test_retrying_litellm_refreshes_mutable_fallbacks_between_calls():
+    model = RetryingLiteLlm(
+        model="ark/primary",
+        fallbacks=[
+            {
+                "model": "openai/fallback",
+                "api_key": "fallback-key",
+                "api_base": "https://fallback.example.com/v1",
+            }
+        ],
+    )
+
+    model._additional_args["fallbacks"][0].pop("model")
+    model._refresh_fallbacks()
+
+    assert model._additional_args["fallbacks"] == [
+        {
+            "model": "openai/fallback",
+            "api_key": "fallback-key",
+            "api_base": "https://fallback.example.com/v1",
+        }
+    ]
+
+
 @patch.dict("os.environ", {"MODEL_AGENT_API_KEY": "mock_api_key"})
 def test_agent_with_existing_model():
     existing_model = LiteLlm(model="test_model")
@@ -217,6 +364,15 @@ def test_agent_empty_model_extra_config():
         agent.model_extra_config["extra_body"]
         == DEFAULT_MODEL_EXTRA_CONFIG["extra_body"]
     )
+
+
+@patch.dict("os.environ", {"MODEL_AGENT_API_KEY": "mock_api_key"})
+def test_agent_accepts_tool_thread_pool_config():
+    config = ToolThreadPoolConfig(max_workers=3)
+
+    agent = Agent(tool_thread_pool_config=config)
+
+    assert agent.tool_thread_pool_config == config
 
 
 @patch.dict("os.environ", {"MODEL_AGENT_API_KEY": "mock_api_key"})

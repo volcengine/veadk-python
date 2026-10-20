@@ -40,7 +40,12 @@ from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 from veadk.config import settings
 
 from veadk.utils.logger import get_logger
-from veadk.utils.cloud_provider import CloudProvider, cloud_provider_from_env
+from veadk.utils.cloud_provider import (
+    CloudProvider,
+    cloud_provider_from_env,
+    configure_openapi_tls,
+    identity_openapi_host,
+)
 
 logger = get_logger(__name__)
 
@@ -162,7 +167,7 @@ class IdentityClient:
         access_key: Optional[str] = None,
         secret_key: Optional[str] = None,
         session_token: Optional[str] = None,
-        region: str = "cn-beijing",
+        region: str = "",
         provider: CloudProvider | None = None,
         enable_vefaas_iam_fallback: bool = True,
     ):
@@ -179,8 +184,12 @@ class IdentityClient:
         Raises:
             KeyError: If required environment variables are not set.
         """
-        self.region = region
         self.provider = provider or cloud_provider_from_env()
+        if not region and self.provider != "byteplus":
+            region = os.getenv("REGION") or "cn-beijing"
+        elif not region:
+            region = "cn-beijing"
+        self.region = region
         self._enable_vefaas_iam_fallback = enable_vefaas_iam_fallback
 
         # Store initial credentials for fallback
@@ -218,8 +227,11 @@ class IdentityClient:
         configuration.sk = self._initial_secret_key
         configuration.session_token = self._initial_session_token
         configuration.logger = {}
-        if self.provider == "byteplus":
-            configuration.host = f"https://id.{region}.byteplusapi.com"
+        identity_scheme = os.getenv("IDENTITY_OPENAPI_SCHEME", "https").strip()
+        configuration.host = (
+            f"{identity_scheme}://{identity_openapi_host(region, self.provider)}"
+        )
+        configure_openapi_tls(configuration)
 
         self._api_client = volcenginesdkid.IDApi(
             volcenginesdkcore.ApiClient(configuration)
@@ -459,14 +471,48 @@ class IdentityClient:
         return convert_response(resp)
 
     @refresh_credentials
+    def get_workload_pool(
+        self, *, workload_pool_name: str
+    ) -> volcenginesdkid.GetWorkloadPoolResponse:
+        """Get a workload pool by its exact name."""
+        return self._api_client.get_workload_pool(
+            volcenginesdkid.GetWorkloadPoolRequest(
+                workload_pool_name=workload_pool_name
+            )
+        )
+
+    @refresh_credentials
+    def create_workload_pool(
+        self, *, workload_pool_name: str
+    ) -> volcenginesdkid.CreateWorkloadPoolResponse:
+        """Create a workload pool with the supplied name."""
+        return self._api_client.create_workload_pool(
+            volcenginesdkid.CreateWorkloadPoolRequest(
+                workload_pool_name=workload_pool_name
+            )
+        )
+
+    @refresh_credentials
+    def get_workload_identity(
+        self, *, workload_pool_name: str, name: str
+    ) -> volcenginesdkid.GetWorkloadIdentityResponse:
+        """Get a workload identity by pool and exact name."""
+        return self._api_client.get_workload_identity(
+            volcenginesdkid.GetWorkloadIdentityRequest(
+                workload_pool_name=workload_pool_name, name=name
+            )
+        )
+
+    @refresh_credentials
     def create_workload_identity(
-        self, name: Optional[str] = None
+        self, name: Optional[str] = None, *, workload_pool_name: str | None = None
     ) -> volcenginesdkid.CreateWorkloadIdentityResponse:
         """Create a new workload identity.
 
         Args:
             name: Optional name for the workload identity. If not provided,
                   a random name will be generated.
+            workload_pool_name: Optional workload pool containing the identity.
 
         Returns:
             Dictionary containing the created workload identity information.
@@ -476,7 +522,9 @@ class IdentityClient:
             name = f"workload-{uuid.uuid4().hex[:8]}"
 
         return self._api_client.create_workload_identity(
-            volcenginesdkid.CreateWorkloadIdentityRequest(name=name),
+            volcenginesdkid.CreateWorkloadIdentityRequest(
+                name=name, workload_pool_name=workload_pool_name
+            ),
         )
 
     @refresh_credentials
@@ -815,6 +863,23 @@ class IdentityClient:
         self._api_client.update_user_pool(request)
 
     @refresh_credentials
+    def configure_user_pool_for_local_login(self, user_pool_uid: str) -> None:
+        """Enable local sign-up, recovery, and sign-in for a user pool."""
+        from volcenginesdkid import UpdateUserPoolRequest
+
+        request = UpdateUserPoolRequest(
+            email_passwordless_sign_in_enabled=True,
+            password_sign_in_enabled=True,
+            self_account_recovery_enabled=True,
+            self_sign_up_enabled=True,
+            sign_up_auto_verification_enabled=True,
+            sms_passwordless_sign_in_enabled=True,
+            unconfirmed_user_sign_in_enabled=True,
+            user_pool_uid=user_pool_uid,
+        )
+        self._api_client.update_user_pool(request)
+
+    @refresh_credentials
     def list_user_pools(self, *, page_size: int = 100) -> list[dict[str, str]]:
         """List all user pools available to the current account."""
         from volcenginesdkid import ListUserPoolsRequest, ListUserPoolsResponse
@@ -921,6 +986,71 @@ class IdentityClient:
         return response.uid, response.client_secret
 
     @refresh_credentials
+    def list_identity_providers(self, user_pool_uid: str) -> list[dict[str, Any]]:
+        """List normalized identity-provider metadata for one user pool."""
+        from typing import cast
+
+        from volcenginesdkid import (
+            ListIdentityProvidersRequest,
+            ListIdentityProvidersResponse,
+        )
+
+        providers: list[dict[str, Any]] = []
+        page_number = 1
+        while True:
+            response = cast(
+                ListIdentityProvidersResponse,
+                self._api_client.list_identity_providers(
+                    ListIdentityProvidersRequest(
+                        user_pool_uid=user_pool_uid,
+                        page_number=page_number,
+                        page_size=100,
+                    )
+                ),
+            )
+            page = response.data or []
+            for item in page:
+                providers.append(
+                    {
+                        "uid": str(item.uid or ""),
+                        "connection_type": str(item.connection_type or ""),
+                        "enabled": bool(item.enabled),
+                    }
+                )
+            if not page or len(providers) >= int(response.total_count or 0):
+                return providers
+            page_number += 1
+
+    @refresh_credentials
+    def get_user_pool_resource_names(
+        self,
+        user_pool_uid: str,
+        client_uid: str,
+    ) -> tuple[str, str]:
+        """Resolve the names that mpa-agent expects from configured UIDs."""
+        from volcenginesdkid import (
+            GetUserPoolClientRequest,
+            GetUserPoolClientResponse,
+            GetUserPoolRequest,
+            GetUserPoolResponse,
+        )
+
+        pool: GetUserPoolResponse = self._api_client.get_user_pool(
+            GetUserPoolRequest(user_pool_uid=user_pool_uid)
+        )
+        client: GetUserPoolClientResponse = self._api_client.get_user_pool_client(
+            GetUserPoolClientRequest(
+                user_pool_uid=user_pool_uid,
+                client_uid=client_uid,
+            )
+        )
+        pool_name = str(pool.name or "").strip()
+        client_name = str(client.name or "").strip()
+        if not pool_name or not client_name:
+            raise ValueError("UserPool or client name is unavailable")
+        return pool_name, client_name
+
+    @refresh_credentials
     def register_callback_for_user_pool_client(
         self,
         user_pool_uid: str,
@@ -945,14 +1075,12 @@ class IdentityClient:
             request
         )
 
-        allowed_callback_urls = response.allowed_callback_urls
-        if not allowed_callback_urls:
-            allowed_callback_urls = []
-        allowed_callback_urls.append(callback_url)
-        allowed_web_origins = response.allowed_web_origins
-        if not allowed_web_origins:
-            allowed_web_origins = []
-        allowed_web_origins.append(web_origin)
+        allowed_callback_urls = list(response.allowed_callback_urls or [])
+        if callback_url not in allowed_callback_urls:
+            allowed_callback_urls.append(callback_url)
+        allowed_web_origins = list(response.allowed_web_origins or [])
+        if web_origin not in allowed_web_origins:
+            allowed_web_origins.append(web_origin)
 
         request2 = UpdateUserPoolClientRequest(
             user_pool_uid=user_pool_uid,
@@ -1068,3 +1196,42 @@ class IdentityClient:
             return response2.uid, response2.client_secret
 
         raise ValueError("Either name or client_uid must be provided")
+
+    @refresh_credentials
+    def get_user_pool_client_refresh_token_lifetime(
+        self,
+        *,
+        user_pool_uid: str,
+        client_uid: str,
+    ) -> int | None:
+        """Return the configured maximum refresh-token lifetime in seconds.
+
+        User-pool clients may configure both an idle lifetime and a combined
+        (absolute) lifetime.  The browser session must never outlive the
+        absolute lifetime, so prefer it when present and otherwise fall back
+        to the idle lifetime.
+        """
+        from volcenginesdkid import GetUserPoolClientRequest, GetUserPoolClientResponse
+
+        request = GetUserPoolClientRequest(
+            user_pool_uid=user_pool_uid,
+            client_uid=client_uid,
+        )
+        response: GetUserPoolClientResponse = self._api_client.get_user_pool_client(
+            request
+        )
+        refresh_token = response.refresh_token
+        if not refresh_token:
+            return None
+
+        if refresh_token.has_combined_lifetime:
+            combined_lifetime = int(refresh_token.combined_lifetime_seconds or 0)
+            if combined_lifetime > 0:
+                return combined_lifetime
+
+        if refresh_token.has_idle_lifetime:
+            idle_lifetime = int(refresh_token.idle_lifetime_seconds or 0)
+            if idle_lifetime > 0:
+                return idle_lifetime
+
+        return None

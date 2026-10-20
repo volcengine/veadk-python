@@ -1,0 +1,191 @@
+#!/opt/studio-sandbox/venv/bin/python
+"""Create an independent Agent project using the image's pre-warmed uv cache."""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path, PurePosixPath
+
+
+MAX_TEMPLATE_BYTES = 1_048_576
+
+
+def validate_template(value: object) -> dict[str, str]:
+    """Accept only bounded UTF-8 files inside a fresh project directory."""
+    if not isinstance(value, dict) or value.get("version") != 1:
+        raise ValueError("Template version must be 1")
+    files = value.get("files")
+    if not isinstance(files, dict) or not files or len(files) > 256:
+        raise ValueError("Template must contain between 1 and 256 files")
+    size = 0
+    for name, content in files.items():
+        if not isinstance(name, str) or not isinstance(content, str):
+            raise ValueError("Template files must map paths to text")
+        path = PurePosixPath(name)
+        if (
+            not name
+            or path.is_absolute()
+            or "\\" in name
+            or "\0" in name
+            or any(part in {"", ".", "..", ".git", ".venv"} for part in name.split("/"))
+        ):
+            raise ValueError("Invalid template path")
+        size += len(name.encode("utf-8")) + len(content.encode("utf-8"))
+        if size > MAX_TEMPLATE_BYTES:
+            raise ValueError("Template exceeds 1 MiB")
+        if any(str(parent) in files for parent in path.parents if str(parent) != "."):
+            raise ValueError("Template file conflicts with directory")
+    return files
+
+
+def initialize_repository(project: Path) -> None:
+    files = {
+        ".gitignore": ".venv/\n.env\n.env.*\n!.env.example\n__pycache__/\n*.py[cod]\n.pytest_cache/\n.ruff_cache/\n.DS_Store\n",
+        "AGENTS.md": "# Python development guide\n\n"
+        "- Use the project .venv and keep dependencies reproducible\n"
+        "- Follow PEP 8, use descriptive snake_case names and type hints for public functions\n"
+        "- Keep functions focused, handle exceptions explicitly and use logging for diagnostics\n"
+        "- Keep credentials in environment variables, never in source control\n"
+        "- Use Ruff for formatting and linting, and pytest for affected behavior\n\n"
+        "## Project directories\n\n"
+        "- main.py: Agent entry point\n"
+        "- .venv/: project Python environment\n"
+        "- tests/: add focused tests when needed\n\n"
+        "## Documentation\n\n"
+        "- VeADK: https://volcengine.github.io/veadk-python/\n"
+        "- VeADK source and examples: https://github.com/volcengine/veadk-python\n"
+        "- AgentKit (Volcengine): https://www.volcengine.com/docs/86681\n"
+        "- AgentKit (BytePlus): https://docs.byteplus.com/en/docs/agentkit\n",
+        "README.md": f"# {project.name}\n\nVeADK agent project\n\n"
+        "Activate the environment with `source .venv/bin/activate`\n"
+        "Configure the required model credentials using environment variables\n",
+    }
+    for name, content in files.items():
+        target = project / name
+        if not target.exists():
+            target.write_text(content)
+    if not (project / ".git").exists():
+        subprocess.run(
+            ["git", "init", "--initial-branch=main", str(project)],
+            check=True,
+            stdout=sys.stderr,
+            stderr=sys.stderr,
+        )
+
+
+def create_project(
+    name: str,
+    projects: Path,
+    studio: Path,
+    uv: str = "/opt/agentkit-code-env/venv/bin/uv",
+    template: object = None,
+) -> Path:
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", name):
+        raise ValueError(
+            "项目名须以英文字母开头，仅含字母、数字、短横线或下划线，最多 64 个字符"
+        )
+    files = validate_template(template) if template is not None else None
+    root = projects.resolve(strict=True)
+    project = root / name
+    project.mkdir(mode=0o755)
+    python = project / ".venv" / "bin" / "python"
+    environment = dict(os.environ, UV_CACHE_DIR=str(studio / "uv-cache"))
+    subprocess.run(
+        [
+            uv,
+            "venv",
+            "--offline",
+            "--python",
+            str(studio / "venv" / "bin" / "python"),
+            str(project / ".venv"),
+        ],
+        env=environment,
+        check=True,
+        stdout=sys.stderr,
+        stderr=sys.stderr,
+    )
+    subprocess.run(
+        [
+            uv,
+            "pip",
+            "sync",
+            "--offline",
+            "--python",
+            str(python),
+            "--link-mode",
+            "copy",
+            str(studio / "requirements.lock"),
+        ],
+        env=environment,
+        check=True,
+        stdout=sys.stderr,
+        stderr=sys.stderr,
+    )
+    agent_name = name.replace("-", "_")
+    if files is None:
+        files = {
+            "main.py": (
+                "from veadk import Agent\n\n"
+                "agent = Agent(\n"
+                f'    name="{agent_name}",\n'
+                '    instruction="You are a helpful assistant",\n'
+                ")\n"
+            )
+        }
+    for relative, content in files.items():
+        target = project / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("x", encoding="utf-8") as output:
+            output.write(content)
+    initialize_repository(project)
+    return project
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("name")
+    parser.add_argument(
+        "--json", action="store_true", help="Return the created project path as JSON"
+    )
+    parser.add_argument(
+        "--template-stdin",
+        action="store_true",
+        help="Read a version 1 JSON template project from stdin",
+    )
+    args = parser.parse_args()
+    root = Path(os.environ.get("STUDIO_PROJECTS_DIR", "/home/gem/Projects"))
+    studio = Path(os.environ.get("STUDIO_SANDBOX_DIR", "/opt/studio-sandbox"))
+    try:
+        template = None
+        if args.template_stdin:
+            raw = sys.stdin.buffer.read(MAX_TEMPLATE_BYTES + 1)
+            if len(raw) > MAX_TEMPLATE_BYTES:
+                raise ValueError("Template exceeds 1 MiB")
+            template = json.loads(raw)
+            validate_template(template)
+        path = create_project(args.name, root, studio, template=template)
+    except FileExistsError:
+        print("项目目录已存在，未覆盖任何文件，请使用其他项目名", file=sys.stderr)
+        return 2
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 2
+    except (OSError, subprocess.CalledProcessError):
+        print(
+            "项目初始化失败，已保留当前目录供检查，请检查镜像依赖缓存和目录权限",
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        json.dumps({"name": args.name, "path": str(path)}, ensure_ascii=False)
+        if args.json
+        else path
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

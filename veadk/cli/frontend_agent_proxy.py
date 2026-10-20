@@ -19,8 +19,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import html
+import inspect
+import json
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
@@ -45,12 +47,56 @@ _OPENCLAW_RESET_TAG = (
     b"if(key.startsWith('openclaw.control.settings.v1'))localStorage.removeItem(key)"
     b"}}catch{}</script>"
 )
-_DEEPSEEK_HARNESS_PATHS = (
+_DEEPSEEK_HARNESS_STATIC_PATHS = (
     "/deepseek-harness-auth-query.js",
     "/deepseek-harness",
     "/plugins",
     "/assets",
+)
+_HERMES_AIO_PATHS = (
+    "/code-server",
+    "/terminal",
+    "/jupyter",
+    "/vnc",
+    "/proxy",
+    "/absproxy",
+    "/mcp",
+    "/v1",
+    "/llms.txt",
+    "/cdp",
+    "/tickets",
+    "/screenshot",
+    "/actions",
+    "/json",
+    "/devtools",
+    "/ws",
+    "/websockify",
+    "/static/sandbox",
+)
+_HERMES_DASHBOARD_PATHS = (
+    "/achievements",
     "/api",
+    "/assets",
+    "/channels",
+    "/chat",
+    "/config",
+    "/cron",
+    "/docs",
+    "/env",
+    "/files",
+    "/favicon.ico",
+    "/kanban",
+    "/logs",
+    "/mcp",
+    "/model",
+    "/models",
+    "/pairing",
+    "/plugins",
+    "/profiles",
+    "/sessions",
+    "/skills",
+    "/system",
+    "/webhooks",
 )
 _BLOCKED_RESPONSE_HEADERS = {
     "connection",
@@ -88,13 +134,26 @@ def _rewrite_body(
     content_type: str,
     prefix: str,
     kind: str,
+    *,
+    upstream_path: str = "",
 ) -> bytes:
     if not any(marker in content_type for marker in _TEXT_CONTENT_TYPES):
         return body
     if kind in {"hermes", "deepseek-harness"}:
         body = _strip_hermes_gateway_query(body)
+    if kind == "hermes" and b"<title>AIO Sandbox</title>" not in body:
+        hermes_mount = _hermes_dashboard_mount(upstream_path)
+        if hermes_mount:
+            for path in _HERMES_DASHBOARD_PATHS:
+                body = _rewrite_root_path(
+                    body,
+                    path,
+                    f"{prefix}{hermes_mount}{path}",
+                )
+        for path in _HERMES_AIO_PATHS:
+            body = _rewrite_root_path(body, path, f"{prefix}{path}")
     if kind == "deepseek-harness":
-        return _rewrite_deepseek_harness_body(body, prefix)
+        return _rewrite_deepseek_harness_body(body, content_type, prefix)
     source = f"/{kind}".encode()
     replacement = f"{prefix}/{kind}".encode()
     for quote in (b'"', b"'", b"`"):
@@ -103,6 +162,15 @@ def _rewrite_body(
     if kind == "openclaw" and "text/html" in content_type:
         body = body.replace(b"<head>", b"<head>" + _OPENCLAW_RESET_TAG, 1)
     return body
+
+
+def _hermes_dashboard_mount(upstream_path: str) -> str:
+    """Return the AIO port-proxy mount hosting the Hermes Dashboard."""
+    normalized = f"/{upstream_path.lstrip('/')}"
+    match = re.match(r"^/(absproxy|proxy)/(\d+)(?:/|$)", normalized)
+    if match is None:
+        return ""
+    return f"/{match.group(1)}/{match.group(2)}"
 
 
 def _rewrite_root_path(body: bytes, source_path: str, replacement_path: str) -> bytes:
@@ -114,10 +182,61 @@ def _rewrite_root_path(body: bytes, source_path: str, replacement_path: str) -> 
     return body
 
 
-def _rewrite_deepseek_harness_body(body: bytes, prefix: str) -> bytes:
-    """Route DSH root assets and APIs through the opaque Studio surface proxy."""
-    for path in _DEEPSEEK_HARNESS_PATHS:
+def _javascript_string(value: str) -> bytes:
+    """Return an HTML-safe JavaScript string literal."""
+    literal = json.dumps(value, ensure_ascii=True)
+    return (
+        literal.replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .encode()
+    )
+
+
+def _deepseek_harness_surface_bootstrap(prefix: str) -> bytes:
+    """Build the browser shim that rebases DSH API traffic at request time."""
+    return b"".join(
+        (
+            b"<script>(()=>{",
+            b"const surfacePrefix = ",
+            _javascript_string(prefix),
+            b";const pageUrl=new URL(window.location.href);",
+            b"const sameEndpoint=url=>url.hostname===pageUrl.hostname&&",
+            b"url.port===pageUrl.port&&(url.protocol===pageUrl.protocol||",
+            b"pageUrl.protocol==='https:'&&url.protocol==='wss:'||",
+            b"pageUrl.protocol==='http:'&&url.protocol==='ws:');",
+            b"const rebase=input=>{try{",
+            b"const source=input instanceof Request?input.url:input;",
+            b"const url=new URL(source,window.location.href);",
+            b"if(sameEndpoint(url)&&(url.pathname==='/api'||",
+            b"url.pathname.startsWith('/api/')||url.pathname.startsWith('/api.')))",
+            b"{url.pathname = surfacePrefix + url.pathname;}",
+            b"if(input instanceof Request)return new Request(url.toString(),input);",
+            b"return url;}catch{return input;}};",
+            b"const originalFetch=window.fetch.bind(window);",
+            b"window.fetch=(input,init)=>originalFetch(rebase(input),init);",
+            b"const OriginalWebSocket=window.WebSocket;",
+            b"window.WebSocket=function(url,protocols){const next=rebase(url);",
+            b"return protocols===undefined?new OriginalWebSocket(next):",
+            b"new OriginalWebSocket(next,protocols);};",
+            b"Object.setPrototypeOf(window.WebSocket,OriginalWebSocket);",
+            b"window.WebSocket.prototype=OriginalWebSocket.prototype;",
+            b"})();</script>",
+        )
+    )
+
+
+def _rewrite_deepseek_harness_body(
+    body: bytes,
+    content_type: str,
+    prefix: str,
+) -> bytes:
+    """Route DSH root assets and runtime API traffic through its Studio surface."""
+    for path in _DEEPSEEK_HARNESS_STATIC_PATHS:
         body = _rewrite_root_path(body, path, f"{prefix}{path}")
+    if "text/html" in content_type:
+        bootstrap = _deepseek_harness_surface_bootstrap(prefix)
+        body = body.replace(b"<head>", b"<head>" + bootstrap, 1)
     return body
 
 
@@ -169,6 +288,23 @@ def _rewrite_location(location: str, prefix: str) -> str:
     return urlunsplit(("", "", f"{prefix}{parsed.path}", safe_query, parsed.fragment))
 
 
+def _websocket_origin(kind: str, path: str, target_url: str) -> str:
+    """Return the Origin expected by the upstream WebSocket service.
+
+    AIO exposes arbitrary local ports below ``/proxy/<port>``.  Its HTTP proxy
+    accepts the public AgentKit origin, but the WebSocket target validates the
+    original local-service origin.  Sending the AgentKit endpoint origin makes
+    Hermes reject the upgrade and the browser only sees close code 1006.
+    """
+    normalized = f"/{path.lstrip('/')}"
+    if kind == "hermes":
+        match = re.match(r"/(?:abs)?proxy/(\d+)(?:/|$)", normalized)
+        if match is not None:
+            return f"http://localhost:{match.group(1)}"
+    parsed = urlsplit(target_url)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 def _rewrite_cookie(cookie: str, prefix: str) -> str:
     if re.search(r"(?i);\s*path=", cookie):
         return re.sub(
@@ -181,9 +317,40 @@ def _rewrite_cookie(cookie: str, prefix: str) -> str:
 
 def mount_agent_surface_proxy_routes(
     app: object,
-    target_resolver: Callable[[str, str, str], SandboxProxyTarget],
+    target_resolver: Callable[
+        [str, str, str],
+        SandboxProxyTarget | Awaitable[SandboxProxyTarget],
+    ],
 ) -> None:
     """Mount bounded HTTP and WebSocket proxies for branded agent WebUIs."""
+
+    http_client: httpx.AsyncClient | None = None
+
+    def _shared_http_client() -> httpx.AsyncClient:
+        nonlocal http_client
+        if http_client is None:
+            http_client = httpx.AsyncClient(
+                follow_redirects=False,
+                timeout=httpx.Timeout(60),
+                limits=httpx.Limits(
+                    max_connections=100,
+                    max_keepalive_connections=40,
+                    keepalive_expiry=30,
+                ),
+            )
+        return http_client
+
+    async def _close_http_client() -> None:
+        nonlocal http_client
+        client, http_client = http_client, None
+        close = getattr(client, "aclose", None)
+        if close is not None:
+            await close()
+
+    router = getattr(app, "router", None)
+    add_event_handler = getattr(router, "add_event_handler", None)
+    if callable(add_event_handler):
+        add_event_handler("shutdown", _close_http_client)
 
     @app.api_route(  # type: ignore[attr-defined]
         "/web/{kind}/sessions/{session_id}/surface/{proxy_token}/{path:path}",
@@ -197,7 +364,8 @@ def mount_agent_surface_proxy_routes(
         request: Request,
     ) -> Response:
         try:
-            target = target_resolver(kind, session_id, proxy_token)
+            resolved = target_resolver(kind, session_id, proxy_token)
+            target = await resolved if inspect.isawaitable(resolved) else resolved
         except (KeyError, PermissionError):
             return Response("沙箱页面授权已失效。", status_code=403)
         target_url = _target_url(target.endpoint, path, request.url.query)
@@ -221,16 +389,12 @@ def mount_agent_surface_proxy_routes(
                 headers["x-hermes-session-token"] = session_token
         headers["origin"] = f"{parsed.scheme}://{parsed.netloc}"
         try:
-            async with httpx.AsyncClient(
-                follow_redirects=False,
-                timeout=httpx.Timeout(60),
-            ) as client:
-                upstream = await client.request(
-                    request.method,
-                    target_url,
-                    headers=headers,
-                    content=await request.body(),
-                )
+            upstream = await _shared_http_client().request(
+                request.method,
+                target_url,
+                headers=headers,
+                content=await request.body(),
+            )
         except httpx.HTTPError:
             return Response("无法连接沙箱页面。", status_code=502)
         if len(upstream.content) > _MAX_BODY_BYTES:
@@ -249,7 +413,13 @@ def mount_agent_surface_proxy_routes(
                 response_headers["location"], prefix
             )
         response = Response(
-            content=_rewrite_body(upstream.content, content_type, prefix, kind),
+            content=_rewrite_body(
+                upstream.content,
+                content_type,
+                prefix,
+                kind,
+                upstream_path=path,
+            ),
             status_code=upstream.status_code,
             headers=response_headers,
             media_type=None,
@@ -272,8 +442,15 @@ def mount_agent_surface_proxy_routes(
         from websockets.exceptions import WebSocketException
 
         try:
-            target = target_resolver(kind, session_id, proxy_token)
+            resolved = target_resolver(kind, session_id, proxy_token)
+            target = await resolved if inspect.isawaitable(resolved) else resolved
         except (KeyError, PermissionError):
+            # Complete the WebSocket upgrade before returning an application-level
+            # capability error.  VeFaaS treats a rejected upgrade as a transport
+            # failure and temporarily puts the entire Function route in backoff,
+            # which can make a single-instance Studio return 429 for unrelated
+            # HTTP requests.
+            await websocket.accept()
             await websocket.close(code=1008, reason="invalid capability")
             return
         target_http_url = _target_url(target.endpoint, path, websocket.url.query)
@@ -295,7 +472,7 @@ def mount_agent_surface_proxy_routes(
         try:
             async with websockets.connect(
                 target_ws_url,
-                origin=f"{parsed.scheme}://{parsed.netloc}",
+                origin=_websocket_origin(kind, path, target_http_url),
                 subprotocols=protocols or None,
                 max_size=None,
             ) as upstream:
@@ -333,4 +510,9 @@ def mount_agent_surface_proxy_routes(
         except (OSError, TimeoutError, WebSocketException) as error:
             logger.warning("Managed agent WebUI proxy failed: %s", type(error).__name__)
             with contextlib.suppress(RuntimeError):
+                # The upstream failure belongs to this logical WebSocket, not to
+                # the Studio Function transport.  Finish the browser-side upgrade
+                # before closing so the outer VeFaaS gateway does not back off the
+                # only Studio instance.
+                await websocket.accept()
                 await websocket.close(code=1011)

@@ -5,6 +5,7 @@ import {
   useState,
   type SVGProps,
 } from "react";
+import { useTranslation } from "react-i18next";
 
 function SelectChevronIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -44,6 +45,7 @@ export interface DeploymentSelectOption {
   value: string;
   label: string;
   description?: string;
+  metadata?: string;
   badge?: string;
 }
 
@@ -72,14 +74,17 @@ export function DeploymentSelect({
   options,
   disabled = false,
   searchValue,
-  searchPlaceholder = "搜索资源名称",
+  searchPlaceholder,
   loading = false,
   hasMore = false,
-  emptyMessage = "暂无可用选项",
+  emptyMessage,
   onSearchChange,
   onLoadMore,
   onChange,
 }: DeploymentSelectProps) {
+  const { t } = useTranslation("ui");
+  const resolvedSearchPlaceholder = searchPlaceholder ?? t("deploymentSelect.searchPlaceholder");
+  const resolvedEmptyMessage = emptyMessage ?? t("deploymentSelect.emptyMessage");
   const listboxId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -239,8 +244,8 @@ export function DeploymentSelect({
                 ref={searchInputRef}
                 type="search"
                 value={searchValue}
-                aria-label={`搜索${ariaLabel}`}
-                placeholder={searchPlaceholder}
+                aria-label={t("deploymentSelect.searchAriaLabel", { label: ariaLabel })}
+                placeholder={resolvedSearchPlaceholder}
                 autoComplete="off"
                 onChange={(event) => onSearchChange?.(event.currentTarget.value)}
               />
@@ -273,7 +278,7 @@ export function DeploymentSelect({
                   aria-selected={selected}
                   tabIndex={index === activeIndex ? 0 : -1}
                   className={`pp-deployment-select-option${selected ? " is-selected" : ""}`}
-                  title={option.description}
+                  title={option.metadata ? [option.label, option.description, option.metadata].filter(Boolean).join("\n") : option.description}
                   onFocus={() => setActiveIndex(index)}
                   onClick={() => selectOption(option)}
                 >
@@ -286,7 +291,8 @@ export function DeploymentSelect({
                         </span>
                       )}
                     </span>
-                    {option.description && <small>{option.description}</small>}
+                    {option.description && <small className={option.metadata ? "pp-deployment-select-description" : undefined}>{option.description}</small>}
+                    {option.metadata && <small className="pp-deployment-select-metadata">{option.metadata}</small>}
                   </span>
                   {selected && <SelectCheckIcon />}
                 </button>
@@ -295,11 +301,11 @@ export function DeploymentSelect({
           </div>
           {loading && (
             <div className="pp-deployment-select-state" aria-live="polite">
-              正在加载更多资源…
+              {t("deploymentSelect.loadingMore")}
             </div>
           )}
           {!loading && options.length === 0 && (
-            <div className="pp-deployment-select-state">{emptyMessage}</div>
+            <div className="pp-deployment-select-state">{resolvedEmptyMessage}</div>
           )}
         </div>
       )}

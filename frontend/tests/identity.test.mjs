@@ -1,22 +1,22 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { Buffer } from "node:buffer";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import ts from "typescript";
+import { build } from "esbuild";
 
-function transpileUrl(source) {
-  const { outputText } = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  });
-  return `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
-}
+globalThis.localStorage = { getItem: () => "zh-CN" };
+globalThis.window = { localStorage: globalThis.localStorage };
 
-const timeoutSource = readFileSync(new URL("../src/adk/timeout.ts", import.meta.url), "utf8");
-const timeoutUrl = transpileUrl(timeoutSource);
-const identitySource = readFileSync(
-  new URL("../src/adk/identity.ts", import.meta.url),
-  "utf8",
-).replace('from "./timeout"', `from "${timeoutUrl}"`);
+const result = await build({
+  entryPoints: [fileURLToPath(new URL("../src/adk/identity.ts", import.meta.url))],
+  bundle: true,
+  format: "esm",
+  platform: "node",
+  target: "node20",
+  write: false,
+});
 const {
+  displayName,
   fetchProviders,
   isOAuthLoginRequired,
   openLoginWindow,
@@ -24,7 +24,7 @@ const {
   resolveIdentity,
   withLocalUser,
 } = await import(
-  transpileUrl(identitySource)
+  `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].contents).toString("base64")}`
 );
 
 const originalFetch = globalThis.fetch;
@@ -58,9 +58,41 @@ test("identity 200 resolves as authenticated", async () => {
 });
 
 test("identity 401 keeps SSO mode unauthenticated", async () => {
-  globalThis.fetch = async () => new Response("", { status: 401 });
+  globalThis.localStorage = { getItem: () => "alice" };
+  let requests = 0;
+  globalThis.fetch = async () => {
+    requests += 1;
+    return new Response("", { status: 401 });
+  };
   const identity = await resolveIdentity();
   assert.deepEqual(identity, { status: "unauthenticated", userId: "", local: false });
+  assert.equal(requests, 1);
+});
+
+test("identity retries a cross-instance refresh-token rotation race", async () => {
+  let requests = 0;
+  globalThis.window = {
+    setTimeout: (callback) => {
+      callback();
+      return 1;
+    },
+  };
+  globalThis.fetch = async () => {
+    requests += 1;
+    if (requests === 1) {
+      return new Response("", {
+        status: 401,
+        headers: { "X-VeADK-OAuth-Refresh-Retry": "1" },
+      });
+    }
+    return Response.json({ sub: "u-rotated" });
+  };
+
+  const identity = await resolveIdentity();
+
+  assert.equal(identity.status, "authenticated");
+  assert.equal(identity.userId, "u-rotated");
+  assert.equal(requests, 2);
 });
 
 test("identity 404 enters legacy local mode", async () => {
@@ -126,6 +158,17 @@ test("reads a trimmed standard OIDC profile picture", () => {
   assert.equal(profilePictureUrl({ picture: "" }), "");
   assert.equal(profilePictureUrl({ picture: { url: "invalid" } }), "");
   assert.equal(profilePictureUrl(), "");
+});
+
+test("prefers a name or username before falling back to email", () => {
+  assert.equal(
+    displayName({ name: " 房耀政 ", preferred_username: "fyz", email: "fyz@example.com" }),
+    "房耀政",
+  );
+  assert.equal(displayName({ preferred_username: "fyz", email: "fyz@example.com" }), "fyz");
+  assert.equal(displayName({ username: "fyz", email: "fyz@example.com" }), "fyz");
+  assert.equal(displayName({ email: "fyz@example.com" }), "fyz@example.com");
+  assert.equal(displayName({ sub: "opaque-id" }), "");
 });
 
 test("provider lookup enables local mode only after a successful empty response", async () => {

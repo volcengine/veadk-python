@@ -136,12 +136,14 @@ model:
     api_key: ${MODEL_AGENT_API_KEY}
 
 volcengine:
-  # Viking DB 与 embedding 需要火山引擎 ak/sk
+  # Viking DB 与 embedding 可使用火山引擎 ak/sk
   access_key: ${VOLCENGINE_ACCESS_KEY}
   secret_key: ${VOLCENGINE_SECRET_KEY}
 
 database:
   viking:
+    # 可选；用于搜索已有 VikingDB 知识库
+    api_key: ${DATABASE_VIKING_API_KEY}
     project: default    # Volcengine Viking DB 中的项目
     region: cn-beijing
   tos:
@@ -167,11 +169,14 @@ database:
 
 ```bash
 export MODEL_AGENT_API_KEY="<你的方舟 API Key>"
+export DATABASE_VIKING_API_KEY="<你的 VikingDB 知识库 API Key>"
 export VOLCENGINE_ACCESS_KEY="<你的 AK>"
 export VOLCENGINE_SECRET_KEY="<你的 SK>"
 export DATABASE_OPENSEARCH_PASSWORD="<你的 OpenSearch 密码>"
 export DATABASE_OPENVIKING_API_KEY="<你的 OpenViking API Key>"
 ```
+
+`DATABASE_VIKING_API_KEY` 会优先用于搜索已有 VikingDB 知识库。创建、删除、列举 collection，管理文档/切片，以及 `add_from_text` / `add_from_files` 这类需要上传 TOS 的能力，仍需要可用的 `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY` 或 VeFaaS IAM 凭证。
 
 ### 演示场景
 

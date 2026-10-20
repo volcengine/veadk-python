@@ -16,10 +16,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import re
+import tempfile
 import zipfile
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from pathlib import Path
 from pathlib import PurePosixPath
 from urllib.parse import quote, urlencode
 
@@ -34,7 +38,6 @@ from veadk.cli.generated_agent_codegen import (
 )
 from veadk.cli.generated_agent_security import DebugPolicyError
 
-
 SkillSpaceResolverResult = str | list[GeneratedFile]
 SkillSpaceResolver = Callable[..., Awaitable[SkillSpaceResolverResult]]
 
@@ -44,6 +47,51 @@ MAX_SKILL_FILE_BYTES = 256 * 1024
 MAX_SKILL_TOTAL_BYTES = 2 * 1024 * 1024
 _SKILL_MD_RE = re.compile(r"(^|/)skill\.md$", re.IGNORECASE)
 _FOLDER_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_BINARY_SKILL_FILE_SUFFIXES = {
+    ".avi",
+    ".bmp",
+    ".eot",
+    ".gif",
+    ".gz",
+    ".ico",
+    ".jpeg",
+    ".jpg",
+    ".mov",
+    ".mp3",
+    ".mp4",
+    ".otf",
+    ".pdf",
+    ".png",
+    ".tar",
+    ".ttf",
+    ".wav",
+    ".webm",
+    ".webp",
+    ".woff",
+    ".woff2",
+    ".zip",
+}
+
+
+@dataclass(frozen=True)
+class CanonicalSkillSnapshot:
+    """Server-validated Skill files accepted by a source-preserving overlay."""
+
+    name: str
+    description: str
+    files: tuple[GeneratedFile, ...]
+    content_digest: str
+
+
+def _is_macos_metadata(path: str) -> bool:
+    parts = PurePosixPath(path).parts
+    return bool(parts) and (
+        parts[0] == "__MACOSX" or parts[-1] == ".DS_Store" or parts[-1].startswith("._")
+    )
+
+
+def _is_binary_skill_file(path: str) -> bool:
+    return PurePosixPath(path).suffix.lower() in _BINARY_SKILL_FILE_SUFFIXES
 
 
 async def materialize_selected_skills(
@@ -54,6 +102,8 @@ async def materialize_selected_skills(
 ) -> None:
     existing = {file.path for file in project.files}
     for skill in _collect_selected_skills(draft):
+        if skill.source == "runtime":
+            continue
         original_folder = skill.folder
         if skill.source == "skillhub":
             files = await _download_skillhub_skill(skill)
@@ -74,6 +124,178 @@ async def materialize_selected_skills(
         _append_skill_files(project, existing, files)
 
 
+async def materialize_source_preserving_skills(
+    draft: AgentDraft,
+    *,
+    resolve_skillspace_detail: SkillSpaceResolver | None = None,
+) -> tuple[AgentDraft, tuple[CanonicalSkillSnapshot, ...]]:
+    """Resolve root Skill selections into canonical, server-trusted snapshots.
+
+    Legacy overlay v1 intentionally supports only the root Agent. Runtime Skills
+    remain opaque; every other source is materialized and checked against its
+    requested replacement identity before the browser payload reaches the image
+    builder.
+    """
+
+    canonical_draft = draft.model_copy(deep=True)
+    snapshots: list[CanonicalSkillSnapshot] = []
+    seen_names: set[str] = set()
+
+    for skill in canonical_draft.selectedSkills:
+        if skill.source == "runtime":
+            continue
+        requested_name = _safe_folder(skill.name or skill.folder)
+        requested_folder = _safe_folder(skill.folder or skill.name)
+        if requested_name != requested_folder:
+            raise DebugPolicyError("Source-preserving Skill name and folder must match")
+        files = await _materialize_one_skill(
+            skill,
+            resolve_skillspace_detail=resolve_skillspace_detail,
+        )
+        snapshot = _canonical_skill_snapshot(
+            requested_name=requested_name,
+            description=skill.description,
+            files=files,
+        )
+        if snapshot.name in seen_names:
+            raise DebugPolicyError(f"Duplicate canonical Skill name: {snapshot.name}")
+        seen_names.add(snapshot.name)
+        snapshots.append(snapshot)
+        skill.source = "local"
+        skill.name = snapshot.name
+        skill.folder = snapshot.name
+        skill.localFiles = [file.model_copy() for file in snapshot.files]
+
+    if _has_descendant_source_preserving_skill(canonical_draft):
+        raise DebugPolicyError(
+            "Source-preserving Skill edits only support the root Agent"
+        )
+
+    return canonical_draft, tuple(snapshots)
+
+
+async def _materialize_one_skill(
+    skill: SelectedSkill,
+    *,
+    resolve_skillspace_detail: SkillSpaceResolver | None,
+) -> list[GeneratedFile]:
+    if skill.source == "skillhub":
+        return await _download_skillhub_skill(skill)
+    if skill.source == "skillspace":
+        if resolve_skillspace_detail is None:
+            raise DebugPolicyError("SkillSpace resolver is not configured")
+        return await _materialize_skillspace_skill(
+            skill,
+            resolve_skillspace_detail,
+        )
+    if skill.source == "local":
+        return _materialize_local_skill(skill)
+    raise DebugPolicyError("Unsupported source-preserving Skill source")
+
+
+def _has_descendant_source_preserving_skill(draft: AgentDraft) -> bool:
+    def mapping_has_skill(node: object) -> bool:
+        if not isinstance(node, dict):
+            return False
+        selected = node.get("selectedSkills")
+        if isinstance(selected, list) and any(
+            isinstance(skill, dict) and skill.get("source") != "runtime"
+            for skill in selected
+        ):
+            return True
+        children = node.get("subAgents")
+        if isinstance(children, list) and any(
+            mapping_has_skill(child) for child in children
+        ):
+            return True
+        workflow = node.get("workflow")
+        workflow_nodes = workflow.get("nodes") if isinstance(workflow, dict) else None
+        return isinstance(workflow_nodes, list) and any(
+            mapping_has_skill(item.get("agent"))
+            for item in workflow_nodes
+            if isinstance(item, dict)
+        )
+
+    if any(
+        any(skill.source != "runtime" for skill in child.selectedSkills)
+        or _has_descendant_source_preserving_skill(child)
+        for child in draft.subAgents
+    ):
+        return True
+    if draft.workflow is None:
+        return False
+    return any(mapping_has_skill(node.agent) for node in draft.workflow.nodes)
+
+
+def _canonical_skill_snapshot(
+    *,
+    requested_name: str,
+    description: str,
+    files: list[GeneratedFile],
+) -> CanonicalSkillSnapshot:
+    _enforce_file_limits(files)
+    normalized: list[GeneratedFile] = []
+    manifest_paths: list[str] = []
+    expected_prefix = f"skills/{requested_name}/"
+    for file in files:
+        path = _normalize_project_path(file.path)
+        if not path.startswith(expected_prefix):
+            raise DebugPolicyError(
+                f"Canonical Skill file must stay under {expected_prefix}: {path}"
+            )
+        if _SKILL_MD_RE.search(path):
+            manifest_paths.append(path)
+        normalized.append(GeneratedFile(path=path, content=file.content))
+
+    expected_manifest = f"skills/{requested_name}/SKILL.md"
+    if manifest_paths != [expected_manifest]:
+        raise DebugPolicyError(
+            "Source-preserving Skill must contain exactly one root SKILL.md"
+        )
+    manifest = next(file for file in normalized if file.path == expected_manifest)
+    metadata, _body = _parse_skill_md(
+        manifest.content,
+        f"Source-preserving Skill {requested_name}",
+    )
+    canonical_name = _safe_folder(str(metadata.get("name") or ""))
+    if canonical_name != requested_name:
+        raise DebugPolicyError(
+            "Source-preserving Skill canonical name does not match its replacement"
+        )
+
+    with tempfile.TemporaryDirectory(prefix="veadk_canonical_skill_") as temp_dir:
+        root = Path(temp_dir)
+        for file in normalized:
+            target = root / file.path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(file.content, encoding="utf-8")
+        try:
+            from google.adk.skills import load_skill_from_dir
+
+            loaded = load_skill_from_dir(root / "skills" / canonical_name)
+        except Exception as error:
+            raise DebugPolicyError(
+                f"Source-preserving Skill {canonical_name} cannot be loaded by ADK"
+            ) from error
+        if str(getattr(loaded, "name", "")) != canonical_name:
+            raise DebugPolicyError(
+                "Source-preserving Skill canonical name does not match ADK"
+            )
+
+    digest = hashlib.sha256()
+    for file in sorted(normalized, key=lambda item: item.path):
+        digest.update(file.path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(file.content.encode("utf-8"))
+        digest.update(b"\0")
+    return CanonicalSkillSnapshot(
+        name=canonical_name,
+        description=description,
+        files=tuple(normalized),
+        content_digest=digest.hexdigest(),
+    )
+
+
 def _collect_selected_skills(draft: AgentDraft) -> list[SelectedSkill]:
     out: list[SelectedSkill] = []
     seen: set[str] = set()
@@ -92,6 +314,8 @@ def _collect_selected_skills(draft: AgentDraft) -> list[SelectedSkill]:
 
 
 def _skill_key(skill: SelectedSkill) -> str:
+    if skill.source == "runtime":
+        return f"runtime:{skill.folder}"
     if skill.source == "skillhub":
         return f"hub:{skill.namespace or 'public'}/{skill.slug}"
     if skill.source == "local":
@@ -221,23 +445,41 @@ def _materialize_local_skill(skill: SelectedSkill) -> list[GeneratedFile]:
     return out
 
 
-def _files_from_zip(content: bytes, folder: str, label: str) -> list[GeneratedFile]:
+def _files_from_zip(
+    content: bytes,
+    folder: str,
+    label: str,
+    *,
+    ignore_binary: bool = False,
+) -> list[GeneratedFile]:
     extracted: list[tuple[str, str]] = []
     total = 0
     with zipfile.ZipFile(io.BytesIO(content)) as archive:
-        infos = [info for info in archive.infolist() if not info.is_dir()]
-        if len(infos) > MAX_SKILL_FILES:
-            raise DebugPolicyError(f"{label} contains too many files")
         skill_md_candidates: list[tuple[str, str]] = []
-        for info in infos:
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            rel = _normalize_relative_path(info.filename)
+            if _is_macos_metadata(rel):
+                continue
+            if ignore_binary and _is_binary_skill_file(rel):
+                continue
             if info.file_size > MAX_SKILL_FILE_BYTES:
                 raise DebugPolicyError(f"{label} file is too large: {info.filename}")
+            with archive.open(info) as fh:
+                try:
+                    text = _decode_skill_file(
+                        fh.read(), f"{label} file {info.filename}"
+                    )
+                except DebugPolicyError:
+                    if ignore_binary:
+                        continue
+                    raise
+            if len(extracted) >= MAX_SKILL_FILES:
+                raise DebugPolicyError(f"{label} contains too many files")
             total += info.file_size
             if total > MAX_SKILL_TOTAL_BYTES:
                 raise DebugPolicyError(f"{label} is too large")
-            rel = _normalize_relative_path(info.filename)
-            with archive.open(info) as fh:
-                text = _decode_skill_file(fh.read(), f"{label} file {info.filename}")
             if _SKILL_MD_RE.search(rel):
                 skill_md_candidates.append((rel, text))
             extracted.append((rel, text))
@@ -281,9 +523,11 @@ def _strip_skill_zip_prefix(
 def _decode_skill_file(content: bytes, label: str) -> str:
     for encoding in ("utf-8-sig", "gb18030"):
         try:
-            return content.decode(encoding)
+            text = content.decode(encoding)
         except UnicodeDecodeError:
-            pass
+            continue
+        if "\x00" not in text:
+            return text
     raise DebugPolicyError(f"{label} must be UTF-8 or GB18030 text")
 
 
@@ -358,6 +602,11 @@ def _skill_md_folder_name(text: str) -> str | None:
     if _FOLDER_RE.fullmatch(name) and name not in {".", ".."}:
         return name
     return None
+
+
+def skill_name_from_markdown(text: str) -> str | None:
+    """Return the normalized ADK skill name declared by a SKILL.md document."""
+    return _skill_md_folder_name(text)
 
 
 def _folder_from_generated_files(files: list[GeneratedFile]) -> str | None:

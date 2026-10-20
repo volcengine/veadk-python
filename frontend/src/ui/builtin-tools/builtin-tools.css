@@ -46,6 +46,14 @@
   --builtin-tool-accent: 32 67% 42%;
 }
 
+.builtin-tool-head[data-tool-tone="resources"] {
+  --builtin-tool-accent: 199 58% 38%;
+}
+
+.builtin-tool-head[data-tool-tone="agent"] {
+  --builtin-tool-accent: 267 38% 47%;
+}
+
 .builtin-tool-head:hover {
   color: hsl(var(--foreground));
 }

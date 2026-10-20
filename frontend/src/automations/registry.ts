@@ -1,8 +1,11 @@
+import { mpaChannelsAutomation } from "./mpaChannels";
 import { codingAgentsAutomation } from "./codingAgents";
 import { feishuBotAutomation } from "./feishuBot";
+import { gitLabMergeRequestReviewAutomation } from "./gitlabMergeRequestReview";
 import { pullRequestReviewAutomation } from "./pullRequestReview";
 import { runtimeDeliveryAutomation } from "./runtimeDelivery";
 import { templateProjectAutomation } from "./templateProject";
+import { websiteIntegrationAutomation } from "./websiteIntegration";
 import type {
   AutomationCategoryId,
   AutomationDefinition,
@@ -14,8 +17,8 @@ export const AUTOMATION_CATEGORIES: readonly {
   id: AutomationCategoryId;
   label: string;
 }[] = [
-  { id: "development", label: "研发" },
-  { id: "channels", label: "消息渠道" },
+  { id: "development", label: "Development" },
+  { id: "channels", label: "Messaging channels" },
 ];
 
 export const AUTOMATIONS: readonly AutomationDefinition[] = [
@@ -23,7 +26,10 @@ export const AUTOMATIONS: readonly AutomationDefinition[] = [
   templateProjectAutomation,
   runtimeDeliveryAutomation,
   pullRequestReviewAutomation,
+  gitLabMergeRequestReviewAutomation,
   feishuBotAutomation,
+  mpaChannelsAutomation,
+  websiteIntegrationAutomation,
 ];
 
 const AUTOMATION_BY_ID = new Map(

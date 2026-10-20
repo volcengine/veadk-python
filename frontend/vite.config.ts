@@ -10,6 +10,7 @@ const API_TARGET = process.env.VEADK_API_TARGET ?? "http://127.0.0.1:8000";
 function localApiProxy(): ProxyOptions {
   return {
     target: API_TARGET,
+    ws: true,
     configure(proxy) {
       proxy.on("proxyReq", (proxyRequest) => {
         // The browser talks to Vite same-origin. Do not forward browser-only
@@ -25,8 +26,32 @@ function localApiProxy(): ProxyOptions {
 // CORS headers, so the browser cannot call it cross-origin directly.
 const SKILLHUB_TARGET = "https://skills.volces.com";
 
+function chunkDirectory(moduleIds: readonly string[]): string {
+  const normalizedIds = moduleIds.map((moduleId) => moduleId.replaceAll("\\", "/"));
+  if (
+    normalizedIds.some(
+      (moduleId) =>
+        moduleId.includes("/node_modules/mermaid/") ||
+        moduleId.includes("/node_modules/@mermaid-js/"),
+    )
+  ) {
+    return "assets/visualizations/mermaid";
+  }
+  if (
+    normalizedIds.some(
+      (moduleId) =>
+        moduleId.includes("/node_modules/echarts/") ||
+        moduleId.includes("/node_modules/zrender/"),
+    )
+  ) {
+    return "assets/visualizations/echarts";
+  }
+  return "assets/chunks";
+}
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  optimizeDeps: { entries: ["index.html"] },
   server: {
     port: 5173,
     proxy: {
@@ -38,6 +63,9 @@ export default defineConfig({
       "/debug": localApiProxy(),
       "/dev": localApiProxy(),
       "/oauth2": localApiProxy(),
+      // Embed authorization depends on the customer's browser Origin, so this
+      // proxy intentionally preserves Origin instead of using localApiProxy().
+      "/embed": { target: API_TARGET },
       "/web": localApiProxy(),
       "/skillhub": {
         target: SKILLHUB_TARGET,
@@ -52,5 +80,18 @@ export default defineConfig({
     // with the wheel and works for pip-installed users.
     outDir: "../veadk/webui",
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        entryFileNames: "assets/app/[name]-[hash].js",
+        chunkFileNames: (chunkInfo) =>
+          `${chunkDirectory(chunkInfo.moduleIds)}/[name]-[hash].js`,
+        assetFileNames: (assetInfo) => {
+          const name = assetInfo.names?.[0] ?? assetInfo.name ?? "asset";
+          return name.endsWith(".css")
+            ? "assets/styles/[name]-[hash][extname]"
+            : "assets/media/[name]-[hash][extname]";
+        },
+      },
+    },
   },
 });

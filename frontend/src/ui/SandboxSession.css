@@ -92,6 +92,26 @@
   text-align: center;
 }
 
+.sandbox-session-warning.is-expiring .sandbox-session-warning-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.sandbox-session-warning.is-expiring {
+  grid-template-columns: minmax(0, 1fr) auto;
+  max-width: 768px;
+}
+
+.sandbox-session-warning.is-expiring .sandbox-session-warning-copy {
+  grid-column: 1;
+  text-align: center;
+}
+
+.sandbox-session-warning.is-expiring button {
+  grid-column: 2;
+}
+
 .sandbox-session-warning button {
   grid-column: 3;
   justify-self: end;
@@ -102,6 +122,7 @@
   color: hsl(var(--muted-foreground));
   font: inherit;
   font-weight: 580;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -296,6 +317,28 @@
   grid-column: 2;
 }
 
+.sandbox-run-actions {
+  grid-row: 2;
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sandbox-run-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 12px 8px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.sandbox-run-status [role="alert"] { color: hsl(var(--destructive)); }
+
 .main.is-sandbox-session {
   position: relative;
   isolation: isolate;
@@ -339,6 +382,14 @@
   filter: blur(24px);
   opacity: 1;
   animation: sandbox-smoke-enter 420ms ease-out both;
+}
+
+.main.is-sandbox-session.is-intelligent-development {
+  background: hsl(var(--panel));
+}
+
+.main.is-sandbox-session.is-intelligent-development::before {
+  display: none;
 }
 
 .main.is-sandbox-session > * {
@@ -482,6 +533,16 @@
 .sandbox-dialog-field input:disabled {
   cursor: default;
   opacity: 0.66;
+}
+
+.sandbox-dialog-disk-field {
+  margin-top: 12px;
+}
+
+.sandbox-dialog-field-help {
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  line-height: 1.45;
 }
 
 .sandbox-dialog-persistence {

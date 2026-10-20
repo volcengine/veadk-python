@@ -30,6 +30,7 @@ _EXPECTED_DEFAULTS = {
     "enable_responses_cache": True,
     "enable_authz": False,
     "auto_save_session": False,
+    "auto_save_memory_policy": "default",
     "enable_supervisor": False,
     "enable_ghostchar": False,
     "enable_dataset_gen": False,
@@ -37,6 +38,7 @@ _EXPECTED_DEFAULTS = {
     "enable_skills_checklist": False,
     "enable_tunnel": False,
     "runtime": "adk",
+    "tool_thread_pool_config": None,
 }
 
 _EXPECTED_PRESENT = {
@@ -66,6 +68,10 @@ def test_agent_is_pydantic_model():
 def test_expected_fields_present():
     missing = _EXPECTED_PRESENT - set(Agent.model_fields)
     assert not missing, f"Agent lost expected fields: {missing}"
+
+
+def test_bff_tool_host_is_not_an_agent_field():
+    assert "enable_bff_tools" not in Agent.model_fields
 
 
 def test_field_defaults():

@@ -20,6 +20,7 @@
   :class:`veadk.agent.Agent`, no runtime object).
 - ``"codex"``: the OpenAI Codex SDK as the agent harness.
 - ``"piagent"``: a local Pi coding agent binary as the agent harness.
+- ``"dsh"``: the DeepSeek Harness SDK and bundled ``dsh`` runtime.
 """
 
 from __future__ import annotations
@@ -27,6 +28,10 @@ from __future__ import annotations
 from functools import lru_cache
 
 from veadk.runtime.base_runtime import BaseRuntime
+from veadk.runtime.provider import DispatchRuntimeProvider
+from veadk.runtime.provider import LocalRuntimeProvider
+from veadk.runtime.provider import RuntimeProvider
+from veadk.runtime.provider import ToolCall
 
 
 @lru_cache(maxsize=None)
@@ -51,7 +56,7 @@ def get_runtime(name: str) -> BaseRuntime:
             raise ImportError(
                 f"The 'codex' runtime requires extra dependencies (missing: {e.name}). "
                 "Install them with: pip install openai-codex fastapi uvicorn "
-                "(openai-codex bundles the Codex binary via openai-codex-cli-bin)."
+                "(openai-codex pins its matching Codex binary, openai-codex-cli-bin)."
             ) from e
 
         return CodexRuntime()
@@ -61,7 +66,30 @@ def get_runtime(name: str) -> BaseRuntime:
 
         return PiAgentRuntime()
 
+    if name == "dsh":
+        try:
+            from veadk.runtime.deepseek_harness import DeepSeekHarnessRuntime
+        except ModuleNotFoundError as e:
+            if e.name and e.name.startswith("deepseek_harness"):
+                raise ImportError(
+                    "The 'dsh' runtime requires optional "
+                    "dependencies. Install them with: "
+                    'pip install "veadk-python[dsh]" '
+                    "(the DeepSeek Harness SDK depends on its matching "
+                    "deepseek-harness-runtime-bin package)."
+                ) from e
+            raise
+
+        return DeepSeekHarnessRuntime()
+
     raise ValueError(f"Unknown runtime: {name!r}")
 
 
-__all__ = ["BaseRuntime", "get_runtime"]
+__all__ = [
+    "BaseRuntime",
+    "DispatchRuntimeProvider",
+    "LocalRuntimeProvider",
+    "RuntimeProvider",
+    "ToolCall",
+    "get_runtime",
+]

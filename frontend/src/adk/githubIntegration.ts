@@ -1,9 +1,71 @@
-export type GitHubAutomationRegion = "cn-beijing" | "cn-shanghai";
+import type { CloudRegion } from "./cloudProvider";
+import { studioFetch } from "./client";
+import { adkT } from "./i18n";
+
+export type GitHubAutomationRegion = CloudRegion;
 
 export interface GitHubPullRequestResult {
   number: number;
   url: string;
   branch: string;
+}
+
+export interface GitHubPullRequestReviewResult {
+  status: "started";
+  sessionId: string;
+  displayName: string;
+}
+
+export type GitHubPullRequestReviewRecordStatus = "started" | "completed" | "ignored" | "failed";
+export type GitHubPullRequestReviewRecordTrigger = "manual" | "webhook";
+
+export interface GitHubPullRequestReviewRecord {
+  id: string;
+  repository: string;
+  pullRequestUrl: string;
+  pullRequestNumber: number;
+  status: GitHubPullRequestReviewRecordStatus;
+  trigger: GitHubPullRequestReviewRecordTrigger;
+  createdAt: string;
+  deliveryId: string;
+  action: string;
+  sessionId: string;
+  displayName: string;
+  reason: string;
+}
+
+export interface GitHubAppConfig {
+  configured: boolean;
+  appSlug: string;
+  installUrl: string;
+  reason: string;
+}
+
+export interface GitHubAppRepository {
+  installationId: number;
+  account: string;
+  fullName: string;
+  htmlUrl: string;
+  private: boolean;
+  reviewEnabled: boolean;
+}
+
+export interface GitHubPagination {
+  page: number;
+  pageSize: number;
+  hasNextPage: boolean;
+}
+
+export interface GitHubAppRepositoriesResult extends GitHubPagination {
+  repositories: GitHubAppRepository[];
+  reviewSettingsConfigured: boolean;
+  reviewSettingsReason: string;
+}
+
+export interface GitHubPullRequestReviewRecordsResult extends GitHubPagination {
+  records: GitHubPullRequestReviewRecord[];
+  reviewSettingsConfigured: boolean;
+  reviewSettingsReason: string;
 }
 
 export interface GitHubPullRequestFile {
@@ -42,17 +104,21 @@ const BRANCH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 const FILE_PATH_PATTERN = /^[A-Za-z0-9._/-]+$/;
 
 function sanitizeGitHubError(status: number, payload: GitHubPayload | null, token: string): string {
+  const message = String(payload?.message || "");
+  if (status === 403 && /workflow/i.test(message)) {
+    return "GitHub Token 缺少 Workflows 写权限，无法创建或更新 .github/workflows 下的文件";
+  }
   if (status === 401 || status === 403) {
-    return "GitHub Token 无效或没有仓库写入权限";
+    return adkT("github.invalidToken");
   }
   if (status === 404) {
-    return "仓库、分支或文件不存在，或 Token 无权访问";
+    return adkT("github.notFound");
   }
   if (status === 422) {
-    return "GitHub 拒绝了提交，请检查分支和文件状态";
+    return adkT("github.rejectedCommit");
   }
-  const detail = String(payload?.message || "").split(token).join("***").trim();
-  return detail.slice(0, 240) || `GitHub 请求失败（HTTP ${status}）`;
+  const detail = message.split(token).join("***").trim();
+  return detail.slice(0, 240) || adkT("github.requestFailed", { status });
 }
 
 async function requestGitHub<T extends GitHubPayload | null>(
@@ -82,7 +148,7 @@ async function requestGitHub<T extends GitHubPayload | null>(
     });
   } catch (error) {
     if (options.signal.aborted) throw error;
-    throw new Error("连接 GitHub 失败，请检查网络后重试");
+    throw new Error(adkT("github.networkFailed"));
   }
 
   const payload = await response.json().catch(() => null) as T;
@@ -120,7 +186,7 @@ export function normalizeGitHubRepository(value: string): string {
     try {
       repositoryUrl = new URL(candidate);
     } catch {
-      throw new Error("GitHub Repo 格式应为 owner/repository");
+      throw new Error(adkT("github.invalidRepositoryFormat"));
     }
     if (
       repositoryUrl.protocol !== "https:"
@@ -130,15 +196,22 @@ export function normalizeGitHubRepository(value: string): string {
       || repositoryUrl.search
       || repositoryUrl.hash
     ) {
-      throw new Error("仅支持安全的 github.com 仓库地址");
+      throw new Error(adkT("github.insecureRepositoryUrl"));
     }
     candidate = repositoryUrl.pathname;
   }
   candidate = candidate.replace(/\.git$/, "").replace(/^\/+|\/+$/g, "");
   if (!REPOSITORY_PATTERN.test(candidate)) {
-    throw new Error("GitHub Repo 格式应为 owner/repository");
+    throw new Error(adkT("github.invalidRepositoryFormat"));
   }
   return candidate;
+}
+
+export function repositoryFromGitHubPullRequestUrl(value: string): string {
+  const match = value.trim().match(
+    /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/[1-9][0-9]*\/?$/,
+  );
+  return match?.[1] ?? "";
 }
 
 export function normalizeRepositoryPath(value: string, fallback = "."): string {
@@ -149,7 +222,7 @@ export function normalizeRepositoryPath(value: string, fallback = "."): string {
     || !FILE_PATH_PATTERN.test(candidate)
     || parts.includes("..")
   ) {
-    throw new Error("Agent 项目目录必须是仓库内的安全相对路径");
+    throw new Error(adkT("github.unsafeProjectPath"));
   }
   return candidate.replace(/\/+$/, "") || ".";
 }
@@ -160,14 +233,14 @@ export async function createGitHubPullRequest(
 ): Promise<GitHubPullRequestResult> {
   const repository = normalizeGitHubRepository(spec.repository);
   const baseBranch = spec.baseBranch.trim() || "main";
-  if (!spec.token.trim()) throw new Error("GitHub Token 不能为空");
+  if (!spec.token.trim()) throw new Error(adkT("github.tokenRequired"));
   if (!BRANCH_PATTERN.test(baseBranch) || baseBranch.includes("..")) {
-    throw new Error("目标分支格式不正确");
+    throw new Error(adkT("github.invalidBaseBranch"));
   }
   if (!BRANCH_PATTERN.test(spec.branchPrefix)) {
-    throw new Error("发布分支格式不正确");
+    throw new Error(adkT("github.invalidPublishBranch"));
   }
-  if (!spec.files.length) throw new Error("没有需要提交的文件");
+  if (!spec.files.length) throw new Error(adkT("github.noFiles"));
 
   const files = spec.files.map((file) => ({
     ...file,
@@ -190,7 +263,7 @@ export async function createGitHubPullRequest(
     },
   );
   const baseSha = baseRef.payload.object?.sha;
-  if (!baseSha) throw new Error("目标分支缺少有效 Git SHA");
+  if (!baseSha) throw new Error(adkT("github.missingBaseSha"));
 
   const branch = createBranchName(spec.branchPrefix);
   await requestGitHub(`${repoPath}/git/refs`, {
@@ -214,10 +287,10 @@ export async function createGitHubPullRequest(
         },
       );
       if (file.mustBeNew && existing.status === 200) {
-        throw new Error(`目标仓库中已存在 ${file.path}，未覆盖现有文件`);
+        throw new Error(adkT("github.fileAlreadyExists", { path: file.path }));
       }
       if (existing.status === 200 && !existing.payload.sha) {
-        throw new Error(`目标路径 ${file.path} 不是可更新的文件`);
+        throw new Error(adkT("github.pathNotUpdatable", { path: file.path }));
       }
 
       await requestGitHub(`${repoPath}/contents/${encodedPath}`, {
@@ -247,7 +320,7 @@ export async function createGitHubPullRequest(
       },
     });
     if (!pullRequest.payload.number || !pullRequest.payload.html_url) {
-      throw new Error("GitHub 未返回有效的 Pull Request");
+      throw new Error(adkT("github.invalidPullRequest"));
     }
     branchCreated = false;
     return {
@@ -264,5 +337,229 @@ export async function createGitHubPullRequest(
         method: "DELETE",
       }).catch(() => undefined);
     }
+  }
+}
+
+export async function startGitHubPullRequestReview(
+  input: {
+    pullRequestUrl: string;
+  },
+  signal: AbortSignal,
+): Promise<GitHubPullRequestReviewResult> {
+  const response = await studioFetch(
+    "/web/github/pull-request-reviews",
+    {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      signal,
+    },
+  );
+  if (!response.ok) {
+    throw await responseErrorFromGitHubReview(response);
+  }
+  const value = (await response.json()) as Partial<GitHubPullRequestReviewResult>;
+  if (
+    value.status !== "started" ||
+    typeof value.sessionId !== "string" ||
+    !value.sessionId ||
+    typeof value.displayName !== "string"
+  ) {
+    throw new Error("PR 评审服务返回了无效结果。");
+  }
+  return value as GitHubPullRequestReviewResult;
+}
+
+export async function getGitHubAppConfig(
+  signal: AbortSignal,
+): Promise<GitHubAppConfig> {
+  const response = await studioFetch(
+    "/web/github/app/config",
+    {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal,
+    },
+  );
+  if (!response.ok) {
+    throw await responseErrorFromGitHubReview(response);
+  }
+  const value = (await response.json()) as Partial<GitHubAppConfig>;
+  if (
+    typeof value.configured !== "boolean" ||
+    typeof value.appSlug !== "string" ||
+    typeof value.installUrl !== "string" ||
+    typeof value.reason !== "string"
+  ) {
+    throw new Error("GitHub App 配置响应格式无效。");
+  }
+  return value as GitHubAppConfig;
+}
+
+export async function getGitHubAppRepositories(
+  signal: AbortSignal,
+  options: { page: number; pageSize: number; query?: string },
+): Promise<GitHubAppRepositoriesResult> {
+  const params = new URLSearchParams({
+    page: String(options.page),
+    pageSize: String(options.pageSize),
+  });
+  if (options.query?.trim()) params.set("q", options.query.trim());
+  const response = await studioFetch(
+    `/web/github/app/repositories?${params.toString()}`,
+    {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal,
+    },
+  );
+  if (!response.ok) {
+    throw await responseErrorFromGitHubReview(response);
+  }
+  const value = (await response.json()) as Partial<GitHubAppRepositoriesResult>;
+  if (
+    !Array.isArray(value.repositories) ||
+    typeof value.page !== "number" ||
+    typeof value.pageSize !== "number" ||
+    typeof value.hasNextPage !== "boolean" ||
+    typeof value.reviewSettingsConfigured !== "boolean" ||
+    typeof value.reviewSettingsReason !== "string" ||
+    value.repositories.some((repository) => (
+      typeof repository !== "object" ||
+      repository === null ||
+      typeof repository.installationId !== "number" ||
+      typeof repository.account !== "string" ||
+      typeof repository.fullName !== "string" ||
+      typeof repository.htmlUrl !== "string" ||
+      typeof repository.private !== "boolean" ||
+      typeof repository.reviewEnabled !== "boolean"
+    ))
+  ) {
+    throw new Error("GitHub App 仓库列表响应格式无效。");
+  }
+  return value as GitHubAppRepositoriesResult;
+}
+
+export async function getGitHubPullRequestReviewRecords(
+  signal: AbortSignal,
+  options: { page: number; pageSize: number },
+): Promise<GitHubPullRequestReviewRecordsResult> {
+  const params = new URLSearchParams({
+    page: String(options.page),
+    pageSize: String(options.pageSize),
+  });
+  const response = await studioFetch(
+    `/web/github/app/review-records?${params.toString()}`,
+    {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal,
+    },
+  );
+  if (!response.ok) {
+    throw await responseErrorFromGitHubReview(response);
+  }
+  const value = (await response.json()) as Partial<GitHubPullRequestReviewRecordsResult>;
+  if (
+    !Array.isArray(value.records) ||
+    typeof value.page !== "number" ||
+    typeof value.pageSize !== "number" ||
+    typeof value.hasNextPage !== "boolean" ||
+    typeof value.reviewSettingsConfigured !== "boolean" ||
+    typeof value.reviewSettingsReason !== "string" ||
+    value.records.some((record) => (
+      typeof record !== "object" ||
+      record === null ||
+      typeof record.id !== "string" ||
+      typeof record.repository !== "string" ||
+      typeof record.pullRequestUrl !== "string" ||
+      typeof record.pullRequestNumber !== "number" ||
+      !["started", "completed", "ignored", "failed"].includes(String(record.status)) ||
+      !["manual", "webhook"].includes(String(record.trigger)) ||
+      typeof record.createdAt !== "string" ||
+      typeof record.deliveryId !== "string" ||
+      typeof record.action !== "string" ||
+      typeof record.sessionId !== "string" ||
+      typeof record.displayName !== "string" ||
+      typeof record.reason !== "string"
+    ))
+  ) {
+    throw new Error("PR 评审记录响应格式无效。");
+  }
+  return value as GitHubPullRequestReviewRecordsResult;
+}
+
+export async function updateGitHubAppReviewRepositories(
+  repositories: string[],
+  signal: AbortSignal,
+): Promise<string[]> {
+  const response = await studioFetch(
+    "/web/github/app/review-repositories",
+    {
+      method: "PUT",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ repositories }),
+      signal,
+    },
+  );
+  if (!response.ok) {
+    throw await responseErrorFromGitHubReview(response);
+  }
+  const value = (await response.json()) as { repositories?: unknown };
+  if (
+    !Array.isArray(value.repositories) ||
+    value.repositories.some((repository) => typeof repository !== "string")
+  ) {
+    throw new Error("GitHub App 启用仓库响应格式无效。");
+  }
+  return value.repositories;
+}
+
+export async function updateGitHubAppReviewRepository(
+  input: {
+    repository: string;
+    reviewEnabled: boolean;
+  },
+  signal: AbortSignal,
+): Promise<string[]> {
+  const response = await studioFetch(
+    "/web/github/app/review-repositories",
+    {
+      method: "PUT",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      signal,
+    },
+  );
+  if (!response.ok) {
+    throw await responseErrorFromGitHubReview(response);
+  }
+  const value = (await response.json()) as { repositories?: unknown };
+  if (
+    !Array.isArray(value.repositories) ||
+    value.repositories.some((repository) => typeof repository !== "string")
+  ) {
+    throw new Error("GitHub App 评审仓库保存响应格式无效。");
+  }
+  return value.repositories;
+}
+
+async function responseErrorFromGitHubReview(response: Response): Promise<Error> {
+  const text = await response.text().catch(() => "");
+  try {
+    const payload = JSON.parse(text) as {
+      detail?: { message?: unknown } | string;
+      message?: unknown;
+      error?: unknown;
+    };
+    const detail = typeof payload.detail === "object" && payload.detail
+      ? payload.detail.message
+      : payload.detail ?? payload.message ?? payload.error;
+    const detailText = typeof detail === "string" ? detail : "";
+    return new Error(
+      detailText || `PR 评审发起失败（HTTP ${response.status}）`,
+    );
+  } catch {
+    return new Error(text || `PR 评审发起失败（HTTP ${response.status}）`);
   }
 }

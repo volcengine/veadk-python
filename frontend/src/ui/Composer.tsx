@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, SVGProps } from "react";
 import {
   AtSign,
@@ -10,11 +10,14 @@ import {
   ImageIcon,
   Loader2,
   MonitorPlay,
+  Pause,
+  Play,
   Plus,
   Sparkles,
   X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { useTranslation } from "react-i18next";
 import type {
   AgentSkill,
   AgentTarget,
@@ -22,8 +25,10 @@ import type {
   CloudRuntime,
   FrontendInvocation,
   RuntimeScope,
+  TurnControlState,
 } from "../adk/client";
 import type { CloudProvider } from "../adk/cloudProvider";
+import type { RuntimeLogTarget } from "../adk/runtimeLogs";
 import type { SessionTokenUsage } from "../adk/tokenUsage";
 import { getVideoCapabilities, type VideoCapabilities } from "../adk/video";
 import type { SandboxAgentResource } from "../adk/sandbox";
@@ -31,6 +36,7 @@ import { InvocationChips } from "./InvocationChips";
 import { MediaGroup } from "./Media";
 import { isImeCompositionEvent } from "./composerKeyboard";
 import { ComposerSendIcon, ComposerStopIcon } from "./icons/ComposerIcons";
+import { SandboxTerminalIcon } from "./icons/SandboxControlIcons";
 import { NewChatModeSelector } from "./new-chat-modes/NewChatModeSelector";
 import { NewChatAgentPicker } from "./new-chat-modes/NewChatAgentPicker";
 import { NewChatSkillControls } from "./new-chat-modes/NewChatSkillControls";
@@ -42,7 +48,7 @@ import { NewChatWorkspaceTabs } from "./new-chat-modes/NewChatWorkspaceTabs";
 import { NewChatCompactSelect } from "./new-chat-modes/NewChatCompactSelect";
 import {
   DEFAULT_NEW_CHAT_VIDEO_CONFIG,
-  VIDEO_TASK_MODE_OPTIONS,
+  videoTaskModeOptions,
   type NewChatVideoConfig,
   type VideoTaskMode,
 } from "./new-chat-modes/video-types";
@@ -60,6 +66,7 @@ import type {
 import { NEW_CHAT_TASK_TOOLS } from "./new-chat-modes/taskTools";
 import { VideoGenerateIcon } from "./builtin-tools/icons";
 import { TokenUsageIndicator } from "./TokenUsageIndicator";
+import { RuntimeLogsDialog } from "./RuntimeLogsDialog";
 
 interface CompletionTrigger {
   kind: "skill" | "agent";
@@ -74,40 +81,36 @@ type CompletionItem =
 const TASK_SHORTCUTS = [
   {
     value: "ppt",
-    label: "PPT",
     icon: MonitorPlay,
     prompts: [
-      "复盘【季度】经营表现，提炼指标差距、原因与行动建议",
-      "汇报【项目名称】进展：里程碑、风险、预算和资源诉求",
-      "为【客户行业】输出解决方案：痛点、架构、实施路径与收益",
-      "分析【行业主题】趋势，给出竞争格局、机会与战略建议",
+      "composer.prompts.ppt.quarterlyReview",
+      "composer.prompts.ppt.projectUpdate",
+      "composer.prompts.ppt.solutionProposal",
+      "composer.prompts.ppt.industryAnalysis",
     ],
   },
   {
     value: "image",
-    label: "图片生成",
     icon: ImageIcon,
     prompts: [
-      "为【品牌或产品】设计【高级科技】风格的发布会主视觉",
-      "生成【产品名称】电商海报，突出【核心卖点】与品牌色",
-      "呈现【产品或空间】在【使用场景】中的写实概念效果图",
-      "围绕【传播主题】制作简洁专业的企业社媒配图",
+      "composer.prompts.image.launchVisual",
+      "composer.prompts.image.ecommercePoster",
+      "composer.prompts.image.conceptRendering",
+      "composer.prompts.image.socialGraphic",
     ],
   },
   {
     value: "video",
-    label: "视频生成",
     icon: VideoGenerateIcon,
     prompts: [
-      "制作【品牌名称】30 秒宣传片，突出【品牌价值】",
-      "为【产品名称】制作 45 秒发布视频：痛点、功能、场景与行动号召",
-      "制作【培训主题】企业培训视频，讲清【关键操作或规范】",
-      "生成【活动名称】20 秒预热视频，包含亮点、时间地点和报名信息",
+      "composer.prompts.video.brandFilm",
+      "composer.prompts.video.productLaunch",
+      "composer.prompts.video.trainingVideo",
+      "composer.prompts.video.eventTeaser",
     ],
   },
 ] as const satisfies ReadonlyArray<{
   value: NewChatTask;
-  label: string;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
   prompts: readonly string[];
 }>;
@@ -138,6 +141,12 @@ export interface ComposerProps {
   invocation: FrontendInvocation;
   capabilitiesLoading?: boolean;
   modelName: string;
+  selectableModels?: readonly string[];
+  selectedModel?: string;
+  onSelectedModelChange?: (model: string) => void;
+  turnControl?: TurnControlState | null;
+  turnControlBusy?: boolean;
+  onTurnControl?: (action: "pause" | "resume") => void;
   tokenUsage: SessionTokenUsage;
   systemTokenEstimate: number | null;
   allowAttachments?: boolean;
@@ -165,9 +174,13 @@ export interface ComposerProps {
   showAgentPicker?: boolean;
   agentPickerDisabled?: boolean;
   selectedRuntimeId?: string;
+  agentsSource?: "local" | "cloud";
+  localApps?: string[];
   runtimeScope?: RuntimeScope;
+  onSelectLocalApp?: (app: string) => Promise<void>;
   onSelectRuntime?: (runtime: CloudRuntime) => Promise<void>;
   onSelectSandboxSession?: (session: SandboxAgentResource) => Promise<void>;
+  runtimeLogTarget?: RuntimeLogTarget;
 }
 
 export function Composer({
@@ -192,6 +205,12 @@ export function Composer({
   invocation,
   capabilitiesLoading = false,
   modelName,
+  selectableModels = [],
+  selectedModel = "",
+  onSelectedModelChange,
+  turnControl = null,
+  turnControlBusy = false,
+  onTurnControl,
   tokenUsage,
   systemTokenEstimate,
   allowAttachments = true,
@@ -219,18 +238,29 @@ export function Composer({
   showAgentPicker = false,
   agentPickerDisabled = false,
   selectedRuntimeId = "",
+  agentsSource = "cloud",
+  localApps = [],
   runtimeScope = "mine",
+  onSelectLocalApp,
   onSelectRuntime,
   onSelectSandboxSession,
+  runtimeLogTarget,
 }: ComposerProps) {
+  const { t } = useTranslation("ui");
   const ref = useRef<HTMLTextAreaElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
   const documentInput = useRef<HTMLInputElement>(null);
   const videoInput = useRef<HTMLInputElement>(null);
+  const hasTurnModelSelector = selectableModels.length > 1 && Boolean(onSelectedModelChange);
+  const turnModelOptions = useMemo(
+    () => selectableModels.map((model) => ({ value: model, label: model })),
+    [selectableModels],
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [trigger, setTrigger] = useState<CompletionTrigger | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [sessionIdCopied, setSessionIdCopied] = useState(false);
+  const [runtimeLogsOpen, setRuntimeLogsOpen] = useState(false);
   const [newChatVideoConfig, setNewChatVideoConfig] = useState(
     DEFAULT_NEW_CHAT_VIDEO_CONFIG,
   );
@@ -299,13 +329,14 @@ export function Composer({
     (attachment) => attachment.status !== "ready",
   );
   const videoMode = newChatLayout && newChatWorkspaceMode === "video";
+  const videoModeOptions = videoTaskModeOptions();
   const requiredInlineAsset = !videoMode
     ? null
     : newChatVideoConfig.taskMode === "first_last_frame"
       ? {
           asset: newChatVideoConfig.firstFrame,
           kind: "image" as const,
-          label: "首帧",
+          label: t("composer.firstFrame"),
         }
       : newChatVideoConfig.taskMode === "video_editing" ||
           newChatVideoConfig.taskMode === "video_extension"
@@ -314,13 +345,36 @@ export function Composer({
             kind: "video" as const,
             label:
               newChatVideoConfig.taskMode === "video_editing"
-                ? "待编辑视频"
-                : "基础视频",
+                ? t("composer.videoToEdit")
+                : t("composer.baseVideo"),
           }
         : null;
   const videoTaskRunning = isVideoTaskRunning(videoTask);
   const canOpenVideoTask = videoMode && Boolean(videoTask) && !value.trim();
-  const canStop = busy && Boolean(onStop);
+  const canPauseTurn = turnControl?.allowedActions.includes("pause") === true;
+  const canResumeTurn = turnControl?.allowedActions.includes("resume") === true;
+  const turnControlPending = turnControlBusy || ["pausing", "resuming"].includes(turnControl?.state ?? "");
+  const canStop = busy && Boolean(onStop) && !turnControl;
+  const turnStateLabel = turnControl
+    ? (turnControl.resumeDisposition === "new_turn_required"
+      ? t("composer.turnState.newTurnRequired")
+      : ({
+        running: t("composer.turnState.running"),
+        pausing: t("composer.turnState.pausing"),
+        paused: t("composer.turnState.paused"),
+        resuming: t("composer.turnState.resuming"),
+        interrupting: t("composer.turnState.interrupting"),
+        cancelling: t("composer.turnState.cancelling"),
+        interrupted: t("composer.turnState.interrupted"),
+        completed: t("composer.turnState.completed"),
+        failed: t("composer.turnState.failed"),
+        rejected: t("composer.turnState.failed"),
+        cancelled: t("composer.turnState.cancelled"),
+        canceled: t("composer.turnState.cancelled"),
+        orphaned: t("composer.turnState.orphaned"),
+      }[turnControl.state] ?? turnControl.state)
+    )
+    : "";
   const canSend = videoMode
     ? videoTaskRunning ||
       canOpenVideoTask ||
@@ -351,19 +405,19 @@ export function Composer({
   const workspacePlaceholder =
     newChatWorkspaceMode === "skill"
       ? newChatSkillAction === "optimize"
-        ? "描述你想优化的技能…"
-        : "描述你想生成的技能…"
+        ? t("composer.optimizeSkillPlaceholder")
+        : t("composer.createSkillPlaceholder")
       : newChatWorkspaceMode === "video"
-        ? "描述你想创作的视频…"
-        : `向 ${agentName} 发消息…`;
+        ? t("composer.createVideoPlaceholder")
+        : t("composer.messageAgentPlaceholder", { name: agentName });
   const placeholderText =
     disabled && newChatWorkspaceMode === "agent"
-      ? "请先选择智能体"
+      ? t("composer.selectAgentFirst")
       : disabled &&
           newChatWorkspaceMode === "skill" &&
           newChatSkillAction === "optimize" &&
           !newChatSkillTarget
-        ? "请先选择需要优化的 Skill"
+        ? t("composer.selectSkillFirst")
         : workspacePlaceholder;
 
   const query = trigger?.query.toLocaleLowerCase() ?? "";
@@ -546,7 +600,7 @@ export function Composer({
             ? "new-chat-workspace-panel"
             : undefined
         }
-        className="composer-box"
+        className={`composer-box${hasTurnModelSelector ? " composer-box--has-model" : ""}`}
         role={newChatLayout && showWorkspaceTabs ? "tabpanel" : undefined}
         aria-labelledby={
           newChatLayout && showWorkspaceTabs
@@ -558,24 +612,24 @@ export function Composer({
           <div
             className="composer-command-menu"
             role="listbox"
-            aria-label={trigger.kind === "skill" ? "可用技能" : "可用子 Agent"}
+            aria-label={trigger.kind === "skill" ? t("composer.availableSkills") : t("composer.availableSubagents")}
           >
             <div className="composer-command-head">
               {trigger.kind === "skill" ? <Sparkles /> : <AtSign />}
               <span>
-                {trigger.kind === "skill" ? "调用技能" : "使用子 Agent"}
+                {trigger.kind === "skill" ? t("composer.invokeSkill") : t("composer.useSubagent")}
               </span>
               <kbd>{trigger.kind === "skill" ? "/" : "@"}</kbd>
             </div>
             {capabilitiesLoading ? (
               <div className="composer-command-empty">
-                <Loader2 className="spin" /> 正在读取 Agent 能力…
+                <Loader2 className="spin" /> {t("composer.loadingCapabilities")}
               </div>
             ) : suggestions.length === 0 ? (
               <div className="composer-command-empty">
                 {trigger.kind === "skill"
-                  ? "当前 Agent 没有匹配技能"
-                  : "当前 Agent 没有匹配子 Agent"}
+                  ? t("composer.noMatchingSkills")
+                  : t("composer.noMatchingSubagents")}
               </div>
             ) : (
               <div className="composer-command-list">
@@ -605,15 +659,15 @@ export function Composer({
                       <span>
                         {item.value.description ||
                           (item.kind === "skill"
-                            ? "加载并执行该技能"
-                            : "将本轮交给该 Agent")}
+                            ? t("composer.skillFallbackDescription")
+                            : t("composer.agentFallbackDescription"))}
                       </span>
                     </span>
                     <kbd>
                       {index === activeIndex
                         ? "↵"
                         : item.kind === "skill"
-                          ? "技能"
+                          ? t("composer.skill")
                           : "Agent"}
                     </kbd>
                   </button>
@@ -626,8 +680,8 @@ export function Composer({
           <button
             type="button"
             className="comp-icon"
-            title="添加"
-            aria-label="添加"
+            title={t("common.add")}
+            aria-label={t("common.add")}
             disabled={disabled || !allowAttachments}
             onClick={() => {
               setTrigger(null);
@@ -646,7 +700,7 @@ export function Composer({
                   onClick={() => pick(imageInput)}
                 >
                   <ImageIcon className="icon" />
-                  上传图片
+                  {t("composer.uploadImage")}
                 </button>
                 <button
                   type="button"
@@ -654,7 +708,7 @@ export function Composer({
                   onClick={() => pick(documentInput)}
                 >
                   <FileText className="icon" />
-                  上传文档或 PDF
+                  {t("composer.uploadDocument")}
                 </button>
                 <button
                   type="button"
@@ -662,7 +716,7 @@ export function Composer({
                   onClick={() => pick(videoInput)}
                 >
                   <FileVideo2 className="icon" />
-                  上传视频
+                  {t("composer.uploadVideo")}
                 </button>
               </div>
             </>
@@ -676,8 +730,11 @@ export function Composer({
           <NewChatAgentPicker
             selectedAgentName={appName ? agentName : ""}
             selectedRuntimeId={selectedRuntimeId}
+            agentsSource={agentsSource}
+            localApps={localApps}
             runtimeScope={runtimeScope}
             disabled={agentPickerDisabled}
+            onSelectLocalApp={onSelectLocalApp}
             onSelectRuntime={onSelectRuntime}
             onSelectSandboxSession={onSelectSandboxSession}
           />
@@ -699,19 +756,19 @@ export function Composer({
           <>
             <div className="new-chat-video-task-mode">
               <NewChatCompactSelect
-                label="任务模式"
+                label={t("composer.taskMode")}
                 hideLabel
                 value={newChatVideoConfig.taskMode}
                 options={
                   videoCapabilities?.supportedModes?.length
-                    ? VIDEO_TASK_MODE_OPTIONS.filter(
+                    ? videoModeOptions.filter(
                         (option) =>
                           option.value === "auto" ||
                           videoCapabilities.supportedModes.includes(
                             option.value as VideoTaskMode,
                           ),
                       )
-                    : VIDEO_TASK_MODE_OPTIONS
+                    : videoModeOptions
                 }
                 onChange={(taskMode) =>
                   setNewChatVideoConfig((current) => ({
@@ -719,7 +776,7 @@ export function Composer({
                     taskMode: taskMode as VideoTaskMode,
                   }))
                 }
-                placeholder="选择任务模式"
+                placeholder={t("composer.selectTaskMode")}
                 disabled={
                   busy ||
                   videoTaskRunning ||
@@ -738,11 +795,11 @@ export function Composer({
                 <Loader2
                   className="icon spin"
                   role="status"
-                  aria-label="正在加载生成模型"
+                  aria-label={t("composer.loadingGenerationModel")}
                 />
               ) : (
                 <strong>
-                  {videoCapabilities?.generationModel || "模型不可用"}
+                  {videoCapabilities?.generationModel || t("composer.modelUnavailable")}
                 </strong>
               )}
             </div>
@@ -767,7 +824,9 @@ export function Composer({
           <button
             type="button"
             className={`new-chat-task-chip new-chat-task-chip--${selectedTask.value}`}
-            aria-label={`取消${selectedTask.label}任务`}
+            aria-label={t("composer.cancelTask", {
+              task: t(`composer.tasks.${selectedTask.value}`),
+            })}
             disabled={busy}
             onClick={clearTask}
           >
@@ -775,7 +834,7 @@ export function Composer({
               <selectedTask.icon className="new-chat-task-chip__task-icon" />
               <X className="new-chat-task-chip__remove-icon" />
             </span>
-            <span>{selectedTask.label}</span>
+            <span>{t(`composer.tasks.${selectedTask.value}`)}</span>
           </button>
         ) : null}
 
@@ -793,7 +852,7 @@ export function Composer({
                 !(videoCapabilities?.assetStorageAvailable ?? false)
               }
               unavailableReason={
-                videoCapabilities?.assetStorageUnavailableReason || ""
+                t("newChat:video.controls.storageUnavailable")
               }
               onChange={(asset) =>
                 setNewChatVideoConfig((current) =>
@@ -879,6 +938,27 @@ export function Composer({
           ) : null}
         </div>
         <div className="composer-submit-actions">
+          {turnControl && turnStateLabel ? (
+            <div className="composer-turn-status" aria-live="polite">
+              <span className="composer-turn-state">
+                {turnStateLabel}
+              </span>
+            </div>
+          ) : null}
+          {hasTurnModelSelector && onSelectedModelChange ? (
+            <div className="composer-model-select">
+              <NewChatCompactSelect
+                label={t("composer.model")}
+                hideLabel
+                value={selectedModel || modelName}
+                options={turnModelOptions}
+                onChange={onSelectedModelChange}
+                placeholder={t("composer.model")}
+                searchable
+                disabled={busy}
+              />
+            </div>
+          ) : null}
           {sessionId && appName && newChatWorkspaceMode === "agent" ? (
             <TokenUsageIndicator
               cloudProvider={cloudProvider}
@@ -890,20 +970,40 @@ export function Composer({
           <motion.button
             type="button"
             className="comp-send"
-            disabled={canStop ? false : !canSend}
-            onClick={canStop ? onStop : submitComposer}
-            aria-label={
-              canStop
-                ? "停止生成"
-                : videoTaskRunning || canOpenVideoTask
-                  ? "查看视频生成进度"
-                  : "发送"
+            disabled={turnControlPending ? true : canPauseTurn || canResumeTurn ? false : canStop ? false : !canSend}
+            onClick={
+              canPauseTurn && onTurnControl
+                ? () => onTurnControl("pause")
+                : canResumeTurn && onTurnControl
+                  ? () => onTurnControl("resume")
+                  : canStop
+                    ? onStop
+                    : submitComposer
             }
-            title={canStop ? "停止生成" : videoCapabilitiesError || undefined}
-            whileTap={canStop || canSend ? { scale: 0.9 } : undefined}
+            aria-label={
+              canPauseTurn
+                ? t("composer.pauseTurn")
+                : canResumeTurn
+                  ? t("composer.resumeTurn")
+                  : turnControlPending
+                    ? turnStateLabel
+                    : canStop
+                      ? t("composer.stopGenerating")
+                : videoTaskRunning || canOpenVideoTask
+                  ? t("composer.viewVideoProgress")
+                  : t("composer.send")
+            }
+            title={canPauseTurn ? t("composer.pauseTurn") : canResumeTurn ? t("composer.resumeTurn") : canStop ? t("composer.stopGenerating") : videoCapabilitiesError || undefined}
+            whileTap={canPauseTurn || canResumeTurn || canStop || canSend ? { scale: 0.9 } : undefined}
             transition={{ type: "spring", stiffness: 600, damping: 22 }}
           >
-            {canStop ? (
+            {turnControlPending ? (
+              <Loader2 className="icon spin" />
+            ) : canPauseTurn ? (
+              <Pause className="icon" />
+            ) : canResumeTurn ? (
+              <Play className="icon" />
+            ) : canStop ? (
               <ComposerStopIcon className="icon" />
             ) : busy || videoTaskRunning ? (
               <Loader2 className="icon spin" />
@@ -927,7 +1027,7 @@ export function Composer({
               videoCapabilities?.assetStorageAvailable ?? false
             }
             assetStorageUnavailableReason={
-              videoCapabilities?.assetStorageUnavailableReason || ""
+              t("newChat:video.controls.storageUnavailable")
             }
             modelsLoading={videoCapabilitiesLoading}
             modelsError={videoCapabilitiesError}
@@ -941,7 +1041,7 @@ export function Composer({
       newChatMode === "agent" &&
       harnessEnabled &&
       !selectedTask ? (
-        <div className="task-shortcuts" aria-label="选择任务类型">
+        <div className="task-shortcuts" aria-label={t("composer.selectTaskType")}>
           {availableTaskShortcuts.map((task) => {
             const TaskIcon = task.icon;
             return (
@@ -953,7 +1053,7 @@ export function Composer({
                 onClick={() => applyTaskShortcut(task)}
               >
                 <TaskIcon />
-                <span>{task.label}</span>
+                <span>{t(`composer.tasks.${task.value}`)}</span>
               </button>
             );
           })}
@@ -966,20 +1066,23 @@ export function Composer({
       selectedTask ? (
         <div
           className="prompt-suggestions"
-          aria-label={`${selectedTask.label}企业提示词`}
+          aria-label={t("composer.enterprisePrompts", {
+            task: t(`composer.tasks.${selectedTask.value}`),
+          })}
         >
           {selectedTask.prompts.map((prompt) => {
             const PromptIcon = selectedTask.icon;
+            const translatedPrompt = t(prompt);
             return (
               <button
                 key={prompt}
                 type="button"
                 className="prompt-suggestion"
                 disabled={disabled || busy}
-                onClick={() => applyTaskPrompt(prompt)}
+                onClick={() => applyTaskPrompt(translatedPrompt)}
               >
                 <PromptIcon />
-                <span>{prompt}</span>
+                <span>{translatedPrompt}</span>
               </button>
             );
           })}
@@ -989,20 +1092,20 @@ export function Composer({
       {showMeta && (
         <div className="composer-meta">
           <span className="composer-session-line">
-            会话 ID：
+            {t("composer.sessionIdLabel")}
             <span
               className="composer-session-id"
               title={sessionId || undefined}
               aria-live="polite"
             >
-              {sessionInitializing ? "初始化中" : sessionId || "—"}
+              {sessionInitializing ? t("composer.initializing") : sessionId || "—"}
             </span>
             {sessionId && (
               <button
                 type="button"
                 className="composer-session-copy"
-                title={sessionIdCopied ? "已复制" : "复制会话 ID"}
-                aria-label={sessionIdCopied ? "已复制会话 ID" : "复制会话 ID"}
+                title={sessionIdCopied ? t("composer.copied") : t("composer.copySessionId")}
+                aria-label={sessionIdCopied ? t("composer.sessionIdCopied") : t("composer.copySessionId")}
                 onClick={() => void copySessionId()}
               >
                 {sessionIdCopied ? <Check /> : <Copy />}
@@ -1012,9 +1115,34 @@ export function Composer({
           <span className="composer-meta-separator" aria-hidden>
             |
           </span>
-          <span>回答仅供参考</span>
+          <span>{t("composer.disclaimer")}</span>
+          {runtimeLogTarget ? (
+            <>
+              <span className="composer-meta-separator" aria-hidden>
+                |
+              </span>
+              <button
+                type="button"
+                className="composer-runtime-logs"
+                onClick={() => setRuntimeLogsOpen(true)}
+              >
+                <SandboxTerminalIcon />
+                <span>{t("composer.viewLogs")}</span>
+              </button>
+            </>
+          ) : null}
         </div>
       )}
+
+      {runtimeLogTarget ? (
+        <RuntimeLogsDialog
+          open={runtimeLogsOpen}
+          provider={cloudProvider}
+          sessionId={sessionId}
+          target={runtimeLogTarget}
+          onClose={() => setRuntimeLogsOpen(false)}
+        />
+      ) : null}
 
       {/* hidden pickers */}
       <input

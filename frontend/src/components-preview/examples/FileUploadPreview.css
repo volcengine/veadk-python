@@ -1,0 +1,2 @@
+.file-upload-preview__examples { display: flex; flex-direction: column; gap: 28px; max-width: 560px; }
+.file-upload-preview__subtitle { margin: 0 0 12px; color: var(--studio-text-secondary, rgba(219, 222, 231, .6)); font-size: 14px; font-weight: 400; line-height: 22px; }

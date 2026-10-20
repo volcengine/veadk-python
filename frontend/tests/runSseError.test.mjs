@@ -1,43 +1,58 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { Buffer } from "node:buffer";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import ts from "typescript";
+import { build } from "esbuild";
 
-const source = readFileSync(
-  new URL("../src/adk/runSseError.ts", import.meta.url),
-  "utf8",
-);
-const { outputText } = ts.transpileModule(source, {
-  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
+globalThis.localStorage = { getItem: () => "zh-CN" };
+globalThis.window = { localStorage: globalThis.localStorage };
+
+const result = await build({
+  entryPoints: [fileURLToPath(new URL("../src/adk/runSseError.ts", import.meta.url))],
+  bundle: true,
+  format: "esm",
+  platform: "node",
+  target: "node20",
+  write: false,
 });
-const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
+const moduleUrl = `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].contents).toString("base64")}`;
 const { formatRunSseError } = await import(moduleUrl);
+
+const GENERIC_RECOVERY_HINT =
+  "提示：请稍后重试，查看 Runtime、模型或网关日志。";
+const MODEL_QUOTA_HINT =
+  "提示：模型当前触发了 TPM/RPM 配额限制，请稍后重试或提高模型配额。";
 
 test("adds memory guidance only when the response says the session is missing", () => {
   const error = "run_sse failed: 404：Session not found: session-1";
   const formatted = formatRunSseError(error);
-  assert.ok(formatted.startsWith(error));
+  assert.ok(formatted.startsWith(`原始响应：${error}`));
   assert.match(formatted, /in-memory/);
   assert.match(formatted, /进程重启/);
   assert.match(formatted, /基于数据库的持久化短期记忆/);
+  assert.ok(formatted.endsWith(GENERIC_RECOVERY_HINT));
 });
 
 test("identifies an unsupported harness route without blaming memory", () => {
   const formatted = formatRunSseError("run_sse failed: 404：Not Found");
+  assert.match(formatted, /^原始响应：run_sse failed/);
   assert.match(formatted, /Runtime 未提供会话能力运行接口/);
   assert.doesNotMatch(formatted, /in-memory/);
 });
 
 test("does not guess at the cause of an unexplained 404", () => {
-  assert.equal(
-    formatRunSseError("run_sse failed: 404：upstream error"),
-    "run_sse failed: 404：upstream error",
-  );
+  const error = "run_sse failed: 404：upstream error";
+  const formatted = formatRunSseError(error);
+  assert.ok(formatted.startsWith(`原始响应：${error}`));
+  assert.ok(formatted.endsWith(GENERIC_RECOVERY_HINT));
+  assert.doesNotMatch(formatted, /会话已不存在|Runtime 未提供/);
 });
 
-test("leaves unrelated errors unchanged", () => {
+test("preserves unrelated errors before appending generic recovery guidance", () => {
   for (const error of ["run_sse failed: 500", "create_session failed: 404"]) {
-    assert.equal(formatRunSseError(error), error);
+    const formatted = formatRunSseError(error);
+    assert.ok(formatted.startsWith(`原始响应：${error}`));
+    assert.ok(formatted.endsWith(GENERIC_RECOVERY_HINT));
   }
 });
 
@@ -51,6 +66,47 @@ test("does not append the guidance twice", () => {
 test("preserves malformed tool argument details and adds an actionable message", () => {
   const error = "Expecting ',' delimiter: line 1 column 169 (char 168)";
   const formatted = formatRunSseError(error);
-  assert.ok(formatted.startsWith(error));
+  assert.ok(formatted.startsWith(`原始响应：${error}`));
   assert.match(formatted, /模型生成的工具参数格式不完整/);
+  assert.ok(formatted.endsWith(GENERIC_RECOVERY_HINT));
+});
+
+test("explains an expired resource collection without blaming public egress", () => {
+  const error =
+    "Unknown or expired collection_id 'resources_2b25f87314b6'. Call collect_resources first.";
+  const formatted = formatRunSseError(error);
+  assert.ok(formatted.startsWith(`原始响应：${error}`));
+  assert.match(formatted, /资源清单已失效/);
+  assert.match(formatted, /重新收集资源/);
+  assert.doesNotMatch(formatted, /共享公网出口/);
+});
+
+test("does not claim that a model error was caused by public egress", () => {
+  const error = "ModelInvocationError: upstream model returned 503";
+  const formatted = formatRunSseError(error);
+  assert.ok(formatted.startsWith(`原始响应：${error}`));
+  assert.ok(formatted.endsWith(GENERIC_RECOVERY_HINT));
+  assert.doesNotMatch(formatted, /Runtime 可能|无法访问模型服务|导致/);
+});
+
+test("shows model quota guidance for LiteLLM 429 without a network hint", () => {
+  const error =
+    "litellm.RateLimitError: TPM limit exceeded (HTTP 429) for model endpoint";
+  const formatted = formatRunSseError(error);
+  assert.ok(formatted.startsWith(`原始响应：${error}`));
+  assert.ok(formatted.endsWith(MODEL_QUOTA_HINT));
+  assert.doesNotMatch(formatted, /共享公网出口/);
+});
+
+test("does not duplicate an original-response label provided by HTTP handling", () => {
+  const error = [
+    "run_sse failed: 502：运行会话失败（HTTP 502）",
+    "Bad Gateway",
+    "原始响应：",
+    '<html lang="en">Bad Gateway</html>',
+  ].join("\n");
+  const formatted = formatRunSseError(error);
+  assert.equal(formatted.match(/原始响应：/g)?.length, 1);
+  assert.ok(formatted.startsWith("run_sse failed: 502"));
+  assert.ok(formatted.endsWith(GENERIC_RECOVERY_HINT));
 });

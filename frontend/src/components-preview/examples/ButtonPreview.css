@@ -1,0 +1,45 @@
+.button-preview-examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 40px;
+}
+
+.button-preview-examples h3,
+.button-preview-examples h4 {
+  margin: 0 0 16px;
+  color: var(--studio-text-preview, #a1a1aa);
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 400;
+}
+
+.button-preview-icon-section,
+.button-preview-loading-section {
+  margin-top: 32px;
+}
+
+.button-preview-icon-section > h3,
+.button-preview-loading-section > h3 {
+  margin: 0 0 16px;
+  color: var(--studio-text-primary);
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+}
+
+.button-preview-icon-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.button-preview-sizes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 20px 24px;
+}
+.button-preview-size-example { display: grid; justify-items: start; gap: 8px; }
+.button-preview-size-label { display: grid; color: var(--studio-text-secondary); font-size: 12px; line-height: 20px; white-space: nowrap; }
+.button-preview-icon-section > .button-preview-sizes { margin-bottom: 28px; }

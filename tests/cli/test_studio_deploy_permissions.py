@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +13,8 @@
 # limitations under the License.
 
 from __future__ import annotations
+
+import os
 
 import pytest
 from click.testing import CliRunner
@@ -36,15 +38,28 @@ def test_default_studio_deploy_requires_all_reachable_actions() -> None:
     specs = _default_specs()
     actions = [spec.action for spec in specs]
 
-    assert len(actions) == 39
+    assert len(actions) == 52
     assert len(actions) == len(set(actions))
     assert "id:CreateUserPool" in actions
+    assert {
+        "id:ListUsers",
+        "id:GetUser",
+        "id:ListGroups",
+        "id:CreateGroup",
+        "id:UpdateGroup",
+        "id:AddUsersToGroup",
+        "id:RemoveUsersFromGroup",
+    } <= set(actions)
     assert "iam:UpdatePolicy" in actions
     assert "tos:CreateBucket" in actions
     assert "agentkit:CreateTool" in actions
     assert "apig:CreateGateway" in actions
     assert "apig:UpdateRoute" in actions
     assert "vefaas:CreateApplication" in actions
+    assert "vefaas:UpdateFunctionResource" in actions
+    assert "vefaas:CreateTimer" in actions
+    assert "vefaas:ListTriggers" in actions
+    assert "vefaas:UpdateTimer" in actions
     assert "vefaas:DeleteApplication" in actions
 
 
@@ -199,8 +214,35 @@ def test_renderer_localizes_byteplus_purposes_and_summary(capsys) -> None:
     assert permissions.IAM_CONFIG_URLS["byteplus"] in output
 
 
-def test_cli_stops_before_cloud_writes_when_permission_is_missing(
-    monkeypatch,
+@pytest.mark.parametrize(
+    ("provider_args", "expected_prompt", "expected_message"),
+    [
+        (
+            [
+                "--volcengine-access-key",
+                "ak",
+                "--volcengine-secret-key",
+                "sk",
+            ],
+            "是否仍要继续部署？",
+            "缺少 Studio 部署所需的 IAM 权限",
+        ),
+        (
+            [
+                "--provider",
+                "byteplus",
+                "--byteplus-access-key",
+                "ak",
+                "--byteplus-secret-key",
+                "sk",
+            ],
+            "Continue deployment anyway?",
+            "required IAM Actions are missing",
+        ),
+    ],
+)
+def test_cli_stops_before_cloud_writes_when_missing_permission_is_declined(
+    monkeypatch, provider_args, expected_prompt, expected_message
 ) -> None:
     identity_called = False
 
@@ -231,20 +273,69 @@ def test_cli_stops_before_cloud_writes_when_permission_is_missing(
             "deploy",
             "--vefaas-app-name",
             "studio-test",
+            *provider_args,
+        ],
+        input="n\n",
+    )
+
+    assert result.exit_code != 0
+    assert expected_prompt in result.output
+    assert expected_message in result.output
+    assert identity_called is False
+
+
+def test_cli_continues_when_missing_permission_is_accepted(monkeypatch) -> None:
+    identity_called = False
+
+    def _precheck(*, specs, **_kwargs):
+        return [
+            permissions.PermissionResult(spec=spec, satisfied=index != 0)
+            for index, spec in enumerate(specs)
+        ]
+
+    def _identity(**_kwargs):
+        nonlocal identity_called
+        identity_called = True
+        raise RuntimeError("identity provisioning reached")
+
+    monkeypatch.setattr(
+        permissions,
+        "run_studio_deploy_permission_precheck",
+        _precheck,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_or_create_studio_identity_resources",
+        _identity,
+    )
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--vefaas-app-name",
+            "studio-test",
             "--volcengine-access-key",
             "ak",
             "--volcengine-secret-key",
             "sk",
         ],
+        input="y\n",
     )
 
     assert result.exit_code != 0
-    assert "缺少 Studio 部署所需的 IAM 权限" in result.output
-    assert identity_called is False
+    assert "是否仍要继续部署？" in result.output
+    assert "已确认忽略缺失的 IAM 权限，继续部署。" in result.output
+    assert identity_called is True
+    assert isinstance(result.exception, RuntimeError)
+    assert str(result.exception) == "identity provisioning reached"
 
 
 def test_cli_precheck_only_exits_before_cloud_writes(monkeypatch) -> None:
+    required_count = 0
+
     def _precheck(*, specs, **_kwargs):
+        nonlocal required_count
+        required_count = len(specs)
         results = [
             permissions.PermissionResult(spec=spec, satisfied=True) for spec in specs
         ]
@@ -274,8 +365,57 @@ def test_cli_precheck_only_exits_before_cloud_writes(monkeypatch) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert "All 39 required IAM Actions are satisfied." in result.output
+    assert f"All {required_count} required IAM Actions are satisfied." in result.output
     assert "Pre-check only: no cloud resources were created." in result.output
+
+
+def test_cli_restores_provider_process_env_after_byteplus_deploy(
+    monkeypatch,
+) -> None:
+    for key in (
+        "CLOUD_PROVIDER",
+        "AGENTKIT_CLOUD_PROVIDER",
+        "BYTEPLUS_REGION",
+        "BYTEPLUS_ACCESS_KEY",
+        "BYTEPLUS_SECRET_KEY",
+        "BYTEPLUS_SESSION_TOKEN",
+        "IAM_ROLE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    def _precheck(*, specs, **_kwargs):
+        return [
+            permissions.PermissionResult(spec=spec, satisfied=True) for spec in specs
+        ]
+
+    monkeypatch.setattr(
+        permissions,
+        "run_studio_deploy_permission_precheck",
+        _precheck,
+    )
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--vefaas-app-name",
+            "studio-test",
+            "--provider",
+            "byteplus",
+            "--byteplus-access-key",
+            "ak",
+            "--byteplus-secret-key",
+            "sk",
+            "--precheck-only",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert os.environ.get("CLOUD_PROVIDER") is None
+    assert os.environ.get("AGENTKIT_CLOUD_PROVIDER") is None
+    assert os.environ.get("BYTEPLUS_REGION") is None
+    assert os.environ.get("BYTEPLUS_ACCESS_KEY") is None
+    assert os.environ.get("BYTEPLUS_SECRET_KEY") is None
 
 
 def test_cli_precheck_only_rejects_overlong_site_title_before_iam(monkeypatch) -> None:

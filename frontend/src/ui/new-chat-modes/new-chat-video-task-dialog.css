@@ -158,6 +158,9 @@
 }
 
 .new-chat-video-task-error {
+  max-height: 220px;
+  min-width: 0;
+  overflow-y: auto;
   padding: 12px 14px;
   border: 1px solid hsl(var(--destructive) / 0.22);
   border-radius: 9px;
@@ -167,12 +170,11 @@
 
 .new-chat-video-task-error p {
   margin: 0;
-}
-
-.new-chat-video-task-error p {
   color: hsl(var(--foreground));
   font-size: 13px;
   line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .new-chat-video-task-prompt {
@@ -244,6 +246,44 @@
   font-weight: 600;
 }
 
+.new-chat-video-task-progress,
+.new-chat-video-task-progress__meta {
+  width: min(320px, 100%);
+}
+
+.new-chat-video-task-progress {
+  height: 4px;
+  overflow: hidden;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: hsl(var(--secondary));
+}
+
+.new-chat-video-task-progress > span {
+  width: 38%;
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: hsl(var(--primary) / 0.76);
+  transform: translate3d(-70%, 0, 0);
+  animation: new-chat-video-task-progress 1.7s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.new-chat-video-task-progress__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.new-chat-video-task-progress__meta span:last-child {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
 .new-chat-video-task-preview.is-loading > span:last-child {
   font-size: 12px;
 }
@@ -265,11 +305,6 @@
   color: hsl(var(--muted-foreground));
   font-size: 11.5px;
   line-height: 1.4;
-}
-
-.new-chat-video-task-dialog__actions p.is-warning {
-  color: hsl(var(--destructive));
-  font-weight: 500;
 }
 
 .new-chat-video-task-dialog__actions > div {
@@ -342,6 +377,15 @@
   }
 }
 
+@keyframes new-chat-video-task-progress {
+  0% {
+    transform: translate3d(-70%, 0, 0);
+  }
+  100% {
+    transform: translate3d(200%, 0, 0);
+  }
+}
+
 @media (max-width: 620px) {
   .new-chat-video-task-backdrop {
     padding: 12px;
@@ -379,5 +423,10 @@
 
   .new-chat-video-task-preview__loading {
     animation: none;
+  }
+
+  .new-chat-video-task-progress > span {
+    animation: none;
+    transform: translate3d(80%, 0, 0);
   }
 }

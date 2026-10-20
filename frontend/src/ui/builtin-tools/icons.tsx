@@ -172,6 +172,77 @@ export function RunCodeIcon(props: ToolIconProps) {
   );
 }
 
+export function CollectResourcesIcon(props: ToolIconProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <circle cx="6" cy="6.25" r="2.25" />
+      <circle cx="18" cy="6.25" r="2.25" />
+      <circle cx="12" cy="17.75" r="2.25" />
+      <path d="m7.7 7.75 2.7 7.55M16.3 7.75l-2.7 7.55M8.25 6.25h7.5" />
+    </svg>
+  );
+}
+
+export function CreateAgentsIcon(props: ToolIconProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <circle cx="9" cy="8" r="3" />
+      <path d="M3.75 18.75c.45-3.05 2.2-4.65 5.25-4.65s4.8 1.6 5.25 4.65" />
+      <path d="M17.75 4.25v5.5M15 7h5.5M16 13.25h4.25M18.125 11.125v4.25" />
+    </svg>
+  );
+}
+
+/** A stacked environment catalog with one active sandbox. */
+export function ListEnvironmentsIcon(props: ToolIconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <rect x="4" y="4.25" width="16" height="5" rx="1.5" />
+      <rect x="4" y="14.75" width="16" height="5" rx="1.5" />
+      <path d="M7.25 6.75h.01M7.25 17.25h.01M10 6.75h6.5M10 17.25h6.5" />
+    </svg>
+  );
+}
+
+/** A manifest sheet with compact configuration lines. */
+export function EnvironmentManifestIcon(props: ToolIconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <path d="M6 3.75h8l4 4v12.5H6V3.75Z" />
+      <path d="M14 3.75v4h4M8.75 11h6.5M8.75 14.25h6.5M8.75 17.5h4" />
+    </svg>
+  );
+}
+
+/** A terminal prompt enclosed by the selected sandbox boundary. */
+export function ExecuteInSandboxIcon(props: ToolIconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <rect x="3.75" y="4.5" width="16.5" height="15" rx="2.5" />
+      <path d="m7.5 9 2.75 2.5L7.5 14M12.5 14h4" />
+      <path d="M3.75 7.5h16.5" opacity=".62" />
+    </svg>
+  );
+}
+
 export function ToolDisclosureIcon(props: ToolIconProps) {
   return (
     <svg

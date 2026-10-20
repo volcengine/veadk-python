@@ -1,0 +1,7 @@
+.file-explorer-preview {
+  width: 100%;
+  max-width: 1040px;
+  min-width: 0;
+}
+.file-explorer-preview__heading { margin: 24px 0 12px; color: var(--studio-text-secondary); font: inherit; font-size: 13px; }
+.file-explorer-preview__status { min-height: 22px; margin: 8px 0 0; color: var(--studio-text-secondary); font-size: 12px; }

@@ -3,7 +3,308 @@
 A React web UI for VeADK / Google ADK agents. It talks to the standard ADK API
 server that `veadk frontend` launches — no separate backend.
 
+## Release notifications
+
+MPA basic information includes an editable maximum instance count, defaulting to
+20 for Volcengine and 10 for BytePlus.
+This is the Runtime autoscaling ceiling (`MaxInstance`), not the initial number
+of running instances. Submitted requests retain their selected value on retry;
+legacy requests without this field keep their original configuration. Duplicate
+names show the existing error message in a red alert. General-agent creation is unchanged.
+See [the creation contract](../specs/studio-mpa-creation/README.md).
+
+MPA 基本信息提供可编辑的“最大实例数”，火山默认 20、BytePlus 默认 10，对应 Runtime 的扩容上限
+`MaxInstance`，并非初始启动实例数。已提交请求重试沿用原值；没有此字段的旧请求
+保留原配置。名称重复时以红色错误框突出原提示，通用智能体创建不变。
+参见[创建契约](../specs/studio-mpa-creation/README.zh.md)。
+
+MPA session output storage accepts only optional buckets beginning with `agentkit-platform-`. The
+Worker Tool uses IAM Role without TOS keys; creation additively grants that role
+bucket metadata access and object read/write/delete under `sandbox-session/*`.
+The shared role's other consumers receive the same access. Existing Tools,
+Sessions and public bucket policies are not changed. Empty selection preserves
+server defaults. See [the managed setup](../veadk/integrations/mpa/managed/README.md#tos-output-storage-with-iam-role).
+
+MPA 会话输出存储仅可选以 `agentkit-platform-` 开头的桶，Worker Tool 使用 IAM Role，不再要求 TOS 密钥。
+创建时增量补齐角色的桶元数据权限和 `sandbox-session/*` 对象读写/删除权限；共享
+角色的其他使用者同样获得该权限。不修改已有 Tool、会话或桶公开策略；空选择保留
+服务端默认配置。参见[托管配置](../veadk/integrations/mpa/managed/README.zh.md#使用-iam-role-的-tos-输出存储)。
+
+The MPA creation wizard supports clicking step headings and returning to earlier
+settings after restoring a submitted draft. Submitted settings remain read-only;
+retry retains the original identity. Any submitted draft offers New Agent to
+open a fresh, editable request. It replaces the browser recovery draft without
+cancelling the old task; active-task admission limits still apply on submission.
+
+恢复已提交草稿时配置保持只读，重试沿用原身份。“新建另一个智能体”会生成新请求，
+开放编辑并替换浏览器恢复草稿，不取消旧任务；提交仍受服务端活动任务限制。
+
+The release workflow sends one Feishu card after both cloud providers finish
+publishing. A separate VeFaaS Webhook discovers the app bot’s group memberships
+and persists delivery results to avoid duplicate notifications on retries.
+See [deployment and operation](service/studio_release_notifier/README.md).
+
 ## Features
+
+Runtime connections discovered as `a2a-default` keep the A2A session protocol,
+including when the agent is categorized as MPA. Session creation, history and
+chat use the same bridge and do not query native MPA execution configuration.
+Native MPA apps continue to use their Profile and session APIs; authentication
+errors never cause an automatic protocol switch.
+
+For MPA agents connected through A2A, Studio uses the sandbox's completed answer
+once and omits only exact complete outer-model answer copies for the same task.
+Distinct supplementary text, reasoning, and partial output remain available. Sandbox tool activity
+and token usage remain available. This normalization runs in the Studio backend;
+restart the local Studio process after updating it. Ordinary ADK chat is unaffected.
+
+MPA A2A transcripts also reconcile repeated consolidated outer reasoning
+snapshots. Empty-response notices are evaluated across the whole user request,
+so an intermediate reasoning fragment does not report an empty reply when tools
+or an answer follow. General agents retain their existing per-turn behavior.
+
+- **Ark API Keys**: Each page load reads the current API Key list directly from
+  the cloud provider. Enabled, disabled, all-permission and custom-permission
+  keys are listed with their status and permission scope beneath the name.
+  Disabled keys remain visible but cannot be selected. Search matches names,
+  statuses and permission scopes; pagination preserves distinct keys with the
+  same name. Model options combine account activation with the selected key's
+  model permissions. Models outside that scope remain visible but disabled,
+  and changing keys clears model selections that are no longer permitted.
+  Explicitly granted video and shut-down models appear in the searchable model
+  dropdown with their status and remain disabled, without expanding the form.
+  Current permissions are re-applied even when model metadata is cached.
+  Overlapping identical requests share one in-flight cloud query, including
+  failures; later API Key list reads still fetch the latest cloud data.
+  This behavior applies to both Volcengine and BytePlus
+- **Agent publication review**: Developers deploy privately and apply from an
+  Agent card. The review center's Agent tab lets administrators inspect the
+  submitted Runtime metadata, approve with an optional comment, or return with
+  a required reason. Administrators can also publish directly. The applicant
+  sees the reviewer name/avatar, decision time, comment and return reason
+
+  Agent review is independent of SkillSpaces. Runtime `TagResources` writes
+  `veadk:visibility` and explicit `veadk:review:*` fields for application ID,
+  status, submission time/message, reviewer ID/name, decision time/reason/comment,
+  and withdrawal/unpublication actors and times. Agent details are read live from
+  the Runtime; applicant identity reuses its `veadk:owner` and `veadk:author` tags
+  instead of storing another snapshot. Display profiles resolve through the
+  configured Identity user pool. Cloud error bodies and request IDs are
+  returned intact. The repository uses provider-scoped clients for Volcengine
+  and BytePlus
+
+  Only an approved Runtime tagged enterprise-visible is shared. Other users can
+  use it through the server proxy and access their own conversations; management,
+  logs, credentials and other users' sessions remain restricted. Pending Agents
+  must be withdrawn before editing/deleting; published Agents must be unpublished
+  first. Unpublishing revokes subsequent shared proxy requests, including when
+  connection credentials were cached. An already running stream is not terminated
+
+  This first iteration stores the latest application on each Runtime and
+  replaces it on resubmission. Review covers name, description, model and Runtime
+  configuration metadata, not source files or automatic scoring. A configuration
+  fingerprint rejects approval if the submitted Runtime has changed. Version
+  upgrades, public-version selection and archived application history are deferred.
+  Studio guards do not prevent direct cloud changes; concurrent decisions are
+  serialized within one process, without a cross-replica transaction. The record
+  limits application messages to 20 characters and decision reasons/comments to
+  256 characters. Text unsupported by cloud tags is encoded per field, splitting
+  long values into numbered continuations. Every tag value fits within 256 bytes;
+  continuation tags are written first, then field heads and visibility together
+  within the 20-tag call limit. Writes are read back before reporting success
+  and reject exceeding the 50-tag Runtime quota. Existing packed applications
+  remain readable; new writes use explicit fields
+
+- **Skill publication requests**: Each personal Skill version can be submitted
+  from its action row. Studio copies its archive into an independent Skill in
+  `studio_review_space`, preserving the original name and writing the signed-in
+  submitter's display name to the `author` tag. Source space, Skill, version and
+  submission time are also recorded in tags. Matching names remain separate
+  requests; repeat submissions of the same source Skill version are rejected
+  while pending or approved. Administrators inspect submitted files, approve
+  with an optional comment, or return with a required reason and optional comment.
+  Approval copies that fixed snapshot into `studio_share_space`. A returned
+  version can be submitted again as a new request; earlier decisions remain in
+  history. Personal Skill rows, details and the version dialog show persisted
+  status, reviewer, decision time, comments and return reasons
+
+  Submission verifies source membership and authorship. Review list and file
+  endpoints require an administrator; generic catalog/download routes also block
+  review copies for ordinary users. The workflow requires readable Skill tags
+  from the cloud provider and fails without publishing a request if metadata
+  cannot be verified. Review copies survive Studio restarts. `TagResources`
+  directly updates Skill tags and each write is read back with `GetSkill`;
+  `UpdateSkillSpace` is not used for tags. Cloud tag values reject newlines,
+  some punctuation and values longer than 256 characters. Review text is encoded
+  in bounded tag chunks and restored on read, preserving multiline comments and
+  reasons up to 256 characters. Approval intent is stored before publication;
+  a retry after final metadata failure reuses the existing shared copy.
+  Duplicate checks and decisions are serialized within one server process;
+  multiple server processes do not have a transactional shared lock
+
+  Reviewer identity comes from the authenticated server principal. The configured
+  Identity user pool's `GetUser` resolves the stored stable UID to name, email and
+  avatar, with a short profile cache. Clients cannot supply the reviewer or time.
+  Local users without a pool UID, removed users and directory failures fall back
+  to the recorded name and a placeholder avatar; access checks remain unchanged
+
+- **Automatic Skill assessment**: New review copies are tagged `queued` on
+  submission and assessed in the background using the same provider-specific
+  model as automatic Agent creation. A Pydantic `output_schema` is sent through
+  Ark's structured-output API; the system prompt contains the rubric, not a
+  duplicate JSON schema. Safety (40%), usability (25%), completeness (15%),
+  reliability (10%) and maintainability (10%) each receive a score and reason;
+  Studio calculates the weighted total and includes risks and suggestions
+
+  Assessment reads the fixed submitted snapshot without running its code or
+  tools. At most 100 text files, 40,000 characters per file and 120,000 characters
+  total are included. Omitted, binary and truncated files are disclosed;
+  incomplete coverage leaves safety, completeness and total scores unset
+
+  Private JSON jobs and reports live in the configured Skill archive TOS bucket
+  under `review-scores/`. Conditional ETag writes prevent concurrent workers
+  from claiming the same job. Skill tags hold status, total, time, model, rubric
+  and report location. Startup and periodic scans recover queued or expired
+  running jobs, with up to two attempts and a ten-minute interrupted-job lease.
+  Recovery also reconciles stale status tags without repeating completed model
+  calls. Recorded bucket/key tags locate existing reports after storage config
+  changes; new jobs use the current configuration. Existing unscored requests
+  remain unscored until an administrator requests assessment
+
+  Administrators and the submitting user can read the full JSON report, using
+  the stored identity UID or owner ID for new requests and the recorded author
+  as a fallback for older requests;
+  administrators can retry failed jobs. Completed reports are immutable.
+  Errors preserve the upstream text and request IDs in the report and API
+  response, without translated summaries or truncation into cloud tags.
+  Manual decisions and published versions remain independent of AI scores
+
+- **Skill versions**: Personal Skills expose native version history. Uploading
+  a ZIP with the same Skill name creates a new version under the original Skill
+  ID and updates only its personal space association. Both ZIP uploads and
+  optimized source updates wait for a new ready version instead of reusing an old
+  running version. Users can inspect files and submit reviews for a selected
+  historical version. Shared copies remain independent and read-only in this
+  version dialog; new or pending personal versions do not change published files.
+  Shared rows and details show the source version and author, while file requests
+  retain the copy's native version so an approved source v2 is read correctly
+
+- **SkillSpace display names**: Personal space creation generates a unique cloud
+  name containing only lowercase letters, numbers and underscores. The name the
+  user enters is stored in the `display_name` tag alongside the `author` tag.
+  Library cards, details and selectors prefer that display name and fall back to
+  the cloud name when the tag is missing or blank. Skill lookups and exports keep
+  using the original cloud name. Renaming display names is not included
+
+- **System SkillSpaces**: `studio_share_space` is the enterprise shared space,
+  permanently shown first in the Skill library. `studio_review_space` stores
+  submitted versions for review and is excluded from the library and Skill
+  selectors. The library provisions the shared space; submitting a Skill or opening
+  Skill reviews provisions the review space. Each space
+  is created once per provider region and `VEADK_STUDIO_PROJECT` (or `default`).
+  Definitions live in `server/skills/consts.json`, consumed by `consts.py` and
+  `src/create/skills/consts.ts`, so both ends use the same names. User-facing create
+  and rename operations reject reserved names, and the backend enforces the same
+  restriction even when called directly. System spaces cannot be renamed or
+  deleted; review content can only be changed by the review workflow. Administrators
+  can maintain shared skills. No legacy names are recognized or migrated
+
+  Cloud names must use lowercase letters, numbers and underscores; hyphenated
+  names return `InvalidParameter.skillSpaceName`. Native SkillSpace tag support
+  varies by provider: Volcengine returns creation tags, while BytePlus may omit them.
+  Managed names and description markers identify system spaces independently
+  of tags. Do not change these identities through the cloud console.
+  Creation failures remain visible with a retry action
+
+- **Intelligent development stream diagnostics**: Quiet SSE responses send a
+  comment heartbeat every 15 seconds without resetting Codex's inactivity timeout.
+  Logs correlate stream stages and elapsed time with Session/Thread IDs, and
+  Codex interruption and transport recovery with Thread/Turn IDs. Explicit stop
+  requests, inactivity timeouts, task cancellation and transport failures have
+  distinct reasons; cancellation alone does not imply a user stop. Logs exclude
+  prompts, command arguments and credentials. The dedicated client preserves
+  intelligent-development identity when Session metadata is absent or generic.
+  Heartbeats mitigate idle disconnects; request deadlines and process restarts
+  still apply, and this does not add background delivery or stream replay.
+
+- **DeepSeek Harness native configuration**: Quick-create now offers VeADK
+  Agent or DeepSeek Harness (Beta) through a radio-selection dialog. Continuing closes
+  the dialog and opens the selected Agent type’s own configuration page. The
+  Harness page uses a separate settings form for session
+  defaults, the DeepSeek adapter, custom model providers, command execution,
+  tool concurrency, sub-agent model selection and DeepSeek web search. Catalog
+  fields use dropdowns, with provider-dependent model and reasoning choices;
+  custom presets, DeepSeek model IDs and search settings remain editable. Default
+  values are prefilled and included in the exported configuration. Preview and ZIP
+  export include a Dockerfile, native settings, startup script, Runtime adapter,
+  AgentKit configuration and credential-name placeholders. The image installs the
+  official DSH npm package and runs the web profile privately as a non-root user.
+  The Runtime plugin exposes health checks and JSON invocations through DSH's native
+  session controller, preserving the selected model and Agent preset. The Deploy
+  action opens Studio's shared Runtime deployment page for cloud region, CP/CR
+  resource selection and credentials. Git sync, message channels and evaluation
+  sets are hidden for Harness deployments in both cloud environments. The form supports Chinese and English and
+  custom Volcengine and BytePlus model endpoints. It follows upstream revision
+  [`aa8262ec`](https://github.com/deepseek-ai/deepseek-harness/blob/aa8262ec091698bae9a6b04773a6b5b06ad4aef2/docs/config-catalog.md).
+  Other plugin parameters and preset-file editing are outside this initial form.
+  Harness drafts remain in memory; export before refreshing or closing Studio.
+  The adapter uses the Runtime gateway for authentication and does not implement
+  Studio's ADK chat protocol. Sessions require persistent storage to survive
+  container replacement, and multiple replicas require appropriate session routing.
+
+- **Runtime IAM role reuse**: ordinary and quick Agent creation reuse the first
+  role with the `AgentKitDefaultRuntimeAccess` system policy in the selected
+  cloud account, including roles on later IAM result pages. If none matches,
+  Studio creates `AgentKit_Runtime_Default_ServiceRole_<7 random characters>`
+  with only that policy. Existing roles keep all their current permissions;
+  quick creation no longer adds `AgentKitFullAccess`. Lookup errors stop the
+  deployment instead of triggering role creation. This applies to Volcengine
+  and BytePlus; existing Runtime updates and Sidecar deployments keep their
+  existing role behavior
+
+- **User management** stores Studio roles in Identity user groups
+  scoped to the configured user pool and client. A super administrator can search
+  all pool users, filter roles, and assign super administrator, administrator,
+  developer, or ordinary-user access. The next page refresh reads current roles;
+  protected backend requests also resolve live membership. Only immutable
+  subject-to-user-ID mappings are cached
+
+- **Review center**: the sidebar's 管控 group contains 审核中心 and 用户管理,
+  showing only entries allowed by the current role and hiding an empty group.
+  Administrators can open 审核中心 and switch
+  between Skills and Agents. Skill requests and submitted files load from the
+  regional review space, with search, refresh and status filters. Agent requests
+  remain empty. Skill decisions include comments, reviewer details and history.
+  The list shows AI assessment status and total; details and applicant history
+  expose dimension reasons, risks, coverage, model metadata and JSON download.
+  Empty lists and filtered results have distinct messages.
+  Chinese and English, Volcengine and BytePlus are supported
+
+- **Sandbox updates** in System Information compare each Tool's current image
+  with `ListToolTypes` for its cloud provider and actual region. Volcengine and
+  BytePlus use their own credentials and API hosts; catalogs are cached for
+  60 seconds and fetched again before an update. Admins can update configured
+  prebuilt Tools with `UpdateTool.ImageUrl`. Codex and DeepSeek Harness share
+  update state when they reference the same Tool; snapshot Tools are checked
+  independently. Missing Codex `MODEL_AGENT_API_KEY` / `MODEL_AGENT_BASE_URL`
+  values are still backfilled from `CODEX_*`, preserving existing variables.
+  Completion requires Tool `Ready` and the target image; this does not verify
+  existing Sessions or rebuild their snapshots. BytePlus has automated coverage,
+  but its image update has not been verified against a live account.
+
+- **Code projects**: open 工作区 → 代码项目 or 从工作区新建 to name,
+  create and reopen projects. Each user has one persistent cloud Sandbox;
+  projects are directories under `/home/gem/Projects`. Creating another project
+  reuses the same Session and opening a project changes VS Code's `folder` path.
+  The image initializes Git, `AGENTS.md` and a Python environment per project.
+  The dedicated Private Tool must enable snapshots. Studio reuses the user's
+  stable cloud session identity and automatically restores its latest ready
+  snapshot after hibernation, rather than creating an empty replacement.
+  Project lists are read from the Sandbox filesystem and survive Studio restarts.
+  The editor opens directly at `/code-server/`; signed routing parameters remain
+  private/no-store. Returning to management keeps the editor mounted, while
+  switching directories opens the selected project directly. Volcengine
+  defaults to Chinese and BytePlus to English.
 
 - **Streaming chat** over the ADK `/run_sse` event stream. While an Agent is
   generating, the composer exposes a stop control that cancels only the active
@@ -28,6 +329,95 @@ server that `veadk frontend` launches — no separate backend.
   AgentKit. Connected Harness agents expose supported image, video, and
   presentation task types; Studio mounts only missing task tools for the
   current session and preserves tools already supplied by the Agent.
+- **Intelligent Agent development**: describe a VeADK Agent and receive
+  immediate, cancellable preparation feedback. Studio owns each build as a
+  background task, including implementation, local checks, temporary cloud
+  validation, source delivery, version persistence when configured, and cleanup.
+  Codex App Server **0.154.0** provides native thread/turn recovery, history,
+  `turn/interrupt`, and `turn/steer`. The running composer keeps separate Stop
+  and Add instructions controls. Additions show whether they are pending,
+  sending, delivered, or withdrawn; additions during recovery or delivery wait
+  until they can safely be applied.
+  Navigating away or disconnecting SSE leaves the task running. Studio's task
+  notification returns to it, and replay restores existing output without
+  duplicating messages. Only an explicit Stop requests remote interruption.
+  Stop is accepted immediately, remains “stopping” until confirmed by Codex and
+  any delivery command, and preserves all received output and workspace changes.
+  Temporary transport failures reconnect automatically; interrupted native turns
+  may continue in the same thread after checking their status. Ambiguous
+  submissions are reconciled by their native message identifiers instead of
+  being sent again. Unresolved failures retain output and expose a Continue
+  action; unusable environments or invalid source integrity require a new build.
+  Public reasoning and Assistant replies reuse the existing conversation
+  renderer. Credentials are redacted before events reach local storage.
+  Source downloads remain available once the delivery artifact is ready.
+  Each completed build or optimization is also saved as an immutable project
+  version in the private Studio TOS bucket. Users can reopen any saved version,
+  view, download, deploy, delete, or restore it into a new Sandbox for another
+  intent-driven iteration after the original Sandbox expires. The source
+  workspace provides an IDE-style file tree with persistent light and dark
+  themes. Optimizations expose their before/after changes directly, and any two
+  saved versions of the same project can be compared on demand without storing
+  another artifact.
+  Deployable source can be sent to Runtime manually; an incomplete verification
+  report requires an explicit confirmation. No separate “start verification”
+  action is required.
+  Task execution metadata and replay events use local SQLite, with no TOS task
+  writes. `VEADK_STUDIO_TASK_DB` defaults to
+  `~/.veadk/studio/development-runs.sqlite3`; retain this directory on a local
+  persistent volume when restarting a container. `VEADK_STUDIO_TASK_RETENTION_SECONDS`
+  defaults to 21600 (six hours after a terminal state).
+  Active tasks are not removed by retention. `VEADK_STUDIO_TASK_MAX_ACTIVE_SECONDS`
+  defaults to 28800 (eight hours), after which Studio requests a durable stop.
+  Admission allows three unfinished tasks per user, 100 globally, and 16 local
+  workers. Task output is limited to 64 MiB per run; reaching the limit keeps
+  existing content. All task reads, event replay, controls, and deletion use the
+  authenticated owner and an owner-qualified database key.
+  This SQLite deployment supports one Studio instance with multiple users.
+  Replicas with separate local disks do not share task state; moving to multiple
+  instances requires a shared transactional task store. Losing the local volume
+  loses its short-term task history. Existing immutable project/version storage
+  continues to use the configured TOS repository independently.
+  The task API accepts idempotent submissions under
+  `/web/intelligent-development/sessions/{sessionId}/runs`, exposes ordered replay
+  at `/runs/{runId}/events?after={seq}`, and accepts `/stop`, `/resume`, and `/inputs`.
+  `/runs` lists only the current user's unfinished tasks. The legacy `/messages`
+  stream is an adapter over the same task service and includes `run.status`
+  events; stream detachment does not stop work.
+  See the [verification report](recoverable-build-verification.md) for executed
+  recovery, isolation, Stop/Steer, and retained-output checks and their limits.
+- **Existing Agent migration**: upload a local project ZIP for read-only
+  analysis, confirm the detected framework and entry point, then migrate and
+  validate it in a temporary Sandbox. Successful migration source is saved as
+  an immutable version in the same private Studio TOS project store. The
+  separate “已迁移项目” page can view, download, deploy, delete, and compare
+  versions; any version can be restored into the intelligent-development flow
+  for another intent-driven iteration after the temporary migration environment
+  has ended.
+  The workspace is a single-column page without a side navigation: the home is
+  the upload entry followed by recent migrations (five by default, expandable
+  in place, with expired environments offered as view-only), “已迁移项目” is a
+  top-bar entry that opens the saved-project library, and returning home or
+  opening the project library never stops a running migration. Capability and
+  session-list failures are reported separately so the upload entry stays
+  usable and each failure offers its own retry.
+  Pencil icons beside project and version names open the existing-style name
+  dialog; the check icon saves and the close icon cancels. Names are normalized
+  and trimmed, allow 1–128 Unicode characters, and reject control/invisible
+  formatting characters and `<` / `>` on both client and server. They are plain
+  display text: renaming never changes source archives, validation reports,
+  version IDs/order, the latest-version marker, or deployed Runtime names.
+  Historical names remain compatible; optional display metadata is stored
+  separately from immutable versions. Optimization session titles retain the
+  existing 40-character limit without shortening the saved project name.
+  An optional migration-effect evaluation is off by default; when enabled,
+  users can enter 1–100 evaluation cases by hand or bulk paste, while expected
+  outcomes and criteria remain optional.
+  Standard evaluation uses three dimensions; users can instead select custom
+  dimensions before upload. The locked dataset and final HTML report are stored
+  as immutable owner-only TOS assets. The report is fetched and rendered in a
+  side drawer only after the user selects “View report,” and remains available
+  for download.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Agent context rail** keeps the selected Agent's description, model, tools,
   skills, and optional live multi-Agent topology together in the conversation's
@@ -63,6 +453,8 @@ server that `veadk frontend` launches — no separate backend.
   require Agent-management access.
 - **AgentKit Skill center**: browse Skill Spaces and their skills with
   server-side pagination by region, then inspect the selected Skill content.
+  Skill and knowledge requests default to the Studio deployment region in
+  cloud deployments and to `cn-beijing` in local Volcengine development.
 - **Library hub**: manage Skills, user-owned AgentKit knowledge bases, and chat
   artifacts from one sidebar entry. Knowledge documents support verified
   JPG/PNG, PDF/PPTX/DOCX/XLSX/TXT uploads and public webpage imports. Studio
@@ -92,6 +484,40 @@ server that `veadk frontend` launches — no separate backend.
   deployment and never enters generated source, workflow, documentation, or
   logs; cloud credentials remain GitHub Secrets or Runtime environment variables.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
+- **Runtime session artifacts**: in a chat that supports Studio Tools, select
+  `studio_write_artifact` for the current session and ask the Agent to save a
+  report, chart, or document. This tool runs in the Studio BFF through the
+  existing tool channel. It uses Studio's configured TOS bucket and server-side
+  credentials, including the cloud Studio IAM role's STS credentials, to write
+  `artifacts/{user_id}/{session_id}/{relative_file_path}`. User and session IDs
+  come from the authenticated tool context; model arguments do not select the
+  owner, session, bucket, or credentials. Creating and updating Agents is
+  unchanged: the tool is selected per session, with no changes to the generator,
+  default system prompt, or Runtime mount configuration.
+  The tool accepts UTF-8 text up to 1 MiB per file; saving the same relative path
+  replaces that file in the current session.
+  A persistent `会话产物` button above the chat composer opens the shared Drawer
+  and FileExplorer. Runtime access is checked before reading the signed-in
+  user's session directory. Changing sessions closes the previous preview;
+  the directory supports refresh and pagination, and refreshes when a reply
+  completes. Empty sessions and access or network failures have separate states.
+  Configure `VEADK_STUDIO_TOS_BUCKET` and `VEADK_STUDIO_TOS_REGION` in Studio;
+  the Studio execution identity needs read, write, and list access to this
+  storage. Reads and writes use the Studio bucket's region on both Volcengine
+  and BytePlus. When Studio storage is configured, previews use that bucket even
+  if the Runtime has an unrelated TOS mount. Without Studio storage, the reader
+  retains support for an existing artifact mount; configuration, authorization,
+  and TOS failures do not silently switch storage.
+  HTML, Markdown, images, JSON, and text can be previewed; other formats remain
+  downloadable. HTML uses a scriptless sandbox with inline styles and up to
+  32 authenticated, same-session relative images. External resources and scripts
+  are disabled. Preview limits are 5 MB per file and 20 MB for embedded images;
+  larger files can be downloaded. Small files are prefetched after replies;
+  bounded per-session caches survive closing the panel, and HTML appears before
+  its relative images finish loading.
+  The BFF tool requires no Runtime TOS mount or separate mount credentials.
+  The tool saves files to the session directory; arbitrary files in `/tmp`
+  or an independent Sandbox are not collected.
 - **Message feedback**: rate persisted Runtime replies with accessible,
   repository-drawn like/dislike controls. Studio identifies the final ADK Event,
   stores the latest rating through the existing Session state-delta API, and
@@ -113,10 +539,24 @@ server that `veadk frontend` launches — no separate backend.
   the info action opens a tabbed Agent/Runtime panel. The Agent directory loads
   one selected region at a time, defaults to Beijing, and carries the Runtime's
   region through details, connection, update, evaluation, and deletion. Studio
-  enables in-place updates for any authorized single-Agent Runtime that exposes
-  compatible `list-apps` and `web/agent-info` endpoints, regardless of whether
-  Studio originally deployed it; multi-Agent Runtimes are rejected because an
-  AgentKit update replaces the whole Runtime package. Studio distinguishes its
+  enables in-place updates for an authorized single-Agent Runtime when its
+  `web/agent-info` response, or the compatible `web/agent-draft` fallback,
+  contains a validated Studio publishing snapshot. For an older Runtime without
+  that snapshot, Studio can instead recover public MCP metadata server-side and
+  extract bounded local Skill files from its exact digest-pinned Volcengine CR
+  image. That legacy path keeps the existing application image and overlays only
+  confirmed Skill/MCP changes. If the image, Skill roots, MCP identity, or
+  authentication state is missing or ambiguous, the Runtime remains visible but
+  its update action is blocked, preventing an empty generated project from
+  replacing custom source. The Agent directory prepares update capability for a
+  bounded set of likely targets with at most two background requests, then
+  reuses the version-keyed in-memory result or in-flight request when details
+  open. Capability failures are not cached, and no recovered configuration is
+  written to browser storage.
+  Multi-Agent Runtimes are rejected because an AgentKit update replaces the
+  whole Runtime package. Every accepted update carries the recovered snapshot
+  etag and base Runtime version so a stale page cannot overwrite a newer
+  release. Studio distinguishes its
   own ownership checks from Agent Server compatibility and authentication
   failures when a connection cannot be established. Each Agent detail page also
   probes and lists confirmed API Server and A2A integration endpoints; protocols
@@ -130,24 +570,51 @@ server that `veadk frontend` launches — no separate backend.
   instead of credentials. Long descriptions, names, component summaries, IDs,
   and environment values stay inside the scrollable panel.
 - **Custom-agent workbench**: configure an agent with a rich Markdown
-  system-prompt editor (including heading and list shortcuts), then debug with
-  expandable, copyable runner error details, per-result Trace inspection, and
-  review. The lifecycle follows Architecture, Debug, Environment, and Publish.
-  The Environment step can optionally add the official Lark CLI and GitHub CLI
-  to the cloud runtime. Selecting either tool generates an inspectable
-  provider-specific Dockerfile with pinned releases, amd64/arm64 assets, and
-  SHA-256 verification. Advanced configuration can edit that Dockerfile
-  directly or restore the provider-specific generated version; selecting
-  neither and leaving the Dockerfile unchanged keeps AgentKit's default image
-  build. Credentials are never written into the generated Dockerfile.
-  In-progress drafts are stored only in the current browser and scoped
+  system-prompt editor (including heading and list shortcuts), choose Harness
+  Sidecar optimizations, then debug with expandable, copyable runner error
+  details and per-result Trace inspection. The workbench order is `架构` →
+  `优化` → `调试` → `环境` → `发布`. On the optimization page, `自定义`
+  appears first and starts with no components, while `运维场景` applies the
+  `ops` component combination. Component checkboxes remain editable and an empty
+  selection keeps Sidecar disabled. BytePlus does not show a default warning;
+  selecting an unsupported Sidecar option still explains the restriction.
+  A2A center selections configure discovery on their parent Agent and do not
+  require a local Agent name. They can be retained or added during a standard
+  Runtime update without enabling Sidecar or configuring MCP. Source-preserving
+  updates still require the original Agent structure. Deployment validation
+  reports Agent, Skill, MCP, and source-image problems separately.
+  The Environment step can optionally add the
+  official Lark CLI, GitHub CLI, and Pandoc to the cloud runtime. Selecting a
+  tool generates an inspectable provider-specific Dockerfile with pinned
+  releases, amd64/arm64 assets, and SHA-256 verification. Advanced configuration
+  can edit that Dockerfile directly or restore the generated version; selecting
+  no tool and leaving the Dockerfile unchanged keeps AgentKit's default image
+  build. Credentials are never written into the generated Dockerfile. Published
+  Agent details display the saved Sidecar scenario and selected components as
+  read-only information. In-progress drafts are stored only in the current
+  browser and scoped
   to the signed-in user. MCP tokens are converted to Runtime environment
   variables: generated source retains only the `${ENV_NAME}` reference, while
   YAML and browser drafts preserve the corresponding environment value.
-  Runtime updates reload existing values, and the deployment form keeps all
-  environment values visible to users who can view the Agent. Entering a
-  replacement Token overrides the previous value. Long descriptions and prompts
-  scroll within bounded editors, while the sidebar stays pinned to the
+  Runtime updates restore only explicitly public environment values. Existing
+  MCP authentication references are resolved against the server-managed Runtime
+  configuration and transiently restored to the masked editor: leaving the MCP
+  identity unchanged reuses the stored value without another environment-variable
+  input. Changing an authenticated MCP
+  URL requires the user to enter a replacement Token, explicitly confirm reuse
+  of the previous credential, or mark the new endpoint as unauthenticated;
+  Studio never silently replays a credential to a different endpoint. Feishu
+  App ID and App Secret are restored from the selected Runtime into the masked
+  update form and remain in the signed-in user's browser draft so a resumed
+  draft shows the same editable values. Disabling Feishu during an update
+  removes both Runtime variables; leaving it enabled preserves or replaces
+  them with the submitted values. Model configuration supports ordered fallback
+  models. Same-provider fallbacks stay compact and are emitted through the
+  existing `model_name=[primary, ...fallbacks]` contract; cross-provider
+  fallbacks are emitted as `ModelFallbackEndpoint` entries and reference API
+  keys by Runtime environment variable name so secret values stay out of YAML,
+  source, and local browser drafts. Long descriptions and
+  prompts scroll within bounded editors, while the sidebar stays pinned to the
   viewport. On narrow desktop windows, the structure, configuration, and debug
   panels stack vertically instead of squeezing the form. The deployment page
   pairs an inspectable Agent topology with a vertically aligned action rail for
@@ -182,21 +649,41 @@ server that `veadk frontend` launches — no separate backend.
   root `app.py` as the compatible default. Studio removes a single wrapping
   directory, rejects unsafe paths, and shows upload, image build, Runtime
   creation, and service publishing as separate deployment stages.
-- **Existing-project migration**: upload one local ZIP of at most 50 MiB from
+- **Existing-project migration**: upload one local ZIP of at most 20 MiB from
   the add-Agent menu. Studio creates one user-owned Dev Sandbox Session with a
-  one-hour TTL, then asks the preinstalled Codex to perform read-only framework,
-  entry-point, and migration-boundary analysis. Migration starts only after the
-  user confirms the framework, entry point, and open questions. Structured
-  frameworks run the preinstalled `ak migrate`; Dify and Any projects run
-  `ak migrate --execution in-place` with Codex in the same Session. State,
-  logs, and artifacts remain only under
-  `/home/gem/.studio/migration/v1/` in that Session. Preview, download, and
-  Runtime deployment stop when the Session expires. Runtime deployment resolves
-  and verifies the owned Session artifact on the server instead of trusting
-  browser-provided files or entry points. AgentKit CLI `0.51.1` is only the
-  current baseline; these CLI changes must be released as a new version. The
-  Dev Sandbox image must pin that migration-capable release and its SHA256 at
-  image build time.
+  one-hour TTL, extended to two hours when effect evaluation is enabled, then
+  asks the preinstalled Codex to perform read-only framework, entry-point, and
+  migration-boundary analysis. Migration starts only after the user confirms
+  the framework, entry point, and open questions. Structured frameworks run the
+  preinstalled `ak migrate`; Dify and Any projects run
+  `ak migrate --execution in-place` with Codex in the same Session. Evaluation
+  deploys a temporary Runtime, checkpoints per-case execution as JSONL, and
+  judges batches in one fresh resumable Codex thread. Analysis and judging both
+  deliver their contract through an app-server dynamic tool instead of parsing
+  free text, and the analysis turn runs on a Studio background worker so a long
+  analysis never waits inside the upload request. Each judged batch is a durable
+  request the runner writes into the Session: Studio answers it with one
+  app-server turn carrying the verdict, and the runner validates and caches that
+  verdict before the next batch. A request stays on disk until it is answered, so
+  a Studio restart replays the same batch; a request that cannot be answered
+  falls back to `codex exec` inside the same batch budget. The request declares
+  how long the runner will listen, and the turn is sized to answer inside that
+  window, so even a judge batch that is too slow comes back as an answered
+  failure rather than a timeout. Setting
+  `AGENTKIT_MIGRATION_JUDGE_APP_SERVER=0` pins that scripted judge for the
+  whole run instead of writing judge requests at all. Cleanup is always
+  reconciled before completing or cancelling. Reports show 0–100 display scores,
+  execution success, evidence coverage, N/A counts, low-scoring and failed
+  cases, versions, evidence severity, and cleanup status without a pass/fail
+  verdict. Each raw judge score is rounded half up to a 0–100 integer before
+  aggregation. Case scores and dimension averages use those integers; the total
+  uses the rounded dimension averages. Each average rounds half up and excludes
+  N/A values, matching report validation and low-scoring case rankings.
+  Evaluation failure never hides or rolls back the migration artifact.
+  Runtime deployment resolves and verifies the owned Session artifact on the
+  server instead of trusting browser-provided files or entry points. The Dev
+  Sandbox image must pin AgentKit CLI `0.52.16` and its SHA256 at image build
+  time.
 - **Built-in code execution**: selecting `代码执行` adds VeADK's `run_code`
   tool to generated Python and reveals the required `AGENTKIT_TOOL_ID` sandbox
   field and optional `AGENTKIT_TOOL_REGION` field below the built-in tool list.
@@ -210,6 +697,14 @@ Changing the Feishu channel on the deployment page regenerates the project so
 `app.py`, the `extensions` dependency, and the runtime environment variables
 stay aligned before deployment.
 
+The deployment card supports automatic and manual credential setup without
+changing its footprint in the publish form. Automatic setup uses the reusable
+`frontend.server.feishu_bot_setup` provider interface and Feishu's official
+PersonalAgent app-registration flow. Credentials are returned only after the
+user confirms the QR authorization; no mock provider or synthetic credentials
+are shipped. The App Secret remains process-local until Studio returns it to
+the authorized browser for credential autofill.
+
 Insight Sandbox requires server-side `VOLCENGINE_ACCESS_KEY`,
 `VOLCENGINE_SECRET_KEY`, `MODEL_AGENT_API_KEY`, and `MODEL_AGENT_NAME` values.
 These credentials and the AgentKit session endpoint remain on the Studio server
@@ -219,6 +714,88 @@ Temporary Sandbox state is process-local. Run Studio with one server worker, or
 configure session affinity so create, message, and delete requests from the same
 browser reach the same instance.
 
+## Studio BFF reverse tools
+
+Studio can expose local or intranet-only tools to a compatible AgentKit Runtime
+without giving the Studio BFF a public address. For each remote `run_sse`
+request, the BFF first tries an outbound WSS connection to
+`/harness/studio-channel/v1`. If the public gateway doesn't support WebSocket
+Upgrade, it automatically falls back to a streaming HTTP/SSE downlink plus HTTP
+tool-result posts. It publishes the current tool catalog, executes `tool.call`
+messages locally, and returns `tool.result` without exposing a BFF endpoint. The
+Runtime sees ordinary tools, but receives neither the executor implementation nor
+its credentials. The HTTP fallback currently requires exactly one Runtime
+instance so its stream and result posts reach the same process.
+
+Build the Runtime app with
+`create_agentkit_app(..., enable_studio_tools=True)` to mount one generic
+`StudioExternalToolset`. It contains no concrete executor and is hidden from
+Agent introspection. During a Studio-channel run, an async-local immutable
+snapshot supplies only the tools selected for that run; ordinary `/run_sse`
+requests see an empty snapshot. With the option disabled (the default), the
+Runtime advertises `enabled=false` and does not mount the Toolset or Tool Channel
+execution endpoints. The enabled host is the stable Runtime compatibility layer
+for future BFF-owned tools, so a new plan or goal tool does not need a matching
+executor in the deployed Agent.
+
+For a compatible remote Runtime, the existing Agent information rail exposes
+**在此对话中添加 Studio 工具** below the Agent's static tools. New chats start
+with every Studio tool disabled; an existing session keeps its selection in the
+current browser process between turns. The browser sends an explicit
+`platform_tools` list on each Runtime run, and an empty or omitted list uses the
+ordinary `/run_sse` path. The BFF validates the submitted IDs and freezes an
+immutable catalog-and-executor snapshot for that run, so simultaneous users and
+sessions cannot add tools to one another. Tool code and credentials stay in the
+BFF, while selected tool results are returned to the cloud Agent through the
+reverse channel.
+
+Studio always registers the canonical functions from
+`veadk/tools/builtin_tools` in its BFF catalog; the implementation files and
+their `builtin:` bindings remain unchanged. The BFF supplies the ADK
+`ToolContext`, keeps state isolated by Runtime/app/user/session, and publishes
+generated ADK artifacts through Studio media storage so downloads remain
+available after execution moves out of Runtime.
+
+Studio-owned tools that don't belong in VeADK's built-in catalog live in
+`frontend/server/studio_tools/extensions`. Studio discovers every public Python
+module in that directory at startup and calls its `register_tools(registry)`
+function. Adding one of these tools requires no environment variable or Runtime
+change; restart Studio after changing the module. `current_time.py` is the
+minimal working example for future Studio-only tools.
+
+Studio forwards the Runtime API-key or Identity authorization on capability
+discovery, WebSocket handshakes, and HTTP/SSE fallback requests; the AgentKit
+ingress remains the authentication boundary for these channels.
+
+A deployable Runtime agent and launch scripts live in the
+[local reverse-tool example](../.agents/local/studio/A_BFF_tool_for_runtime/examples/README.md).
+
+## Studio BFF dynamic routes
+
+A compatible Runtime can also expose Studio-owned HTTP routes without loading
+their Python handlers. Build the Runtime app with
+`create_agentkit_app(..., enable_studio_routes=True)` and start Studio with
+`VEADK_STUDIO_ROUTE_CHANNEL=skill-catalog` (`demo` remains a compatibility
+alias). After Studio connects the Runtime, the BFF keeps a separate persistent
+reverse-route channel and publishes these Studio-owned, read-only routes:
+
+- `GET /harness/skills/findskill`
+- `GET /harness/skills/spaces`
+- `GET /harness/skills/spaces/{space_id}/skills`
+
+Runtimes without the dynamic-route opt-in keep their native Skill catalog
+handlers. Opted-in Runtimes leave those three read-only query handlers to Studio.
+The segment-template request contract is protocol v2, so a Runtime using the
+older route-channel protocol must be updated once before accepting this catalog.
+
+Requests still enter through the Runtime URL. Its dynamic dispatcher emits
+`route.call`, the local BFF executes the handler, and `route.result` becomes the
+Runtime HTTP response. WSS is preferred; unsupported gateways automatically use
+a long-lived HTTP/SSE downlink plus HTTP result posts. The current implementation
+is currently single-instance: both the persistent stream and arbitrary route
+requests must reach the same Runtime process. A disconnected BFF leaves known
+Studio-owned routes unavailable with HTTP 503; Agent runs remain available.
+
 Local Studio reads transient and snapshot Tool IDs from
 `SANDBOX_CHAT_CODEX`/`SANDBOX_CHAT_CODEX_SNAPSHOT`,
 `SANDBOX_CHAT_OPENCLAW`/`SANDBOX_CHAT_OPENCLAW_SNAPSHOT`, and
@@ -226,6 +803,61 @@ Local Studio reads transient and snapshot Tool IDs from
 all six Tools when their IDs are omitted; the three snapshot Tool names end in
 `_snapshot`. The matching `--sandbox-chat-*-tool-id` and
 `--sandbox-chat-*-snapshot-tool-id` options select existing Tools instead.
+
+## Mermaid diagrams in model messages
+
+Agents can render diagrams in conversation replies by returning standard
+Markdown fenced code blocks with the `mermaid` language tag. No tool call or
+custom JSON envelope is required. Studio uses the official Mermaid renderer,
+so the same contract covers flowcharts, line charts, pie charts, and the other
+diagram types supported by the installed Mermaid version.
+
+````markdown
+```mermaid
+flowchart LR
+  Request --> Agent --> Response
+```
+
+```mermaid
+xychart-beta
+  title "Requests"
+  x-axis [Jan, Feb, Mar]
+  y-axis "Count" 0 --> 100
+  line [24, 58, 91]
+```
+
+```mermaid
+pie showData
+  title Traffic sources
+  "Direct" : 42
+  "Search" : 58
+```
+````
+
+Studio keeps the Mermaid source visible while a response is streaming and
+renders it after the message completes. Users can switch each diagram between
+its preview and original Mermaid code. If a definition is invalid, Studio shows
+an error while keeping the original source available in the code view.
+
+For interactive data charts, agents can return an ECharts option as JSON or
+JSON5 in an `echarts` fenced block. The singular `echart` tag and case variants
+such as `ECharts` are accepted as aliases. The common `option = { ... };`
+wrapper is also accepted. ECharts linear and radial gradient constructors are
+converted to their equivalent data objects without execution. Other functions
+and executable JavaScript are not part of this data-only contract. Tooltip
+content is forced to ECharts rich-text rendering.
+
+````markdown
+```echarts
+{
+  "tooltip": { "trigger": "axis" },
+  "legend": { "data": ["Requests"] },
+  "xAxis": { "type": "category", "data": ["Jan", "Feb", "Mar"] },
+  "yAxis": { "type": "value" },
+  "series": [{ "name": "Requests", "type": "line", "data": [24, 58, 91] }]
+}
+```
+````
 
 ## Development specification
 
@@ -263,6 +895,97 @@ Rebuild the UI from source after changing it:
 cd frontend && npm install && npm run build   # -> veadk/webui
 ```
 
+If an existing checkout reports missing `i18next` or `react-i18next` modules,
+run `npm ci` from `frontend/` to synchronize dependencies with the lockfile
+before rebuilding. Reusing another checkout's `node_modules` can retain older
+dependencies even when the current `package.json` already declares them
+
+### Studio deployment resources
+
+`veadk studio deploy` configures the Studio function with 8 vCPU, 16 GB memory,
+and both minimum and maximum instance counts set to 1 on Volcengine and BytePlus
+These settings apply to new deployments and redeployments of an existing Studio
+Ordinary Agent deployments retain their existing resource defaults
+
+### Identity-backed user management
+
+Deploy with `--super-admin <existing-user-email-or-uid>` to select the first
+super administrator. This is the only deployment role flag; `deploy --admin`
+and `deploy --developer` are no longer supported
+
+Without `--super-admin`, deployment first warns that user and permission
+management will be inconvenient without a super administrator and asks
+`是否继续? [y/N]`. Press Enter or enter `n` to cancel before cloud operations;
+enter `y` to continue. Setting `VEADK_STUDIO_SUPER_ADMIN` also satisfies this
+check. Read-only `--precheck-only` does not prompt
+
+```bash
+veadk studio deploy --user-pool-id <pool-uid> \
+  --allowed-client-id <client-uid> --vefaas-app-name <app-name> \
+  --super-admin <existing-user-email-or-uid>
+```
+
+On first deployment, omitting `--super-admin` stores an **admin** default in
+Identity, so existing and future signed-in users are administrators. Specifying
+it stores a **regular-user** default for other users. Existing Identity roles
+and the stored default are preserved on subsequent deployments and updates
+
+Only super administrators can see **User management** or call its APIs. They
+also inherit all administrator capabilities, including visibility into all
+agents and resources available to the Studio. The initial super administrator
+is protected from demotion. If an existing Studio has none, use
+`veadk studio update --vefaas-app-name <app-name> --super-admin <email-or-uid>`
+to assign the first one without resetting other users' roles
+
+Role changes validate the browser Origin against the public OAuth callback URL
+configured by deployment, so HTTPS gateways can forward to an internal HTTP
+server without blocking legitimate changes. Other origins remain blocked, and
+client-supplied forwarding headers cannot change the accepted origin. For a
+custom public domain, set `--oauth2-redirect-uri` to its OAuth callback URL
+
+For local use, pass `--oauth2-user-pool-uid`, `--oauth2-user-pool-client-uid`, and
+optionally `--super-admin` to `veadk studio`, with the selected provider's AK/SK
+available. `VEIDENTITY_REGION` selects the Identity region. Volcengine and
+BytePlus use their respective credentials and API hosts. Local sessions without
+an Identity pool retain the legacy `--admin` / `--developer` options
+
+Four `studio-<client-uid>-<role>` Identity groups store application roles; their
+metadata stores the default role and the protected user's immutable UID. These
+application roles do not assign cloud IAM roles. Each authenticated backend
+request reads current group membership. OIDC subjects map to Identity management
+UIDs; email cannot substitute for an authenticated subject. Refreshing the page
+shows a newly assigned role. Multiple role memberships fail closed to regular
+user access and can be repaired by assigning a role again
+
+Cloud frontend updates automatically migrate `VEADK_STUDIO_ADMINS` and
+`VEADK_STUDIO_DEVELOPERS` into Identity. Each UID, subject, email or username
+must match exactly one pool user before any assignments are written. Admin
+membership takes precedence over developer membership. With either legacy list,
+unlisted users remain regular users; with neither list and no initial super
+administrator, everyone retains admin access. Migration never promotes a legacy
+admin to super administrator automatically
+
+After successful migration, the update clears the old role environment values
+and enables Identity roles. Failures retain the old configuration. Updates and
+restarts preserve subsequent role edits in Identity. When the running updater
+predates this feature, the new runtime performs the migration before accepting
+requests and clears the Function configuration. Existing immutable revisions
+may still contain their original environment snapshot; the new runtime ignores
+those old lists once Identity initialization is complete
+
+Deploy and CLI update provision the required Identity permissions on the
+managed Studio IAM policy. In-app updates check permissions and do not change
+IAM policies. For an older updater that lacks this check, grant Identity
+user/group read and group create/update/add/remove-member permissions before
+upgrading, or use the new `veadk studio update` CLI. Missing permissions stop
+migration instead of falling back to static role lists
+
+Initialize a new pool/client on one instance before starting additional
+instances. Identity membership updates are not transactional across instances;
+conflicting edits are denied or reported for retry, and multiple memberships
+grant no additional privileges. Audit logs include the actor, target, old/new
+roles and operation ID
+
 Dev loop with hot reload (Vite proxies the API):
 
 ```bash
@@ -272,6 +995,22 @@ cd frontend && npm run dev  # http://localhost:5173
 
 The Vite development server proxies the ADK API routes, including the
 `/dev/apps/.../debug/trace` session-trace endpoint, to the backend on port 8000.
+
+For code projects, configure `STUDIO_WORKSPACE_TOOL_ID` with a dedicated
+snapshot-enabled Tool in the selected provider and region. The former
+single-project `/web/workspace-preview/session` preview is replaced by the
+personal-workspace project APIs.
+
+### Dependencies in a new worktree
+
+Run `npm ci` inside this worktree's `frontend/` directory before starting Vite or
+running the build. Each worktree needs dependencies matching its own lockfile;
+avoid linking another checkout's older `node_modules` directory. If TypeScript
+reports missing `i18next` or `react-i18next` despite their entries in
+`package.json`, install from the current lockfile with `npm ci`, then rerun the
+check. Do not remove imports or change source types to work around missing
+dependencies. This also applies to component tests: reinstall dependencies in
+the worktree itself instead of borrowing the main checkout’s `node_modules`
 
 ## Branding
 
@@ -289,6 +1028,105 @@ Supported logo formats are PNG, JPEG, GIF, WebP, AVIF, and ICO, up to 5 MB.
 configuration. `veadk studio deploy` accepts the same flags and copies either a
 local image or a downloaded network image into the VeFaaS deployment package.
 
+## Environment image builds
+
+Studio 的“工作区”用于组织一组可复用环境。一个工作区可以包含多个环境，同一个环境也可以加入多个工作区；删除工作区只会删除组合关系，不会删除环境。侧边栏只展示“工作区”入口，工作区页面内可在“工作区”和“环境”两个视图之间切换。Agent 的创建与部署仍直接选择具体环境及其构建版本。
+
+工作区元数据保存在与环境相同的 Studio TOS 桶中，路径为 `veadk-studio/v1/workspaces/<owner>/<workspace-id>/summary.json`。接口包括 `/web/workspaces` CRUD，以及 `/web/workspaces/{workspaceId}/environments/{environmentId}` 的添加和移除操作。被工作区引用的环境不能直接删除。
+
+The Studio `环境` page stores each environment definition, generated Dockerfile,
+build version, log metadata, and resulting image reference in the private Studio
+TOS bucket. Creating or saving an environment starts an asynchronous
+CodePipeline build and pushes the resulting image to Container Registry.
+Custom and Dockerfile environments can select a preset environment: none, AIO
+Sandbox, or Codex Sandbox. Selecting a preset pins its `FROM` instruction ahead
+of the editable Dockerfile body; selecting none leaves the complete Dockerfile
+under user control. AIO Sandbox keeps the inherited `/opt/gem/run.sh` entrypoint
+and port `8080`, while Codex Sandbox exposes task delegation through its Codex
+App Server instead of the generic Sandbox shell tool. Legacy records created
+before preset environments were introduced remain compatible.
+Each image version exposes a read-only Manifest at
+`/web/environments/{environmentId}/builds/{versionId}/manifest`; the Studio
+environment card opens the same version-bound contract as YAML for inspection
+and copying.
+
+Build logs and the initial provisioning state are saved before the Sandbox Tool
+task starts. Delayed status polls recheck the saved state before provisioning,
+so a completed task is not repeated when an earlier poll returns late. This
+applies to both Volcengine and BytePlus
+
+When an environment is mounted to an Agent conversation, Studio assigns a new
+`mount_instance_id`. Sandbox Tool Sessions are reused only while the Agent
+session, mount instance, environment version, Tool ID, image, provider, and
+region all remain unchanged. Unmounting and mounting again creates a new mount
+instance and therefore a new Sandbox Tool Session. Codex Sandbox progress and
+its Sandbox Session and Codex Thread identifiers are streamed into the normal
+tool-call card and preserved in conversation history.
+Volcengine builds use the Aliyun PyPI mirror, Huawei Cloud Python source mirror,
+and npmmirror for Playwright browsers; BytePlus builds use the corresponding
+official sources. Cross-version Python combinations are compiled from pinned
+source releases instead of depending on GitHub-hosted binaries.
+
+除了自定义配置和上传 Dockerfile，环境还支持两种并列的镜像接入方式：
+
+1. **从公开 Git 仓库构建**：填写无需鉴权的 HTTPS Git 地址和可选的 Branch、Tag
+   或 Commit；Studio 通过 `POST /web/environment-repositories/inspect` 探查仓库中的
+   `Dockerfile`、`Dockerfile.*` 和 `*.Dockerfile`，用户确认其中一个文件后再创建
+   环境；没有匹配文件时不能继续。环境保存
+   `gitSource.repositoryUrl`、`gitSource.ref` 和
+   `gitSource.dockerfilePath`，CodePipeline 使用仓库根目录作为构建上下文，以选中的
+   Dockerfile 构建镜像，并在构建版本中记录实际 Commit SHA。首版不支持私有仓库、
+   SSH 地址或 Git 凭据。
+2. **绑定已有 CR 镜像**：适用于镜像已经由用户自己的 Git 流水线构建并推送到
+   Container Registry 的场景。用户先选择 Region，再依次选择 Registry 实例、
+   Namespace、Repository，最后填写 Tag 或 Digest；Studio 保存
+   `imageSource.region`、`imageSource.registry`、`imageSource.namespace`、
+   `imageSource.repository` 和 `imageSource.reference`，直接使用该镜像，不再启动
+   CodePipeline 构建。
+
+CR 资源层级为 `Registry 实例 / Namespace / Repository / Tag 或 Digest`。环境最终
+绑定的是可运行镜像，因此已有镜像必须精确到 Repository 和 Tag 或 Digest。对于 Git
+构建，`containerRepository` 只指定 CodePipeline 的推送目标，包含 `region`、
+`registry`、`namespace` 和 `repository`；每次构建产生的版本 Tag 仍由 Studio 记录在
+构建结果中。这两个字段含义不同：`containerRepository` 是构建输出位置，
+`imageSource` 是无需构建、直接作为环境使用的现有镜像。两种方式都通过 Region 分段
+选择器和服务端资源接口级联选择 CR；切换 Region 会清空已选的 Registry、Namespace
+和 Repository，避免跨 Region 组合无效资源。服务端使用所选 Region 校验 CR 资源，
+并把 Git 构建结果推送到该 Region 的目标 Repository。
+
+环境配置可以导出为 `akenv://v1/` 分享码，并在另一位 Studio 用户的环境列表中导入。
+分享码是自包含、无服务端分享记录的版本化数据：它包含环境名称、描述、系统、语言、
+组件、Dockerfile、Git/CR 来源和可移植的 Skill 配置；本地 Skill 文件会直接写入分享码，
+导入时再保存为接收者自己的 Skill 资产。环境 ID、所有者、创建/更新时间、构建版本、
+构建日志、运行记录及云凭据不会进入分享码。分享码本身可能包含 Dockerfile 和本地
+Skill 源码，应只发送给可信接收者。
+
+“导入环境”支持使用英文逗号、中文逗号或换行分隔多个分享码，自动忽略重复项，单次
+最多处理 20 个。Studio 会先检测并列出有效、无效项，再逐项导入，因此一个条目失败
+不会回滚已成功添加的环境。如果源环境存在可用版本，分享码会同时携带其镜像、
+Sandbox Tool 和版本级 Skill 快照，在同一云厂商的 Studio 中导入后可直接挂载；跨
+火山引擎与 BytePlus 导入时不会把该版本误标为可用。没有可用版本的自定义、Dockerfile
+和 Git 环境不会自动启动 CodePipeline；已有镜像环境会重新校验并绑定指定 CR 镜像。
+环境列表检测到剪贴板以 `akenv://` 开头时会提示导入；浏览器拒绝自动复制时，分享弹窗
+会保留完整分享码供用户手动复制。
+
+By default, Studio creates or reuses managed CodePipeline and Container Registry
+resources on the first environment build. With the account-stable default TOS
+bucket, Studio reuses the account's `agentkit-cli-<account-id>` CR instance and
+creates the `runtime-environments/base-images` repository inside it. Existing
+resources can be selected at deployment time with flags only:
+
+```bash
+veadk studio deploy \
+  --vefaas-app-name <app-name> \
+  --environment-cp-workspace <workspace-id-or-name> \
+  --environment-cr-repository <registry/namespace/repository>
+```
+
+Either flag can be supplied independently. The System Information page shows
+the resolved workspace, pipeline, repository, ownership mode, and provider
+console links. These values are resource identifiers, not credentials.
+
 ## In-app Studio updates
 
 Studio deployments use the centrally maintained `veadk-studio` TOS bucket in
@@ -305,11 +1143,34 @@ When `--user-pool-id` and `--allowed-client-id` are omitted, deployment creates
 or reuses them in the selected `--region` and prints the resolved IDs. Pass both
 options to keep using existing Identity resources.
 
+The cloud deploy and update commands register both `/oauth2/callback` for Studio
+SSO and `/oauth/callback` for MPA user authorization on that same client. An MPA
+Runtime can therefore reuse the deployed Studio user pool and client and set its
+identity callback URL to `https://<studio-domain>/oauth/callback`. The callback
+validates the MPA relay state without requiring a Studio browser session,
+redirects the browser through the configured UserPool, then locates exactly one
+key-auth Runtime by `MPA_AGENT_ID` and calls its `/identity/oauth/callback`
+endpoint from the server. The browser never receives the Runtime endpoint or
+API key.
+
+For Studio web chat with an MPA Runtime, the Studio server refreshes the signed-in
+user's UserPool session before each run and prewarms the Runtime's
+`/identity/sessions/put` using the server-held Runtime key. The ID token stays
+server-side and out of the browser session cookie. This requires Studio and MPA
+to use the same UserPool client, a refresh-backed Studio login, and an MPA
+Runtime that recognizes Studio's `x-user-id` as the user identity. If the
+handoff fails, chat continues and MPA can ask the user to log in normally.
+Feishu chat keeps its separate manual login flow.
+
 After automatic provisioning, the success summary lists every Sandbox type and
 Tool ID, the private Studio TOS address, and the resolved Identity user pool and
 client IDs. It also links to the matching Volcengine or BytePlus Identity
 console. Password sign-in remains disabled by default for security; configure
-an SSO identity provider before inviting users to the deployed Studio.
+an SSO identity provider before inviting users to the deployed Studio. Pass
+`--allow-dangerous-login` to explicitly enable local password, passwordless,
+sign-up, recovery, and unconfirmed-user login flows on a Studio-managed user
+pool. When `--user-pool-id` is provided, deployment preserves that existing
+user pool's login settings regardless of this flag.
 
 Studio checks `latest.json` every three minutes and lists newer releases with
 their changelog and Git SHA. An accepted update verifies the selected complete
@@ -320,6 +1181,9 @@ When an update fails, the administrator dialog shows the failed stage, a
 searchable error ID, the complete diagnostic timeline and exception chain, and
 a direct link to the deployed Function in the VeFaaS console. The log can be
 copied in full for support, and retrying starts a fresh diagnostic record.
+Reading the VeFaaS release log is optional: when the Function role lacks
+`vefaas:GetApplicationRevisionLog`, the update continues and the dialog links
+to the matching provider IAM console so an administrator can grant access.
 
 `.github/workflows/publish-studio-release.yaml` runs only when it is manually
 dispatched on `main`. Enter the user-facing changelog when starting the
@@ -414,13 +1278,28 @@ export VEADK_STUDIO_TOS_BUCKET=teststudio
 ```
 
 The server derives the provider-specific endpoint, such as
-`tos-cn-beijing.volces.com`, and never sends TOS credentials to the
-browser. Local Studio uses the configured Volcengine or BytePlus AK/SK; VeFaaS
-uses its IAM role credentials. Studio objects use the versioned, user-first
-layout
+`tos-cn-beijing.volces.com`, and never sends TOS credentials to the browser.
+For Volcengine, Studio probes the public endpoint once and automatically uses
+the matching `tos-<region>.ivolces.com` intranet endpoint when the public
+endpoint has a transport-level connection failure. Authentication, permission,
+and other TOS service errors do not trigger fallback. Browser-facing signed URLs
+continue to use the public endpoint. BytePlus and custom endpoints are left
+unchanged. Local Studio uses the configured Volcengine or BytePlus AK/SK;
+VeFaaS uses its IAM role credentials. Studio objects use the versioned,
+user-first layout
 `veadk-studio/v1/users/<encoded-user-id>/<namespace>/<scope>/<resource-id>/`.
 Video reference assets currently use the `video/<asset-role>/<asset-id>/`
 namespace and store `content` plus `metadata.json` below it.
+
+Intelligent-development projects use
+`intelligent-development/projects/<project-id>/versions/<version-id>/` below
+the signed-in user's prefix. A version contains an immutable source ZIP,
+validation report, and commit marker; the mutable project summary is only an
+index. Viewing, downloading, and deploying a committed version do not depend on
+the original Sandbox. TOS configuration, integrity, and availability failures
+are returned as distinct errors and are never rendered as an empty project
+list. If persistence fails after a Sandbox delivery is generated, the current
+Sandbox delivery remains usable until that environment expires.
 
 Local Studio still accepts `VEADK_STUDIO_TOS_BUCKET` together with
 `VEADK_STUDIO_TOS_REGION`. When local storage is not configured,
@@ -531,6 +1410,48 @@ veadk studio deploy \
   --vefaas-app-name <app-name>
 ```
 
+## Scheduled tasks
+
+The `定时任务` workspace runs a fixed text prompt on a selected deployed Runtime
+Agent. Each occurrence creates an independent Agent session. Schedules support
+one-time, daily, weekly, and five-field Cron expressions with an IANA timezone.
+
+Definitions, locks, execution history, and results live in the private Studio
+TOS bucket under `veadk-studio/v1/users/{user_id}/cronjobs/{job_id}`. A derived
+minute index lives under `veadk-studio/v1/scheduler/cronjobs/due/{yyyyMMddHHmm}`
+so the scheduler never scans user namespaces.
+
+`veadk studio deploy` creates or updates two stateless VeFaaS functions. A
+scanner runs once per minute, copies the current due bucket into the durable
+`scheduler/cronjobs/ready/` queue, persists queued runs, and advances each
+schedule without waiting for Runtime execution. A separate asynchronous worker
+drains ready entries, invokes Runtime, and writes terminal results. The scanner,
+worker, and Studio BFF can therefore restart independently without losing work.
+
+Deployment output identifies the scanner and worker separately, including each
+Function name, ID, console link, dependency installation status, cloud build log,
+release status, revision, and minute timer ID. Build logs are printed as they
+become available, with repeated lines suppressed. Release failures include the
+status message and failed-instance logs returned by VeFaaS. During quiet periods,
+a progress message reports the current stage and elapsed time about every 15
+seconds, including while an SDK request is pending. Optional log retrieval uses
+short timeouts and does not interrupt deployment; credentials and signed URL
+queries are redacted. Volcengine uses Chinese progress messages and BytePlus uses
+English messages
+
+Duplicate timer deliveries are deduplicated with immutable run IDs and TOS
+conditional writes; an ETag lock prevents concurrent executions of the same
+task across Studio replicas or worker instances. Ready entries are deleted only
+after a terminal result is persisted. The worker uses the function IAM role to
+read the Runtime's current endpoint and version. It does not store user tokens
+or AK/SK credentials.
+
+Manual runs are persisted with a `queued` status and placed in the next minute's
+due bucket, so they normally start within 60 seconds. This avoids losing a run
+when the current minute has already been scanned. When Studio is started with
+`veadk studio --vite`, the BFF starts independent local scan and execution
+loops; no separate local scheduler process is required.
+
 ## Agent usage statistics
 
 The `用量统计` tab on a deployed Agent records one invocation after a Studio
@@ -576,3 +1497,421 @@ it natively. Each component lives in its own self-registering directory under
 view, so a catalog/renderer mismatch never breaks the page. To add a component,
 drop a folder there (frontend) and declare it in the agent's catalog (backend —
 see `veadk.a2ui.BaseA2UICatalog`).
+
+### Sleeping agents
+
+Agent categories query live Sessions and Session snapshots without restoring them,
+including legacy requests with `autoResumeSnapshots=true`. Studio presents the
+latest saved record for each logical agent, unless a live Session already
+represents it. Live and wakeable cards share the Ready label and styling; saved
+records show Never expires. Details use the same Ready label and explain
+separately when opening requires waking the agent. Snapshot `SessionMetadata` supplies its display
+name, creator and agent kind, including on SDK versions that omit this field.
+Owners can list, wake and delete their own records; administrators can also manage
+legacy records without owner metadata. Records with a different agent kind are
+excluded when kinds share a Tool.
+
+Opening a sleeping agent explicitly restores it and then opens its normal entry
+point. The UI explains the wait using “waking” language and permits retry after a
+failure. Same-agent wake requests are serialized within a service instance, and
+retries check for an existing live Session. This is not a distributed lock.
+Deleting a sleeping agent requires confirmation and sends `ToolId` and `SnapshotId`
+to `DeleteSessionSnapshot`; it deletes the selected saved record only. If that
+logical agent has older records, the next latest record can appear on refresh.
+Failed records remain visible for deletion but cannot be opened. The UI uses
+agent terminology rather than exposing these control-plane resource types.
+
+### Studio Sandbox 工作区
+
+`veadk studio deploy` 默认创建或复用启用持久化快照的 Studio Sandbox Tool，
+新建规格为 8 核 CPU、16 GB 内存，更新时自动补建也使用相同规格。
+
+部署、命令行更新和云上 OTA 共用 Studio Sandbox 创建流程：BytePlus 使用内置
+`StudioEnv`，火山引擎继续使用 `Private`。创建时获取模型凭据并配置模型名称、
+地址、API Key、鉴权和快照；已有工作区绑定保持不变。
+
+按云环境和地域选择 `studio-sandbox-1.0.1` 镜像：
+
+| 云环境 | 地域 | 镜像 |
+| --- | --- | --- |
+| 火山引擎 | cn-beijing | `enterprise-public-cn-beijing.cr.volces.com/vefaas-public/agentkit-sandbox:studio-sandbox-1.0.1` |
+| 火山引擎 | cn-shanghai | `enterprise-cn-shanghai-cn-shanghai.cr.volces.com/vefaas-public/agentkit-sandbox:studio-sandbox-1.0.1` |
+| BytePlus | ap-southeast-1 | `enterprise-public-ap-southeast-1.cr.volces.com/vefaas-public/agentkit-sandbox:studio-sandbox-1.0.1` |
+
+可通过 `STUDIO_WORKSPACE_IMAGE` 指定区域可访问的其他镜像。启动命令使用镜像内的
+`/opt/gem/run.sh`，不再注入编辑器补丁。火山引擎默认中文，BytePlus 默认英文，
+模型配置沿用相应云环境的 Studio 配置。
+
+部署时 Studio Sandbox 与其他 Sandbox Tool 并行创建，并自动获取模型凭据，
+注入 `MODEL_AGENT_NAME`、`MODEL_AGENT_BASE_URL` 和 `MODEL_AGENT_API_KEY`。
+可通过 `--studio-sandbox-tool-id t-xxx` 或环境变量 `STUDIO_WORKSPACE_TOOL_ID`
+指定已配置好的持久化 Tool，此时直接复用，不重新创建或修改配置。
+部署通过 `STUDIO_WORKSPACE_TOOL_ID` 绑定工作区，系统信息显示对应 Tool ID。
+`veadk studio update` 和前端更新都会自动补齐缺失的持久化工作区 Tool，
+配置上述模型凭据并保存绑定，火山引擎和 BytePlus 均适用。
+已有 Tool ID 时保留绑定，避免切换个人项目存储；创建失败时更新报错，不忽略失败。
+从尚不支持补建的旧版本更新时，新版本首次启动会在后台补建并保存函数环境中的 Tool ID。
+补建期间代码项目暂不可用，失败会记录日志，可检查权限后重试更新。
+每位用户的项目共用自己的持久化 Session，打开项目时剩余不足一小时会通过
+`SetSessionTtl` 续期为八小时。标题栏显示倒计时，项目管理右侧支持全屏展开；
+内嵌浏览器使用当前页面的可用空间。
+
+### 工作区项目模板
+
+默认模板位于 `frontend/server/templates/python-agent/`，由 Studio 在创建项目时传入
+Sandbox。修改这些模板只需要更新 Studio，不需要重建镜像，也不会覆盖已有项目。
+`${project_name}` 和 `${agent_name}` 在创建时替换为项目名和合法 Python Agent 名。
+
+新镜像的 `studio-project-create NAME --json --template-stdin` 从标准输入接收
+`{"version":1,"files":{"main.py":"...","README.md":"..."}}` 格式的 UTF-8 文件项目，
+支持子目录。最多 256 个文件、1 MiB，不接受绝对路径、父目录跳转或 `.git`、`.venv`
+文件。工具仅将模板写入新项目，保留离线 Python 环境初始化和 `git init`。
+模板中的新依赖不会自动安装，运行环境依赖仍由镜像管理。
+
+其他地域需要显式设置 `STUDIO_WORKSPACE_IMAGE`，避免错误使用跨地域镜像。
+
+## 统一组件库与预览
+
+AI APP 新增 [ConversationFlow](src/components/ai-app/ConversationFlow/README.md)，覆盖思考、工具调用、子智能体移交、图表、文件与授权等消息场景，提供现有 Studio Turn 的适配入口和明暗主题
+消息区域复用固定高度 ScrollArea，默认 600px；用户消息靠右、模型回复靠左，不显示头像和名称，不包含输入框，可通过 height / scrollAreaProps 配置滚动区域
+
+共享组件目录见 [组件库说明](src/components/README.md)，预览目录见
+[Components Preview](src/components-preview/README.md)
+
+运行 `npm run dev:components` 打开独立组件预览页，按 Foundation、Base、Block、AI App、Node、Layout 分组，组内按组件名称排序
+Foundation 下的 Specification 展示用户确认的前端开发规则，支持复制规范；内容与 AI 可读取的 [Specification.md](src/components-preview/foundation/Specification.md) 保持同一来源
+组件名称使用一级标题，变种使用二级标题；Input 的前后图标变种合并展示，参数表统一在底部，可通过页内目录直接跳转
+Form Label Row 和 Glass Icon Button Group 独立归入 Block，Card Layout 归入 Layout，原有页面与小节链接继续可用
+Progress 对应 LongRunningState，Text 和 Code 两种详情形式分别在二级标题下展示，支持 `#progress` 与原有 `#long-running-state` 链接
+窄屏提供可展开的组件目录和本页目录，原有组件链接继续可用
+预览包含可复用控件、完整 Radio 卡片、表格、页面布局和 Prompt Input，提供持久化明暗主题、语义 Token 展示及从 TypeScript 接口生成的参数表
+主次按钮默认等高，Select 支持选项副标题，Prompt Input 支持提示词列表轮播；组件交互与使用约定见预览说明
+Menu 提供文字与箭头触发的面板菜单，支持分组、多级子菜单及可选图标，预览中可查看交互示例与参数表
+Toast 提供四种状态和自定义操作，通过 ToastProvider 与 useToast 管理堆叠、自动关闭及悬停暂停，继承明暗主题
+Loading 提供无限路径（默认 32 × 16px）与圆环（默认 20 × 20px）两种加载图形，ScrollArea 和卡片触底加载复用无限路径，支持明暗主题与减少动态效果偏好
+EmptyState 支持圆形背景内的 24px 图标、标题与详细说明，以及复用 Button 的横排操作组；ErrorState 使用相同尺寸的红色断链图标且无按钮，两者均可在基础组件预览中查看
+Button 各样式并排展示 Compact、Default、Large，按钮底端对齐，尺寸说明在下方；文字按钮高度为 28 / 32 / 36px、字号为 12 / 14 / 16px，图标随字号缩放，Pill 使用同一套尺寸
+Button 支持 loading，加载时自动禁用且只显示 Ring 图标，保留按钮尺寸与无障碍名称
+LongRunningState 整体左对齐，依次展示正常字号的当前进度名称、快速循环滑动的加载条和无背景 ScrollArea；名称切换时向上渐隐再滑入下一名称，完成后停止动画并保留结果，支持减少动态效果偏好
+ConversationFlow 新增步骤先展开空间再渐显内容，状态更新不重复进场，减少动态效果时直接显示
+资源页首次加载统一复用 Infinity Path，详情布局不包含 Sidebar
+ModalButton 复用 ModalLayout 并提供遮罩和进出动效；Drawer 以留有屏幕边距的浮动卡片打开；FileExplorer 组合文件树、CodeBlock 与 ScrollArea 展示文件内容
+FileExplorer 按文件名显示常用文件图标并选择高亮语言，file.language 可覆盖，支持自动格式化、折行及可选编辑保存；CodeBlock 支持自动语法高亮、手动颜色 token 和纯文本，复制保留传入文本
+Drawer 默认提供毛玻璃背景；FileUpload 复用 DashedZone 并提供文件选择与校验，Slider 支持原生拖动和键盘调整
+DatePicker 在基础组件中展示日期与日期时间选择；IndexLayout 在布局分组中展示首页；侧边栏会话示例位于 Block 分组的 Sidebar
+
+
+### 组件库侧栏预览
+
+`npm run dev:components` 启动独立组件库，在布局分组打开 App layout 可查看完整侧栏
+支持 240px / 56px 展开折叠、会话菜单、账号区域与默认深色的主题切换
+全屏入口为 `/components-preview/?fullscreen=app-layout#app-layout`，详见 [组件预览说明](src/components-preview/README.md)
+### MPA 消息渠道
+
+在“自动化 → 消息渠道”打开“MPA智能体消息渠道”，与飞书机器人创建、网站集成并列。选择已有 MPA 智能体后配置飞书、企业微信、钉钉；原智能体详情不再显示消息渠道栏目。列表按当前账号授权范围加载，选项展示名称、描述、“创建者 | 相对创建时间”，以及地域和 Runtime ID，支持按名称、Runtime ID、地域搜索已加载结果，并可加载更多；切换智能体会清理临时二维码和凭据，已有绑定继续保留。三个渠道均提供“极速配置”和“手动配置”，默认极速配置，切换方式后仅显示对应内容。极速配置沿用飞书、钉钉扫码绑定和企业微信官方 SDK 弹窗授权；手动配置分别填写飞书 App ID / App Secret、钉钉 Client ID / Client Secret、企业微信 Bot ID / Secret；仅飞书提供允许群列表，并独立展示消息网关、入站路由和回复投递状态。钉钉与企业微信无需配置本地群白名单。所有渠道均可解绑，旧 Runtime 必须升级后才能使用新增绑定接口。需要 Studio 管理员身份、Runtime 的 `CHANNEL_ADMIN_AUTH_MODE=runtime_key`，以及通过部署配置注入并在更新时保留的 `CHANNEL_STATE_ENCRYPTION_KEY`（Fernet key）。渠道数据库必须独立于其他 MPA 实例。飞书和钉钉的扫码凭据由服务端获取；企微 SDK 授权结果仅在浏览器内存中短暂存在，立即提交 Runtime 保存并完成注册，取消、切页和五分钟超时会清理弹窗。配置完成不等于收发验证通过；部署后请单独验收私聊和授权群 @ 对话。详见 [接口契约](../specs/mpa-channels/README.zh.md)。
+
+已绑定飞书、钉钉或企业微信时，可点击“重新生成二维码”展开“消息渠道扫码配对”。生成二维码不会先解绑当前机器人；飞书扫码并绑定成功后替换原机器人，可在授权流程选择绑定存量机器人或新建机器人。
+
+企业微信的“重新生成二维码”会重新打开企微扫码授权窗口，成功绑定后更新连接，取消授权或失败保留原机器人。
+
+配对二维码仅在当前渠道面板临时展示，不显示“等待扫码”或“打开授权页面”。切换渠道、离开页面、浏览器刷新或面板刷新后不恢复旧二维码，需要重新点击生成；已绑定机器人配置保留。
+
+三个渠道的解除连接操作统一为“解除绑定”；已绑定企业微信的“重新生成二维码”与“解除绑定”横向排列，与飞书和钉钉一致。
+
+飞书群聊权限列表不再提供“编辑”；每行右侧的 × 按钮用于移除该群权限。 新增群权限仅填写群 ID，不再提供会话隔离选项或提交 `groupSessionScope`；新群沿用 Runtime 默认/继承策略，已有群配置及列表中的策略展示保持不变。
+
+配置方式不跨页面或 Runtime 保存。切换方式会清空未提交凭据、隐藏二维码并停止前端轮询或企微授权等待；注册提交进行中禁止切换。已绑定机器人也可以通过手动配置替换，失败保留现有绑定。飞书与钉钉手动配置须由 Runtime 的 `credentialBindingChannels` 声明支持；旧镜像显示升级提示。
+
+### MPA Runtime scheduled tasks
+
+Select a connected cloud Runtime and open the Runtime scheduled tasks tab. The list/calendar supports search, status filtering, pagination, creation, editing, copying, deletion, enable/disable, manual execution, and execution history. Studio retains gateway authentication and Runtime authorization, forwards the authenticated Studio user as `x-user-id`, and does not require JWT input or TOP credential exchange. With MPA JWT disabled, task ownership remains scoped to that user. The Runtime resolves the default executing Agent; no Agent ID input is required. Errors are not rendered as empty results. Complex Cron expressions show the server's next execution in the calendar.
+
+Run `npm run test:mpa-cron-coverage` and `python -m pytest tests/frontend/server/test_mpa_cron.py` for focused regression checks.
+
+### A2A 长耗时请求
+
+连接 A2A Runtime 后，对话会显示等待响应、排队或执行中的状态。收到有效状态后会继续等待最终回复，不因任务耗时超过 30 秒而自动中断。等待响应不代表 Runtime 已接受任务；错误或连接中断也不代表后台任务已取消，请先确认任务状态再重试创建等操作。
+
+### Sandbox file downloads
+
+Assistant Markdown links under `/data/output/` or `/data/workspace/` appear as download buttons in conversation history and streaming messages. Studio uses the current Runtime and session through its authenticated proxy; files remain available only while that Sandbox and file exist. Legacy `<file-card>` and `<personal-drive-enable-card>` payloads are hidden in conversation rendering. A failed download can be retried by clicking the button again. Run `npm run test:sandbox-download-coverage` for the focused regression suite.
+
+
+### MPA conversation information rail / MPA 会话信息侧栏
+
+Only MPA Runtimes show the right conversation rail. AGENTS.md displays the actual Runtime document through the authenticated Studio metadata endpoint. Upgrade the MPA Runtime image to expose `/api/v1/studio/agent-info`; Studio alone cannot add the endpoint to deployed agents. Runtime credentials stay server-side.
+
+Skills show only the bound Skill Spaces, with pagination. Temporary mounting has been removed, and old temporary selections are excluded from MPA messages. Click a skill name to view its latest SKILL.md. Authorized owners/admins can save a new version to that space; shared/review spaces remain read-only. Saving preserves other files, rejects stale versions and changes to the frontmatter name, and can affect other agents bound to the same space. Running sessions may need a cache refresh or a new session. Use **Refresh information** to reload the rail; environment controls remain available.
+
+右侧会话信息栏仅对 MPA Runtime 展示。AGENTS.md 通过受认证的 Studio 元信息接口显示真实正文。需要更新 MPA Runtime 镜像以提供 `/api/v1/studio/agent-info`；单独更新 Studio 无法给已部署智能体增加此接口。Runtime 凭据仅保留在服务端。
+
+技能仅展示绑定空间的内容并支持分页。已取消临时挂载，旧的临时技能选择不会再发送给 MPA。点击技能名称查看最新 SKILL.md；有权限的所有者/管理员可保存新版本到该空间，共享/审核空间保持只读。保存保留其他文件，拒绝过期版本及 frontmatter 名称变化，可能影响绑定同一空间的其他智能体。运行中的会话可能需要等待缓存刷新或新建会话后生效。点击“刷新信息”重新加载侧栏；环境操作保持可用。
+
+### Production component themes
+
+The production entry loads both component token stylesheets before rendering. When the host does not set `data-theme` on `<html>`, Studio uses `light` to match its existing page; an explicit `light` or `dark` value is preserved. This keeps portalled dialogs, their text, inputs and buttons on the same palette. Component-preview defaults are unchanged.
+
+生产入口在渲染前加载两份组件主题样式。宿主未在 `<html>` 上设置 `data-theme` 时沿用浅色页面；显式浅色或深色设置保持不变，确保弹窗、文字、输入框和按钮配色一致。组件预览的默认主题不变。
+
+### Named MPA creation / MPA 名称创建
+
+Studio resolves shared VPC/subnet and APIG/IM Gateway from the account/region
+records in `mpa_admin_workspace/mpa_admin_db`. It creates and persists missing
+resources, then reuses them for later agents. The built-in profile does not pin
+existing resource IDs. Existing records are preserved; this does not migrate
+agents or bypass resource quotas.
+
+Studio 从 `mpa_admin_workspace/mpa_admin_db` 的账号/地域记录解析共享 VPC/子网及
+APIG/IM Gateway；缺失时创建并保存，后续智能体复用。内置配置不固定已有资源 ID。
+已有记录保持不变；本次不迁移智能体或绕过资源配额。
+
+New Studio requests prepare a dedicated `mpa_agent_<Runtime name>` Workspace and its `aidb` business database per MPA. Name checks before first Next and task acceptance block foreign Runtime/template/Workspace collisions; own bindings remain reusable on retry. Existing submitted requests and registered shared bindings retain the original shared business Workspace. Shared account/region resource records live in `mpa_admin_workspace/mpa_admin_db`. With `managed.postgres.mode: auto`, deployment STS creates/reuses both Workspaces and the PG step needs no connection input. Manual profiles remain supported. See the [setup and registry migration instructions](../veadk/integrations/mpa/managed/README.md).
+
+Studio 新请求为每个 MPA 准备独立 `mpa_agent_<Runtime 名称>` Workspace 及 `aidb` 业务库。首次下一步及任务接收前检查名称，阻止其他归属 Runtime/模板/Workspace 重名，自身绑定仍可重试复用。已提交请求及已登记的共享绑定沿用原共享业务 Workspace。账号/地域共享资源记录存入 `mpa_admin_workspace/mpa_admin_db`。设置 `managed.postgres.mode: auto` 后，由部署 STS 创建/复用两个 Workspace，PG 步骤无需填写连接信息；仍兼容手动配置。参见[配置和注册库迁移说明](../veadk/integrations/mpa/managed/README.zh.md)。
+
+The MPA creation dialog asks for a Runtime name (4–64 ASCII letters, digits, underscores or hyphens) and description. The server generates the stable Agent ID; neither ID nor image inputs are shown. Fresh requests use the built-in `mpa/mpa_agent:latest` and `mpa/mpa_codex_worker:latest` images. Submitted legacy drafts retain their original request and images for retry. Existing Runtimes are unchanged. See [managed creation](../veadk/integrations/mpa/managed/README.md).
+
+The dialog now uses three steps: basics (required Runtime name and description), automatic PostgreSQL preparation, and OpenViking preparation. It links to the relevant Volcengine console pages. The server obtains PostgreSQL Workspace connections through deployment credentials. New Volcengine Beijing requests automatically prepare an independent paid enterprise OpenViking library and inject its four Runtime variables; retries reuse the registered library. New BytePlus Johor requests automatically prepare a personal library using the resolved MPA ModelArk API Key and two inference endpoints (server overrides: `OV_VLM_ENDPOINT_ID` / `OV_EMBEDDING_ENDPOINT_ID`). Its default-user and overseas data-plane behavior require a separately adapted Runtime image before memory works. Already-submitted manual requests still enable OpenViking only when all three connection values are entered; leaving them blank omits the four variables, including inherited values. The key is never saved in browser drafts or task SQLite. Only the final step submits; nonsecret draft choices and request identity survive reopening in the same browser session. See the [creation contract](../specs/studio-mpa-creation/README.md).
+
+创建弹窗现分为基础信息（必填 Runtime 名称和描述）、PostgreSQL 自动准备、OpenViking 准备说明三步，并提供对应的火山引擎控制台入口。服务端通过部署凭据获取 PostgreSQL Workspace 连接。火山北京新请求自动准备独立的付费企业版 OpenViking 库并注入四个 Runtime 变量，重试复用已登记库。BytePlus 柔佛新请求使用已解析的 MPA ModelArk API Key 和两个推理接入点（服务端可通过 `OV_VLM_ENDPOINT_ID` / `OV_EMBEDDING_ENDPOINT_ID` 覆盖）自动准备个人版库；其 default 用户及海外数据面行为需要单独适配 Runtime 镜像后才能使用记忆。已提交手动请求仍在三项连接值全部填写时启用 OpenViking；全空时不注入四个变量，也不继承旧值。密钥不保存到浏览器草稿或任务 SQLite。仅最后一步提交，非密钥草稿与请求身份在同一浏览器会话中可恢复。参见[创建契约](../specs/studio-mpa-creation/README.zh.md)。
+
+After a confirmed failure or cancellation, the dialog retains the old task for same-ID retry. “Create another agent” generates a new request UUID and blank name; the server derives the new agent ID on submission and returns to the first step. It replaces only the browser draft, not any cloud resources from the previous attempt. Running or uncertain submissions cannot switch identities.
+
+失败或取消后，创建弹窗保留原任务供同 ID 重试；点击“新建另一个智能体”会生成新的请求 UUID 和空白名称并返回第一步，服务端在提交时派生新智能体 ID。该操作只替换浏览器草稿，不会删除上次创建的云资源。运行中或提交结果不明时不能切换到新身份。
+
+MPA 创建弹窗填写 Runtime 名称（4–64 个 ASCII 字母、数字、下划线或连字符）和描述。服务端生成稳定的智能体 ID，不再显示 ID 和镜像输入框。新请求使用内置 `mpa/mpa_agent:latest` 和 `mpa/mpa_codex_worker:latest` 镜像。已提交旧草稿保留原请求和镜像用于重试。现有 Runtime 不变。参见[托管创建说明](../veadk/integrations/mpa/managed/README.zh.md)。
+
+MPA A2A responses now group adjacent assistant fragments into one reply with a single action row. Copy/share include the grouped response; feedback remains attached to the final answer event, and the trace entry retains the session timeline through the latest fragment. Reported request tokens are deduplicated by usage source/event, including trailing usage updates. General-agent rendering is unchanged.
+
+MPA grouped replies hide exact answer mirrors only in their derived view: an extended fragment reappears intact, including its original prefix. General Codex tool activity preserves commentary and subsequent model text under its original behavior.
+
+### MPA A2A shared gateway compatibility
+
+MPA conversations (native or A2A) hide the separate “会话产物” entry because it does not read the Worker `/data/output` mount. General Runtime sessions retain the entry. Existing MPA Markdown file-download links are unchanged.
+
+Fresh flat MPA creation defaults to `ENABLE_A2A=true` and `DISABLE_JWT_AUTH=true`; explicit `false` overrides and referenced Runtime/template environments are preserved. The inner legacy REST JWT gate is bypassed, including its admin checks and header-based identity paths; trusted callers must control identity headers. Outer gateway key-auth is unchanged. Studio now prefers a valid Agent Card for tagged MPA Runtimes, selecting `a2a-default` even when the Runtime also advertises ADK. General Runtimes and MPA without a usable card keep existing discovery behavior. This avoids native Profile/session preflight on the A2A path; it does not enable `MPA_AGENTKIT_MODE`, change independent management-endpoint authentication or migrate old sessions. If a tagged MPA Runtime's agent card omits the shared gateway `/runtime/<ID>` prefix from its same-origin `/a2a/jsonrpc` URL, the Studio backend still restores the prefix from the control-plane endpoint for chat and history requests. General-agent URLs are unchanged. Existing Runtimes need an explicit configuration release for environment changes; reconnect to refresh discovery. Restart Studio after this backend update; no frontend rebuild is required.
+
+新建 MPA 沙箱模板按智能体 ID 命名，并将 `-` 替换为 `_`（例如 `mi-example` → `mi_example`）；已有模板保持原绑定，未完成的旧创建任务继续按原名称重试。
+
+### 智能构建首页与任务找回
+
+从创建入口重新进入智能构建时，返回首页并清除上次部署页的导航状态；仍可从已保存项目
+选择版本再次部署。
+
+首页将新建构建与进行中的任务并列展示，已保存项目位于下方。窄窗口优先展示进行中的
+任务。列表通过已有后台任务监控读取当前登录用户的任务，显示需求摘要、状态和开始
+时间；刷新或重新打开网页后仍可找到尚在运行、重连中或等待回复的任务。
+
+点击「查看任务」会连接原开发环境，恢复已保存输出及停止、追加要求等操作，不会
+重新创建构建。任务列表与后台通知共用一套查询；首页内不重复弹出后台任务提示。
+网络异常保留已显示的列表和正在编辑的需求，可手动重试；切换账号后隔离旧数据。
+已结束任务的构建产物仍在「已保存项目」中，短期记录受现有保留时间和实例生命周期限制。
+
+浏览器回归脚本 `scripts/checkDevelopmentTurnUi.mjs` 支持 `CHECK_HOME=1`，覆盖服务端
+发现、重新加载、打开失败重试、过期导航响应和原输出恢复；`CHECK_LOCALE=en-US`
+可验证英文页面。测试使用受控 Sandbox HTTP，不会调用真实模型。
+
+### 智能构建的过程与每轮统计
+
+开发环境准备、连接期间，在当前状态旁显示「取消」。取消后保留需求、模型和所选
+项目版本，返回原输入位置；已经取消的请求即使稍后返回，也不会进入执行页或显示旧错误。
+此阶段不显示执行输入框；真正开始构建后，输入框提供停止任务和追加要求操作。
+
+智能构建按 Codex 原生 turn 统计；同一轮中的 steer 补充消息不重新计时。
+思考、工具、计划和文件变更使用带图标的可展开过程行，命令行标题显示短英文摘要，
+完整命令与输出保留在详情中。失败命令保留原位，单个工具不显示执行耗时。
+分组和整轮统计保留汇总耗时，自动使用毫秒、秒、分和小时；
+例如 `1,542,277 ms` 显示为 `25 分 42.3 秒`，显示精度下为零时显示为 `<1 毫秒`。
+耗时单位跟随界面语言：中文使用毫秒、秒、分、小时，英文使用 ms、s、min、h。
+该展示规则不修改原始耗时数据或累计计算，缺少耗时数据时仍显示“未上报”。
+
+每轮成功、失败或中断后显示工具调用次数、本轮耗时、工具累计耗时和 Tokens 按钮。
+次数按原生工具 item 去重，包含失败和中断调用；工具累计耗时是各调用耗时之和，
+并行调用可能使其超过本轮耗时。缺少部分工具耗时时，显示“已记录工具耗时”。
+Tokens 使用带展开提示的轻量文字按钮，可通过悬浮、键盘聚焦或点击查看本轮模型、输入、输出、缓存命中与未命中、
+缓存写入及推理输出。缓存命中是输入的子集，推理输出是输出的子集，不重复累加；
+未命中输入为输入减缓存命中。缺失指标显示“未上报”，中断或统计断点显示记录可能不完整。
+
+产物卡片以 Agent 名称为标题，入口独占一行并支持长路径换行，文件数和大小并排，
+时间与验证结果单独展示。查看源码、比较和下载位于辅助操作区，部署单独突出；
+窄窗口将操作区上下排列，保留加载、错误和重试反馈。
+
+统计沿用按用户隔离的 SQLite 短期保存和事件回放。`run.turn` 是新增事件，原有
+`usage` 事件仍保留兼容；已有数据库只增加 `run_turns.metrics` 列。回滚到旧代码时应
+使用新的短期数据库路径，因为旧版本按固定列数写入 `run_turns`。当前单实例云部署
+在实例替换后丢失短期记录的约定不变。
+
+### Runtime evaluation storage
+
+Studio stores evaluation sets and samples in the configured private TOS bucket
+(`VEADK_STUDIO_TOS_BUCKET` and `VEADK_STUDIO_TOS_REGION`). Volcengine and BytePlus
+use their respective server credentials. No AgentKit evaluation APIs are used.
+
+Objects live under `veadk-studio/v1/evaluation/<runtime-id>/`:
+
+- `sets/good.json` and `sets/bad.json` are the two default sets
+- `sets/<id>.json` stores a user-created set and its editable name and description
+- `samples/<id>.json` stores an individual sample, its set ID and `user` or `auto` source
+
+App names, projects and cloud regions are not part of the storage identity.
+Use separate buckets for local and production installations. Existing AgentKit
+sets are not imported.
+
+New Runtime deployments apply the requested instance limits at creation and
+wait for the configured instances to become ready before reporting success.
+This avoids starting the first conversation on a temporary startup instance.
+Runtime sessions still use the Agent's configured short-term memory backend;
+use database-backed memory when sessions must survive instance replacement.
+
+The existing evaluation page and conversation feedback controls use the same
+TOS records. Runtime-scoped APIs support custom set CRUD, sample editing and
+moving, source filtering, search and pagination. Updates use TOS ETag conditions;
+a stale edit returns a conflict. Deletion removes
+sample content and retains a small marker so automatic retries cannot recreate
+it. Deleting a default set stops feedback writes to that set and prevents background recreation; renaming it keeps feedback routing intact.
+
+List filtering and counts currently scan only the selected Runtime's objects,
+with bounded parallel reads. This is intended for the initial dataset sizes;
+large collections will need a separate rebuildable query index.
+### MPA 消息渠道
+
+在“自动化 → 消息渠道”打开“MPA智能体消息渠道”，与飞书机器人创建、网站集成并列。选择已有 MPA 智能体后配置飞书、企业微信、钉钉；原智能体详情不再显示消息渠道栏目。列表按当前账号授权范围加载，选项展示名称、描述、“创建者 | 相对创建时间”，以及地域和 Runtime ID，支持按名称、Runtime ID、地域搜索已加载结果，并可加载更多；切换智能体会清理临时二维码和凭据，已有绑定继续保留。三个渠道均提供“极速配置”和“手动配置”，默认极速配置，切换方式后仅显示对应内容。极速配置沿用飞书、钉钉扫码绑定和企业微信官方 SDK 弹窗授权；手动配置分别填写飞书 App ID / App Secret、钉钉 Client ID / Client Secret、企业微信 Bot ID / Secret；仅飞书提供允许群列表，并独立展示消息网关、入站路由和回复投递状态。钉钉与企业微信无需配置本地群白名单。所有渠道均可解绑，旧 Runtime 必须升级后才能使用新增绑定接口。需要 Studio 管理员身份、Runtime 的 `CHANNEL_ADMIN_AUTH_MODE=runtime_key`，以及通过部署配置注入并在更新时保留的 `CHANNEL_STATE_ENCRYPTION_KEY`（Fernet key）。渠道数据库必须独立于其他 MPA 实例。飞书和钉钉的扫码凭据由服务端获取；企微 SDK 授权结果仅在浏览器内存中短暂存在，立即提交 Runtime 保存并完成注册，取消、切页和五分钟超时会清理弹窗。配置完成不等于收发验证通过；部署后请单独验收私聊和授权群 @ 对话。详见 [接口契约](../specs/mpa-channels/README.zh.md)。
+
+已绑定飞书、钉钉或企业微信时，可点击“重新生成二维码”展开“消息渠道扫码配对”。生成二维码不会先解绑当前机器人；飞书扫码并绑定成功后替换原机器人，可在授权流程选择绑定存量机器人或新建机器人。
+
+企业微信的“重新生成二维码”会重新打开企微扫码授权窗口，成功绑定后更新连接，取消授权或失败保留原机器人。
+
+配对二维码仅在当前渠道面板临时展示，不显示“等待扫码”或“打开授权页面”。切换渠道、离开页面、浏览器刷新或面板刷新后不恢复旧二维码，需要重新点击生成；已绑定机器人配置保留。
+
+三个渠道的解除连接操作统一为“解除绑定”；已绑定企业微信的“重新生成二维码”与“解除绑定”横向排列，与飞书和钉钉一致。
+
+飞书群聊权限列表不再提供“编辑”；每行右侧的 × 按钮用于移除该群权限。 新增群权限仅填写群 ID，不再提供会话隔离选项或提交 `groupSessionScope`；新群沿用 Runtime 默认/继承策略，已有群配置及列表中的策略展示保持不变。
+
+配置方式不跨页面或 Runtime 保存。切换方式会清空未提交凭据、隐藏二维码并停止前端轮询或企微授权等待；注册提交进行中禁止切换。已绑定机器人也可以通过手动配置替换，失败保留现有绑定。飞书与钉钉手动配置须由 Runtime 的 `credentialBindingChannels` 声明支持；旧镜像显示升级提示。
+
+### MPA Runtime scheduled tasks
+
+Select a connected cloud Runtime and open the Runtime scheduled tasks tab. The list/calendar supports search, status filtering, pagination, creation, editing, copying, deletion, enable/disable, manual execution, and execution history. Studio retains gateway authentication and Runtime authorization, forwards the authenticated Studio user as `x-user-id`, and does not require JWT input or TOP credential exchange. With MPA JWT disabled, task ownership remains scoped to that user. The Runtime resolves the default executing Agent; no Agent ID input is required. Errors are not rendered as empty results. Complex Cron expressions show the server's next execution in the calendar.
+
+Run `npm run test:mpa-cron-coverage` and `python -m pytest tests/frontend/server/test_mpa_cron.py` for focused regression checks.
+
+### A2A 长耗时请求
+
+连接 A2A Runtime 后，对话会显示等待响应、排队或执行中的状态。收到有效状态后会继续等待最终回复，不因任务耗时超过 30 秒而自动中断。等待响应不代表 Runtime 已接受任务；错误或连接中断也不代表后台任务已取消，请先确认任务状态再重试创建等操作。
+
+### Sandbox file downloads
+
+Assistant Markdown links under `/data/output/` or `/data/workspace/` appear as download buttons in conversation history and streaming messages. Studio uses the current Runtime and session through its authenticated proxy; files remain available only while that Sandbox and file exist. Legacy `<file-card>` and `<personal-drive-enable-card>` payloads are hidden in conversation rendering. A failed download can be retried by clicking the button again. Run `npm run test:sandbox-download-coverage` for the focused regression suite.
+
+
+### MPA conversation information rail / MPA 会话信息侧栏
+
+Only MPA Runtimes show the right conversation rail. AGENTS.md displays the actual Runtime document through the authenticated Studio metadata endpoint. Upgrade the MPA Runtime image to expose `/api/v1/studio/agent-info`; Studio alone cannot add the endpoint to deployed agents. Runtime credentials stay server-side.
+
+Skills show only the bound Skill Spaces, with pagination. Temporary mounting has been removed, and old temporary selections are excluded from MPA messages. Click a skill name to view its latest SKILL.md. Authorized owners/admins can save a new version to that space; shared/review spaces remain read-only. Saving preserves other files, rejects stale versions and changes to the frontmatter name, and can affect other agents bound to the same space. Running sessions may need a cache refresh or a new session. Use **Refresh information** to reload the rail; environment controls remain available.
+
+右侧会话信息栏仅对 MPA Runtime 展示。AGENTS.md 通过受认证的 Studio 元信息接口显示真实正文。需要更新 MPA Runtime 镜像以提供 `/api/v1/studio/agent-info`；单独更新 Studio 无法给已部署智能体增加此接口。Runtime 凭据仅保留在服务端。
+
+技能仅展示绑定空间的内容并支持分页。已取消临时挂载，旧的临时技能选择不会再发送给 MPA。点击技能名称查看最新 SKILL.md；有权限的所有者/管理员可保存新版本到该空间，共享/审核空间保持只读。保存保留其他文件，拒绝过期版本及 frontmatter 名称变化，可能影响绑定同一空间的其他智能体。运行中的会话可能需要等待缓存刷新或新建会话后生效。点击“刷新信息”重新加载侧栏；环境操作保持可用。
+
+### Production component themes
+
+The production entry loads both component token stylesheets before rendering. When the host does not set `data-theme` on `<html>`, Studio uses `light` to match its existing page; an explicit `light` or `dark` value is preserved. This keeps portalled dialogs, their text, inputs and buttons on the same palette. Component-preview defaults are unchanged.
+
+生产入口在渲染前加载两份组件主题样式。宿主未在 `<html>` 上设置 `data-theme` 时沿用浅色页面；显式浅色或深色设置保持不变，确保弹窗、文字、输入框和按钮配色一致。组件预览的默认主题不变。
+
+### Named MPA creation / MPA 名称创建
+
+New Studio requests prepare a dedicated `mpa_agent_<Runtime name>` Workspace and its `aidb` business database per MPA. Name checks before first Next and task acceptance block foreign Runtime/template/Workspace collisions; own bindings remain reusable on retry. Existing submitted requests and registered shared bindings retain the original shared business Workspace. Shared account/region resource records live in `mpa_admin_workspace/mpa_admin_db`. With `managed.postgres.mode: auto`, deployment STS creates/reuses both Workspaces and the PG step needs no connection input. Manual profiles remain supported. See the [setup and registry migration instructions](../veadk/integrations/mpa/managed/README.md).
+
+Studio 新请求为每个 MPA 准备独立 `mpa_agent_<Runtime 名称>` Workspace 及 `aidb` 业务库。首次下一步及任务接收前检查名称，阻止其他归属 Runtime/模板/Workspace 重名，自身绑定仍可重试复用。已提交请求及已登记的共享绑定沿用原共享业务 Workspace。账号/地域共享资源记录存入 `mpa_admin_workspace/mpa_admin_db`。设置 `managed.postgres.mode: auto` 后，由部署 STS 创建/复用两个 Workspace，PG 步骤无需填写连接信息；仍兼容手动配置。参见[配置和注册库迁移说明](../veadk/integrations/mpa/managed/README.zh.md)。
+
+The MPA creation dialog asks for a Runtime name (4–64 ASCII letters, digits, underscores or hyphens) and description. The server generates the stable Agent ID; neither ID nor image inputs are shown. Fresh requests use the built-in `mpa/mpa_agent:latest` and `mpa/mpa_codex_worker:latest` images. Submitted legacy drafts retain their original request and images for retry. Existing Runtimes are unchanged. See [managed creation](../veadk/integrations/mpa/managed/README.md).
+
+The dialog now uses three steps: basics (required Runtime name and description), automatic PostgreSQL preparation, and OpenViking preparation. It links to the relevant Volcengine console pages. The server obtains PostgreSQL Workspace connections through deployment credentials. New Volcengine Beijing requests automatically prepare an independent paid enterprise OpenViking library and inject its four Runtime variables; retries reuse the registered library. New BytePlus Johor requests automatically prepare a personal library using the resolved MPA ModelArk API Key and two inference endpoints (server overrides: `OV_VLM_ENDPOINT_ID` / `OV_EMBEDDING_ENDPOINT_ID`). Its default-user and overseas data-plane behavior require a separately adapted Runtime image before memory works. Already-submitted manual requests still enable OpenViking only when all three connection values are entered; leaving them blank omits the four variables, including inherited values. The key is never saved in browser drafts or task SQLite. Only the final step submits; nonsecret draft choices and request identity survive reopening in the same browser session. See the [creation contract](../specs/studio-mpa-creation/README.md).
+
+创建弹窗现分为基础信息（必填 Runtime 名称和描述）、PostgreSQL 自动准备、OpenViking 准备说明三步，并提供对应的火山引擎控制台入口。服务端通过部署凭据获取 PostgreSQL Workspace 连接。火山北京新请求自动准备独立的付费企业版 OpenViking 库并注入四个 Runtime 变量，重试复用已登记库。BytePlus 柔佛新请求使用已解析的 MPA ModelArk API Key 和两个推理接入点（服务端可通过 `OV_VLM_ENDPOINT_ID` / `OV_EMBEDDING_ENDPOINT_ID` 覆盖）自动准备个人版库；其 default 用户及海外数据面行为需要单独适配 Runtime 镜像后才能使用记忆。已提交手动请求仍在三项连接值全部填写时启用 OpenViking；全空时不注入四个变量，也不继承旧值。密钥不保存到浏览器草稿或任务 SQLite。仅最后一步提交，非密钥草稿与请求身份在同一浏览器会话中可恢复。参见[创建契约](../specs/studio-mpa-creation/README.zh.md)。
+
+After a confirmed failure or cancellation, the dialog retains the old task for same-ID retry. “Create another agent” generates a new request UUID and blank name; the server derives the new agent ID on submission and returns to the first step. It replaces only the browser draft, not any cloud resources from the previous attempt. Running or uncertain submissions cannot switch identities.
+
+失败或取消后，创建弹窗保留原任务供同 ID 重试；点击“新建另一个智能体”会生成新的请求 UUID 和空白名称并返回第一步，服务端在提交时派生新智能体 ID。该操作只替换浏览器草稿，不会删除上次创建的云资源。运行中或提交结果不明时不能切换到新身份。
+
+MPA 创建弹窗填写 Runtime 名称（4–64 个 ASCII 字母、数字、下划线或连字符）和描述。服务端生成稳定的智能体 ID，不再显示 ID 和镜像输入框。新请求使用内置 `mpa/mpa_agent:latest` 和 `mpa/mpa_codex_worker:latest` 镜像。已提交旧草稿保留原请求和镜像用于重试。现有 Runtime 不变。参见[托管创建说明](../veadk/integrations/mpa/managed/README.zh.md)。
+
+MPA A2A responses now group adjacent assistant fragments into one reply with a single action row. Copy/share include the grouped response; feedback remains attached to the final answer event, and the trace entry retains the session timeline through the latest fragment. Reported request tokens are deduplicated by usage source/event, including trailing usage updates. General-agent rendering is unchanged.
+
+MPA grouped replies hide exact answer mirrors only in their derived view: an extended fragment reappears intact, including its original prefix. General Codex tool activity preserves commentary and subsequent model text under its original behavior.
+
+### MPA A2A shared gateway compatibility
+
+MPA creation defaults to A2A discovery (`ENABLE_A2A=true`, `DISABLE_JWT_AUTH=false`). When a tagged MPA Runtime's agent card omits the shared gateway `/runtime/<ID>` prefix from its same-origin `/a2a/jsonrpc` URL, the Studio backend restores the prefix from the control-plane endpoint for chat and history requests. General-agent URLs are unchanged. Existing Runtimes need an explicit configuration release; reconnect to refresh discovery. Restart Studio after this backend update; no frontend rebuild is required.
+
+MPA name validation highlights invalid input and its message in the theme danger color, offers a valid-name placeholder, and visibly disables Next until corrected. Shared Button disabled states are dimmed consistently; loading retains its own appearance.
+
+MPA 名称校验使用主题错误色显示非法输入及错误提示，并提供合法名称示例；名称修正前“下一步”明显置灰。共享 Button 的禁用态统一降低透明度，加载态保留原有外观。
+
+MPA Agent details currently expose only Basic information. Other tabs and the Profile configuration action are hidden; this page does not query Profile status or submit Profile operations. General Agent pages and chat session protocols are unchanged.
+
+MPA 智能体详情当前仅显示基本信息。其他页面及 Profile 配置操作隐藏；本页不查询 Profile 状态或提交 Profile 操作。普通智能体页面与聊天会话协议保持不变。
+
+### MPA Feishu multi-bot accounts / MPA 飞书多机器人
+
+When Runtime advertises `botBindingTypes`, adding a Feishu or Lark Bot offers Shared/Private (Shared by default). QR, retry and manual binding send the selected `bindingType`; older Runtime payloads remain unchanged. The choice is locked during binding and is not an existing-account editing control. Private: “Private chats can recall this Bot’s history, including group chats.” Runtime still enforces recall authorization and isolation.
+
+Runtime 声明 `botBindingTypes` 时，添加飞书或 Lark Bot 可选择共享／私有（默认共享）；扫码、重试和手动绑定携带所选 `bindingType`，旧 Runtime 请求不变。绑定过程中锁定类型，不提供已有账号类型编辑。私有说明：“私聊可召回同 Bot 的历史，包括群聊。”召回鉴权和隔离仍由 Runtime 执行。
+
+Runtimes advertising `multiBotChannels: ["feishu"]` expose a robot selector in
+Automations → Messaging channels → MPA agent messaging channels. Add bots with
+QR or manual binding, then manage enablement, unbinding, diagnostics and group
+permissions for the selected `appId`. Adding a different bot preserves existing
+accounts. Feishu scheduled tasks select an enabled delivery bot; switching to
+Web delivery removes `delivery.appId`. Channel management requires Studio
+administrator access. A failed or unauthorized account lookup blocks Feishu
+task submission instead of selecting an arbitrary bot. Older runtimes keep the
+single-bot interface. Compatible MPA images must be deployed separately.
+
+Adding a Feishu group only requires its chat ID; Studio no longer exposes a session-isolation selector or sends `groupSessionScope`. New groups use Runtime default/inheritance rules. Existing group configuration and returned scope labels remain unchanged.
+
+Runtime 声明 `multiBotChannels: ["feishu"]` 后，可在“自动化 → 消息渠道 →
+MPA 智能体消息渠道”中选择机器人。扫码或手动添加后，启停、解绑、诊断和群权限
+均按选中的 `appId` 管理；新增不同机器人保留既有绑定。飞书定时任务须选择已启用
+的投递机器人，切换 Web 投递会清除 `delivery.appId`。渠道管理需要 Studio 管理员
+权限；账号读取失败或无权限时阻止飞书任务提交，不任意选择机器人。旧 Runtime
+保持单机器人界面，兼容的 MPA 镜像需另行部署。
+
+Contracts and verification / 契约与验证：
+[channels](../specs/mpa-channels/README.md),
+[tasks](../specs/studio-mpa-cron-tasks/README.md),
+[design](../prd-spec/features/mpa-feishu-multi-bot/2026-10-09-studio-multi-bot.md).
+
+### General and MPA deployment isolation
+
+Generic structured/YAML creation retains the ordinary build, deploy and publish flow (plus selected scaling, evaluation and GitHub options). Only explicitly identified MPA targets apply Profile/smoke phases. Local drafts are filtered by type; legacy drafts without explicit MPA intent default to general. This does not repair cloud Runtime tags written by previous versions.
+
+### 通用与 MPA 部署隔离
+
+通用结构化/YAML 创建保留原构建、部署和发布流程（以及选中的实例配置、评测和 GitHub 选项）。仅明确标识为 MPA 的目标执行 Profile/smoke 阶段。本地草稿按类型筛选；无明确 MPA 意图的旧草稿默认通用。此修改不会修复旧版本已写入的云端 Runtime 标签。
+
+### Deleting MPA agents / 删除 MPA 智能体
+
+MPA deletion checks sessions and active lifecycle operations without querying Profile. Confirmation lists exclusive managed sandbox templates and Skill Spaces to delete, and shared or unproven resources to retain. Cleanup failures keep Runtime available for retry; databases, Workspaces, network, APIG and other resources remain. General agents use their existing Runtime deletion flow. Check errors are shown in the confirmation dialog and can be retried or cancelled. Restart Studio after updating the backend. Session authentication remains required; deletion forwards the same server-authenticated user identity as chat.
+
+MPA 删除检查会话和活动生命周期操作，不查询 Profile。确认弹窗列出待删除的独占受管沙箱模板、Skill Space，以及保留的共享或归属不明资源。清理失败保留 Runtime 供重试；数据库、Workspace、网络、APIG 及其他资源保留。通用智能体沿用现有 Runtime 删除流程。检查错误在弹窗内显示，可重新检查或取消。更新后端后需重启 Studio；会话接口仍需通过鉴权；删除流程传递与聊天一致的服务端已认证用户身份。
+
+MPA deletion waits up to 180 seconds. If the browser times out, Studio makes one read-only check: only explicit Runtime NotFound plus complete list absence confirms completion. Otherwise it shows that the outcome is not yet confirmed; refresh and check later rather than assuming failure. General-agent deletion retains its existing 30-second timeout. Confirmation requires the same authenticated Studio user and deployment credentials; a backend restart or credential rotation can leave the outcome unconfirmed. This change does not alter resource cleanup or retention. Restart Studio and refresh the page after updating.
+
+MPA 删除最多等待 180 秒。浏览器超时后，Studio 会只读检查一次：仅 Runtime 明确返回 NotFound 且完整列表也不存在时确认完成。否则显示结果尚未确认，需稍后刷新检查，不能直接认定失败。通用智能体仍使用原来的 30 秒超时。结果确认要求相同的 Studio 已认证用户和部署凭据；后端重启或凭据轮换可能导致结果无法确认。此修改不改变资源清理和保留规则。更新后请重启 Studio 并刷新页面。
+
+
+MPA runtime-role preparation now distinguishes missing deployment IAM permissions from temporary IAM/network failures. Temporary failures retry within the role deadline; exhausted attempts display an actionable same-agent retry message. Safe operation/category/Request ID diagnostics are retained by the server. See the [IAM recovery design](../prd-spec/bugfixes/mpa-iam-retry/2026-10-14-transient-errors.md).
+
+MPA 运行角色准备现区分部署 IAM 权限不足与临时 IAM/网络失败。临时失败在角色期限内重试，耗尽后提示用同一智能体重试。服务端保留安全的接口/类别/Request ID 诊断。见[IAM 恢复设计](../prd-spec/bugfixes/mpa-iam-retry/2026-10-14-transient-errors.zh.md)。
+
+BytePlus managed MPA creation in ap-southeast-1 again automatically prepares personal OpenViking. New/editable requests use automatic configuration without manual credentials. Submitted no-OV/automatic/manual requests retain their original recovery mode; use New Agent to enable OV after a no-OV submission. Domestic automatic OV and uncertain-create protection are unchanged.
+
+MPA same-request retries validate the original stored payload and deployment-account snapshot before checking owned Runtime/Worker names. A fresh same-name request still fails. Empty Runtime owner tags can only be supplemented by the authenticated original intent; foreign metadata remains rejected. This restores recovery after a failed readiness check without changing generic-agent creation.
+
+
+BytePlus Studio MPA creation now retrieves the deployment-account APM AppKey through the overseas service host and injects `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY` into Runtime Envs. The key stays out of browser/task/deployment records; lookup failures stop resource preparation with safe diagnostics. Restart Studio and use a new request. Domestic/general-agent creation and CLI profiles are unchanged. See the [APM key design](../prd-spec/bugfixes/mpa-byteplus-apm/2026-10-14-server-app-key.md).
+
+BytePlus Studio MPA 创建现通过海外服务 Host 获取部署账号的 APM AppKey，注入 Runtime Envs 的 `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY`。Key 不进入浏览器/任务/部署记录；获取失败时以安全诊断停止资源准备。重启 Studio 后使用新请求。国内/通用智能体创建和 CLI 配置不变。见 [APM Key 设计](../prd-spec/bugfixes/mpa-byteplus-apm/2026-10-14-server-app-key.zh.md)。

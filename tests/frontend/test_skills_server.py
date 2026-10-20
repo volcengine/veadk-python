@@ -17,19 +17,22 @@ from __future__ import annotations
 import base64
 import io
 import json
-import sys
 import stat
+import sys
 import zipfile
-from types import ModuleType
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
+import frontend.server.skills.devenv as skill_devenv
 from frontend.server.skills.archive import SkillArchiveError, validate_skill_archive
 from frontend.server.skills.devenv import (
     CreateSkillTaskBody,
     SkillWorkbenchError,
     SkillWorkbenchService,
+)
+from frontend.server.skills.devenv import (
+    validate_skill_archive as validate_workbench_skill_archive,
 )
 from frontend.server.skills.models import (
     CreateSkillSpaceBody,
@@ -80,6 +83,66 @@ def test_skill_archive_accepts_root_or_one_wrapper(files: dict[str, bytes]) -> N
     assert result.name == "example-skill"
     assert result.description == "A focused test Skill"
     assert result.files[0]["path"] == "SKILL.md"
+
+
+@pytest.mark.parametrize(
+    "validator", [validate_skill_archive, validate_workbench_skill_archive]
+)
+def test_skill_archive_ignores_top_level_macos_metadata(validator) -> None:
+    result = validator(
+        archive(
+            {
+                "example-skill/SKILL.md": SKILL_MD.encode(),
+                "__MACOSX/._example-skill": b"\x00\x05AppleDouble",
+                "__MACOSX/example-skill/._SKILL.md": b"\x00\x05AppleDouble",
+            }
+        )
+    )
+
+    assert result.name == "example-skill"
+    assert result.files == [{"path": "SKILL.md", "size": len(SKILL_MD.encode())}]
+
+
+@pytest.mark.parametrize(
+    "validator", [validate_skill_archive, validate_workbench_skill_archive]
+)
+def test_skill_archive_rejects_macos_metadata_only(validator) -> None:
+    with pytest.raises((SkillArchiveError, SkillWorkbenchError)) as raised:
+        validator(archive({"__MACOSX/._example-skill": b"\x00\x05AppleDouble"}))
+
+    assert raised.value.code == "SKILL_ARCHIVE_EMPTY"
+
+
+@pytest.mark.parametrize(
+    "validator", [validate_skill_archive, validate_workbench_skill_archive]
+)
+def test_skill_archive_still_rejects_an_unrelated_second_root(validator) -> None:
+    with pytest.raises((SkillArchiveError, SkillWorkbenchError)) as raised:
+        validator(
+            archive(
+                {
+                    "example-skill/SKILL.md": SKILL_MD.encode(),
+                    "other/notes.txt": b"not metadata",
+                }
+            )
+        )
+
+    assert raised.value.code == "SKILL_MD_NOT_AT_ROOT"
+
+
+@pytest.mark.parametrize(
+    "validator", [validate_skill_archive, validate_workbench_skill_archive]
+)
+def test_ignored_macos_metadata_still_gets_security_validation(validator) -> None:
+    content = archive(
+        {"example-skill/SKILL.md": SKILL_MD.encode()},
+        symlink="__MACOSX/unsafe-link",
+    )
+
+    with pytest.raises((SkillArchiveError, SkillWorkbenchError)) as raised:
+        validator(content)
+
+    assert raised.value.code == "SKILL_ARCHIVE_SYMLINK"
 
 
 @pytest.mark.parametrize(
@@ -159,15 +222,149 @@ def test_unexpected_skill_service_error_preserves_original_error() -> None:
     )
 
     assert converted.status_code == 502
-    assert converted.detail == {
-        "code": "SKILL_SERVICE_UNAVAILABLE",
-        "message": "暂时无法访问 AgentKit Skills。",
+    assert converted.detail == "Volcengine credentials not found: missing access key"
+
+
+def test_repository_error_preserves_original_error() -> None:
+    error = SkillRepositoryError(
+        "SKILL_ARCHIVE_DOWNLOAD_FAILED",
+        "暂时无法下载 Skill 文件，请稍后重试。",
+        status_code=502,
+        retryable=True,
+        original_error=RuntimeError("TOS GetObject failed with request-id-1"),
+    )
+
+    assert error.detail() == {
+        "code": "SKILL_ARCHIVE_DOWNLOAD_FAILED",
+        "message": "暂时无法下载 Skill 文件，请稍后重试。",
         "retryable": True,
         "originalError": {
             "type": "builtins.RuntimeError",
-            "message": "Volcengine credentials not found: missing access key",
-            "repr": "RuntimeError('Volcengine credentials not found: missing access key')",
+            "message": "TOS GetObject failed with request-id-1",
+            "repr": "RuntimeError('TOS GetObject failed with request-id-1')",
         },
+    }
+
+
+def test_repository_falls_back_to_legacy_skill_info_and_keeps_region(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class Client:
+        def get_skill_version(self, request: object) -> SimpleNamespace:
+            calls.append(("version", request))
+            raise RuntimeError("interface type not consistent with skill type")
+
+        def get_skill_info(self, request: object) -> SimpleNamespace:
+            calls.append(("info", request))
+            return SimpleNamespace(
+                skill_name="cloud-migration-qa",
+                description="Migration checks",
+                skill_md=SKILL_MD,
+                bucket_name="skills-bucket",
+                tos_path="skills/cloud-migration-qa.zip",
+            )
+
+    def download_skill(
+        skill: object,
+        path,
+        *,
+        region: str | None = None,
+        raise_on_error: bool = False,
+    ) -> bool:
+        assert skill.name == "cloud-migration-qa"
+        assert region == "cn-beijing"
+        assert raise_on_error is True
+        path.write_bytes(
+            archive(
+                {
+                    "cloud-migration-qa/SKILL.md": SKILL_MD.encode(),
+                    "__MACOSX/cloud-migration-qa/._SKILL.md": b"\x00\x05AppleDouble",
+                    "cloud-migration-qa/.DS_Store": b"\x00\x01desktop",
+                }
+            )
+        )
+        return True
+
+    monkeypatch.setattr(
+        "veadk.skills.materializer._download_legacy_skill_space_skill",
+        download_skill,
+    )
+    repository = AgentKitSkillRepository(lambda _region: Client())
+
+    result = repository.skill_files(
+        region="cn-beijing",
+        space_id="space-1",
+        skill_id="skill-1",
+        version="v1",
+        skill_space_name="migration-space",
+        skill_name="cloud-migration-qa",
+    )
+
+    assert [name for name, _request in calls] == ["version", "info"]
+    assert [file["path"] for file in result["files"]] == ["cloud-migration-qa/SKILL.md"]
+
+
+def test_repository_does_not_hide_unrelated_get_version_errors() -> None:
+    class Client:
+        def get_skill_version(self, _request: object) -> SimpleNamespace:
+            raise RuntimeError("AccessDenied")
+
+        def get_skill_info(self, _request: object) -> SimpleNamespace:
+            raise AssertionError("legacy fallback must not run")
+
+    repository = AgentKitSkillRepository(lambda _region: Client())
+
+    with pytest.raises(RuntimeError, match="AccessDenied"):
+        repository.skill_archive(
+            region="cn-beijing",
+            space_id="space-1",
+            skill_id="skill-1",
+            version="v1",
+            skill_space_name="migration-space",
+            skill_name="cloud-migration-qa",
+        )
+
+
+def test_repository_download_failure_preserves_cloud_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Client:
+        def get_skill_version(self, request: object) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                name="cloud-migration-qa",
+                description="Migration checks",
+                version="v1",
+                skill_md=SKILL_MD,
+                bucket_name="skills-bucket",
+                tos_path="skills/cloud-migration-qa.zip",
+            )
+
+    def download_skill(*_args, **_kwargs) -> bool:
+        raise RuntimeError("TOS GetObject failed with request-id-2")
+
+    monkeypatch.setattr(
+        "veadk.skills.materializer._download_legacy_skill_space_skill",
+        download_skill,
+    )
+    repository = AgentKitSkillRepository(lambda _region: Client())
+
+    with pytest.raises(SkillRepositoryError) as raised:
+        repository.skill_files(
+            region="cn-beijing",
+            space_id="space-1",
+            skill_id="skill-1",
+            version="v1",
+        )
+
+    assert raised.value.code == "SKILL_ARCHIVE_DOWNLOAD_FAILED"
+    assert raised.value.detail()["originalError"] == {
+        "type": "builtins.RuntimeError",
+        "message": "TOS GetObject failed with request-id-2",
+        "repr": "RuntimeError('TOS GetObject failed with request-id-2')",
     }
 
 
@@ -329,6 +526,9 @@ class _FakeSkillClient:
         self.create_requests: list[object] = []
         self.publish_requests: list[object] = []
 
+    def get_skill_space(self, request: object) -> SimpleNamespace:
+        return SimpleNamespace(tags=[])
+
     def list_skills(self, request: object) -> SimpleNamespace:
         del request
         raise AssertionError(
@@ -352,6 +552,7 @@ class _FakeSkillClient:
 
 def _install_fake_agentkit_modules(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_types = SimpleNamespace(
+        GetSkillSpaceRequest=_FakeSkillRequest,
         ListSkillsBySkillSpaceRequest=_FakeSkillRequest,
         CreateSkillRequest=_FakeSkillRequest,
         PublishSkillToSkillSpaceRequest=_FakeSkillRequest,
@@ -496,6 +697,53 @@ def test_workbench_reports_admin_not_configured_without_a_tool() -> None:
 
     assert capability["enabled"] is False
     assert capability["reason"] == "管理员未配置"
+
+
+@pytest.mark.parametrize(
+    ("provider", "conflicting_provider", "region"),
+    [
+        ("volcengine", "byteplus", "cn-beijing"),
+        ("byteplus", "volcengine", "ap-southeast-1"),
+    ],
+)
+def test_workbench_default_clients_use_environment_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    conflicting_provider: str,
+    region: str,
+) -> None:
+    from agentkit.platform.context import (
+        default_cloud_provider,
+        get_default_cloud_provider,
+    )
+
+    constructed: list[tuple[str, object, str]] = []
+
+    class FakeToolsClient:
+        def __init__(self, *, region: str) -> None:
+            constructed.append(("tools", get_default_cloud_provider(), region))
+
+    class FakeSkillsClient:
+        def __init__(self, *, region: str) -> None:
+            constructed.append(("skills", get_default_cloud_provider(), region))
+
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", provider)
+    monkeypatch.setattr(skill_devenv, "AgentkitToolsClient", FakeToolsClient)
+    monkeypatch.setattr(skill_devenv, "AgentkitSkillsClient", FakeSkillsClient)
+
+    service = SkillWorkbenchService(tool_id="tool-1", region=region)
+    with default_cloud_provider(conflicting_provider):
+        service._tools_client_factory(region)
+        service._skills_client_factory(region)
+        assert get_default_cloud_provider().value == conflicting_provider
+
+    assert [
+        (kind, context.value, client_region)
+        for kind, context, client_region in constructed
+    ] == [
+        ("tools", provider, region),
+        ("skills", provider, region),
+    ]
 
 
 def test_prompt_injects_preset_or_custom_style_and_optional_name() -> None:
@@ -709,3 +957,28 @@ def test_workbench_byteplus_uses_default_and_catalog_models(
     assert result["model"] == "deepseek-v4-flash-260425"
     session_envs = {item.key: item.value for item in client.created[0].envs}
     assert session_envs["CODEX_MODEL"] == "deepseek-v4-flash-260425"
+
+
+def test_cloud_http_status_and_full_text_are_returned_without_summary() -> None:
+    class CloudError(RuntimeError):
+        status_code = 429
+
+    raw = '\n{"Code":"Throttling","RequestId":"request-cloud-429","Message":"retry later"}\n'
+    converted = _convert_error(CloudError(raw))
+    assert converted.status_code == 429
+    assert converted.detail == raw
+
+
+def test_local_storage_and_repository_wrappers_expose_original_cloud_error() -> None:
+    from frontend.server.skills.storage import SkillPublishStorageError
+    from frontend.server.skills.errors import skill_error_text
+
+    raw = "Error code: 503, RequestId: original-request\n" + "cloud detail " * 500
+    original = RuntimeError(raw)
+    storage_error = SkillPublishStorageError("Local upload summary")
+    storage_error.__cause__ = original
+    repository_error = SkillRepositoryError(
+        "LOCAL_WRAPPER", "Local summary", original_error=storage_error
+    )
+    assert _convert_error(repository_error).detail == raw
+    assert skill_error_text(repository_error) == raw

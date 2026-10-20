@@ -67,6 +67,10 @@ test("smoothly positions new turns and follows streamed output until interrupted
     /!conversationAutoFollowRef\.current \|\|[\s\S]*?conversationSmoothScrollRef\.current[\s\S]*?el\.scrollTop = el\.scrollHeight/,
   );
   assert.match(
+    appSource,
+    /conversationSmoothScrollRef\.current = false;[\s\S]*?const current = scrollRef\.current;[\s\S]*?conversationAutoFollowRef\.current[\s\S]*?current\.scrollTop = current\.scrollHeight/,
+  );
+  assert.match(
     stylesSource,
     /\.transcript\.is-streaming\s*\{[^}]*overflow-anchor:\s*none/,
   );
@@ -84,10 +88,10 @@ test("smoothly positions new turns and follows streamed output until interrupted
   );
   assert.match(
     appSource,
-    /streaming=\{isLast && \(activeConversationBusy \|\| presentingStream\)\}/,
+    /streaming=\{turnIsStreaming\}/,
   );
   assert.match(appSource, /finishStreamPresentation[\s\S]*?2400/);
-  assert.match(appSource, /onStreamFrame=\{isLast \? followConversationStreamFrame : undefined\}/);
+  assert.match(appSource, /onStreamFrame=\{turnIsStreaming \? followConversationStreamFrame : undefined\}/);
   assert.match(blocksSource, /!done \|\| streaming/);
 });
 
@@ -116,7 +120,7 @@ test("collapses untouched thinking as soon as answer text starts streaming", () 
   );
   assert.match(
     blocksSource,
-    /blocks\.slice\(i \+ 1\)\.some\([\s\S]*?block\.kind === "text"[\s\S]*?block\.text\.trim\(\)/,
+    /blocks[\s\S]*?\.slice\(i \+ 1\)[\s\S]*?\.some\([\s\S]*?block\.kind === "text"[\s\S]*?block\.text\.trim\(\)/,
   );
   assert.match(blocksSource, /answerStarted=\{answerStarted\}/);
 });
@@ -140,7 +144,7 @@ test("first message renders before session creation finishes", () => {
     /setTurnsFor\(sid,\s*\(current\)\s*=>\s*createsSession\s*\?\s*optimisticTurns\s*:\s*\[\.\.\.current,\s*\.\.\.optimisticTurns\],\s*\);[\s\S]*?setSessionId\(sid\);[\s\S]*?setInitializingSession\(false\);/,
   );
   assert.match(appSource, /const conversationBusy = busy \|\| initializingSession/);
-  assert.match(composerSource, /sessionInitializing \? "初始化中" : sessionId \|\| "—"/);
+  assert.match(composerSource, /sessionInitializing \? t\("composer\.initializing"\) : sessionId \|\| "—"/);
 });
 
 test("subsequent messages append to the active session transcript", () => {
@@ -159,38 +163,42 @@ test("new-session failure restores the submitted text", () => {
 });
 
 test("welcome screen offers a broader set of prompts", () => {
-  const greetings = appSource.match(/const GREETINGS = \[([\s\S]*?)\];/)?.[1] ?? "";
-  assert.ok((greetings.match(/"/g)?.length ?? 0) >= 20);
-  assert.match(greetings, /今天想先解决哪件事？/);
-  assert.match(greetings, /我在，随时可以开始/);
+  assert.match(appSource, /const GREETING_KEYS = Array\.from\(\{ length: 14 \}/);
+  assert.match(appSource, /const greeting = t\(greetingKey\)/);
 });
 
 test("shows full session titles on hover instead of internal ids", () => {
-  assert.match(sidebarSource, /const title = sessionTitle\(s\.events\)/);
-  assert.match(sidebarSource, /title=\{title\}/);
-  assert.doesNotMatch(sidebarSource, /title=\{s\.id\}/);
+  assert.match(
+    sidebarSource,
+    /title: session\.title \|\| sessionTitle\(session\.events, t\("history\.newConversation"\)\)/,
+  );
+  assert.match(sidebarSource, /title=\{item\.title\}/);
+  assert.doesNotMatch(sidebarSource, /title=\{item\.id\}/);
 });
 
 test("renders a normal-font session id with an inline copy action", () => {
   assert.match(composerSource, /navigator\.clipboard\.writeText\(sessionId\)/);
   assert.match(composerSource, /className="composer-session-copy"/);
-  assert.match(composerSource, /复制会话 ID/);
+  assert.match(composerSource, /t\("composer\.copySessionId"\)/);
   assert.match(
     stylesSource,
     /\.composer-session-id\s*\{[^}]*font-family:\s*inherit/,
   );
 });
 
-test("uses the selected Agent display name outside dedicated sandbox sessions", () => {
+test("uses product-specific composer copy for Agent and sandbox sessions", () => {
   assert.match(
     appSource,
     /<SandboxComposer[\s\S]*?appName=\{appName\}/,
   );
   assert.match(appSource, /agentName=\{appName \? labelOf\(appName\) : "Agent"\}/);
-  assert.match(composerSource, /`向 \$\{agentName\} 发消息…`/);
-  assert.match(composerSource, /请先选择智能体/);
+  assert.match(composerSource, /t\("composer\.messageAgentPlaceholder", \{ name: agentName \}\)/);
+  assert.match(composerSource, /t\("composer\.selectAgentFirst"\)/);
   assert.doesNotMatch(composerSource, /给智能体发消息/);
-  assert.match(sandboxComposerSource, /placeholder="向 AgentKit 沙箱发送消息/);
+  assert.match(
+    sandboxComposerSource,
+    /textOnly\s*\?\s*t\(busy && allowSteer \? "composer\.steerPlaceholder" : "composer\.continuePlaceholder"\)\s*:\s*t\("composer\.messagePlaceholder"\)/,
+  );
 });
 
 test("composer slot keeps the input full width in the centered welcome layout", () => {

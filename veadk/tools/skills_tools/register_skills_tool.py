@@ -96,7 +96,11 @@ def register_skills_tool(
             default_region = "cn-beijing"
 
         agentkit_tool_service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
-        region = os.getenv("AGENTKIT_TOOL_REGION", default_region)
+        region = (
+            os.getenv("AGENTKIT_TOOL_REGION")
+            or (os.getenv("REGION") if cloud_provider != "byteplus" else None)
+            or default_region
+        )
         agentkit_skill_host = os.getenv(
             "AGENTKIT_SKILL_HOST", agentkit_tool_service + "." + region + f".{sld}.com"
         )

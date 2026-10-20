@@ -1,3 +1,5 @@
+import { createT } from "./i18n";
+
 export interface RuntimeEnvSpec {
   key: string;
   required: boolean;
@@ -14,6 +16,12 @@ export interface RuntimeEnvSpec {
   readOnly?: boolean;
   /** Secret is resolved by the Studio server and never sent to the browser. */
   serverManaged?: boolean;
+  /** Value is managed by Studio and should not be shown as a user-facing field. */
+  hidden?: boolean;
+  /** User-facing optimization names that require this Runtime setting. */
+  requiredBy?: string[];
+  /** Actionable error shown when a derived required value cannot be produced. */
+  missingError?: string;
 }
 
 export interface RuntimeEnvSelection {
@@ -67,12 +75,14 @@ export function runtimeEnvDisplayRows(
   values: Record<string, string>,
 ): RuntimeEnvDisplayRow[] {
   const deduped = runtimeEnvConfiguration([{ env: specs }]).specs;
-  return deduped.map((spec) => ({
-    ...spec,
-    value: spec.serverManaged
-      ? spec.placeholder || "由服务端注入"
-      : runtimeEnvValue(spec, values),
-  }));
+  return deduped
+    .filter((spec) => !spec.hidden)
+    .map((spec) => ({
+      ...spec,
+      value: spec.serverManaged
+        ? spec.placeholder || createT("helpers.deploymentEnv.serverInjected")
+        : runtimeEnvValue(spec, values),
+    }));
 }
 
 /** Convert only the currently active feature settings into runtime env rows. */
@@ -89,21 +99,80 @@ export function runtimeEnvVars(
   return [...env].map(([key, value]) => ({ key, value }));
 }
 
+/** Keep explicit MCP credentials in debug requests without exposing other managed secrets. */
+export function runtimeDebugEnvVars(
+  specs: RuntimeEnvSpec[],
+  values: Record<string, string>,
+  explicitMcpEnvValues: Record<string, string>,
+): { key: string; value: string }[] {
+  const env = new Map(
+    runtimeEnvVars(specs, values).map(({ key, value }) => [key, value]),
+  );
+  for (const [key, value] of Object.entries(explicitMcpEnvValues)) {
+    if (value.trim()) env.set(key, value);
+  }
+  return [...env].map(([key, value]) => ({ key, value }));
+}
+
 export function firstMissingRuntimeEnv(
   specs: RuntimeEnvSpec[],
   values: Record<string, string>,
+  configuredKeys: readonly string[] = [],
 ): RuntimeEnvSpec | undefined {
-  return specs.find(
+  return missingRuntimeEnvs(specs, values, configuredKeys)[0];
+}
+
+export function missingRuntimeEnvs(
+  specs: RuntimeEnvSpec[],
+  values: Record<string, string>,
+  configuredKeys: readonly string[] = [],
+): RuntimeEnvSpec[] {
+  const configured = new Set(configuredKeys);
+  return specs.filter(
     (spec) =>
       spec.required &&
       !spec.serverManaged &&
+      !configured.has(spec.key) &&
       !runtimeEnvValue(spec, values).trim(),
   );
+}
+
+function runtimeEnvRequirementLabels(spec: RuntimeEnvSpec): string[] {
+  return [...new Set((spec.requiredBy ?? []).map((item) => item.trim()).filter(Boolean))];
+}
+
+export function runtimeEnvRequirementHint(
+  spec: RuntimeEnvSpec,
+): string | undefined {
+  const labels = runtimeEnvRequirementLabels(spec);
+  const requirement = labels.length
+    ? createT("helpers.deploymentEnv.requirementHint", {
+        labels: labels.join(createT("helpers.deploymentEnv.listSeparator")),
+      })
+    : "";
+  return (
+    [requirement, spec.help?.trim()].filter(Boolean).join(" ") || undefined
+  );
+}
+
+export function runtimeEnvMissingError(spec: RuntimeEnvSpec): string {
+  if (spec.missingError?.trim()) return spec.missingError.trim();
+  const labels = runtimeEnvRequirementLabels(spec);
+  return labels.length
+    ? createT("helpers.deploymentEnv.requiredBy", {
+        labels: labels.join(createT("helpers.deploymentEnv.listSeparator")),
+        key: spec.key,
+      })
+    : createT("helpers.deploymentEnv.required", {
+        label: spec.comment || spec.key,
+        key: spec.key,
+      });
 }
 
 export function runtimeEnvJsonError(
   spec: RuntimeEnvSpec,
   values: Record<string, string>,
+  invalidJsonMessage = createT("helpers.deploymentEnv.invalidJson"),
 ): string | undefined {
   if (spec.format !== "json") return undefined;
   const value = runtimeEnvValue(spec, values).trim();
@@ -112,7 +181,7 @@ export function runtimeEnvJsonError(
     JSON.parse(value);
     return undefined;
   } catch {
-    return "JSON 格式不正确";
+    return invalidJsonMessage;
   }
 }
 

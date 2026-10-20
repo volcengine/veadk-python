@@ -10,18 +10,6 @@ const railSource = readFileSync(
   new URL("../src/ui/AgentTopology.tsx", import.meta.url),
   "utf8",
 );
-const capabilityDialogsSource = readFileSync(
-  new URL("../src/ui/SessionCapabilityDialogs.tsx", import.meta.url),
-  "utf8",
-);
-const clientSource = readFileSync(
-  new URL("../src/adk/client.ts", import.meta.url),
-  "utf8",
-);
-const skillspaceClientSource = readFileSync(
-  new URL("../src/create/skills/skillspace.ts", import.meta.url),
-  "utf8",
-);
 const navbarSource = readFileSync(
   new URL("../src/ui/Navbar.tsx", import.meta.url),
   "utf8",
@@ -35,50 +23,43 @@ const railStyles = stylesSource.slice(
   stylesSource.indexOf("/* ---------- quick create"),
 );
 
+test("limits the conversation rail to server-classified MPA agents", () => {
+  assert.match(appSource, /!sandboxSession && agentInfoSelectionRef\.current === appName && agentInfo\?\.agentCategory === "mpa"/);
+  assert.match(railSource, /info\.mpa\?\.agentsMd/);
+});
+
 test("reuses loaded Agent metadata for the conversation information rail", () => {
-  assert.match(appSource, /<AgentInfoPanel[\s\S]*?info=\{agentInfo\}/);
-  assert.match(appSource, /<AgentInfoPanel[\s\S]*?loading=\{capabilitiesLoading\}/);
+  assert.match(appSource, /<MpaAgentInfoRail[\s\S]*?info=\{agentInfo\}/);
+  assert.match(appSource, /<MpaAgentInfoRail[\s\S]*?loading=\{capabilitiesLoading\}/);
   assert.match(railSource, /info: AgentInfo \| null/);
   assert.doesNotMatch(railSource, /getAgentInfo/);
 });
 
-test("shows Agent tools, skills, and a fullscreen execution canvas", () => {
-  assert.match(railSource, /Agent 信息/);
-  assert.match(railSource, /title="工具"/);
-  assert.match(railSource, /title="技能"/);
-  assert.match(railSource, /未配置/);
-  assert.doesNotMatch(railSource, /const hasTopology/);
-  assert.match(railSource, /className="topo-module-card topo-tools-card"/);
+test("shows only AGENTS.md, skills, and environment configuration in the rail", () => {
+  assert.match(railSource, /useTranslation\("workspaceTools"\)/);
+  assert.match(railSource, /title=\{t\("agentTopology\.agentsMd"\)\}/);
+  assert.match(railSource, /title=\{t\("agentTopology\.skills"\)\}/);
+  assert.match(railSource, /t\("agentTopology\.notConfigured"\)/);
+  assert.match(railSource, /className="topo-module-card topo-agents-md-card"/);
   assert.match(railSource, /className="topo-module-card topo-skills-card"/);
-  assert.match(railSource, /className="topo-module-card topo-topology" aria-label="Agent 画布"/);
-  assert.match(railSource, /<ModuleTitle title="结构拓扑" count=\{totalNodes\(graph\)\} \/>/);
-  assert.doesNotMatch(railSource, /<ModuleTitle title="画布"/);
-  assert.match(
-    railSource,
-    /<AgentBuildCanvas[\s\S]*?direction="horizontal"[\s\S]*?readOnly[\s\S]*?interactivePreview/,
-  );
-  assert.match(railSource, /aria-label="全屏查看 Agent 画布"/);
-  assert.match(railSource, /createPortal\([\s\S]*?role="dialog"[\s\S]*?aria-label="全屏 Agent 执行画布"/);
-  assert.match(railSource, /event\.key === "Escape"/);
-  assert.match(railStyles, /\.topo-canvas-preview[\s\S]*?border-radius:\s*12px/);
-  assert.match(railStyles, /\.topo-canvas-dialog\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?inset:\s*0;/);
+  assert.match(railSource, /className="topo-module-card topo-environment-card"/);
+  assert.doesNotMatch(railSource, /className="topo-module-card topo-tools-card"/);
+  assert.doesNotMatch(railSource, /className="topo-module-card topo-topology"/);
+  assert.doesNotMatch(railSource, /<AgentBuildCanvas/);
+  assert.doesNotMatch(railSource, /info\.resourceTopology\?\.nodes/);
+  assert.doesNotMatch(railSource, /topo-runtime-flow/);
   assert.doesNotMatch(railSource, /className="topo-kicker"/);
-  assert.match(railSource, /className="topo-module-scroll topo-tools-scroll"/);
+  assert.match(railSource, /className="topo-module-scroll topo-agents-md-scroll"/);
+  assert.match(railSource, /className="topo-agents-md-content"/);
   assert.match(railSource, /className="topo-module-scroll topo-skills-scroll"/);
-  assert.match(railSource, /aria-label="工具列表"[\s\S]*?tabIndex=\{0\}/);
-  assert.match(railSource, /aria-label="技能列表"[\s\S]*?tabIndex=\{0\}/);
+  assert.match(railSource, /aria-label=\{t\("agentTopology\.skillList"\)\}[\s\S]*?tabIndex=\{0\}/);
   assert.match(railSource, /className="topo-skill-name"/);
   assert.doesNotMatch(railSource, /<strong>\{skill\.name\}<\/strong>/);
   assert.match(
     railSource,
     /className="topo-module-label"[\s\S]*?className="topo-section-count"[\s\S]*?\{count\}/,
   );
-  assert.match(railSource, /aria-label=\{`\$\{count\} 项`\}/);
-  assert.doesNotMatch(railSource, /\{count\} 项<\/span>/);
-  assert.match(
-    railStyles,
-    /\.topo-capability-name\s*\{[^}]*font-size:\s*13px;/,
-  );
+  assert.match(railSource, /aria-label=\{t\("agentTopology\.itemCount", \{ count \}\)\}/);
   assert.match(
     railStyles,
     /\.topo-skill-name\s*\{[^}]*font-size:\s*13px;/,
@@ -90,11 +71,11 @@ test("shows Agent tools, skills, and a fullscreen execution canvas", () => {
   );
   assert.doesNotMatch(agentCard, /AgentIdentityIcon|topo-identity-mark/);
 
-  const toolsIndex = railSource.indexOf('title="工具"');
-  const skillsIndex = railSource.indexOf('title="技能"');
-  const topologyIndex = railSource.indexOf('className="topo-module-card topo-topology"');
-  assert.ok(toolsIndex > -1 && skillsIndex > toolsIndex);
-  assert.ok(topologyIndex > skillsIndex);
+  const agentsMdIndex = railSource.indexOf('title={t("agentTopology.agentsMd")}');
+  const skillsIndex = railSource.indexOf('title={t("agentTopology.skills")}');
+  const environmentIndex = railSource.indexOf('title={t("agentTopology.environment")}');
+  assert.ok(agentsMdIndex > -1 && skillsIndex > agentsMdIndex);
+  assert.ok(environmentIndex > skillsIndex);
 });
 
 test("keeps Agent information out of the new-session empty state", () => {
@@ -102,8 +83,8 @@ test("keeps Agent information out of the new-session empty state", () => {
     appSource.indexOf(": turns.length === 0 ? ("),
     appSource.indexOf("className={`transcript"),
   );
-  assert.doesNotMatch(emptyState, /<AgentInfoPanel/);
-  assert.match(appSource, /: turns\.length === 0 \? \([\s\S]*?<AgentInfoPanel/);
+  assert.doesNotMatch(emptyState, /<MpaAgentInfoRail/);
+  assert.match(appSource, /: turns\.length === 0 \? \([\s\S]*?<MpaAgentInfoRail/);
   assert.doesNotMatch(appSource, /className="agent-info-trigger"/);
   assert.doesNotMatch(appSource, /<AgentInfoDrawer\b/);
 });
@@ -127,15 +108,15 @@ test("places the rail on the right and protects the conversation column", () => 
   assert.match(railStyles, /\.topo-section-count\s*\{[\s\S]*?font-size:\s*11px;/);
   assert.match(railStyles, /\.topo-skill-name\s*\{[\s\S]*?font-weight:\s*500;/);
   assert.doesNotMatch(railStyles, /\.topo-section-count\s*\{[^}]*position:\s*absolute;/);
-  assert.match(railStyles, /\.topo-tools-scroll\s*\{\s*max-height:/);
+  assert.match(railStyles, /\.topo-agents-md-scroll\s*\{\s*max-height:/);
   assert.match(railStyles, /\.topo-skills-scroll\s*\{\s*max-height:/);
-  assert.match(railStyles, /\.topo-canvas-preview\s*\{[\s\S]*?min-height:\s*120px;/);
   assert.match(railStyles, /\.topo-module-scroll\s*\{[^}]*padding-top:\s*9px;/);
-  assert.match(railStyles, /\.topo-tool:first-child\s*\{\s*padding-top:\s*0;/);
   assert.match(railStyles, /\.topo-skill:first-child\s*\{\s*padding-top:\s*0;/);
   assert.match(railStyles, /\.topo-module-scroll:focus-visible/);
   assert.match(railStyles, /\.topo\s*\{[\s\S]*?overflow:\s*hidden;/);
   assert.match(railStyles, /\.topo-module-stack\s*\{[\s\S]*?grid-template-rows:/);
+  assert.doesNotMatch(railStyles, /\.topo-topology/);
+  assert.doesNotMatch(railStyles, /\.topo-runtime-flow/);
   assert.doesNotMatch(railStyles, /\.topo\s*\{[^}]*left:\s*18px;/);
   assert.match(railStyles, /\.main:has\(> \.topo\) > \.transcript/);
   assert.match(appSource, /className="conversation-composer-slot"/);
@@ -160,7 +141,7 @@ test("keeps Agent information in the conversation rail without a title trigger",
   assert.match(navbarSource, /\{titleLeading\}/);
   assert.doesNotMatch(appSource, /className="agent-info-trigger"/);
   assert.doesNotMatch(appSource, /<AgentInfoDrawer\b/);
-  assert.match(appSource, /<AgentInfoPanel[\s\S]*?info=\{agentInfo\}/);
+  assert.match(appSource, /<MpaAgentInfoRail[\s\S]*?info=\{agentInfo\}/);
   assert.match(railSource, /export function AgentInfoDrawer/);
   assert.match(railSource, /event\.key === "Escape"/);
   assert.match(railSource, /returnFocusRef\.current\?\.focus\(\)/);
@@ -178,44 +159,37 @@ test("keeps capability section titles text-only", () => {
   assert.doesNotMatch(railSource, /SkillCapabilityIcon/);
   assert.doesNotMatch(railSource, /topo-section-icon/);
   assert.doesNotMatch(railStyles, /\.topo-section-icon/);
-  assert.match(railSource, /import \{ Maximize2, X \} from "lucide-react"/);
+  assert.match(railSource, /import \{ X \} from "lucide-react"/);
 });
 
-test("mixes session capabilities into the existing lists with custom badges", () => {
-  assert.match(railSource, /capabilities\?\.tools/);
-  assert.match(railSource, /capabilities\?\.skills/);
-  assert.match(railSource, /tool\.custom && <span className="topo-custom-badge">自定义<\/span>/);
-  assert.match(railSource, /skill\.custom && <span className="topo-custom-badge">自定义<\/span>/);
-  assert.match(railSource, /tool\.custom && \([\s\S]*?topo-remove-capability/);
-  assert.match(railSource, /skill\.custom && \([\s\S]*?topo-remove-capability/);
-  assert.doesNotMatch(railSource, /本会话添加/);
-  assert.match(appSource, /getSessionCapabilities\(appName, userId, sessionId\)/);
-  assert.match(
-    appSource,
-    /sessionCapabilities:\s*requiresSessionCapabilityRunner\(sessionCapabilities\)/,
-  );
+test("removes generic Session Studio tool configuration from the rail", () => {
+  assert.doesNotMatch(railSource, /const selectedStudioTools = studioTools/);
+  assert.doesNotMatch(railSource, /addStudioToolHere/);
+  assert.doesNotMatch(railSource, /<StudioToolDialog/);
+  assert.doesNotMatch(appSource, /studioTools=\{visibleStudioTools\}/);
+  assert.doesNotMatch(appSource, /onStudioToolsChange=/);
+  assert.doesNotMatch(appSource, /veadk\.sessionStudioToolMounts\.v1/);
+  assert.doesNotMatch(railStyles, /\.topo-custom-badge/);
+  assert.doesNotMatch(railStyles, /\.topo-remove-capability/);
+  assert.doesNotMatch(appSource, /SessionCapabilities|sessionCapabilities/);
 });
 
-test("offers session-scoped tool and skill controls in the information rail", () => {
-  assert.match(railSource, /aria-label="添加内置工具"/);
-  assert.match(railSource, /aria-label="添加技能"/);
-  assert.match(railSource, /<span>在此对话中添加工具<\/span>/);
-  assert.match(railSource, /<span>在此对话中添加技能<\/span>/);
+test("offers Session-level Skill Space controls in the information rail", () => {
+  assert.match(railSource, /t\("agentTopology\.addSkillHere"\)/);
   assert.match(railSource, /className="topo-capability-add-slot"/);
-  assert.match(railSource, /<ToolCapabilityDialog/);
-  assert.match(railSource, /<SkillCapabilityDialog/);
-  assert.doesNotMatch(railSource, /placeholder="Skill Space ID"/);
-  assert.match(appSource, /<AgentInfoPanel[\s\S]*?capabilities=\{sessionCapabilities\}/);
+  assert.match(railSource, /<SkillSpacePicker/);
+  assert.match(
+    railSource,
+    /dialog === "skill"[\s\S]*?className="studio-tool-dialog-head is-iconless"/,
+  );
+  assert.doesNotMatch(railSource, /<SkillCapabilityDialog/);
+  assert.doesNotMatch(appSource, /<MpaAgentInfoRail[\s\S]*?onStudioToolsChange=/);
   assert.doesNotMatch(appSource, /<AgentInfoDrawer\b/);
-  assert.match(railStyles, /\.topo-custom-badge/);
   assert.match(
     railStyles,
     /\.topo-skill-name\s*\{[^}]*font-family:\s*-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;/,
   );
-  assert.match(
-    railStyles,
-    /\.session-skill-option-copy strong\s*\{[^}]*font-family:\s*-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;/,
-  );
+  assert.doesNotMatch(railStyles, /\.session-skill-option-copy/);
   assert.match(railStyles, /\.topo-capability-add-slot/);
   assert.match(
     railStyles,
@@ -223,60 +197,10 @@ test("offers session-scoped tool and skill controls in the information rail", ()
   );
   assert.equal(
     (railSource.match(/className="topo-capability-add-dock"/g) ?? []).length,
-    2,
+    1,
   );
   assert.match(
     railStyles,
     /\.topo-capability-add-dock\s*\{[^}]*flex:\s*0 0 auto;/,
-  );
-  assert.match(railStyles, /\.topo-remove-capability/);
-});
-
-test("uses searchable dialogs for public Skill Hub and AgentKit Skill Center", () => {
-  assert.match(capabilityDialogsSource, /get_city_weather: "城市天气查询"/);
-  assert.match(capabilityDialogsSource, /get_location_weather: "位置天气查询"/);
-  assert.ok(
-    capabilityDialogsSource.includes('return description.replace(/[。.]+$/, "");'),
-  );
-  assert.match(capabilityDialogsSource, /title="添加内置工具"/);
-  assert.match(capabilityDialogsSource, /label="搜索内置工具"/);
-  assert.match(capabilityDialogsSource, /title="添加技能"/);
-  assert.match(capabilityDialogsSource, /role="tablist" aria-label="技能来源"/);
-  assert.match(capabilityDialogsSource, />\s*Skill Hub\s*<span>公域<\/span>/);
-  assert.match(capabilityDialogsSource, /AgentKit Skill 中心/);
-  assert.match(capabilityDialogsSource, /searchSessionPublicSkills\(appName, publicQuery\.trim\(\)\)/);
-  assert.match(capabilityDialogsSource, /skillSourceId: `findskill:\$\{skill\.slug\}`/);
-  assert.match(clientSource, /\/harness\/skills\/findskill/);
-  assert.match(capabilityDialogsSource, /listSkillSpaces\(\)/);
-  assert.match(
-    capabilityDialogsSource,
-    /listSkillsInSpace\(selectedSpace\.id, selectedSpace\.region\)/,
-  );
-  assert.doesNotMatch(capabilityDialogsSource, /listSessionSkillSpaces/);
-  assert.doesNotMatch(capabilityDialogsSource, /listSessionSkillsInSpace/);
-  assert.match(skillspaceClientSource, /"\/web\/skill-spaces\?region=all"/);
-  assert.match(capabilityDialogsSource, /label="搜索 Skill Space"/);
-  assert.match(capabilityDialogsSource, /label="搜索 AgentKit 技能"/);
-  assert.match(capabilityDialogsSource, /skillSourceId: selectedSpace\.id/);
-  assert.match(capabilityDialogsSource, /name: skill\.skillName/);
-  assert.match(stylesSource, /\.session-skill-browser\s*\{[\s\S]*?grid-template-columns:/);
-  assert.match(stylesSource, /\.session-capability-dialog-layer\s*\{[\s\S]*?z-index:\s*110;/);
-  assert.match(
-    stylesSource,
-    /\.session-capability-dialog\.is-wide\s*\{[^}]*height:\s*min\(720px, calc\(100dvh - 48px\)\);/,
-  );
-  assert.doesNotMatch(capabilityDialogsSource, /SkillCapabilityIcon|SkillSpaceIcon/);
-  assert.match(capabilityDialogsSource, /session-capability-dialog-head\$\{icon \? "" : " is-iconless"\}/);
-  assert.doesNotMatch(
-    stylesSource,
-    /\.session-public-skill-head\s*\{[^}]*border-bottom:/,
-  );
-  assert.doesNotMatch(
-    stylesSource,
-    /\.session-skill-pane-head\s*\{[^}]*border-bottom:/,
-  );
-  assert.match(
-    stylesSource,
-    /\.session-capability-search\s*\{[\s\S]*?flex:\s*0 0 40px;[\s\S]*?height:\s*40px;[\s\S]*?border-radius:\s*6px;/,
   );
 });

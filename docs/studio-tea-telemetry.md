@@ -47,8 +47,17 @@ Studio 的产品行为数据统一上报到 TEA App `1050062`。火山引擎和 
 ## 数据边界
 
 只允许上报已登记的扁平 string/number 字段。禁止上报 Prompt、消息正文、模型响应、
-源码、文件路径、自由文本错误、错误堆栈、Cookie、Token、AK/SK 或其他密钥。错误只保留
-稳定的 `error_kind`、可选 `error_code` 和适用事件的 `failed_phase`。
+源码、文件路径、错误堆栈、Cookie、Token、AK/SK 或其他密钥。错误默认保留稳定的
+`error_kind`、可选 `error_code` 和适用事件的 `failed_phase`。
+`studio_agent_deploy` 失败事件额外允许上报经过前端脱敏与长度限制的 `error_message`，
+用于定位部署、构建和 Runtime 初始化失败原因。构建阶段失败时，`error_message` 优先来自
+前端已收到的 CodePipeline 构建日志文本；没有可用构建日志时再回退到部署接口返回的
+错误摘要。构建日志较长时保留末尾内容，避免截掉通常位于日志尾部的真实失败行。
+后端在构建失败的最终同步中会有限重试拉取 CodePipeline 日志，直到保留的日志尾部包含
+构建错误 marker，降低日志服务延迟导致埋点只拿到镜像下载/解压进度的概率。
+部署主阶段按 `prepare -> upload -> build -> deploy -> publish -> update -> evaluation`
+单调推进；CodePipeline 日志事件只更新构建日志，不应把已经进入部署阶段的任务回退为
+构建阶段。
 
 `user_unique_id` 通过 TEA `config` 设置，不作为自定义事件属性重复发送。所有资源 ID
 在模块边界转换为字符串；布尔属性使用 `0/1`。
@@ -58,3 +67,10 @@ Studio 的产品行为数据统一上报到 TEA App `1050062`。火山引擎和 
 本迁移仅删除 Studio 产品行为埋点使用的前端 APMPlus Web SDK 和配置传递链路。
 `veadk/tracing/telemetry/`、APMPlus OpenTelemetry exporter、Runtime trace 和问题反馈中的
 APMPlus 查询能力不在迁移范围内并继续保留。
+
+## 开发排障记录
+
+- 检查 Studio 后端使用的 AgentKit SDK 时，应优先使用仓库虚拟环境
+  `.venv/bin/python`。当前全局 `python` 命令可能不存在，且全局 `python3` 环境可能未安装
+  `agentkit` 包，直接执行 `python3 -c 'import agentkit'` 会得到
+  `ModuleNotFoundError: No module named 'agentkit'`。

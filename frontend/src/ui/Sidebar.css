@@ -1,0 +1,54 @@
+.new-chat--cronjobs > .icon {
+  flex: 0 0 16px;
+  stroke-width: 1.75;
+}
+
+.new-chat--cronjobs.is-active > .icon {
+  color: hsl(var(--foreground));
+}
+
+.account-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 10px;
+}
+
+.account-menu-action {
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  font-size: 13px;
+}
+
+.account-menu-action .icon {
+  width: 16px;
+  height: 16px;
+  color: hsl(var(--muted-foreground));
+}
+
+.account-menu-action__label {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.sidebar-nav--administration {
+  margin-top: 20px;
+}
+
+.sidebar-nav-group-title {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 10px;
+  color: hsl(var(--sidebar-section-title));
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 22px;
+}
+
+.sidebar.is-collapsed .sidebar-nav-group-title {
+  display: none;
+}

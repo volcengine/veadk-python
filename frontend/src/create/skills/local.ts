@@ -11,6 +11,7 @@
 import type { ProjectFile } from "../project";
 import type { SkillHit } from "./types";
 import { unzip } from "./zip";
+import { createT } from "../i18n";
 
 export interface LocalReadResult {
   hits: SkillHit[];
@@ -142,7 +143,10 @@ function materializeHit(
   const where = `${sourceLabel}${folderKey ? "/" + folderKey : ""}`;
   const md = files.find((e) => SKILL_MD_RE.test("/" + e.path));
   if (!md) {
-    return { hit: null, error: `${where} 缺少 SKILL.md` };
+    return {
+      hit: null,
+      error: createT("helpers.skills.missingManifest", { location: where }),
+    };
   }
   const fm = readSkillMdMetadata(md.text);
   const folder = safeSkillFolder(fm.name, folderKey, sourceLabel.replace(/\.[^.]+$/, ""));
@@ -152,11 +156,23 @@ function materializeHit(
     // skills/<folder>/ after normalization.
     const parts = e.path.split("/");
     if (parts.some((p) => p === "..")) {
-      return { hit: null, error: `${where} 包含非法路径（..）：${e.path}` };
+      return {
+        hit: null,
+        error: createT("helpers.skills.invalidParentPath", {
+          location: where,
+          path: e.path,
+        }),
+      };
     }
     const target = `skills/${folder}/${e.path}`;
     if (!target.startsWith(`skills/${folder}/`)) {
-      return { hit: null, error: `${where} 包含非法路径：${e.path}` };
+      return {
+        hit: null,
+        error: createT("helpers.skills.invalidPath", {
+          location: where,
+          path: e.path,
+        }),
+      };
     }
     projectFiles.push({ path: target, content: e.text });
   }
@@ -165,7 +181,7 @@ function materializeHit(
       source: "local",
       id: `local:${folder}:${files.length}`,
       name: displaySkillName(folder, fm.name),
-      description: fm.description || "本地 Skill",
+      description: fm.description || createT("helpers.skills.localDescription"),
       folder,
       localFiles: projectFiles,
     },
@@ -197,7 +213,10 @@ export async function readFolderSkills(
     const text = await f.text();
     raw.push({ path: rel, text });
   }
-  return collectHits(normalizeEntries(raw), "文件夹");
+  return collectHits(
+    normalizeEntries(raw),
+    createT("helpers.skills.folderSource"),
+  );
 }
 
 function collectHits(entries: RawEntry[], sourceLabel: string): LocalReadResult {
@@ -210,7 +229,9 @@ function collectHits(entries: RawEntry[], sourceLabel: string): LocalReadResult 
     if (hit) hits.push(hit);
   }
   if (hits.length === 0 && errors.length === 0) {
-    errors.push(`${sourceLabel} 中未发现 SKILL.md`);
+    errors.push(
+      createT("helpers.skills.noManifest", { location: sourceLabel }),
+    );
   }
   return { hits, errors };
 }

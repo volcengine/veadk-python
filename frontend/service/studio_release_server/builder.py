@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -43,6 +44,7 @@ from frontend.service.studio_release_server.tos_store import (
     DependencyStore,
     SourceStore,
     resolve_credentials,
+    tos_endpoint,
 )
 
 _MAX_SOURCE_ARCHIVE_BYTES = 200 * 1024 * 1024
@@ -55,6 +57,7 @@ _GITHUB_CLONE_MIRROR = "https://ghfast.top/https://github.com"
 _GIT_CLONE_ATTEMPT_SECONDS = 30
 _SPARSE_CHECKOUT_PATHS = (
     "/pyproject.toml",
+    "/uv.lock",
     "/README.md",
     "/LICENSE",
     "/frontend/",
@@ -72,10 +75,81 @@ _NODE_ARCHIVE_SHA256 = {
     "arm64": "140aee84be6774f5fb3f404be72adbe8420b523f824de82daeb5ab218dab7b18",
     "x64": "325c0f1261e0c61bcae369a1274028e9cfb7ab7949c05512c5b1e630f7e80e12",
 }
+_CGROUP_MEMORY_LIMIT_PATHS = (
+    Path("/sys/fs/cgroup/memory.max"),
+    Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+)
+_NODE_HEAP_MEMORY_RATIO = 0.75
+_DEFAULT_NODE_HEAP_MB = 4096
+_STUDIO_RELEASE_CONTRACT = "agentkit-cli-v1"
 
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[str, str], None]
+
+
+def _physical_memory_bytes() -> int | None:
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        page_count = os.sysconf("SC_PHYS_PAGES")
+    except (OSError, ValueError):
+        return None
+    if page_size <= 0 or page_count <= 0:
+        return None
+    return page_size * page_count
+
+
+def _memory_limit_bytes(
+    *,
+    cgroup_paths: tuple[Path, ...] = _CGROUP_MEMORY_LIMIT_PATHS,
+    physical_memory: int | None = None,
+) -> int | None:
+    if physical_memory is None:
+        physical_memory = _physical_memory_bytes()
+    candidates = [physical_memory] if physical_memory and physical_memory > 0 else []
+    for path in cgroup_paths:
+        try:
+            raw_limit = path.read_text(encoding="utf-8").strip()
+            cgroup_limit = int(raw_limit)
+        except (FileNotFoundError, OSError, ValueError):
+            continue
+        if cgroup_limit <= 0:
+            continue
+        # Cgroup v1 represents an unlimited value with a number close to 2^63.
+        if physical_memory and cgroup_limit > physical_memory:
+            continue
+        candidates.append(cgroup_limit)
+    return min(candidates) if candidates else None
+
+
+def _node_heap_limit_mb(memory_limit: int | None = None) -> int:
+    if memory_limit is None:
+        memory_limit = _memory_limit_bytes()
+    if memory_limit is None:
+        return _DEFAULT_NODE_HEAP_MB
+    return max(128, int(memory_limit * _NODE_HEAP_MEMORY_RATIO / (1024 * 1024)))
+
+
+def _node_options(existing: str, heap_limit_mb: int) -> str:
+    try:
+        options = shlex.split(existing)
+    except ValueError:
+        options = []
+    filtered: list[str] = []
+    skip_value = False
+    for option in options:
+        if skip_value:
+            skip_value = False
+            continue
+        normalized = option.replace("_", "-")
+        if normalized == "--max-old-space-size":
+            skip_value = True
+            continue
+        if normalized.startswith("--max-old-space-size="):
+            continue
+        filtered.append(option)
+    filtered.append(f"--max-old-space-size={heap_limit_mb}")
+    return shlex.join(filtered)
 
 
 class ReleaseBuilder(Protocol):
@@ -138,7 +212,9 @@ class StudioReleaseBuilder:
                 raise RuntimeError("uv is not installed in the release server package.")
             tools_seconds = time.monotonic() - tools_started
 
-            version = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d%H%M%S")
+            version = request.version or datetime.now(
+                ZoneInfo("Asia/Shanghai")
+            ).strftime("%Y%m%d%H%M%S")
             output_dir = workspace / "dist"
             publish_started = time.monotonic()
             on_progress("building", "正在构建 Studio Bundle 并发布到 TOS")
@@ -532,7 +608,11 @@ class StudioReleaseBuilder:
         frontend_assets: Path | None,
         dependency_wheels: Path | None,
     ) -> None:
-        credentials = resolve_credentials()
+        if request.thin_bundle and not self._settings.thin_releases:
+            raise RuntimeError(
+                "Studio thin releases are not enabled on this Release Server."
+            )
+        credentials = resolve_credentials(self._settings.provider)
         command = [
             sys.executable,
             str(Path(__file__).with_name("publisher.py")),
@@ -548,9 +628,15 @@ class StudioReleaseBuilder:
             self._settings.bucket,
             "--region",
             self._settings.region,
+            "--provider",
+            self._settings.provider,
             "--prefix",
             self._settings.release_prefix,
+            "--release-contract",
+            _STUDIO_RELEASE_CONTRACT,
         ]
+        if request.thin_bundle:
+            command.append("--thin")
         for item in request.changelog:
             command.extend(("--changelog", item))
         if frontend_assets is not None:
@@ -559,16 +645,23 @@ class StudioReleaseBuilder:
             raise RuntimeError("Prepared Studio dependency wheels are missing.")
         command.extend(("--dependency-wheels", str(dependency_wheels)))
         env = os.environ.copy()
+        env["NODE_OPTIONS"] = _node_options(
+            env.get("NODE_OPTIONS", ""),
+            _node_heap_limit_mb(),
+        )
         path_entries = [str(uv.parent)]
         if node_bin is not None:
             path_entries.insert(0, str(node_bin))
         path_entries.append(env.get("PATH", ""))
+        credential_prefix = (
+            "BYTEPLUS" if self._settings.provider == "byteplus" else "VOLCENGINE"
+        )
         env.update(
             {
                 "PATH": os.pathsep.join(path_entries),
-                "VOLCENGINE_ACCESS_KEY": credentials.access_key,
-                "VOLCENGINE_SECRET_KEY": credentials.secret_key,
-                "VOLCENGINE_SESSION_TOKEN": credentials.session_token,
+                f"{credential_prefix}_ACCESS_KEY": credentials.access_key,
+                f"{credential_prefix}_SECRET_KEY": credentials.secret_key,
+                f"{credential_prefix}_SESSION_TOKEN": credentials.session_token,
                 "TZ": "Asia/Shanghai",
                 "PIP_INDEX_URL": _PYPI_SIMPLE_INDEX,
                 "UV_CACHE_DIR": str(
@@ -601,12 +694,12 @@ class StudioReleaseBuilder:
     def _verify_latest(self, expected: dict[str, object]) -> None:
         import tos
 
-        credentials = resolve_credentials()
+        credentials = resolve_credentials(self._settings.provider)
         client = tos.TosClientV2(
             credentials.access_key,
             credentials.secret_key,
             security_token=credentials.session_token or None,
-            endpoint=f"tos-{self._settings.region}.volces.com",
+            endpoint=tos_endpoint(self._settings.region, self._settings.provider),
             region=self._settings.region,
         )
         response = client.get_object(

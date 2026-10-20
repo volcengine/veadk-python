@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   BlockTypeSelect,
   BoldItalicUnderlineToggles,
@@ -14,33 +15,21 @@ import {
 } from "@mdxeditor/editor";
 import "@mdxeditor/editor/style.css";
 
-const TRANSLATIONS: Record<string, string> = {
-  "toolbar.undo": "撤销 {{shortcut}}",
-  "toolbar.redo": "重做 {{shortcut}}",
-  "toolbar.blockTypes.paragraph": "正文",
-  "toolbar.blockTypes.quote": "引用",
-  "toolbar.blockTypes.heading": "标题 {{level}}",
-  "toolbar.blockTypeSelect.selectBlockTypeTooltip": "选择文本类型",
-  "toolbar.blockTypeSelect.placeholder": "文本类型",
-  "toolbar.bold": "加粗",
-  "toolbar.removeBold": "取消加粗",
-  "toolbar.italic": "斜体",
-  "toolbar.removeItalic": "取消斜体",
-  "toolbar.bulletedList": "无序列表",
-  "toolbar.numberedList": "有序列表",
+const TRANSLATION_KEYS: Record<string, string> = {
+  "toolbar.undo": "promptEditor.toolbar.undo",
+  "toolbar.redo": "promptEditor.toolbar.redo",
+  "toolbar.blockTypes.paragraph": "promptEditor.toolbar.paragraph",
+  "toolbar.blockTypes.quote": "promptEditor.toolbar.quote",
+  "toolbar.blockTypes.heading": "promptEditor.toolbar.heading",
+  "toolbar.blockTypeSelect.selectBlockTypeTooltip": "promptEditor.toolbar.selectBlockType",
+  "toolbar.blockTypeSelect.placeholder": "promptEditor.toolbar.blockType",
+  "toolbar.bold": "promptEditor.toolbar.bold",
+  "toolbar.removeBold": "promptEditor.toolbar.removeBold",
+  "toolbar.italic": "promptEditor.toolbar.italic",
+  "toolbar.removeItalic": "promptEditor.toolbar.removeItalic",
+  "toolbar.bulletedList": "promptEditor.toolbar.bulletedList",
+  "toolbar.numberedList": "promptEditor.toolbar.numberedList",
 };
-
-function translate(
-  key: string,
-  defaultValue: string,
-  interpolations?: Record<string, unknown>,
-) {
-  let value = TRANSLATIONS[key] ?? defaultValue;
-  for (const [name, replacement] of Object.entries(interpolations ?? {})) {
-    value = value.split(`{{${name}}}`).join(String(replacement));
-  }
-  return value;
-}
 
 export default function MarkdownPromptEditor({
   value,
@@ -51,9 +40,10 @@ export default function MarkdownPromptEditor({
   onChange: (value: string) => void;
   invalid?: boolean;
 }) {
+  const { t } = useTranslation("create");
   const editorRef = useRef<MDXEditorMethods>(null);
   const lastPublishedValue = useRef(value);
-  const [parseError, setParseError] = useState("");
+  const [plainTextFallback, setPlainTextFallback] = useState(false);
   const plugins = useMemo(
     () => [
       headingsPlugin({ allowedHeadingLevels: [1, 2, 3] }),
@@ -74,14 +64,45 @@ export default function MarkdownPromptEditor({
     ],
     [],
   );
+  const translate = useMemo(
+    () => (
+      key: string,
+      defaultValue: string,
+      interpolations?: Record<string, unknown>,
+    ) => {
+      const translationKey = TRANSLATION_KEYS[key];
+      if (!translationKey) return defaultValue;
+      return t(translationKey, interpolations);
+    },
+    [t],
+  );
 
   useEffect(() => {
     if (value !== lastPublishedValue.current) {
-      editorRef.current?.setMarkdown(value);
+      if (!plainTextFallback) {
+        editorRef.current?.setMarkdown(value);
+      }
       lastPublishedValue.current = value;
-      setParseError("");
     }
-  }, [value]);
+  }, [plainTextFallback, value]);
+
+  if (plainTextFallback) {
+    return (
+      <div>
+        <textarea
+          className={`cw-markdown-fallback${invalid ? " is-error" : ""}`}
+          value={value}
+          aria-invalid={invalid}
+          spellCheck={false}
+          onChange={(event) => {
+            const nextValue = event.target.value;
+            lastPublishedValue.current = nextValue;
+            onChange(nextValue);
+          }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -90,25 +111,19 @@ export default function MarkdownPromptEditor({
         className={`cw-markdown-editor${invalid ? " is-error" : ""}`}
         contentEditableClassName="cw-markdown-content"
         markdown={value}
-        placeholder="输入系统提示词；键入 ## 加空格可创建二级标题…"
+        placeholder={t("promptEditor.placeholder")}
         plugins={plugins}
         suppressHtmlProcessing
         trim={false}
         translation={translate}
         onChange={(markdown, initialMarkdownNormalize) => {
           lastPublishedValue.current = markdown;
-          setParseError("");
           if (!initialMarkdownNormalize) {
             onChange(markdown);
           }
         }}
-        onError={({ error }) => setParseError(error)}
+        onError={() => setPlainTextFallback(true)}
       />
-      {parseError && (
-        <span className="cw-markdown-error" role="alert">
-          Markdown 内容暂时无法解析，请检查未闭合的语法。
-        </span>
-      )}
     </div>
   );
 }

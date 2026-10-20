@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -52,6 +52,24 @@ class PermissionResult:
     satisfied: bool
 
 
+@dataclass(frozen=True)
+class AttachedPolicyDocument:
+    """One policy attached to the current IAM principal."""
+
+    name: str
+    policy_type: str
+    document: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PrincipalPolicySet:
+    """Resolved IAM principal and the policies used to authorize it."""
+
+    kind: Literal["role", "user", "root"]
+    name: str
+    policies: tuple[AttachedPolicyDocument, ...]
+
+
 def _permission(action: str, purpose_zh: str, purpose_en: str) -> PermissionSpec:
     return PermissionSpec(action, purpose_zh, purpose_en)
 
@@ -80,6 +98,25 @@ _IAM_PERMISSIONS = (
 )
 
 _IDENTITY_PERMISSIONS = (
+    _permission(
+        "id:ListUsers",
+        "匹配存量用户与初始管理员",
+        "Match existing users and the initial administrator",
+    ),
+    _permission("id:GetUser", "校验用户角色", "Verify user roles"),
+    _permission("id:ListGroups", "读取 Studio 角色用户组", "Read Studio role groups"),
+    _permission(
+        "id:CreateGroup", "创建 Studio 角色用户组", "Create Studio role groups"
+    ),
+    _permission(
+        "id:UpdateGroup",
+        "保存初始超级管理员",
+        "Persist the initial super administrator",
+    ),
+    _permission("id:AddUsersToGroup", "分配 Studio 角色", "Assign Studio roles"),
+    _permission(
+        "id:RemoveUsersFromGroup", "移除旧角色关系", "Remove previous role memberships"
+    ),
     _permission(
         "id:GetUserPool", "读取 Studio 身份用户池", "Read the Studio Identity user pool"
     ),
@@ -161,6 +198,11 @@ _AUTO_SANDBOX_PERMISSIONS = (
 
 _VEFAAS_PERMISSIONS = (
     _permission(
+        "vefaas:ListFunctions",
+        "查找 Studio 与定时任务调度函数",
+        "Find Studio and cronjob scheduler functions",
+    ),
+    _permission(
         "vefaas:CreateFunction",
         "创建 Studio VeFaaS 函数",
         "Create the Studio VeFaaS function",
@@ -196,9 +238,19 @@ _VEFAAS_PERMISSIONS = (
         "Read failed Studio application release logs",
     ),
     _permission(
+        "vefaas:GetFunction",
+        "读取定时任务调度函数配置",
+        "Read the cronjob scheduler function configuration",
+    ),
+    _permission(
         "vefaas:UpdateFunction",
         "更新 Studio 函数环境变量",
         "Update Studio function environment variables",
+    ),
+    _permission(
+        "vefaas:UpdateFunctionResource",
+        "设置 Studio 函数最小实例数",
+        "Set the Studio function minimum instance count",
     ),
     _permission(
         "vefaas:Release", "重新发布 Studio 函数", "Release the updated Studio function"
@@ -207,6 +259,21 @@ _VEFAAS_PERMISSIONS = (
         "vefaas:GetReleaseStatus",
         "查询 Studio 函数发布状态",
         "Check the Studio function release status",
+    ),
+    _permission(
+        "vefaas:ListTriggers",
+        "查找定时任务分钟触发器",
+        "Find the cronjob minute timer",
+    ),
+    _permission(
+        "vefaas:CreateTimer",
+        "创建定时任务分钟触发器",
+        "Create the cronjob minute timer",
+    ),
+    _permission(
+        "vefaas:UpdateTimer",
+        "更新定时任务分钟触发器",
+        "Update the cronjob minute timer",
     ),
 )
 
@@ -455,9 +522,9 @@ class StudioDeployPermissionService:
             return str(user.get("UserName") or "").strip()
         return ""
 
-    def _attached_policy_documents(
+    def _attached_policies(
         self, service: Any, principal_kind: str, principal_name: str
-    ) -> list[dict[str, Any]]:
+    ) -> list[AttachedPolicyDocument]:
         if principal_kind == "role":
             response = service.list_attached_role_policies({"RoleName": principal_name})
         else:
@@ -466,7 +533,7 @@ class StudioDeployPermissionService:
                 raise RuntimeError("Could not resolve the current IAM user")
             response = service.list_attached_user_policies({"UserName": user_name})
         result = _iam_result(response)
-        documents: list[dict[str, Any]] = []
+        policies: list[AttachedPolicyDocument] = []
         for policy in _as_list(result.get("AttachedPolicyMetadata", [])):
             if not isinstance(policy, Mapping):
                 continue
@@ -482,19 +549,39 @@ class StudioDeployPermissionService:
             policy_data = policy_result.get("Policy", policy_result)
             if not isinstance(policy_data, Mapping):
                 raise TypeError(f"IAM policy {policy_name} is unreadable")
-            documents.append(_policy_document(policy_data.get("PolicyDocument")))
-        return documents
+            policies.append(
+                AttachedPolicyDocument(
+                    name=policy_name,
+                    policy_type=policy_type,
+                    document=_policy_document(policy_data.get("PolicyDocument")),
+                )
+            )
+        return policies
+
+    def principal_policies(self) -> PrincipalPolicySet:
+        """Return the current principal and its attached policy documents."""
+        principal_kind, principal_name = self._caller_identity()
+        if principal_kind == "root":
+            return PrincipalPolicySet(kind="root", name="", policies=())
+        policies = self._attached_policies(
+            self._iam_service(), principal_kind, principal_name
+        )
+        return PrincipalPolicySet(
+            kind=cast(Literal["role", "user"], principal_kind),
+            name=principal_name,
+            policies=tuple(policies),
+        )
 
     def check(self, specs: Iterable[PermissionSpec]) -> list[PermissionResult]:
         required = list(specs)
-        principal_kind, principal_name = self._caller_identity()
-        if principal_kind == "root":
+        principal = self.principal_policies()
+        if principal.kind == "root":
             satisfied = {spec.action: True for spec in required}
         else:
-            documents = self._attached_policy_documents(
-                self._iam_service(), principal_kind, principal_name
+            satisfied = evaluate_actions(
+                (spec.action for spec in required),
+                (policy.document for policy in principal.policies),
             )
-            satisfied = evaluate_actions((spec.action for spec in required), documents)
         return [
             PermissionResult(spec=spec, satisfied=satisfied.get(spec.action, False))
             for spec in required
@@ -605,8 +692,10 @@ def run_studio_deploy_permission_precheck(
 
 __all__ = [
     "IAM_CONFIG_URLS",
+    "AttachedPolicyDocument",
     "PermissionResult",
     "PermissionSpec",
+    "PrincipalPolicySet",
     "StudioDeployPermissionService",
     "evaluate_actions",
     "render_permission_results",

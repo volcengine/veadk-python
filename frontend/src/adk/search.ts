@@ -15,6 +15,7 @@ import {
   type AdkSession,
   type AgentSearchSource,
 } from "./client";
+import { adkT } from "./i18n";
 
 export type SearchSource = "session" | "web" | "knowledge" | "memory";
 
@@ -84,7 +85,7 @@ function firstUserText(session: AdkSession): string {
       if (t) return t;
     }
   }
-  return "未命名会话";
+  return adkT("search.untitledSession");
 }
 
 function snippetAround(text: string, idx: number, qlen: number): string {
@@ -146,12 +147,12 @@ async function searchWeb(appId: string, query: string): Promise<SearchOutcome> {
     return {
       results: [],
       note: msg.includes("404")
-        ? "网络搜索接口未就绪（后端未启用 /web/search）。"
-        : `网络搜索失败：${msg}`,
+        ? adkT("search.webUnavailable")
+        : adkT("search.webFailed", { message: msg }),
     };
   }
   const { mounted, results, error } = res;
-  if (!mounted) return { results: [], note: "当前 Agent 未挂载 web_search 工具。" };
+  if (!mounted) return { results: [], note: adkT("search.webNotMounted") };
   if (error) return { results: [], note: error };
   return {
     results: results.map((hit, index) => ({
@@ -177,11 +178,15 @@ async function searchComponent(
   if (!response.mounted) {
     return {
       results: [],
-      note: source === "knowledge" ? "该 Agent 未挂载知识库。" : "该 Agent 未挂载长期记忆。",
+      note: source === "knowledge"
+        ? adkT("search.knowledgeNotMounted")
+        : adkT("search.memoryNotMounted"),
     };
   }
   if (response.error) return { results: [], note: response.error };
-  const sourceName = response.sourceName ?? (source === "knowledge" ? "知识库" : "长期记忆");
+  const sourceName = response.sourceName ?? (source === "knowledge"
+    ? adkT("search.knowledge")
+    : adkT("search.longTermMemory"));
   return {
     results: response.results.map((hit, index) =>
       source === "knowledge"

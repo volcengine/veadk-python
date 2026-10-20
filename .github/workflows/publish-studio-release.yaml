@@ -18,9 +18,14 @@ on:
   workflow_dispatch:
     inputs:
       changelog:
-        description: User-facing Studio release summary
+        description: User-facing Studio updates, separated by semicolons
         required: true
         type: string
+      thin_bundles:
+        description: Publish Volcengine thin bundles (BytePlus remains full-only)
+        required: true
+        default: false
+        type: boolean
   pull_request:
     paths:
       - '.github/workflows/publish-studio-release.yaml'
@@ -39,12 +44,23 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  harness-sidecar-release-gate:
+    if: >-
+      github.repository == 'volcengine/veadk-python' &&
+      github.event_name == 'pull_request'
+    uses: ./.github/workflows/harness-sidecar-release-gate.yaml
+
   verify:
     if: >-
       github.repository == 'volcengine/veadk-python' &&
       (github.event_name == 'pull_request' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      PIP_INDEX_URL: https://pypi.org/simple
+      UV_DEFAULT_INDEX: https://pypi.org/simple
+      npm_config_registry: https://registry.npmjs.org
+      npm_config_replace_registry_host: always
 
     steps:
       - name: Check out release source
@@ -56,6 +72,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+            frontend/service/studio_release_server/offline_runtime.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -66,34 +87,108 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          prune-cache: false
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Cache pinned Studio build inputs
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/studio-release-inputs
+          key: studio-release-inputs-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('veadk/cli/studio_dependencies.py', 'veadk/cli/agentkit_cli.py') }}
+
+      - name: Validate frozen Studio runtime lock
+        run: uv lock --check
 
       - name: Build and validate Studio bundle
-        env:
-          PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
-          UV_DEFAULT_INDEX: https://mirrors.aliyun.com/pypi/simple/
-          npm_config_registry: https://registry.npmmirror.com
-          npm_config_replace_registry_host: always
         run: |
           set -euo pipefail
           output_dir="$RUNNER_TEMP/studio-release-output"
           version="$(TZ=Asia/Shanghai date +%Y%m%d%H%M%S)"
           export output_dir version
-          uv run --group dev python - <<'PY'
+          uv run --frozen --group dev python - <<'PY'
+          import hashlib
           import json
           import os
+          import time
+          import urllib.request
+          from concurrent.futures import ThreadPoolExecutor
           from pathlib import Path
 
+          from veadk.cli.agentkit_cli import download_agentkit_cli_archive
+          from veadk.cli.studio_dependencies import (
+              STUDIO_AGENTKIT_CLI_ARTIFACT,
+              STUDIO_DEPENDENCY_SOURCES,
+          )
+          from veadk.cli.studio_package import build_frontend_assets
           from veadk.cli.studio_release import build_studio_release
+
+
+          def prepare_dependency(dependency, destination):
+              target = destination / dependency.filename
+              if target.is_file():
+                  if hashlib.sha256(target.read_bytes()).hexdigest() == dependency.sha256:
+                      print(f"Using cached {dependency.filename}", flush=True)
+                      return
+                  target.unlink()
+              started = time.monotonic()
+              if dependency == STUDIO_AGENTKIT_CLI_ARTIFACT:
+                  download_agentkit_cli_archive(target, dependency)
+              else:
+                  with urllib.request.urlopen(dependency.url, timeout=120) as response:
+                      content = response.read(128 * 1024 * 1024 + 1)
+                  if len(content) > 128 * 1024 * 1024:
+                      raise ValueError(f"{dependency.filename} exceeds 128 MiB")
+                  if hashlib.sha256(content).hexdigest() != dependency.sha256:
+                      raise ValueError(f"{dependency.filename} checksum mismatch")
+                  target.write_bytes(content)
+              print(
+                  f"Prepared {dependency.filename} in {time.monotonic() - started:.1f}s",
+                  flush=True,
+              )
+
 
           source_root = Path(os.environ["GITHUB_WORKSPACE"])
           output_dir = Path(os.environ["output_dir"])
+          frontend_assets = Path(os.environ["RUNNER_TEMP"]) / "studio-release-frontend"
+          dependency_inputs = Path(os.environ["RUNNER_TEMP"]) / "studio-release-inputs"
+          dependency_inputs.mkdir(parents=True, exist_ok=True)
+          changelog = ("Pull request release validation",)
+          started = time.monotonic()
+          with ThreadPoolExecutor(max_workers=5) as executor:
+              preparation = [
+                  executor.submit(
+                      build_frontend_assets,
+                      source_root,
+                      frontend_assets,
+                      changelog=changelog,
+                  )
+              ]
+              for dependency in (*STUDIO_DEPENDENCY_SOURCES, STUDIO_AGENTKIT_CLI_ARTIFACT):
+                  preparation.append(
+                      executor.submit(
+                          prepare_dependency,
+                          dependency,
+                          dependency_inputs,
+                      )
+                  )
+              for future in preparation:
+                  future.result()
+          print(f"Build inputs ready in {time.monotonic() - started:.1f}s", flush=True)
+          started = time.monotonic()
           bundle, manifest = build_studio_release(
               source_root=source_root,
               output_dir=output_dir,
               version=os.environ["version"],
               git_sha=os.environ["GITHUB_SHA"],
-              changelog=("Pull request release validation",),
+              changelog=changelog,
+              frontend_assets=frontend_assets,
+              dependency_wheels=dependency_inputs,
           )
+          print(f"Bundle built in {time.monotonic() - started:.1f}s", flush=True)
           print(
               json.dumps(
                   {
@@ -112,18 +207,197 @@ jobs:
           test "${#manifests[@]}" -eq 1
           unzip -t "${bundles[0]}"
 
-  publish:
+      - name: Simulate customer update and smoke-test Studio
+        env:
+          BYTEPLUS_ACCESS_KEY: smoke
+          BYTEPLUS_SECRET_KEY: smoke
+          VOLCENGINE_ACCESS_KEY: smoke
+          VOLCENGINE_SECRET_KEY: smoke
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = "Linux"
+          test "$(uname -m)" = "x86_64"
+          test "$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" = "3.12"
+          COLD_START_DEADLINE_SECONDS=60
+          STUDIO_MAX_BUNDLE_BYTES=$((256 * 1024 * 1024))
+          bundle=("$RUNNER_TEMP"/studio-release-output/studio-bundle-*.zip)
+          test "${#bundle[@]}" -eq 1
+          test "$(stat -c %s "${bundle[0]}")" -lt "$STUDIO_MAX_BUNDLE_BYTES"
+
+          permission_probe_root="$(mktemp -d)"
+          permission_probe="$permission_probe_root/package"
+          permission_probe_bin="$permission_probe_root/bin"
+          permission_probe_state="$permission_probe_root/state"
+          mkdir "$permission_probe" "$permission_probe_bin" "$permission_probe_state"
+          chmod 755 "$permission_probe_root" "$permission_probe" "$permission_probe_bin"
+          chmod 700 "$permission_probe_state"
+          sudo chown nobody "$permission_probe_state"
+          unzip -q "${bundle[0]}" -d "$permission_probe"
+          test "$(stat -c %a "$permission_probe/run.sh")" = "755"
+          test "$(stat -c %a "$permission_probe/agentkit-linux-x64.tar.gz")" = "644"
+          cat >"$permission_probe_bin/python3" <<'SH'
+          #!/bin/bash
+          set -eu
+          if [[ "$*" == *"veadk.cli.studio_companion"* ]]; then
+            test -r "$VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE"
+            touch "$PERMISSION_PROBE_STATE/companion-started"
+            while [ ! -f "$PERMISSION_PROBE_STATE/studio-started" ]; do sleep 0.01; done
+            exit 0
+          fi
+          touch "$PERMISSION_PROBE_STATE/studio-started"
+          while [ ! -f "$PERMISSION_PROBE_STATE/companion-started" ]; do sleep 0.01; done
+          SH
+          chmod 755 "$permission_probe_bin/python3"
+          direct_stderr="$permission_probe_root/direct.stderr"
+          if sudo -u nobody -H env \
+            PATH="$permission_probe_bin:/usr/bin:/bin" \
+            PERMISSION_PROBE_STATE="$permission_probe_state" \
+            "$permission_probe/run.sh" 2>"$direct_stderr"; then
+            echo "entrypoint accepted an unexpected Studio exit" >&2
+            exit 1
+          fi
+          grep -qx "studio_process_exited_unexpectedly" "$direct_stderr"
+          sudo -u nobody -H rm \
+            "$permission_probe_state/companion-started" \
+            "$permission_probe_state/studio-started"
+          chmod 644 "$permission_probe/run.sh"
+          normalized_stderr="$permission_probe_root/normalized.stderr"
+          if sudo -u nobody -H env \
+            PATH="$permission_probe_bin:/usr/bin:/bin" \
+            PERMISSION_PROBE_STATE="$permission_probe_state" \
+            bash "$permission_probe/run.sh" 2>"$normalized_stderr"; then
+            echo "normalized entrypoint accepted an unexpected Studio exit" >&2
+            exit 1
+          fi
+          grep -qx "studio_process_exited_unexpectedly" "$normalized_stderr"
+
+          smoke_studio() {
+            provider="$1"
+            port="$2"
+            package_dir="$RUNNER_TEMP/studio-release-package-${provider}"
+            runtime_venv="$RUNNER_TEMP/studio-release-runtime-${provider}"
+            log="$RUNNER_TEMP/studio-${provider}.log"
+            response="$RUNNER_TEMP/studio-${provider}-ui-config.json"
+            export package_dir
+            test ! -e "$package_dir"
+            test ! -e "$runtime_venv"
+            uv run --frozen --group dev python - <<'PY'
+          import os
+          from pathlib import Path
+
+          from veadk.cli.studio_self_update import extract_studio_bundle
+
+          output_dir = Path(os.environ["RUNNER_TEMP"]) / "studio-release-output"
+          bundle = next(output_dir.glob("studio-bundle-*.zip"))
+          extract_studio_bundle(bundle, Path(os.environ["package_dir"]))
+          PY
+            uv venv --python 3.12 "$runtime_venv"
+            (
+              cd "$package_dir"
+              uv pip install --python "$runtime_venv/bin/python" -r requirements.txt
+            )
+            (
+              cd "$package_dir"
+              PATH="$runtime_venv/bin:$PATH" \
+                CLOUD_PROVIDER="$provider" \
+                AGENTKIT_CLOUD_PROVIDER="$provider" \
+                _FAAS_RUNTIME_PORT="$port" \
+                ./run.sh
+            ) >"$log" 2>&1 &
+            pid=$!
+            started=$SECONDS
+            while (( SECONDS - started < COLD_START_DEADLINE_SECONDS )); do
+              if ! kill -0 "$pid" 2>/dev/null; then
+                cat "$log"
+                return 1
+              fi
+              if curl --fail --silent \
+                "http://127.0.0.1:${port}/web/ui-config" >"$response"; then
+                if ! curl --fail --silent --show-error \
+                  "http://127.0.0.1:${port}/" >/dev/null; then
+                  kill "$pid" 2>/dev/null || true
+                  wait "$pid" 2>/dev/null || true
+                  cat "$log"
+                  return 1
+                fi
+                kill "$pid" 2>/dev/null || true
+                wait "$pid" || true
+                return 0
+              fi
+              sleep 1
+            done
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            cat "$log"
+            return 1
+          }
+
+          smoke_studio byteplus 18877
+          smoke_studio volcengine 18878
+
+          package_dir="$RUNNER_TEMP/studio-release-package-volcengine"
+          runtime_venv="$RUNNER_TEMP/studio-release-runtime-volcengine"
+          (
+            cd "$package_dir"
+            "$runtime_venv/bin/python" - <<'PY'
+          from pathlib import Path
+
+          import frontend
+          import veadk
+          import frontend.server.cronjobs
+          import frontend.service.studio_release_server
+          import frontend.service.studio_scheduler
+
+          runtime_root = Path(veadk.__file__).resolve().parents[1]
+          assert Path(frontend.__file__).resolve().is_relative_to(runtime_root)
+          webui = Path(veadk.__file__).resolve().parent / "webui" / "index.html"
+          assert webui.is_file()
+          print(f"Validated installed Studio packages from {runtime_root}")
+          PY
+          )
+
+  release-context:
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.repository == 'volcengine/veadk-python' &&
       github.ref == 'refs/heads/main'
     needs: verify
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - id: release
+        name: Allocate shared release version
+        run: echo "version=$(TZ=Asia/Shanghai date +%Y%m%d%H%M%S)" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish Studio Release (${{ matrix.provider }})
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'volcengine/veadk-python' &&
+      github.ref == 'refs/heads/main'
+    needs: [verify, release-context]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - provider: volcengine
+            thin_bundles: ${{ inputs.thin_bundles }}
+            url_secret: STUDIO_RELEASE_SERVER_URL
+            key_secret: STUDIO_RELEASE_SERVER_API_KEY
+          - provider: byteplus
+            thin_bundles: false
+            url_secret: BYTEPLUS_STUDIO_RELEASE_SERVER_URL
+            key_secret: BYTEPLUS_STUDIO_RELEASE_SERVER_API_KEY
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: studio-release
     env:
-      RELEASE_SERVER_URL: ${{ secrets.STUDIO_RELEASE_SERVER_URL }}
-      RELEASE_SERVER_API_KEY: ${{ secrets.STUDIO_RELEASE_SERVER_API_KEY }}
+      RELEASE_PROVIDER: ${{ matrix.provider }}
+      RELEASE_SERVER_URL: ${{ secrets[matrix.url_secret] }}
+      RELEASE_SERVER_API_KEY: ${{ secrets[matrix.key_secret] }}
+      RELEASE_VERSION: ${{ needs.release-context.outputs.version }}
+      RELEASE_THIN_BUNDLES: ${{ matrix.thin_bundles }}
 
     steps:
       - name: Validate release server configuration
@@ -164,13 +438,16 @@ jobs:
 
           job_id = (
               f"{os.environ['GITHUB_RUN_ID']}-"
-              f"{os.environ['GITHUB_RUN_ATTEMPT']}"
+              f"{os.environ['GITHUB_RUN_ATTEMPT']}-"
+              f"{os.environ['RELEASE_PROVIDER']}"
           )
           payload_data = {
               "repository": os.environ["GITHUB_REPOSITORY"],
               "gitSha": os.environ["GITHUB_SHA"],
               "requestId": job_id,
+              "version": os.environ["RELEASE_VERSION"],
               "changelog": [os.environ["STUDIO_CHANGELOG"]],
+              "thinBundle": os.environ["RELEASE_THIN_BUNDLES"].lower() == "true",
           }
           payload = json.dumps(payload_data).encode()
           request = urllib.request.Request(
@@ -264,3 +541,60 @@ jobs:
               raise SystemExit(1)
           print(json.dumps(terminal["result"], ensure_ascii=False, indent=2))
           PY
+
+  notify:
+    name: Notify Studio release subscribers
+    needs: [release-context, publish]
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'volcengine/veadk-python' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: studio-release
+    steps:
+      - name: Send release card to Feishu groups
+        env:
+          WEBHOOK_URL: ${{ secrets.STUDIO_RELEASE_WEBHOOK_URL }}
+          WEBHOOK_KEY: ${{ secrets.STUDIO_RELEASE_WEBHOOK_KEY }}
+          RELEASE_VERSION: ${{ needs.release-context.outputs.version }}
+          RELEASE_CHANGELOG: ${{ inputs.changelog }}
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+
+          url = os.environ["WEBHOOK_URL"]
+          key = os.environ["WEBHOOK_KEY"]
+          if not url.startswith("https://") or len(key) < 32:
+              raise SystemExit("Studio release Webhook secrets are missing or invalid")
+          version = os.environ["RELEASE_VERSION"]
+          payload = json.dumps({
+              "version": version,
+              "date": f"{version[:4]}.{version[4:6]}.{version[6:8]}",
+              "changelog": os.environ["RELEASE_CHANGELOG"],
+          }).encode()
+          for attempt in range(3):
+              request = urllib.request.Request(url, data=payload, method="POST", headers={
+                  "Content-Type": "application/json", "X-API-Key": key,
+              })
+              try:
+                  with urllib.request.urlopen(request, timeout=190) as response:
+                      result = json.load(response)
+                  print(json.dumps(result, ensure_ascii=False))
+                  if result.get("ok") is not True:
+                      raise SystemExit("Release notification was not delivered to every group")
+                  break
+              except urllib.error.HTTPError as error:
+                  print(f"Notification HTTP status: {error.code}")
+                  if error.code < 500 and error.code != 429:
+                      raise SystemExit("Check Webhook configuration and bot group membership") from None
+              except (OSError, urllib.error.URLError):
+                  print("Notification request interrupted")
+              if attempt == 2:
+                  raise SystemExit("Release succeeded, but notification failed after three attempts")
+              time.sleep(5 * (attempt + 1))
+          PYTHON

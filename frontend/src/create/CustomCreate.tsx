@@ -1,16 +1,18 @@
 import {
   type CSSProperties,
-  type ComponentType,
   Fragment,
   lazy,
   type ReactNode,
   Suspense,
+  useCallback,
   useEffect,
   useId,
   useMemo,
   useRef,
   useState,
 } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { Checkbox } from "@openai/apps-sdk-ui/components/Checkbox";
@@ -23,8 +25,6 @@ import {
   Cpu,
   Database,
   ExternalLink,
-  FolderUp,
-  Globe,
   Info,
   Layers,
   Loader2,
@@ -35,20 +35,36 @@ import {
   Sparkles,
   Trash2,
   Wrench,
-  X,
 } from "lucide-react";
 import {
   type CreateModeProps,
   type AgentDraft,
   type CloudEnvironmentConfig,
-  MAX_CLOUD_DOCKERFILE_LENGTH,
+  type HarnessSidecarOptionId,
+  type HarnessSidecarProfileId,
+  type ModelFallbackDraft,
   type McpTool,
-  type SelectedSkill,
   emptyDraft,
 } from "./types";
+import { createT } from "./i18n";
+import { deploymentAgentCategory } from "./agentDraftStorage";
+import {
+  HARNESS_SIDECAR_OPTIONS,
+  HARNESS_SIDECAR_OPTION_GROUPS,
+  HARNESS_SIDECAR_PROFILES,
+  harnessIntentFromOptimizations,
+  harnessProfileDefaultOptimizations,
+  harnessSidecarProviderNotice,
+  harnessSidecarOptionLabel,
+  releaseDraftFromDebugVariant,
+  selectedHarnessModelProxyOptimizations,
+  selectedHarnessProfile,
+  selectedHarnessOptimizations,
+} from "./harnessSidecarOptions";
 import {
   A2A_REGISTRY_DEFAULTS,
   A2A_REGISTRY_ENV,
+  a2aRegistryDefaults,
   BUILTIN_TOOLS,
   createBuiltinToolsForProvider,
   STM_BACKENDS,
@@ -56,12 +72,15 @@ import {
   KB_BACKENDS,
   DEFAULT_KB_BACKEND,
   TRACING_EXPORTERS,
+  FEISHU_ENV,
   type BackendOption,
   type EnvVar,
 } from "./veadkCatalog";
 import {
+  firstMissingRuntimeEnv,
   firstInvalidRuntimeEnv,
   runtimeEnvConfiguration,
+  runtimeDebugEnvVars,
   runtimeEnvJsonError,
   runtimeEnvVars,
   type RuntimeEnvConfiguration,
@@ -74,15 +93,22 @@ import {
   isA2aType,
   isOrchestratorType,
 } from "./agentTypeMeta";
-import { displayDescription } from "./displayText";
 import { localPickerMatches } from "./localPickerSearch";
+import { modelApiKeyDescription, modelApiKeyMatches, modelOptionsWithPermissions } from "./modelApiKeyPresentation";
 import { draftToYaml } from "./configYaml";
 import {
+  deploymentMcpSecretValues,
+  type McpConfigurationConflict,
   mcpAuthTokenInputValue,
+  mcpConfigurationConflict,
   mcpUrlNeedsPathWarning,
   prepareMcpAuth,
+  removedConfiguredMcpEnvKeys,
+  sourcePreservingMcpSecretValues,
   updateMcpAuthTokenInput,
+  updateMcpUrlInput,
 } from "./mcpAuth";
+import { resolveMcpGatewayEnv } from "./mcpGatewayEnv";
 import {
   normalizeDraft,
   sanitizeGeneratedDraftCapabilities,
@@ -92,22 +118,26 @@ import {
   resolvedModelSource,
   type ModelSource,
 } from "./modelSource";
-import { resolveRuntimeName } from "./runtimeName";
+import { resolveRuntimeName, runtimeNameProblem } from "./runtimeName";
+import {
+  normalizeModelFallbacks,
+  sameProviderModelFallbacks,
+} from "./modelFallbacks";
+import { ModelFallbackFields } from "./ModelFallbackFields";
 import type { AgentProject } from "./project";
 import { AgentBuildCanvas } from "./AgentBuildCanvas";
-import type { SkillSource } from "./skills/types";
-import { SkillHubPicker } from "./SkillHubPicker";
-import { LocalPicker } from "./LocalPicker";
-import { SkillSpacePicker } from "./SkillSpacePicker";
 import {
-  CloudEnvironmentAdvancedTrigger,
-  CloudEnvironmentConfigurator,
-} from "../ui/CloudEnvironmentConfigurator";
+  NewAgentWorkbench,
+  type NewAgentDeploymentOptions,
+} from "./NewAgentWorkbench";
+import { CloudEnvironmentConfigurator } from "../ui/CloudEnvironmentConfigurator";
+import { SkillSourcePicker } from "../ui/SkillSourcePicker";
 import { listA2aSpaces, type A2aSpaceRef } from "./a2aSpaces";
 import {
   listVikingKnowledgebases,
   type VikingKnowledgebaseRef,
 } from "./vikingKnowledgebases";
+import { listVikingMemories, type VikingMemoryRef } from "./vikingMemories";
 import {
   ProjectPreview,
   type DeployResult,
@@ -121,12 +151,15 @@ import { isImeCompositionEvent } from "../ui/composerKeyboard";
 import {
   createGeneratedAgentTestRun,
   createGeneratedAgentTestSession,
+  checkRuntimeNameAvailability,
   deleteGeneratedAgentTestRun,
   deployAgentkitProject,
+  applyMpaProfileAfterDeployment,
   generateAgentDraftFromRequirement,
   generateAgentProject,
   listModelApiKeys,
   listModelOptions,
+  retryMpaAgentOperation,
   type ModelApiKeyOption,
   runGeneratedAgentTestSSE,
   type ModelOption,
@@ -157,7 +190,9 @@ import { applyEvent, emptyAcc, type Block } from "../blocks";
 import {
   customModelCredentialRequirements,
   customModelEnvironmentBindings,
+  missingCustomModelCredentialRequirement,
 } from "./customModelCredentials";
+import { isValidModelApiBaseUrl } from "./modelApiBase";
 import "./CustomCreate.css";
 
 const MarkdownPromptEditor = lazy(() => import("./MarkdownPromptEditor"));
@@ -247,25 +282,25 @@ interface StepMeta {
 const STEPS: StepMeta[] = [
   {
     id: "type",
-    label: "Agent 类型",
-    hint: "选择 Agent 类型",
+    label: "traditional.sections.type.label",
+    hint: "traditional.sections.type.hint",
     icon: Shapes,
     required: true,
   },
   {
     id: "basic",
-    label: "基本信息",
-    hint: "名称、描述与系统提示词",
+    label: "traditional.sections.basic.label",
+    hint: "traditional.sections.basic.hint",
     icon: Info,
     required: true,
   },
-  { id: "model", label: "模型配置", hint: "模型与服务（可选）", icon: Cpu },
-  { id: "tools", label: "工具", hint: "可调用的能力", icon: Wrench },
-  { id: "skills", label: "技能", hint: "声明式技能", icon: Sparkles },
-  { id: "knowledge", label: "知识库", hint: "外部知识检索", icon: Database },
-  { id: "memory", label: "记忆", hint: "短期与长期记忆", icon: Layers },
-  { id: "subagents", label: "子 Agent", hint: "嵌套协作", icon: Boxes },
-  { id: "review", label: "完成", hint: "预览并创建", icon: Rocket },
+  { id: "model", label: "traditional.sections.model.label", hint: "traditional.sections.model.hint", icon: Cpu },
+  { id: "tools", label: "traditional.sections.tools.label", hint: "traditional.sections.tools.hint", icon: Wrench },
+  { id: "skills", label: "traditional.sections.skills.label", hint: "traditional.sections.skills.hint", icon: Sparkles },
+  { id: "knowledge", label: "traditional.sections.knowledge.label", hint: "traditional.sections.knowledge.hint", icon: Database },
+  { id: "memory", label: "traditional.sections.memory.label", hint: "traditional.sections.memory.hint", icon: Layers },
+  { id: "subagents", label: "traditional.sections.subagents.label", hint: "traditional.sections.subagents.hint", icon: Boxes },
+  { id: "review", label: "traditional.sections.review.label", hint: "traditional.sections.review.hint", icon: Rocket },
 ];
 
 /** Root-only reset mark: a tilted eraser clearing the current draft. */
@@ -370,11 +405,11 @@ function A2aRefreshIcon({ className }: { className?: string }) {
 type AgentType = NonNullable<AgentDraft["agentType"]>;
 
 const AGENT_TYPE_BAR_LABELS: Record<AgentType, string> = {
-  llm: "智能体",
-  sequential: "分步协作",
-  parallel: "同时处理",
-  loop: "循环执行",
-  a2a: "远程智能体",
+  llm: "traditional.agentTypes.llm.label",
+  sequential: "traditional.agentTypes.sequential.label",
+  parallel: "traditional.agentTypes.parallel.label",
+  loop: "traditional.agentTypes.loop.label",
+  a2a: "traditional.agentTypes.a2a.label",
 };
 
 const A2A_REGISTRY_ENV_TO_FIELD = {
@@ -393,18 +428,18 @@ const A2A_REGISTRY_RUNTIME_ENV = A2A_REGISTRY_ENV.filter(
 function a2aRegistryEnvValues(
   registry: AgentDraft["a2aRegistry"] | undefined,
   options: { includeDefaults: boolean },
+  cloudProvider: CloudProvider = "volcengine",
 ): Record<string, string> {
   if (!registry?.enabled) return {};
+  const defaults = a2aRegistryDefaults(cloudProvider);
   const values: Record<string, string> = {
     REGISTRY_SPACE_ID: registry.registrySpaceId ?? "",
   };
   if (options.includeDefaults) {
-    values.REGISTRY_TOP_K =
-      registry.registryTopK?.trim() || A2A_REGISTRY_DEFAULTS.topK;
-    values.REGISTRY_REGION =
-      registry.registryRegion?.trim() || A2A_REGISTRY_DEFAULTS.region;
+    values.REGISTRY_TOP_K = registry.registryTopK?.trim() || defaults.topK;
+    values.REGISTRY_REGION = registry.registryRegion?.trim() || defaults.region;
     values.REGISTRY_ENDPOINT =
-      registry.registryEndpoint?.trim() || A2A_REGISTRY_DEFAULTS.endpoint;
+      registry.registryEndpoint?.trim() || defaults.endpoint;
   } else {
     values.REGISTRY_TOP_K = registry.registryTopK ?? "";
     values.REGISTRY_REGION = registry.registryRegion ?? "";
@@ -418,7 +453,14 @@ function providerRuntimeEnv(
   cloudProvider: CloudProvider,
 ): EnvVar[] {
   if (cloudProvider !== "byteplus") return env;
+  const a2aDefaults = a2aRegistryDefaults(cloudProvider);
   return env.map((item) => {
+    if (item.key === "REGISTRY_REGION") {
+      return { ...item, placeholder: a2aDefaults.region };
+    }
+    if (item.key === "REGISTRY_ENDPOINT") {
+      return { ...item, placeholder: a2aDefaults.endpoint };
+    }
     if (item.key === "MODEL_EMBEDDING_NAME") {
       return { ...item, placeholder: defaultEmbeddingModelName(cloudProvider) };
     }
@@ -466,6 +508,7 @@ function Checklist({
   onToggle: (id: string) => void;
   scrollRows?: number;
 }) {
+  const { t } = useTranslation("create");
   return (
     <div
       className={`cw-checklist ${scrollRows ? "cw-checklist-tools" : ""}`}
@@ -490,7 +533,7 @@ function Checklist({
             }}
             label={
               <span className="cw-check-text">
-                <span className="cw-check-title">{it.label}</span>
+                <span className="cw-check-title">{t(`traditional.catalog.${it.id}.label`, { defaultValue: it.label })}</span>
               </span>
             }
           />
@@ -508,11 +551,14 @@ function BackendSelect({
   options,
   value,
   onChange,
+  translationGroup,
 }: {
   options: BackendOption[];
   value: string | undefined;
   onChange: (id: string) => void;
+  translationGroup: "knowledge" | "shortTerm" | "longTerm";
 }) {
+  const { t } = useTranslation("create");
   return (
     <div className="cw-segmented">
       {options.map((o) => {
@@ -525,7 +571,12 @@ function BackendSelect({
             onClick={() => onChange(o.id)}
             aria-pressed={on}
           >
-            <span className="cw-seg-title">{o.label}</span>
+            <span className="cw-seg-title">
+              {t(
+                `traditional.backends.${translationGroup}.${o.id}.label`,
+                { defaultValue: o.label },
+              )}
+            </span>
           </button>
         );
       })}
@@ -550,14 +601,16 @@ function RuntimeEnvFields({
   onChange: (key: string, value: string) => void;
   renderAfterField?: (item: EnvVar) => ReactNode;
 }) {
-  if (env.length === 0) {
-    return <p className="cw-env-empty">此后端无需额外运行参数。</p>;
+  const { t } = useTranslation("create");
+  const visibleEnv = env.filter((item) => !item.hidden);
+  if (visibleEnv.length === 0) {
+    return <p className="cw-env-empty">{t("traditional.env.noAdditionalParameters")}</p>;
   }
   return (
     <div className="cw-env-fields">
-      {env.map((item) => {
+      {visibleEnv.map((item) => {
         const value = values[item.key] ?? item.defaultValue ?? "";
-        const jsonError = runtimeEnvJsonError(item, values);
+        const jsonError = runtimeEnvJsonError(item, values, t("traditional.env.invalidJson"));
         const controlId = `cw-env-${item.key}`;
         return (
           <Fragment key={item.key}>
@@ -573,7 +626,7 @@ function RuntimeEnvFields({
                       className="cw-env-help"
                       tabIndex={0}
                       data-help={item.help}
-                      aria-label={`${item.comment || item.key}说明：${item.help}`}
+                      aria-label={t("traditional.env.helpAriaLabel", { label: item.comment || item.key, help: item.help })}
                     >
                       ?
                       <span className="cw-env-help-popover" role="tooltip">
@@ -587,8 +640,8 @@ function RuntimeEnvFields({
                       href={item.link.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      title={`打开 OpenViking ${item.link.label}`}
-                      aria-label={`打开 OpenViking ${item.link.label}`}
+                      title={t("traditional.env.openOpenViking", { label: item.link.label })}
+                      aria-label={t("traditional.env.openOpenViking", { label: item.link.label })}
                       onClick={(event) => event.stopPropagation()}
                     >
                       <ExternalLink aria-hidden="true" />
@@ -602,7 +655,7 @@ function RuntimeEnvFields({
                   id={controlId}
                   className="cw-input cw-env-textarea"
                   value={value}
-                  placeholder={item.placeholder || "请输入参数值"}
+                  placeholder={item.placeholder || t("traditional.env.valuePlaceholder")}
                   autoComplete="off"
                   spellCheck={false}
                   aria-invalid={!!jsonError}
@@ -616,7 +669,7 @@ function RuntimeEnvFields({
                   className="cw-input"
                   type={isSensitiveEnv(item.key) ? "password" : "text"}
                   value={value}
-                  placeholder={item.placeholder || "请输入参数值"}
+                  placeholder={item.placeholder || t("traditional.env.valuePlaceholder")}
                   autoComplete="off"
                   aria-invalid={!!jsonError}
                   onChange={(event) =>
@@ -634,9 +687,6 @@ function RuntimeEnvFields({
   );
 }
 
-const OPENVIKING_KNOWLEDGE_INDEX_HELP =
-  "默认值：留空；生成项目时使用 Agent 名自动生成，例如 my_agent_kb。未配置 DATABASE_OPENVIKING_TARGET_URI 时，默认 URI 拼接为 viking://user/{知识库归属 ID，未填则 default}/resources/{资源索引}/；如果填写了 DATABASE_OPENVIKING_TARGET_URI，则直接使用该完整 URI。";
-
 function OpenVikingKnowledgeIndexField({
   value,
   onChange,
@@ -644,21 +694,23 @@ function OpenVikingKnowledgeIndexField({
   value: string;
   onChange: (index: string) => void;
 }) {
+  const { t } = useTranslation("create");
   const controlId = "cw-openviking-knowledge-index";
+  const help = t("traditional.env.openVikingIndexHelp");
   return (
     <label className="cw-env-field" htmlFor={controlId}>
       <span className="cw-env-field-head">
         <span className="cw-env-field-title">
-          <span className="cw-env-field-label">OpenViking 资源索引</span>
+          <span className="cw-env-field-label">{t("traditional.env.openVikingIndex")}</span>
           <span
             className="cw-env-help"
             tabIndex={0}
-            data-help={OPENVIKING_KNOWLEDGE_INDEX_HELP}
-            aria-label={`OpenViking 资源索引说明：${OPENVIKING_KNOWLEDGE_INDEX_HELP}`}
+            data-help={help}
+            aria-label={t("traditional.env.openVikingIndexAriaLabel", { help })}
           >
             ?
             <span className="cw-env-help-popover" role="tooltip">
-              {OPENVIKING_KNOWLEDGE_INDEX_HELP}
+              {help}
             </span>
           </span>
         </span>
@@ -675,27 +727,35 @@ function OpenVikingKnowledgeIndexField({
   );
 }
 
-function a2aSpaceDisplayName(space: A2aSpaceRef): string {
-  return space.name.trim() || "未命名智能体中心";
+function a2aSpaceDisplayName(space: A2aSpaceRef, fallback = createT("traditional.resources.unnamedAgentCenter")): string {
+  return space.name.trim() || fallback;
 }
 
-function vikingKnowledgebaseDisplayName(item: VikingKnowledgebaseRef): string {
-  const name = item.name.trim() || item.id || "未命名知识库";
+function vikingKnowledgebaseDisplayName(item: VikingKnowledgebaseRef, fallback = createT("traditional.resources.unnamedKnowledgeBase")): string {
+  const name = item.name.trim() || item.id || fallback;
   const details = [item.sourceLabel, item.projectName].filter(Boolean);
   return details.length ? `${name} · ${details.join(" · ")}` : name;
 }
 
-function modelAvailabilityLabel(model: ModelOption): string {
-  if (model.available) return "已开通";
-  if (model.lifecycleStatus === "Retiring") return "即将下线";
+function vikingMemoryDisplayName(item: VikingMemoryRef, fallback = createT("traditional.resources.unnamedMemory")): string {
+  return item.name.trim() || item.id || fallback;
+}
+
+function modelAvailabilityKey(model: ModelOption): string {
+  if (model.apiKeyAllowed === false) return "modelApiKey.noModelPermission";
+  if (model.unavailableReason) return `modelApiKey.permissionState.${model.unavailableReason}`;
+  if (model.available) return "traditional.model.available";
+  if (model.lifecycleStatus === "Retiring") return "traditional.model.retiring";
   if (model.activationState && model.activationState !== "Available") {
-    return "未开通";
+    return "traditional.model.notActivated";
   }
-  return "暂不可用";
+  return "traditional.model.unavailable";
 }
 
 function isModelSelectable(model: ModelOption): boolean {
-  return model.available || model.lifecycleStatus === "Retiring";
+  return model.apiKeyAllowed !== false &&
+    !model.unavailableReason &&
+    (model.available || model.lifecycleStatus === "Retiring");
 }
 
 interface ModelMenuPosition {
@@ -788,10 +848,7 @@ function CatalogSelect({
         window.innerHeight - rect.bottom - viewportPadding - gap;
       const availableAbove = rect.top - viewportPadding - gap;
       const opensUp = availableBelow < 300 && availableAbove > availableBelow;
-      const available = Math.max(
-        96,
-        opensUp ? availableAbove : availableBelow,
-      );
+      const available = Math.max(96, opensUp ? availableAbove : availableBelow);
       const width = Math.min(
         rect.width,
         window.innerWidth - viewportPadding * 2,
@@ -879,8 +936,8 @@ function CatalogSelect({
             ref={menuRef}
             className={`cw-a2a-space-menu cw-catalog-menu cw-catalog-menu-portal${menuPosition.opensUp ? " is-up" : ""}`}
             style={{
-              top: menuPosition.top,
-              bottom: menuPosition.bottom,
+              top: menuPosition.top ?? "auto",
+              bottom: menuPosition.bottom ?? "auto",
               left: menuPosition.left,
               width: menuPosition.width,
               maxHeight: menuPosition.maxHeight,
@@ -917,19 +974,36 @@ function CatalogSelect({
 
 function ModelOptionSelect({
   value,
+  fallbacks,
   cloudProvider,
+  agentName,
   apiKeyId,
   apiKeyName,
+  customModelSecretValues,
+  configuredRuntimeEnvKeys,
+  showFallbacks = true,
+  showMissingApiKeyErrors,
   onApiKeyChange,
   onChange,
+  onFallbacksChange,
+  onCustomModelSecretChange,
 }: {
   value: string;
+  fallbacks: ModelFallbackDraft[];
   cloudProvider: CloudProvider;
+  agentName: string;
   apiKeyId?: string;
   apiKeyName?: string;
+  customModelSecretValues: Record<string, string>;
+  configuredRuntimeEnvKeys?: readonly string[];
+  showFallbacks?: boolean;
+  showMissingApiKeyErrors?: boolean;
   onApiKeyChange: (key: ModelApiKeyOption) => void;
   onChange: (modelId: string) => void;
+  onFallbacksChange: (fallbacks: ModelFallbackDraft[]) => void;
+  onCustomModelSecretChange: (key: string, value: string) => void;
 }) {
+  const { t } = useTranslation("create");
   const [apiKeys, setApiKeys] = useState<ModelApiKeyOption[]>([]);
   const [keysLoading, setKeysLoading] = useState(false);
   const [models, setModels] = useState<ModelOption[]>([]);
@@ -940,6 +1014,7 @@ function ModelOptionSelect({
   const [keySelectionRevision, setKeySelectionRevision] = useState(0);
   const [apiKeySearchQuery, setApiKeySearchQuery] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [fallbackSearchQuery, setFallbackSearchQuery] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -953,13 +1028,13 @@ function ModelOptionSelect({
           response.keys.find((key) => key.id === apiKeyId) ??
           response.keys.find((key) => key.name === apiKeyName) ??
           response.keys.find((key) => key.id === response.defaultKeyId) ??
-          response.keys[0];
+          response.keys.find((key) => key.status !== "Restricted");
         if (selected) onApiKeyChange(selected);
       })
       .catch((err) => {
         if (!controller.signal.aborted) {
           setError(
-            err instanceof Error ? err.message : "加载 Ark API Key 失败",
+            err instanceof Error ? err.message : t("traditional.model.apiKeyLoadError"),
           );
         }
       })
@@ -967,7 +1042,7 @@ function ModelOptionSelect({
         if (!controller.signal.aborted) setKeysLoading(false);
       });
     return () => controller.abort();
-  }, [cloudProvider, reloadKey]);
+  }, [cloudProvider, reloadKey, t]);
 
   useEffect(() => {
     if (!apiKeyId) {
@@ -985,50 +1060,55 @@ function ModelOptionSelect({
     })
       .then((response) => {
         if (!controller.signal.aborted) {
-          setModels(response.models);
+          const nextModels = modelOptionsWithPermissions(response.models, response.apiKeyModelPermissions);
+          setModels(nextModels);
           setModelsApiKeyId(apiKeyId);
+          const denied = new Set(nextModels.filter((model) => model.apiKeyAllowed === false || model.unavailableReason).map((model) => model.id));
+          if (denied.has(value.trim())) onChange("");
+          const permittedFallbacks = fallbacks.filter((fallback) => typeof fallback !== "string" || !denied.has(fallback));
+          if (permittedFallbacks.length !== fallbacks.length) onFallbacksChange(permittedFallbacks);
         }
       })
       .catch((err) => {
         if (!controller.signal.aborted) {
-          setError(err instanceof Error ? err.message : "加载模型列表失败");
+          setError(err instanceof Error ? err.message : t("traditional.model.loadError"));
         }
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [apiKeyId, cloudProvider, keySelectionRevision, reloadKey]);
+  }, [apiKeyId, cloudProvider, keySelectionRevision, reloadKey, t]);
 
   const normalizedValue = value.trim();
   const modelsAreCurrent = modelsApiKeyId === apiKeyId;
   const visibleModels = modelsAreCurrent ? models : [];
   const selectedApiKey = apiKeys.find((key) => key.id === apiKeyId);
   const selectedApiKeyLabel = selectedApiKey
-    ? selectedApiKey.name
+    ? selectedApiKey.name || t("modelApiKey.unnamed")
     : apiKeyId
-      ? "当前 API Key"
+      ? t("traditional.model.currentApiKey")
       : keysLoading
-        ? "正在加载 API Key…"
+        ? t("traditional.model.loadingApiKeys")
         : apiKeys.length === 0
-          ? "暂无可用 API Key"
-          : "请选择 API Key";
+          ? t("traditional.model.noApiKeys")
+          : t("traditional.model.selectApiKey");
   const filteredApiKeys = useMemo(
     () =>
       apiKeys.filter((key) =>
-        localPickerMatches(apiKeySearchQuery, [key.name]),
+        modelApiKeyMatches(apiKeySearchQuery, key.name, modelApiKeyDescription(key, t)),
       ),
-    [apiKeySearchQuery, apiKeys],
+    [apiKeySearchQuery, apiKeys, t],
   );
   const selectedModel = visibleModels.find(
     (model) => model.id === normalizedValue,
   );
   const selectedLabel =
     loading && !modelsAreCurrent
-      ? "正在刷新模型列表…"
+      ? t("traditional.model.refreshing")
       : selectedModel
         ? `${selectedModel.displayName} (${selectedModel.id})`
-        : normalizedValue || "请选择模型";
+        : normalizedValue || t("traditional.model.selectModel");
   const filteredModels = useMemo(
     () =>
       visibleModels.filter((model) =>
@@ -1052,8 +1132,41 @@ function ModelOptionSelect({
     (model) => model.available,
   ).length;
   const providerLabel =
-    cloudProvider === "byteplus" ? "BytePlus ModelArk" : "火山方舟";
+    cloudProvider === "byteplus" ? "BytePlus ModelArk" : t("traditional.model.volcengineArk");
   const activationConsoleUrl = modelActivationConsoleUrl(cloudProvider);
+  const normalizedFallbacks = normalizeModelFallbacks(
+    normalizedValue,
+    fallbacks,
+  );
+  const selectedFallbacks = new Set(
+    sameProviderModelFallbacks(normalizedValue, normalizedFallbacks),
+  );
+  const fallbackModelsForSearch = (currentValue: string) => {
+    const currentModelId = currentValue.trim();
+    return visibleModels.filter((model) => {
+      const modelId = model.id.trim();
+      const alreadySelected =
+        modelId !== currentModelId && selectedFallbacks.has(modelId);
+      const primarySelected = modelId !== currentModelId && modelId === normalizedValue;
+      return (
+        !alreadySelected &&
+        !primarySelected &&
+        localPickerMatches(fallbackSearchQuery, [
+          model.displayName,
+          model.id,
+          model.name,
+          model.vendorName,
+          model.activationState,
+          model.lifecycleStatus,
+        ])
+      );
+    });
+  };
+  const updateFallback = (index: number, modelName: string) => {
+    const next = [...fallbacks];
+    next[index] = modelName;
+    onFallbacksChange(normalizeModelFallbacks(normalizedValue, next));
+  };
 
   return (
     <div className="cw-a2a-space-picker cw-model-picker">
@@ -1064,35 +1177,40 @@ function ModelOptionSelect({
             selectedLabel={selectedApiKeyLabel}
             placeholder={!apiKeyId}
             disabled={keysLoading}
-            triggerAriaLabel="选择 API Key"
-            menuAriaLabel="API Key 列表"
-            searchAriaLabel="搜索 API Key"
+            triggerAriaLabel={t("traditional.model.selectApiKey")}
+            menuAriaLabel={t("traditional.model.apiKeyList")}
+            searchAriaLabel={t("traditional.model.searchApiKey")}
             searchValue={apiKeySearchQuery}
-            searchPlaceholder="搜索 API Key 名称"
+            searchPlaceholder={t("modelApiKey.search")}
             onSearchChange={setApiKeySearchQuery}
             empty={filteredApiKeys.length === 0}
-            emptyLabel="未找到匹配的 API Key"
+            emptyLabel={t("traditional.model.noMatchingApiKey")}
             optionsClassName="cw-model-key-options"
             renderOptions={(closeMenu) =>
               filteredApiKeys.map((key) => {
                 const selected = key.id === apiKeyId;
+                const description = modelApiKeyDescription(key, t);
                 return (
                   <button
                     key={key.id}
                     type="button"
                     role="option"
                     aria-selected={selected}
+                    disabled={key.status === "Restricted"}
                     className={`cw-a2a-space-option cw-model-key-option ${
                       selected ? "is-selected" : ""
                     }`}
-                    title={key.name}
+                    title={`${key.name || t("modelApiKey.unnamed")} · ${description}`}
                     onClick={() => {
                       setKeySelectionRevision((revision) => revision + 1);
                       onApiKeyChange(key);
                       closeMenu();
                     }}
                   >
-                    <span>{key.name}</span>
+                    <span className="cw-model-option-copy">
+                      <strong>{key.name || t("modelApiKey.unnamed")}</strong>
+                      <small>{description}</small>
+                    </span>
                   </button>
                 );
               })
@@ -1100,20 +1218,20 @@ function ModelOptionSelect({
           />
         </div>
         <div className="cw-model-picker-field">
-          <span className="cw-model-picker-label">模型</span>
+          <span className="cw-model-picker-label">{t("traditional.model.label")}</span>
           <div className="cw-a2a-space-row">
             <CatalogSelect
               selectedLabel={selectedLabel}
               placeholder={!normalizedValue}
               disabled={loading}
-              triggerAriaLabel={`选择${providerLabel}模型`}
-              menuAriaLabel={`${providerLabel}模型`}
-              searchAriaLabel="搜索模型"
+              triggerAriaLabel={t("traditional.model.selectProviderModel", { provider: providerLabel })}
+              menuAriaLabel={t("traditional.model.providerModels", { provider: providerLabel })}
+              searchAriaLabel={t("traditional.model.search")}
               searchValue={searchQuery}
-              searchPlaceholder="搜索名称、Model ID 或服务商"
+              searchPlaceholder={t("traditional.model.searchPlaceholder")}
               onSearchChange={setSearchQuery}
               empty={!showUnknownModel && filteredModels.length === 0}
-              emptyLabel="未找到匹配的模型"
+              emptyLabel={t("traditional.model.noMatches")}
               triggerClassName="cw-model-trigger"
               optionsClassName="cw-model-options"
               renderOptions={(closeMenu) => (
@@ -1130,11 +1248,11 @@ function ModelOptionSelect({
                       }}
                     >
                       <span className="cw-model-option-copy">
-                        <strong>当前配置</strong>
+                        <strong>{t("traditional.model.currentConfiguration")}</strong>
                         <small>{normalizedValue}</small>
                       </span>
                       <span className="cw-model-status is-unknown">
-                        状态未知
+                        {t("traditional.model.unknownStatus")}
                       </span>
                     </button>
                   )}
@@ -1142,7 +1260,7 @@ function ModelOptionSelect({
                     const selected = model.id === normalizedValue;
                     const selectable = isModelSelectable(model);
                     const activationRequired =
-                      !selectable && model.activationState !== "Available";
+                      model.apiKeyAllowed !== false && !model.unavailableReason && !selectable && model.activationState !== "Available";
                     if (activationRequired) {
                       return (
                         <button
@@ -1151,7 +1269,7 @@ function ModelOptionSelect({
                           role="option"
                           aria-selected={false}
                           className="cw-a2a-space-option cw-model-option is-activation-link"
-                          title={`前往${providerLabel}开通 ${model.displayName}`}
+                          title={t("traditional.model.activate", { provider: providerLabel, model: model.displayName })}
                           onClick={() => {
                             window.open(
                               activationConsoleUrl,
@@ -1169,7 +1287,7 @@ function ModelOptionSelect({
                             </small>
                           </span>
                           <span className="cw-model-status is-unavailable">
-                            未开通，去开通
+                            {t("traditional.model.activateAction")}
                           </span>
                         </button>
                       );
@@ -1199,14 +1317,16 @@ function ModelOptionSelect({
                         </span>
                         <span
                           className={`cw-model-status ${
-                            model.available
-                              ? "is-available"
-                              : model.lifecycleStatus === "Retiring"
-                                ? "is-retiring"
-                                : "is-unavailable"
+                            model.apiKeyAllowed === false || model.unavailableReason
+                              ? "is-unavailable"
+                              : model.available
+                                ? "is-available"
+                                : model.lifecycleStatus === "Retiring"
+                                  ? "is-retiring"
+                                  : "is-unavailable"
                           }`}
                         >
-                          {modelAvailabilityLabel(model)}
+                          {t(modelAvailabilityKey(model))}
                         </span>
                       </button>
                     );
@@ -1217,8 +1337,8 @@ function ModelOptionSelect({
             <button
               type="button"
               className="cw-icon-btn cw-a2a-space-refresh"
-              title="刷新 API Key 和模型列表"
-              aria-label="刷新 API Key 和模型列表"
+              title={t("traditional.model.refresh")}
+              aria-label={t("traditional.model.refresh")}
               disabled={loading || keysLoading}
               onClick={() => setReloadKey((key) => key + 1)}
             >
@@ -1230,22 +1350,170 @@ function ModelOptionSelect({
             </button>
           </div>
         </div>
+        {showFallbacks ? (
+          <ModelFallbackFields
+            variant="traditional"
+            embedded
+            primaryModelName={normalizedValue}
+            agentName={agentName}
+            value={fallbacks}
+            secretValues={customModelSecretValues}
+            configuredSecretEnvKeys={configuredRuntimeEnvKeys}
+            showMissingApiKeyErrors={showMissingApiKeyErrors}
+            onChange={onFallbacksChange}
+            onSecretChange={onCustomModelSecretChange}
+            renderSameProviderField={({ index, value: fallbackValue }) => {
+              const selectedFallbackModel = visibleModels.find(
+                (model) => model.id === fallbackValue.trim(),
+              );
+              const fallbackOptions = fallbackModelsForSearch(fallbackValue);
+              const showUnknownFallback = Boolean(
+                fallbackValue.trim() &&
+                  !selectedFallbackModel &&
+                  localPickerMatches(fallbackSearchQuery, [fallbackValue]),
+              );
+              const fallbackLabel = selectedFallbackModel
+                ? `${selectedFallbackModel.displayName} (${selectedFallbackModel.id})`
+                : fallbackValue || t("traditional.model.fallbackPlaceholder");
+              return (
+                <CatalogSelect
+                  selectedLabel={fallbackLabel}
+                  placeholder={!fallbackValue.trim()}
+                  disabled={loading || !apiKeyId}
+                  triggerAriaLabel={t("traditional.model.selectProviderModel", {
+                    provider: providerLabel,
+                  })}
+                  menuAriaLabel={t("traditional.model.providerModels", {
+                    provider: providerLabel,
+                  })}
+                  searchAriaLabel={t("traditional.model.search")}
+                  searchValue={fallbackSearchQuery}
+                  searchPlaceholder={t("traditional.model.searchPlaceholder")}
+                  onSearchChange={setFallbackSearchQuery}
+                  empty={!showUnknownFallback && fallbackOptions.length === 0}
+                  emptyLabel={t("traditional.model.noMatches")}
+                  triggerClassName="cw-model-trigger"
+                  optionsClassName="cw-model-options"
+                  renderOptions={(closeMenu) => (
+                    <>
+                      {showUnknownFallback && (
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected
+                          className="cw-a2a-space-option cw-model-option is-selected"
+                          onClick={() => {
+                            updateFallback(index, fallbackValue);
+                            closeMenu();
+                          }}
+                        >
+                          <span className="cw-model-option-copy">
+                            <strong>
+                              {t("traditional.model.currentConfiguration")}
+                            </strong>
+                            <small>{fallbackValue}</small>
+                          </span>
+                          <span className="cw-model-status is-unknown">
+                            {t("traditional.model.unknownStatus")}
+                          </span>
+                        </button>
+                      )}
+                      {fallbackOptions.map((model) => {
+                        const selected = model.id === fallbackValue.trim();
+                        const selectable = isModelSelectable(model);
+                        const activationRequired =
+                          model.apiKeyAllowed !== false && !model.unavailableReason && !selectable && model.activationState !== "Available";
+                        if (activationRequired) {
+                          return (
+                            <button
+                              key={model.id}
+                              type="button"
+                              role="option"
+                              aria-selected={false}
+                              className="cw-a2a-space-option cw-model-option is-activation-link"
+                              title={t("traditional.model.activate", {
+                                provider: providerLabel,
+                                model: model.displayName,
+                              })}
+                              onClick={() => {
+                                window.open(
+                                  activationConsoleUrl,
+                                  "_blank",
+                                  "noopener,noreferrer",
+                                );
+                                closeMenu();
+                              }}
+                            >
+                              <span className="cw-model-option-copy">
+                                <strong>{model.displayName}</strong>
+                                <small>
+                                  {model.id}
+                                  {model.vendorName ? ` · ${model.vendorName}` : ""}
+                                </small>
+                              </span>
+                              <span className="cw-model-status is-unavailable">
+                                {t("traditional.model.activateAction")}
+                              </span>
+                            </button>
+                          );
+                        }
+                        return (
+                          <button
+                            key={model.id}
+                            type="button"
+                            role="option"
+                            aria-selected={selected}
+                            disabled={!selectable}
+                            className={`cw-a2a-space-option cw-model-option ${
+                              selected ? "is-selected" : ""
+                            }`}
+                            title={`${model.displayName} (${model.id})`}
+                            onClick={() => {
+                              updateFallback(index, model.id);
+                              closeMenu();
+                            }}
+                          >
+                            <span className="cw-model-option-copy">
+                              <strong>{model.displayName}</strong>
+                              <small>
+                                {model.id}
+                                {model.vendorName ? ` · ${model.vendorName}` : ""}
+                              </small>
+                            </span>
+                            <span
+                              className={`cw-model-status ${
+                                model.apiKeyAllowed === false || model.unavailableReason
+                                  ? "is-unavailable"
+                                  : model.available
+                                    ? "is-available"
+                                    : model.lifecycleStatus === "Retiring"
+                                      ? "is-retiring"
+                                      : "is-unavailable"
+                              }`}
+                            >
+                              {t(modelAvailabilityKey(model))}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
+                />
+              );
+            }}
+          />
+        ) : null}
       </div>
       {error ? (
         <div className="cw-banner cw-a2a-space-error" role="alert">
           <Info className="cw-i" />
           <span>{error}</span>
         </div>
-      ) : loading ? (
-        <span className="cw-help cw-a2a-space-status" aria-live="polite">
-          <Loader2 className="cw-i cw-i-sm cw-spin" />
-          正在加载模型列表…
-        </span>
-      ) : visibleModels.length === 0 ? (
-        <span className="cw-help">当前账号下暂无可配置模型。</span>
+      ) : loading ? null : visibleModels.length === 0 ? (
+        <span className="cw-help">{t("traditional.model.empty")}</span>
       ) : (
         <span className="cw-help">
-          已加载 {visibleModels.length} 个模型，其中 {availableCount} 个已开通。
+          {t("traditional.model.loaded", { count: visibleModels.length, available: availableCount })}
         </span>
       )}
     </div>
@@ -1263,6 +1531,7 @@ function A2aSpaceSelect({
   invalid: boolean;
   onChange: (spaceId: string) => void;
 }) {
+  const { t } = useTranslation("create");
   const normalizedRegion = region.trim() || A2A_REGISTRY_DEFAULTS.region;
   const [spaces, setSpaces] = useState<A2aSpaceRef[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1283,7 +1552,7 @@ function A2aSpaceSelect({
       .catch((err) => {
         if (!cancelled) {
           setSpaces([]);
-          setError(err instanceof Error ? err.message : "加载失败");
+          setError(err instanceof Error ? err.message : t("traditional.resources.loadError"));
         }
       })
       .finally(() => {
@@ -1292,32 +1561,32 @@ function A2aSpaceSelect({
     return () => {
       cancelled = true;
     };
-  }, [normalizedRegion, reloadKey]);
+  }, [normalizedRegion, reloadKey, t]);
 
   const selectedKnown =
     !value || spaces.some((space) => space.id === value.trim());
   const selectedSpace = spaces.find((space) => space.id === value.trim());
   const selectedLabel = selectedSpace
-    ? a2aSpaceDisplayName(selectedSpace)
+    ? a2aSpaceDisplayName(selectedSpace, t("traditional.resources.unnamedAgentCenter"))
     : value && !selectedKnown
-      ? "已选择的智能体中心"
-      : "请选择智能体中心";
+      ? t("traditional.resources.selectedAgentCenter")
+      : t("traditional.resources.selectAgentCenter");
   const disabled = loading && spaces.length === 0;
   const filteredSpaces = useMemo(
     () =>
       spaces.filter((space) =>
         localPickerMatches(searchQuery, [
-          a2aSpaceDisplayName(space),
+          a2aSpaceDisplayName(space, t("traditional.resources.unnamedAgentCenter")),
           space.id,
           space.projectName,
         ]),
       ),
-    [searchQuery, spaces],
+    [searchQuery, spaces, t],
   );
   const showUnknownSpace = Boolean(
     value &&
     !selectedKnown &&
-    localPickerMatches(searchQuery, ["已选择的智能体中心", value]),
+    localPickerMatches(searchQuery, [t("traditional.resources.selectedAgentCenter"), value]),
   );
 
   useEffect(() => {
@@ -1361,7 +1630,7 @@ function A2aSpaceSelect({
             disabled={disabled}
             aria-haspopup="listbox"
             aria-expanded={open}
-            aria-label="选择 AgentKit 智能体中心"
+            aria-label={t("traditional.resources.selectAgentKitCenter")}
             onClick={() => {
               setSearchQuery("");
               setOpen((current) => !current);
@@ -1381,8 +1650,8 @@ function A2aSpaceSelect({
                   value={searchQuery}
                   autoFocus
                   autoComplete="off"
-                  aria-label="搜索 AgentKit 智能体中心"
-                  placeholder="搜索名称或 ID"
+                  aria-label={t("traditional.resources.searchAgentKitCenter")}
+                  placeholder={t("traditional.resources.searchNameOrId")}
                   onChange={(event) =>
                     setSearchQuery(event.currentTarget.value)
                   }
@@ -1391,7 +1660,7 @@ function A2aSpaceSelect({
               <div
                 className="cw-picker-options"
                 role="listbox"
-                aria-label="AgentKit 智能体中心"
+                aria-label={t("traditional.resources.agentKitCenter")}
               >
                 {showUnknownSpace && (
                   <button
@@ -1401,11 +1670,11 @@ function A2aSpaceSelect({
                     className="cw-a2a-space-option is-selected"
                     onClick={() => selectSpace(value)}
                   >
-                    已选择的智能体中心
+                    {t("traditional.resources.selectedAgentCenter")}
                   </button>
                 )}
                 {filteredSpaces.map((space) => {
-                  const optionLabel = a2aSpaceDisplayName(space);
+                  const optionLabel = a2aSpaceDisplayName(space, t("traditional.resources.unnamedAgentCenter"));
                   const selected = space.id === value;
                   return (
                     <button
@@ -1424,7 +1693,7 @@ function A2aSpaceSelect({
                   );
                 })}
                 {!showUnknownSpace && filteredSpaces.length === 0 && (
-                  <div className="cw-picker-empty">未找到匹配的智能体中心</div>
+                  <div className="cw-picker-empty">{t("traditional.resources.noMatchingAgentCenters")}</div>
                 )}
               </div>
             </div>
@@ -1433,8 +1702,8 @@ function A2aSpaceSelect({
         <button
           type="button"
           className="cw-icon-btn cw-a2a-space-refresh"
-          title="刷新智能体中心列表"
-          aria-label="刷新智能体中心列表"
+          title={t("traditional.resources.refreshAgentCenters")}
+          aria-label={t("traditional.resources.refreshAgentCenters")}
           disabled={loading}
           onClick={() => setReloadKey((key) => key + 1)}
         >
@@ -1453,80 +1722,84 @@ function A2aSpaceSelect({
       ) : loading ? (
         <span className="cw-help cw-a2a-space-status">
           <Loader2 className="cw-i cw-i-sm cw-spin" />
-          正在加载 AgentKit 智能体中心…
+          {t("traditional.resources.loadingAgentCenters")}
         </span>
       ) : spaces.length === 0 ? (
-        <span className="cw-help">此账号下暂无 AgentKit 智能体中心。</span>
+        <span className="cw-help">{t("traditional.resources.noAgentCenters")}</span>
       ) : (
         <span className="cw-help">
-          已加载 {spaces.length} 个智能体中心，列表仅展示中心名称。
+          {t("traditional.resources.agentCentersLoaded", { count: spaces.length })}
         </span>
       )}
     </div>
   );
 }
 
-function VikingKnowledgebaseSelect({
+type ResourcePickerItem = { id: string };
+
+function ResourcePicker<T extends ResourcePickerItem>({
   value,
+  items,
+  loading,
+  error,
+  pickerClassName,
+  selectLabel,
+  searchLabel,
+  listLabel,
+  placeholder,
+  emptyMessage,
+  loadedMessage,
+  refreshLabel,
+  noMatchesMessage,
+  getLabel,
+  getSearchFields,
+  getKey,
+  getOptionIds,
+  makeUnknownItem,
   onChange,
+  onRefresh,
 }: {
   value: string;
-  onChange: (item: VikingKnowledgebaseRef) => void;
+  items: T[];
+  loading: boolean;
+  error: string | null;
+  pickerClassName: string;
+  selectLabel: string;
+  searchLabel: string;
+  listLabel: string;
+  placeholder: string;
+  emptyMessage: ReactNode;
+  loadedMessage: (count: number) => ReactNode;
+  refreshLabel: string;
+  noMatchesMessage: string;
+  getLabel: (item: T) => string;
+  getSearchFields: (item: T) => Array<string | undefined>;
+  getKey: (item: T) => string;
+  getOptionIds: (item: T) => Array<string | undefined>;
+  makeUnknownItem: (id: string) => T;
+  onChange: (item: T) => void;
+  onRefresh: () => void;
 }) {
-  const [items, setItems] = useState<VikingKnowledgebaseRef[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
+  const { t } = useTranslation("create");
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const pickerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    listVikingKnowledgebases()
-      .then((next) => {
-        if (!cancelled) setItems(next);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setItems([]);
-          setError(err instanceof Error ? err.message : "加载失败");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [reloadKey]);
 
   const selectedKnown =
     !value || items.some((item) => item.id === value.trim());
   const selectedItem = items.find((item) => item.id === value.trim());
   const selectedLabel = selectedItem
-    ? vikingKnowledgebaseDisplayName(selectedItem)
+    ? getLabel(selectedItem)
     : value && !selectedKnown
       ? value
-      : "请选择 VikingDB 知识库";
+      : placeholder;
   const disabled = loading && items.length === 0;
   const filteredItems = useMemo(
     () =>
       items.filter((item) =>
-        localPickerMatches(searchQuery, [
-          vikingKnowledgebaseDisplayName(item),
-          item.id,
-          item.description,
-          item.projectName,
-          item.resourceId,
-          item.agentkitKnowledgeId,
-          item.providerKnowledgeId,
-          item.sourceLabel,
-        ]),
+        localPickerMatches(searchQuery, getSearchFields(item)),
       ),
-    [items, searchQuery],
+    [getSearchFields, items, searchQuery],
   );
   const showUnknownItem = Boolean(
     value && !selectedKnown && localPickerMatches(searchQuery, [value]),
@@ -1555,7 +1828,7 @@ function VikingKnowledgebaseSelect({
     };
   }, [open]);
 
-  const selectItem = (item: VikingKnowledgebaseRef) => {
+  const selectItem = (item: T) => {
     onChange(item);
     setOpen(false);
   };
@@ -1564,14 +1837,14 @@ function VikingKnowledgebaseSelect({
     return (
       <span className="cw-viking-kb-inline-status" role="status">
         <Loader2 className="cw-i cw-i-sm cw-spin" />
-        正在加载…
+        {t("common.loading")}
       </span>
     );
   }
 
   return (
     <div
-      className={`cw-a2a-space-picker cw-viking-kb-picker${open ? " is-open" : ""}`}
+      className={`cw-a2a-space-picker ${pickerClassName}${open ? " is-open" : ""}`}
       ref={pickerRef}
     >
       <div className="cw-a2a-space-row">
@@ -1582,7 +1855,7 @@ function VikingKnowledgebaseSelect({
             disabled={disabled}
             aria-haspopup="listbox"
             aria-expanded={open}
-            aria-label="选择 VikingDB 知识库"
+            aria-label={selectLabel}
             onClick={() => {
               setSearchQuery("");
               setOpen((current) => !current);
@@ -1602,8 +1875,8 @@ function VikingKnowledgebaseSelect({
                   value={searchQuery}
                   autoFocus
                   autoComplete="off"
-                  aria-label="搜索 VikingDB 知识库"
-                  placeholder="搜索名称或 ID"
+                  aria-label={searchLabel}
+                  placeholder={t("traditional.resources.searchNameOrId")}
                   onChange={(event) =>
                     setSearchQuery(event.currentTarget.value)
                   }
@@ -1612,7 +1885,7 @@ function VikingKnowledgebaseSelect({
               <div
                 className="cw-picker-options"
                 role="listbox"
-                aria-label="VikingDB 知识库"
+                aria-label={listLabel}
               >
                 {showUnknownItem && (
                   <button
@@ -1620,36 +1893,20 @@ function VikingKnowledgebaseSelect({
                     role="option"
                     aria-selected
                     className="cw-a2a-space-option is-selected"
-                    onClick={() =>
-                      selectItem({
-                        id: value,
-                        name: value,
-                        description: "",
-                        projectName: "",
-                        region: "",
-                        sourceKind: "knowledge",
-                        sourceLabel: "Knowledge Engine",
-                        resourceId: "",
-                      })
-                    }
+                    onClick={() => selectItem(makeUnknownItem(value))}
                   >
                     {value}
                   </button>
                 )}
                 {filteredItems.map((item) => {
-                  const optionLabel = vikingKnowledgebaseDisplayName(item);
+                  const optionLabel = getLabel(item);
                   const selected = item.id === value;
-                  const optionIds = [
-                    item.id,
-                    item.resourceId,
-                    item.agentkitKnowledgeId,
-                    item.providerKnowledgeId,
-                  ]
+                  const optionIds = getOptionIds(item)
                     .filter(Boolean)
                     .join(" / ");
                   return (
                     <button
-                      key={item.id}
+                      key={getKey(item)}
                       type="button"
                       role="option"
                       aria-selected={selected}
@@ -1668,7 +1925,7 @@ function VikingKnowledgebaseSelect({
                   );
                 })}
                 {!showUnknownItem && filteredItems.length === 0 && (
-                  <div className="cw-picker-empty">未找到匹配的知识库</div>
+                  <div className="cw-picker-empty">{noMatchesMessage}</div>
                 )}
               </div>
             </div>
@@ -1677,10 +1934,10 @@ function VikingKnowledgebaseSelect({
         <button
           type="button"
           className="cw-icon-btn cw-a2a-space-refresh cw-viking-kb-refresh"
-          title="刷新知识库列表"
-          aria-label="刷新知识库列表"
+          title={refreshLabel}
+          aria-label={refreshLabel}
           disabled={loading}
-          onClick={() => setReloadKey((key) => key + 1)}
+          onClick={onRefresh}
         >
           {loading ? (
             <Loader2 className="cw-i cw-i-sm cw-spin" />
@@ -1695,13 +1952,176 @@ function VikingKnowledgebaseSelect({
           <span>{error}</span>
         </div>
       ) : items.length === 0 ? (
-        <span className="cw-help">此账号下暂无 VikingDB 知识库。</span>
+        <span className="cw-help">{emptyMessage}</span>
       ) : (
-        <span className="cw-help">
-          已加载 {items.length} 个知识库，选择的知识库会用于当前 Agent。
-        </span>
+        <span className="cw-help">{loadedMessage(items.length)}</span>
       )}
     </div>
+  );
+}
+
+function VikingKnowledgebaseSelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (item: VikingKnowledgebaseRef) => void;
+}) {
+  const { t } = useTranslation("create");
+  const [items, setItems] = useState<VikingKnowledgebaseRef[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    listVikingKnowledgebases()
+      .then((next) => {
+        if (!cancelled) setItems(next);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setItems([]);
+          setError(err instanceof Error ? err.message : t("traditional.resources.loadError"));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey, t]);
+
+  return (
+    <ResourcePicker
+      value={value}
+      items={items}
+      loading={loading}
+      error={error}
+      pickerClassName="cw-viking-kb-picker"
+      selectLabel={t("traditional.resources.selectKnowledgeBase")}
+      searchLabel={t("traditional.resources.searchKnowledgeBase")}
+      listLabel={t("traditional.resources.knowledgeBaseList")}
+      placeholder={t("traditional.resources.knowledgeBasePlaceholder")}
+      emptyMessage={t("traditional.resources.noKnowledgeBases")}
+      loadedMessage={(count) =>
+        t("traditional.resources.knowledgeBasesLoaded", { count })
+      }
+      refreshLabel={t("traditional.resources.refreshKnowledgeBases")}
+      noMatchesMessage={t("traditional.resources.noMatchingKnowledgeBases")}
+      getLabel={(item) => vikingKnowledgebaseDisplayName(item, t("traditional.resources.unnamedKnowledgeBase"))}
+      getSearchFields={(item) => [
+        vikingKnowledgebaseDisplayName(item, t("traditional.resources.unnamedKnowledgeBase")),
+        item.id,
+        item.description,
+        item.projectName,
+        item.resourceId,
+        item.agentkitKnowledgeId,
+        item.providerKnowledgeId,
+        item.sourceLabel,
+      ]}
+      getKey={(item) => item.id}
+      getOptionIds={(item) => [
+        item.id,
+        item.resourceId,
+        item.agentkitKnowledgeId,
+        item.providerKnowledgeId,
+      ]}
+      makeUnknownItem={(id) => ({
+        id,
+        name: id,
+        description: "",
+        projectName: "",
+        region: "",
+        sourceKind: "knowledge" as const,
+        sourceLabel: "Knowledge Engine",
+        resourceId: "",
+      })}
+      onChange={onChange}
+      onRefresh={() => setReloadKey((key) => key + 1)}
+    />
+  );
+}
+
+function VikingMemorySelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (item: VikingMemoryRef) => void;
+}) {
+  const { t } = useTranslation("create");
+  const [items, setItems] = useState<VikingMemoryRef[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    listVikingMemories()
+      .then((next) => {
+        if (!cancelled) setItems(next);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setItems([]);
+          setError(err instanceof Error ? err.message : t("traditional.resources.loadError"));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey, t]);
+
+  return (
+    <ResourcePicker
+      value={value}
+      items={items}
+      loading={loading}
+      error={error}
+      pickerClassName="cw-viking-memory-picker"
+      selectLabel={t("traditional.resources.selectMemory")}
+      searchLabel={t("traditional.resources.searchMemory")}
+      listLabel={t("traditional.resources.memoryList")}
+      placeholder={t("traditional.resources.memoryPlaceholder")}
+      emptyMessage={t("traditional.resources.noMemories")}
+      loadedMessage={(count) =>
+        t("traditional.resources.memoriesLoaded", { count })
+      }
+      refreshLabel={t("traditional.resources.refreshMemories")}
+      noMatchesMessage={t("traditional.resources.noMatchingMemories")}
+      getLabel={(item) => vikingMemoryDisplayName(item, t("traditional.resources.unnamedMemory"))}
+      getSearchFields={(item) => [
+        vikingMemoryDisplayName(item, t("traditional.resources.unnamedMemory")),
+        item.id,
+        item.description,
+        item.projectName,
+        item.region,
+        item.resourceId,
+        ...(item.memoryTypes ?? []),
+      ]}
+      getKey={(item) => `${item.projectName}:${item.region}:${item.id}`}
+      getOptionIds={(item) => [item.id, item.resourceId]}
+      makeUnknownItem={(id) => ({
+        id,
+        name: id,
+        description: "",
+        projectName: "",
+        region: "",
+        resourceId: "",
+        memoryTypes: [],
+      })}
+      onChange={onChange}
+      onRefresh={() => setReloadKey((key) => key + 1)}
+    />
   );
 }
 
@@ -1710,17 +2130,61 @@ function VikingKnowledgebaseSelect({
  * (http / stdio) and shows the matching fields. http -> url + optional
  * bearer token; stdio -> command + space-separated args. Optional name.
  * ---------------------------------------------------------------- */
+function McpTokenVisibilityIcon({ hidden }: { hidden: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {hidden ? (
+        <>
+          <path d="M3 3l18 18" />
+          <path d="M9.7 6.95A9.7 9.7 0 0 1 12 6.68c5.9 0 9.25 5.32 9.25 5.32a16 16 0 0 1-2.28 2.85" />
+          <path d="M14.35 14.55A3.25 3.25 0 0 1 9.5 10.2" />
+          <path d="M6.25 8.12A16.4 16.4 0 0 0 2.75 12S6.1 17.32 12 17.32c.8 0 1.55-.1 2.25-.27" />
+        </>
+      ) : (
+        <>
+          <path d="M2.75 12s3.35-5.25 9.25-5.25S21.25 12 21.25 12 17.9 17.25 12 17.25 2.75 12 2.75 12Z" />
+          <circle cx="12" cy="12" r="2.5" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 function McpToolEditor({
   tools,
+  conflict,
+  showConflict,
   onChange,
 }: {
   tools: McpTool[];
+  conflict: McpConfigurationConflict | null;
+  showConflict: boolean;
   onChange: (next: McpTool[]) => void;
 }) {
+  const { t } = useTranslation("create");
+  const conflictErrorId = useId();
+  const [revealedTokenIndex, setRevealedTokenIndex] = useState<number | null>(
+    null,
+  );
+  const visibleConflict = showConflict ? conflict : null;
   const update = (i: number, p: Partial<McpTool>) =>
-    onChange(tools.map((t, idx) => (idx === i ? { ...t, ...p } : t)));
+    onChange(tools.map((tool, idx) => (idx === i ? { ...tool, ...p } : tool)));
 
-  const remove = (i: number) => onChange(tools.filter((_, idx) => idx !== i));
+  const remove = (i: number) => {
+    setRevealedTokenIndex((current) => {
+      if (current == null || current < i) return current;
+      return current === i ? null : current - 1;
+    });
+    onChange(tools.filter((_, idx) => idx !== i));
+  };
 
   const add = () =>
     onChange([...tools, { name: "", transport: "http", url: "" }]);
@@ -1730,7 +2194,7 @@ function McpToolEditor({
       {tools.length > 0 && (
         <div className="cw-mcp-list">
           <AnimatePresence initial={false}>
-            {tools.map((t, i) => (
+            {tools.map((tool, i) => (
               <motion.div
                 key={i}
                 className="cw-mcp-row"
@@ -1745,20 +2209,20 @@ function McpToolEditor({
                     <button
                       type="button"
                       className={`cw-seg cw-seg-sm ${
-                        t.transport === "http" ? "is-on" : ""
+                        tool.transport === "http" ? "is-on" : ""
                       }`}
                       onClick={() => update(i, { transport: "http" })}
-                      aria-pressed={t.transport === "http"}
+                      aria-pressed={tool.transport === "http"}
                     >
                       <span className="cw-seg-title">HTTP</span>
                     </button>
                     <button
                       type="button"
                       className={`cw-seg cw-seg-sm ${
-                        t.transport === "stdio" ? "is-on" : ""
+                        tool.transport === "stdio" ? "is-on" : ""
                       }`}
                       onClick={() => update(i, { transport: "stdio" })}
-                      aria-pressed={t.transport === "stdio"}
+                      aria-pressed={tool.transport === "stdio"}
                     >
                       <span className="cw-seg-title">stdio</span>
                     </button>
@@ -1767,7 +2231,7 @@ function McpToolEditor({
                     type="button"
                     className="cw-icon-btn cw-icon-danger"
                     onClick={() => remove(i)}
-                    aria-label="移除 MCP 工具"
+                    aria-label={t("traditional.mcp.removeTool")}
                   >
                     <Trash2 className="cw-i cw-i-sm" />
                   </button>
@@ -1775,55 +2239,105 @@ function McpToolEditor({
 
                 <input
                   className="cw-input"
-                  value={t.name}
-                  placeholder="名称（用于命名，可留空）"
+                  data-validation-field="mcp-name"
+                  aria-invalid={visibleConflict === "duplicateName"}
+                  aria-describedby={
+                    visibleConflict === "duplicateName"
+                      ? conflictErrorId
+                      : undefined
+                  }
+                  value={tool.name}
+                  placeholder={t("traditional.mcp.namePlaceholder")}
                   onChange={(e) => update(i, { name: e.target.value })}
                 />
 
-                {t.transport === "http" ? (
+                {tool.transport === "http" ? (
                   <>
                     <input
                       className="cw-input"
-                      value={t.url ?? ""}
-                      placeholder="MCP 服务地址（StreamableHTTP）"
-                      onChange={(e) => update(i, { url: e.target.value })}
-                    />
-                    {mcpUrlNeedsPathWarning(t.url ?? "") && (
-                      <p className="cw-mcp-warning">
-                        <Info aria-hidden="true" />
-                        <span>
-                          当前地址不是以 /mcp 结尾，请确认它是实际的 MCP
-                          Endpoint。Studio 会保留该地址，不会自动补充路径。
-                        </span>
-                      </p>
-                    )}
-                    <input
-                      className="cw-input"
-                      value={mcpAuthTokenInputValue(t)}
-                      placeholder="Bearer Token（可选）"
+                      data-validation-field="mcp-url"
+                      aria-invalid={visibleConflict === "duplicateUrl"}
+                      aria-describedby={
+                        visibleConflict === "duplicateUrl"
+                          ? conflictErrorId
+                          : undefined
+                      }
+                      value={tool.url ?? ""}
+                      placeholder={t("traditional.mcp.urlPlaceholder")}
                       onChange={(e) =>
                         onChange(
                           tools.map((tool, index) =>
                             index === i
-                              ? updateMcpAuthTokenInput(tool, e.target.value)
+                              ? updateMcpUrlInput(tool, e.target.value)
                               : tool,
                           ),
                         )
                       }
                     />
+                    {mcpUrlNeedsPathWarning(tool.url ?? "") && (
+                      <p className="cw-mcp-warning">
+                        <Info aria-hidden="true" />
+                        <span>
+                          {t("traditional.mcp.pathWarning")}
+                        </span>
+                      </p>
+                    )}
+                    <div className="cw-mcp-token-field">
+                      <input
+                        className="cw-input"
+                        type={revealedTokenIndex === i ? "text" : "password"}
+                        value={mcpAuthTokenInputValue(tool)}
+                        placeholder={t("traditional.mcp.tokenPlaceholder")}
+                        autoComplete="new-password"
+                        spellCheck={false}
+                        onChange={(e) =>
+                          onChange(
+                            tools.map((tool, index) =>
+                              index === i
+                                ? updateMcpAuthTokenInput(tool, e.target.value)
+                                : tool,
+                            ),
+                          )
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="cw-mcp-token-toggle"
+                        aria-label={
+                          revealedTokenIndex === i
+                            ? t("traditional.mcp.hideToken")
+                            : t("traditional.mcp.showToken")
+                        }
+                        title={
+                          revealedTokenIndex === i
+                            ? t("traditional.mcp.hideToken")
+                            : t("traditional.mcp.showToken")
+                        }
+                        aria-pressed={revealedTokenIndex === i}
+                        onClick={() =>
+                          setRevealedTokenIndex((current) =>
+                            current === i ? null : i,
+                          )
+                        }
+                      >
+                        <McpTokenVisibilityIcon
+                          hidden={revealedTokenIndex !== i}
+                        />
+                      </button>
+                    </div>
                   </>
                 ) : (
                   <>
                     <input
                       className="cw-input"
-                      value={t.command ?? ""}
-                      placeholder="启动命令，例如 npx"
+                      value={tool.command ?? ""}
+                      placeholder={t("traditional.mcp.commandPlaceholder")}
                       onChange={(e) => update(i, { command: e.target.value })}
                     />
                     <input
                       className="cw-input"
-                      value={(t.args ?? []).join(" ")}
-                      placeholder="参数（用空格分隔），例如 -y @playwright/mcp@latest"
+                      value={(tool.args ?? []).join(" ")}
+                      placeholder={t("traditional.mcp.argsPlaceholder")}
                       onChange={(e) =>
                         update(i, {
                           args: e.target.value.split(/\s+/).filter(Boolean),
@@ -1831,8 +2345,7 @@ function McpToolEditor({
                       }
                     />
                     <p className="cw-mcp-note">
-                      stdio MCP
-                      暂不参与调试运行；点击“去部署”时会完整保留这项配置并生成对应代码。
+                      {t("traditional.mcp.stdioHint")}
                     </p>
                   </>
                 )}
@@ -1842,253 +2355,22 @@ function McpToolEditor({
         </div>
       )}
 
-      <button type="button" className="cw-add-sub" onClick={add}>
-        <Plus className="cw-i" />
-        添加 MCP 工具
-      </button>
-    </div>
-  );
-}
-
-/* ---------------------------------------------------------------- *
- * Multi-source skill picker: tab bar switching between Skill Hub
- * (public marketplace), local folder/.zip upload, and account-scoped
- * AgentKit SkillSpaces. Selected skills from all sources share one
- * list rendered below the tabs.
- * ---------------------------------------------------------------- */
-function AgentKitSkillsIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="M5.5 7.5h10.75a2 2 0 0 1 2 2v7.75a2 2 0 0 1-2 2H5.5a2 2 0 0 1-2-2V9.5a2 2 0 0 1 2-2Z" />
-      <path d="M7 4.75h9.5a2 2 0 0 1 2 2" opacity=".58" />
-      <path d="m11 10.25.72 1.48 1.63.24-1.18 1.15.28 1.62-1.45-.77-1.45.77.28-1.62-1.18-1.15 1.63-.24.72-1.48Z" />
-      <path d="M19.25 11.25h1.5M20 10.5V12" opacity=".72" />
-    </svg>
-  );
-}
-
-function SelectedSkillRow({
-  s,
-  onRemove,
-}: {
-  s: SelectedSkill;
-  onRemove: () => void;
-}) {
-  let Icon: ComponentType<{ className?: string }> = Sparkles;
-  let label = "火山 Find Skill 技能广场";
-  if (s.source === "local") {
-    Icon = FolderUp;
-    label = "本地";
-  } else if (s.source === "skillspace") {
-    Icon = AgentKitSkillsIcon;
-    label = "AgentKit Skills 中心";
-  }
-  return (
-    <motion.div
-      key={`${s.source}:${s.folder}:${s.skillId || s.slug || ""}:${s.version || ""}`}
-      className="cw-selected-skill-row"
-      layout
-      initial={{ opacity: 0, y: -4 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -4 }}
-      transition={{ duration: 0.16 }}
-    >
-      <span className="cw-selected-skill-icon" aria-hidden>
-        <Icon className="cw-i cw-i-sm" />
-      </span>
-      <span className="cw-selected-skill-meta">
-        <span className="cw-selected-skill-name">{s.name}</span>
-        <span className="cw-selected-skill-detail">
-          {label}
-          {s.description ? ` · ${displayDescription(s.description)}` : ""}
-        </span>
-      </span>
-      <button
-        type="button"
-        className="cw-selected-skill-remove"
-        onClick={onRemove}
-        aria-label={`移除 ${s.name}`}
-        title={`移除 ${s.name}`}
-      >
-        <X className="cw-i cw-i-sm" />
-      </button>
-    </motion.div>
-  );
-}
-
-const SKILL_SOURCES: {
-  id: SkillSource;
-  label: string;
-  icon: ComponentType<{ className?: string }>;
-}[] = [
-  { id: "local", label: "本地文件", icon: FolderUp },
-  { id: "skillspace", label: "AgentKit Skills 中心", icon: AgentKitSkillsIcon },
-  { id: "skillhub", label: "火山 Find Skill 技能广场", icon: Globe },
-];
-
-function SkillsSourceTabs({
-  selected,
-  onChange,
-  cloudProvider,
-}: {
-  selected: SelectedSkill[];
-  onChange: (next: SelectedSkill[]) => void;
-  cloudProvider: CloudProvider;
-}) {
-  const [active, setActive] = useState<SkillSource>("local");
-  const [open, setOpen] = useState(false);
-  const activeIndex = SKILL_SOURCES.findIndex((source) => source.id === active);
-  const remove = (key: string) =>
-    onChange(selected.filter((s) => skillKey(s) !== key));
-
-  useEffect(() => {
-    if (!open) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [open]);
-
-  return (
-    <div className="cw-skillspane">
-      <button
-        type="button"
-        className="cw-skill-add"
-        aria-haspopup="dialog"
-        onClick={() => setOpen(true)}
-      >
-        <span className="cw-skill-add-icon" aria-hidden>
-          <Plus className="cw-i" />
-        </span>
-        <span>添加 Skill</span>
-      </button>
-
-      {selected.length > 0 && (
-        <div className="cw-skill-selected">
-          <span className="cw-skill-selected-label">
-            已加入技能 · {selected.length}
-          </span>
-          <div className="cw-selected-skill-list">
-            <AnimatePresence initial={false}>
-              {selected.map((s) => (
-                <SelectedSkillRow
-                  key={skillKey(s)}
-                  s={s}
-                  onRemove={() => remove(skillKey(s))}
-                />
-              ))}
-            </AnimatePresence>
-          </div>
-        </div>
+      {visibleConflict && (
+        <p className="cw-error-text" id={conflictErrorId} role="alert">
+          {t(
+            visibleConflict === "duplicateName"
+              ? "traditional.validation.mcpDuplicateName"
+              : "traditional.validation.mcpDuplicateUrl",
+          )}
+        </p>
       )}
 
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            className="cw-skill-dialog-backdrop"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.16 }}
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget) setOpen(false);
-            }}
-          >
-            <motion.div
-              className="cw-skill-dialog"
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="cw-skill-dialog-title"
-              initial={{ opacity: 0, y: 10, scale: 0.985 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 6, scale: 0.99 }}
-              transition={{ duration: 0.18, ease: "easeOut" }}
-            >
-              <div className="cw-skill-dialog-head">
-                <h3 id="cw-skill-dialog-title">添加 Skill</h3>
-                <button
-                  type="button"
-                  className="cw-skill-dialog-close"
-                  aria-label="关闭添加 Skill"
-                  onClick={() => setOpen(false)}
-                >
-                  <X className="cw-i" />
-                </button>
-              </div>
-              <div className="cw-skill-dialog-body">
-                <div
-                  className="cw-skill-sourcetabs"
-                  role="tablist"
-                  style={
-                    {
-                      "--cw-skill-tab-slider-width": `calc((100% - 16px) / ${SKILL_SOURCES.length})`,
-                      "--cw-active-skill-tab-offset": `calc(${activeIndex * 100}% + ${
-                        activeIndex * 4
-                      }px)`,
-                    } as CSSProperties
-                  }
-                >
-                  <span className="cw-skill-tab-slider" aria-hidden />
-                  {SKILL_SOURCES.map(({ id, label, icon: Icon }) => (
-                    <button
-                      key={id}
-                      type="button"
-                      role="tab"
-                      id={`cw-skill-tab-${id}`}
-                      aria-controls="cw-skill-tabpanel"
-                      aria-selected={active === id}
-                      className={`cw-skill-pickertab ${active === id ? "is-on" : ""}`}
-                      onClick={() => setActive(id)}
-                    >
-                      <Icon className="cw-i cw-i-sm" />
-                      {label}
-                    </button>
-                  ))}
-                </div>
-
-                <div
-                  id="cw-skill-tabpanel"
-                  className="cw-skill-tabbody"
-                  role="tabpanel"
-                  aria-labelledby={`cw-skill-tab-${active}`}
-                >
-                  {active === "skillhub" && (
-                    <SkillHubPicker selected={selected} onChange={onChange} />
-                  )}
-                  {active === "local" && (
-                    <LocalPicker selected={selected} onChange={onChange} />
-                  )}
-                  {active === "skillspace" && (
-                    <SkillSpacePicker
-                      selected={selected}
-                      onChange={onChange}
-                      cloudProvider={cloudProvider}
-                    />
-                  )}
-                </div>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <button type="button" className="cw-add-sub" onClick={add}>
+        <Plus className="cw-i" />
+        {t("traditional.mcp.addTool")}
+      </button>
     </div>
   );
-}
-
-function skillKey(s: SelectedSkill): string {
-  if (s.source === "skillhub") return `hub:${s.namespace}/${s.slug}`;
-  if (s.source === "local") return `local:${s.folder}`;
-  return `ss:${s.skillSpaceId}/${s.skillId}/${s.version || ""}`;
 }
 
 /* ---------------------------------------------------------------- *
@@ -2234,27 +2516,40 @@ function nodeProblem(
   n: AgentDraft,
   duplicateNames: ReadonlySet<string>,
   isRoot = false,
-): string | null {
+): NodeProblemCode | null {
   if (isA2aType(n.agentType)) {
-    if (isRoot) return "远程 Agent 只能作为子 Agent";
+    if (isRoot) return "remoteRoot";
     return n.a2aRegistry?.registrySpaceId.trim()
       ? null
-      : "缺少 AgentKit 智能体中心";
+      : "missingRegistry";
   }
-  const nameProblem = agentNameProblem(n.name);
-  if (nameProblem) return nameProblem;
-  if (duplicateNames.has(n.name)) return "Agent 名称在当前结构中必须唯一";
-  if (n.description.trim().length === 0) return "缺少描述";
+  const nameProblem = agentNameProblem(n.name, (key) => `name.${key}`);
+  if (nameProblem) return nameProblem as NodeProblemCode;
+  if (duplicateNames.has(n.name)) return "duplicateName";
+  if (n.description.trim().length === 0) return "missingDescription";
   if (isOrchestratorType(n.agentType))
-    return n.subAgents.length === 0 ? "缺少子 Agent" : null;
-  return n.instruction.trim().length === 0 ? "缺少系统提示词" : null;
+    return n.subAgents.length === 0 ? "missingSubagent" : null;
+  return n.instruction.trim().length === 0 ? "missingPrompt" : null;
 }
+
+type NodeProblemCode =
+  | "remoteRoot"
+  | "missingRegistry"
+  | "name.required"
+  | "name.reserved"
+  | "name.characters"
+  | "duplicateName"
+  | "missingDescription"
+  | "mcpDuplicateName"
+  | "mcpDuplicateUrl"
+  | "missingSubagent"
+  | "missingPrompt";
 
 interface TreeProblem {
   path: NodePath;
   name: string;
-  typeLabel: string;
-  problem: string;
+  agentType: AgentDraft["agentType"];
+  problem: NodeProblemCode;
 }
 
 /** Collect required-field problems across the whole tree, in render order. */
@@ -2264,13 +2559,27 @@ function treeProblems(
   path: NodePath = [],
 ): TreeProblem[] {
   const out: TreeProblem[] = [];
+  if (path.length === 0) {
+    const conflict = mcpConfigurationConflict(root);
+    if (conflict) {
+      out.push({
+        path,
+        name: root.name.trim(),
+        agentType: root.agentType,
+        problem:
+          conflict === "duplicateName"
+            ? "mcpDuplicateName"
+            : "mcpDuplicateUrl",
+      });
+    }
+  }
   const remote = isA2aType(root.agentType);
   const p = nodeProblem(root, duplicateNames, path.length === 0);
   if (p) {
     out.push({
       path,
-      name: remote ? "远程 Agent" : root.name.trim() || "未命名",
-      typeLabel: agentTypeMeta(root.agentType).label,
+      name: remote ? "" : root.name.trim(),
+      agentType: root.agentType,
       problem: p,
     });
   }
@@ -2282,11 +2591,42 @@ function treeProblems(
   return out;
 }
 
-function validationProblemMessage(problem: TreeProblem): string {
-  if (problem.problem === "缺少子 Agent") {
-    return `${problem.typeLabel}至少需要添加一个子 Agent 后才能调试或发布。`;
+function validationProblemMessage(problem: TreeProblem, t: TFunction): string {
+  if (problem.problem === "missingSubagent") {
+    return t("traditional.validation.missingSubagentDetail", {
+      type: t(
+        `traditional.agentTypes.${problem.agentType ?? "llm"}.fullLabel`,
+      ),
+    });
   }
-  return `${problem.name}：${problem.problem}`;
+  const name = isA2aType(problem.agentType)
+    ? t("traditional.agentTypes.a2a.fullLabel")
+    : problem.name || t("traditional.basic.unnamed");
+  return t("traditional.validation.problem", {
+    name,
+    problem: t(`traditional.validation.${problem.problem}`),
+  });
+}
+
+function firstArkModelPath(
+  root: AgentDraft,
+  cloudProvider: CloudProvider,
+  path: NodePath = [],
+): NodePath | null {
+  const isLlmNode = root.agentType === undefined || root.agentType === "llm";
+  if (isLlmNode && resolvedModelSource(root, cloudProvider) === "ark") {
+    return path;
+  }
+  if (!nodeAcceptsChildren(root)) return null;
+  for (let index = 0; index < root.subAgents.length; index += 1) {
+    const match = firstArkModelPath(
+      root.subAgents[index],
+      cloudProvider,
+      [...path, index],
+    );
+    if (match) return match;
+  }
+  return null;
 }
 
 /** Count the root Agent and every nested sub-Agent in the draft. */
@@ -2298,12 +2638,23 @@ function countDraftAgents(root: AgentDraft): number {
 }
 
 /** Collect only settings used by active components across the Agent tree. */
-function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
+function collectDeploymentEnv(
+  root: AgentDraft,
+  sourcePreserving = false,
+): RuntimeEnvConfiguration {
   const prepared = prepareMcpAuth(root);
+  const mcpGatewayManaged = selectedHarnessOptimizations(prepared.draft).includes(
+    "mcp_resilience",
+  );
   const selections: RuntimeEnvSelection[] = [];
   const fixedValues: Record<string, string> = { ...prepared.envValues };
   const cloudProvider = prepared.draft.cloudProvider ?? "volcengine";
+  const modelProxyHarnessOptimizationLabels =
+    selectedHarnessModelProxyOptimizations(prepared.draft).map(
+      harnessSidecarOptionLabel,
+    );
   let usesArkModel = false;
+  let arkModelName = "";
   for (const binding of customModelEnvironmentBindings(
     prepared.draft,
     defaultModelApiBase(cloudProvider),
@@ -2331,6 +2682,9 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
       resolvedModelSource(node, cloudProvider) === "ark"
     ) {
       usesArkModel = true;
+      if (!arkModelName) {
+        arkModelName = (node.modelName ?? "").trim();
+      }
     }
     for (const toolId of node.builtinTools ?? []) {
       const tool = BUILTIN_TOOLS.find((item) => item.id === toolId);
@@ -2345,16 +2699,26 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
               key: mcpTool.authTokenEnv,
               required: false,
               comment: `${mcpTool.name.trim() || "MCP"} Bearer Token`,
+              secret: true,
+              readOnly: mcpGatewayManaged,
+              serverManaged: mcpGatewayManaged,
+              hidden: mcpGatewayManaged,
             },
           ],
         });
       }
     }
     if (node.a2aRegistry?.enabled) {
-      selections.push({ env: A2A_REGISTRY_ENV });
+      selections.push({
+        env: providerRuntimeEnv(A2A_REGISTRY_ENV, cloudProvider),
+      });
       Object.assign(
         fixedValues,
-        a2aRegistryEnvValues(node.a2aRegistry, { includeDefaults: true }),
+        a2aRegistryEnvValues(
+          node.a2aRegistry,
+          { includeDefaults: true },
+          cloudProvider,
+        ),
       );
     }
     if (node.memory.shortTerm) {
@@ -2413,15 +2777,64 @@ function collectDeploymentEnv(root: AgentDraft): RuntimeEnvConfiguration {
           key: "MODEL_AGENT_API_KEY",
           required: true,
           comment: "Ark API Key",
-          placeholder: "由所选 API Key 注入",
+          placeholder: createT("helpers.deploymentEnv.selectedApiKeyPlaceholder"),
           secret: true,
           readOnly: true,
           serverManaged: true,
+          requiredBy: modelProxyHarnessOptimizationLabels,
         },
       ],
     });
     fixedValues.MODEL_AGENT_PROVIDER = "openai";
     fixedValues.MODEL_AGENT_API_BASE = defaultModelApiBase(cloudProvider);
+    const selectedModelName = arkModelName || defaultModelName(cloudProvider);
+    fixedValues.MODEL_AGENT_NAME = selectedModelName;
+    fixedValues.MODEL_NAME = selectedModelName;
+  }
+  if (mcpGatewayManaged) {
+    if (sourcePreserving) {
+      selections.push({
+        env: [
+          {
+            key: "MCP_SERVERS_JSON",
+            required: true,
+            comment: createT("helpers.deploymentEnv.mcpInjectedComment"),
+            placeholder: createT("helpers.deploymentEnv.restoredPlaceholder"),
+            help: createT("helpers.deploymentEnv.restoredHelp"),
+            readOnly: true,
+            serverManaged: true,
+            hidden: true,
+            requiredBy: [harnessSidecarOptionLabel("mcp_resilience")],
+          },
+        ],
+      });
+      const config = runtimeEnvConfiguration(selections);
+      return {
+        specs: config.specs,
+        fixedValues: { ...config.fixedValues, ...fixedValues },
+      };
+    }
+    const gatewayEnv = resolveMcpGatewayEnv(prepared.draft);
+    const gatewayError = gatewayEnv.ok ? undefined : gatewayEnv.message;
+    selections.push({
+      env: [
+        {
+          key: "MCP_SERVERS_JSON",
+          required: true,
+          comment: createT("helpers.deploymentEnv.mcpInjectedComment"),
+          placeholder: sourcePreserving
+            ? createT("helpers.deploymentEnv.restoredPlaceholder")
+            : createT("helpers.deploymentEnv.generatedMcpPlaceholder"),
+          help: createT("helpers.deploymentEnv.mergedMcpHelp"),
+          secret: true,
+          readOnly: true,
+          serverManaged: gatewayEnv.ok,
+          hidden: true,
+          requiredBy: [harnessSidecarOptionLabel("mcp_resilience")],
+          missingError: gatewayError,
+        },
+      ],
+    });
   }
   const config = runtimeEnvConfiguration(selections);
   return {
@@ -2455,6 +2868,7 @@ export function TreeNode({
   onChange: (nextRoot: AgentDraft, select?: NodePath) => void;
   onClearRoot: () => void;
 }) {
+  const { t } = useTranslation("create");
   const node = getNode(root, path);
   const meta = agentTypeMeta(node.agentType);
   const Icon = meta.icon;
@@ -2544,18 +2958,20 @@ export function TreeNode({
         <span className="cw-tree-main">
           <span className="cw-tree-name">
             {isA2aType(node.agentType)
-              ? "远程 Agent"
-              : node.name.trim() || "未命名"}
+              ? t("traditional.agentTypes.a2a.fullLabel")
+              : node.name.trim() || t("traditional.basic.unnamed")}
           </span>
-          <span className="cw-tree-type">{meta.label}</span>
+          <span className="cw-tree-type">
+            {t(`traditional.agentTypes.${meta.id}.fullLabel`)}
+          </span>
         </span>
         <span className="cw-tree-actions">
           {isRoot && (
             <button
               type="button"
               className="cw-icon-btn cw-tree-clear"
-              title="清空根 Agent"
-              aria-label="清空根 Agent"
+              title={t("traditional.actions.clearRoot")}
+              aria-label={t("traditional.actions.clearRoot")}
               onClick={(e) => {
                 e.stopPropagation();
                 onClearRoot();
@@ -2568,7 +2984,8 @@ export function TreeNode({
             <button
               type="button"
               className="cw-icon-btn"
-              title="添加子 Agent"
+              title={t("traditional.actions.addSubagent")}
+              aria-label={t("traditional.actions.addSubagent")}
               onClick={(e) => {
                 e.stopPropagation();
                 add();
@@ -2581,7 +2998,8 @@ export function TreeNode({
             <button
               type="button"
               className="cw-icon-btn cw-icon-danger"
-              title="删除"
+              title={t("common.delete")}
+              aria-label={t("common.delete")}
               onClick={(e) => {
                 e.stopPropagation();
                 del();
@@ -2616,7 +3034,8 @@ export function TreeNode({
 
 type DebugPhase = "idle" | "starting" | "ready" | "sending" | "error";
 
-type WorkspaceMode = "build" | "validate" | "environment" | "publish";
+type WorkspaceMode =
+  "build" | "validate" | "optimize" | "environment" | "publish";
 interface DebugMessage {
   role: "user" | "assistant";
   content: string;
@@ -2630,7 +3049,6 @@ interface DebugVariant {
   modelName: string;
   description: string;
   instruction: string;
-  optimizations: string[];
   configOpen: boolean;
   phase: DebugPhase;
   runtimeSnapshot: string;
@@ -2644,6 +3062,17 @@ interface DebugTraceTarget {
   variantName: string;
 }
 
+function debugVariantDisplayName(
+  variant: Pick<DebugVariant, "id" | "name">,
+  t: TFunction,
+): string {
+  if (variant.id === "baseline") return t("traditional.debug.baseline");
+  const sequence = /^variant-(\d+)$/.exec(variant.id)?.[1];
+  return sequence
+    ? t("traditional.debug.comparison", { count: Number(sequence) })
+    : variant.name;
+}
+
 function sameBaseUrl(a: string | undefined, b: string): boolean {
   const normalize = (value: string | undefined) =>
     (value ?? "").trim().replace(/\/+$/, "");
@@ -2655,6 +3084,8 @@ function shouldUseProviderDefaultModel(
   previousProvider: CloudProvider,
   nextProvider: CloudProvider,
 ): boolean {
+  // Keep an explicitly cleared selection when its API Key loses permission.
+  if (modelName === "" && previousProvider === nextProvider) return false;
   const trimmed = (modelName ?? "").trim();
   if (!trimmed) return true;
   if (trimmed === defaultModelName(previousProvider)) return true;
@@ -2732,7 +3163,9 @@ function customCreateInitialState(
       deployment: {
         ...(draft.deployment ?? { feishuEnabled: false }),
         envValues: Object.fromEntries(
-          Object.entries(initialEnvValues).filter(([key]) => !secretKeys.has(key)),
+          Object.entries(initialEnvValues).filter(
+            ([key]) => !secretKeys.has(key),
+          ),
         ),
       },
     },
@@ -2783,13 +3216,45 @@ function debugRuntimeDraft(
       modelApiKeyId: draft.deployment?.modelApiKeyId ?? "",
       modelApiKeyName: draft.deployment?.modelApiKeyName ?? "",
       envValues: Object.fromEntries(
-        runtimeEnvVars(runtimeEnv.specs, values).map(({ key, value }) => [
-          key,
-          value,
-        ]),
+        runtimeDebugEnvVars(
+          runtimeEnv.specs,
+          values,
+          prepareMcpAuth(draft).envValues,
+        ).map(({ key, value }) => [key, value]),
       ),
     },
   };
+}
+
+function modelRuntimeEnvKeys(
+  draft: AgentDraft,
+  cloudProvider: CloudProvider,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const binding of customModelEnvironmentBindings(
+    draft,
+    defaultModelApiBase(cloudProvider),
+  )) {
+    for (const key of [
+      binding.providerKey,
+      binding.apiBaseKey,
+      binding.apiKeyKey,
+    ]) {
+      if (key) keys.add(key);
+    }
+  }
+  return keys;
+}
+
+function sourcePreservingModelEnvVars(
+  draft: AgentDraft,
+  cloudProvider: CloudProvider,
+  envs: { key: string; value: string }[] | undefined,
+): { key: string; value: string }[] {
+  const allowedKeys = modelRuntimeEnvKeys(draft, cloudProvider);
+  return (envs ?? []).filter(
+    ({ key, value }) => allowedKeys.has(key) && value.trim(),
+  );
 }
 
 function debugSnapshotKey(
@@ -2801,31 +3266,23 @@ function debugSnapshotKey(
 
 function debugVariantSnapshot(
   draftSnapshot: string,
-  variant: Pick<
-    DebugVariant,
-    "modelName" | "description" | "instruction" | "optimizations"
-  >,
+  variant: Pick<DebugVariant, "modelName" | "description" | "instruction">,
 ): string {
   return JSON.stringify({
     draftSnapshot,
     modelName: variant.modelName,
     description: variant.description,
     instruction: variant.instruction,
-    optimizations: variant.optimizations,
   });
 }
 
 function debugVariantConfigurationKey(
-  variant: Pick<
-    DebugVariant,
-    "modelName" | "description" | "instruction" | "optimizations"
-  >,
+  variant: Pick<DebugVariant, "modelName" | "description" | "instruction">,
 ): string {
   return JSON.stringify({
     modelName: variant.modelName.trim(),
     description: variant.description.trim(),
     instruction: variant.instruction.trim(),
-    optimizations: variant.optimizations,
   });
 }
 
@@ -2838,7 +3295,7 @@ function DebugComparisonWorkspace({
   onInput,
   onSend,
   onStartVariant,
-  onDeployVariant,
+  onUseVariant,
   onAddVariant,
   onRemoveVariant,
   onToggleConfig,
@@ -2854,7 +3311,7 @@ function DebugComparisonWorkspace({
   onInput: (v: string) => void;
   onSend: () => void;
   onStartVariant: (id: string) => void;
-  onDeployVariant: (id: string) => void;
+  onUseVariant: (id: string) => void;
   onAddVariant: () => void;
   onRemoveVariant: (id: string) => void;
   onToggleConfig: (id: string) => void;
@@ -2866,6 +3323,7 @@ function DebugComparisonWorkspace({
   ) => void;
   onOpenTrace: (id: string) => void;
 }) {
+  const { t } = useTranslation("create");
   const runningVariants = variants.filter((variant) => {
     if (variant.phase !== "ready") return false;
     return (
@@ -2876,7 +3334,7 @@ function DebugComparisonWorkspace({
   const canSend = runningVariants.length > 0 && !sending;
 
   return (
-    <section className="cw-ab-workspace" aria-label="A/B 调试工作台">
+    <section className="cw-ab-workspace" aria-label={t("traditional.debug.ariaLabel")}>
       <div className="cw-ab-stage">
         {!enabled ? (
           <div className="cw-debug-empty">{disabledReason}</div>
@@ -2890,6 +3348,7 @@ function DebugComparisonWorkspace({
             }
           >
             {variants.map((variant, variantIndex) => {
+              const variantName = debugVariantDisplayName(variant, t);
               const modelName = variant.modelName.trim();
               const description = variant.description.trim();
               const instruction = variant.instruction.trim();
@@ -2925,23 +3384,23 @@ function DebugComparisonWorkspace({
               const startDisabled =
                 busy || variant.configOpen || configurationUnavailable;
               const disabledReason = !modelName
-                ? "请先选择模型"
+                ? t("traditional.debug.selectModel")
                 : !description
-                  ? "请填写描述"
+                  ? t("traditional.debug.enterDescription")
                   : !instruction
-                    ? "请填写系统提示词"
+                    ? t("traditional.debug.enterPrompt")
                     : duplicateConfiguration
-                      ? "该配置与已有测试组相同"
+                      ? t("traditional.debug.duplicateConfiguration")
                       : "";
               const startLabel = starting
-                ? "正在启动"
+                ? t("traditional.debug.starting")
                 : stale
-                  ? "应用配置并重启"
+                  ? t("traditional.debug.applyAndRestart")
                   : ready
-                    ? "重新启动环境"
+                    ? t("traditional.debug.restart")
                     : variant.phase === "error"
-                      ? "重新启动环境"
-                      : "启动环境";
+                      ? t("traditional.debug.restart")
+                      : t("traditional.debug.start");
               return (
                 <article key={variant.id} className="cw-ab-card">
                   <div
@@ -2950,11 +3409,12 @@ function DebugComparisonWorkspace({
                     <section
                       className="cw-ab-card-face cw-ab-card-front"
                       aria-hidden={variant.configOpen}
+                      inert={variant.configOpen}
                     >
                       <header className="cw-ab-card-head">
                         <div className="cw-ab-card-title">
-                          <strong>{variant.name}</strong>
-                          <span>{variant.modelName || "默认模型"}</span>
+                          <strong>{variantName}</strong>
+                          <span>{variant.modelName || t("traditional.debug.defaultModel")}</span>
                         </div>
                         <div className="cw-ab-card-actions">
                           <button
@@ -2963,13 +3423,13 @@ function DebugComparisonWorkspace({
                             disabled={variant.configOpen || busy}
                             onClick={() => onToggleConfig(variant.id)}
                           >
-                            测试配置
+                            {t("traditional.debug.testConfiguration")}
                           </button>
                           {variant.id !== "baseline" && (
                             <button
                               type="button"
                               className="cw-ab-remove"
-                              aria-label={`删除${variant.name}`}
+                              aria-label={t("traditional.debug.deleteVariant", { name: variantName })}
                               disabled={variant.configOpen || busy}
                               onClick={() => onRemoveVariant(variant.id)}
                             >
@@ -2989,26 +3449,26 @@ function DebugComparisonWorkspace({
                         ) : starting ? (
                           <div className="cw-ab-empty cw-ab-starting">
                             <Loader2 className="cw-i cw-spin" />
-                            <span>正在创建独立测试环境</span>
+                            <span>{t("traditional.debug.creatingEnvironment")}</span>
                           </div>
                         ) : stale ? (
                           <div className="cw-ab-empty cw-ab-launch">
-                            <span>配置已变更，请重新启动此环境</span>
+                            <span>{t("traditional.debug.configurationChanged")}</span>
                           </div>
                         ) : variant.messages.length === 0 ? (
                           <div className="cw-ab-empty cw-ab-launch">
                             {ready ? (
                               <>
                                 <strong className="cw-ab-ready-title">
-                                  已就绪
+                                  {t("traditional.debug.ready")}
                                 </strong>
                                 <span className="cw-ab-launch-hint">
-                                  可在下方输入测试消息
+                                  {t("traditional.debug.readyHint")}
                                 </span>
                               </>
                             ) : (
                               <span className="cw-ab-launch-hint">
-                                {disabledReason || "启动环境后即可加入本轮测试"}
+                                {disabledReason || t("traditional.debug.startHint")}
                               </span>
                             )}
                           </div>
@@ -3052,12 +3512,12 @@ function DebugComparisonWorkspace({
                           disabled={!traceAvailable}
                           title={
                             traceAvailable
-                              ? `查看${variant.name}调用链路`
-                              : "完成一次调试后可查看调用链路"
+                              ? t("traditional.debug.viewTraceNamed", { name: variantName })
+                              : t("traditional.debug.traceUnavailable")
                           }
                           onClick={() => onOpenTrace(variant.id)}
                         >
-                          调用链路
+                          {t("traditional.debug.trace")}
                         </button>
                         <button
                           type="button"
@@ -3077,9 +3537,9 @@ function DebugComparisonWorkspace({
                           type="button"
                           className="cw-ab-deploy"
                           disabled={busy || !modelName}
-                          onClick={() => onDeployVariant(variant.id)}
+                          onClick={() => onUseVariant(variant.id)}
                         >
-                          部署该配置
+                          {t("traditional.debug.useConfiguration")}
                         </button>
                       </footer>
                     </section>
@@ -3087,19 +3547,20 @@ function DebugComparisonWorkspace({
                     <section
                       className="cw-ab-card-face cw-ab-card-back"
                       aria-hidden={!variant.configOpen}
+                      inert={!variant.configOpen}
                     >
                       <header className="cw-ab-config-head">
                         <div>
-                          <strong>测试配置</strong>
-                          <span>{variant.name}</span>
+                          <strong>{t("traditional.debug.testConfiguration")}</strong>
+                          <span>{variantName}</span>
                         </div>
                         <div className="cw-ab-config-head-actions">
                           {variant.id !== "baseline" && (
                             <button
                               type="button"
                               className="cw-icon-btn cw-icon-danger cw-ab-config-remove"
-                              aria-label={`删除${variant.name}`}
-                              title="删除配置组"
+                              aria-label={t("traditional.debug.deleteVariant", { name: variantName })}
+                              title={t("traditional.debug.deleteVariantGroup")}
                               disabled={busy}
                               onClick={() => onRemoveVariant(variant.id)}
                             >
@@ -3119,8 +3580,8 @@ function DebugComparisonWorkspace({
                               onClick={() => onCompleteConfig(variant.id)}
                             >
                               {variant.id === "baseline"
-                                ? "完成配置"
-                                : "完成并启动"}
+                                ? t("traditional.debug.finishConfiguration")
+                                : t("traditional.debug.finishAndStart")}
                             </button>
                             {disabledReason && (
                               <span
@@ -3135,10 +3596,10 @@ function DebugComparisonWorkspace({
                       </header>
                       <div className="cw-ab-config">
                         <label>
-                          <span>模型</span>
+                          <span>{t("traditional.model.label")}</span>
                           <input
                             value={variant.modelName}
-                            placeholder="使用 Agent 当前模型"
+                            placeholder={t("traditional.debug.currentAgentModel")}
                             disabled={!variant.configOpen}
                             onChange={(event) =>
                               onConfigChange(
@@ -3150,7 +3611,7 @@ function DebugComparisonWorkspace({
                           />
                         </label>
                         <label>
-                          <span>描述</span>
+                          <span>{t("common.description")}</span>
                           <textarea
                             rows={2}
                             value={variant.description}
@@ -3165,7 +3626,7 @@ function DebugComparisonWorkspace({
                           />
                         </label>
                         <label>
-                          <span>系统提示词</span>
+                          <span>{t("traditional.basic.systemPrompt")}</span>
                           <textarea
                             rows={5}
                             value={variant.instruction}
@@ -3179,26 +3640,7 @@ function DebugComparisonWorkspace({
                             }
                           />
                         </label>
-                        <fieldset className="cw-ab-optimizations-disabled">
-                          <legend>
-                            <span>优化选项</span>
-                            <em>待开放</em>
-                          </legend>
-                          <div className="cw-ab-optimization-list">
-                            {DEBUG_OPTIMIZATIONS.map((item) => (
-                              <Checkbox
-                                key={item.id}
-                                checked={variant.optimizations.includes(
-                                  item.id,
-                                )}
-                                disabled
-                                label={item.label}
-                                className="cw-ab-optimization-checkbox"
-                              />
-                            ))}
-                          </div>
-                        </fieldset>
-                        <p>设置完成后返回正面，再启动当前测试环境。</p>
+                        <p>{t("traditional.debug.configurationHint")}</p>
                       </div>
                     </section>
                   </div>
@@ -3217,8 +3659,8 @@ function DebugComparisonWorkspace({
             value={input}
             placeholder={
               canSend
-                ? "输入测试消息，将发送到所有已启动测试组..."
-                : "请先启动至少一个测试组"
+                ? t("traditional.debug.messagePlaceholder")
+                : t("traditional.debug.startOneFirst")
             }
             disabled={!canSend}
             onChange={(e) => onInput(e.target.value)}
@@ -3233,7 +3675,7 @@ function DebugComparisonWorkspace({
           <button
             type="button"
             className="cw-debug-send"
-            title="发送"
+            title={t("common.send")}
             disabled={!canSend || !input.trim()}
             onClick={onSend}
           >
@@ -3251,9 +3693,126 @@ function DebugComparisonWorkspace({
             onClick={onAddVariant}
           >
             <Plus className="cw-i" />
-            添加对照组
+            {t("traditional.debug.addVariant")}
           </button>
         )}
+      </div>
+    </section>
+  );
+}
+
+function HarnessOptimizationWorkspace({
+  profile,
+  optimizations,
+  onProfileChange,
+  onOptimizationChange,
+}: {
+  profile: HarnessSidecarProfileId;
+  optimizations: HarnessSidecarOptionId[];
+  onProfileChange: (profile: HarnessSidecarProfileId) => void;
+  onOptimizationChange: (
+    optionId: HarnessSidecarOptionId,
+    selected: boolean,
+  ) => void;
+}) {
+  const { t } = useTranslation("create");
+  return (
+    <section
+      className="cw-optimize-workspace"
+      aria-label={t("traditional.optimization.ariaLabel")}
+    >
+      <div className="cw-optimize-panel">
+        <fieldset className="cw-optimize-section">
+          <legend>{t("traditional.optimization.scenario")}</legend>
+          <RadioGroup<HarnessSidecarProfileId>
+            className="cw-optimize-profile-options"
+            aria-label={t("traditional.optimization.scenario")}
+            value={profile}
+            onChange={onProfileChange}
+          >
+            {HARNESS_SIDECAR_PROFILES.map((item) => (
+              <div
+                key={item.id}
+                className={`cw-optimize-profile-option${
+                  profile === item.id ? " is-on" : ""
+                }`}
+              >
+                <RadioGroup.Item
+                  value={item.id}
+                  block
+                  className="cw-optimize-profile-control"
+                >
+                  <span className="cw-optimize-profile-copy">
+                    <strong>
+                      {t(`traditional.optimization.profiles.${item.id}.label`)}
+                    </strong>
+                    <small>
+                      {t(
+                        `traditional.optimization.profiles.${item.id}.description`,
+                      )}
+                    </small>
+                  </span>
+                </RadioGroup.Item>
+              </div>
+            ))}
+          </RadioGroup>
+        </fieldset>
+
+        <fieldset className="cw-optimize-section">
+          <legend>{t("traditional.optimization.components")}</legend>
+          <div className="cw-optimize-option-list">
+            {HARNESS_SIDECAR_OPTION_GROUPS.map((group) => (
+              <section
+                key={group.id}
+                className="cw-optimize-option-group"
+                aria-labelledby={`cw-optimize-group-${group.id}`}
+              >
+                <h3
+                  id={`cw-optimize-group-${group.id}`}
+                  className="cw-optimize-option-group-title"
+                >
+                  {t(`traditional.optimization.groups.${group.id}`)}
+                </h3>
+                <div className="cw-optimize-option-group-items">
+                  {group.componentIds.map((optionId) => {
+                    const item = HARNESS_SIDECAR_OPTIONS.find(
+                      (option) => option.id === optionId,
+                    );
+                    if (!item) return null;
+                    const checked = optimizations.includes(item.id);
+                    return (
+                      <Checkbox
+                        key={item.id}
+                        checked={checked}
+                        onCheckedChange={(next) => {
+                          const selected = Boolean(next);
+                          if (selected !== checked) {
+                            onOptimizationChange(item.id, selected);
+                          }
+                        }}
+                        label={
+                          <span className="cw-optimize-option-copy">
+                            <strong>
+                              {t(
+                                `traditional.optimization.options.${item.id}.label`,
+                              )}
+                            </strong>
+                            <small>
+                              {t(
+                                `traditional.optimization.options.${item.id}.description`,
+                              )}
+                            </small>
+                          </span>
+                        }
+                        className="cw-optimize-option"
+                      />
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
+          </div>
+        </fieldset>
       </div>
     </section>
   );
@@ -3263,46 +3822,26 @@ const WORKSPACE_MODES: Array<{
   id: WorkspaceMode;
   label: string;
 }> = [
-  { id: "build", label: "架构" },
-  { id: "validate", label: "调试" },
-  { id: "environment", label: "环境" },
-  { id: "publish", label: "发布" },
+  { id: "build", label: "traditional.workspace.modes.build" },
+  { id: "validate", label: "traditional.workspace.modes.validate" },
+  { id: "optimize", label: "traditional.workspace.modes.optimize" },
+  { id: "environment", label: "traditional.workspace.modes.environment" },
+  { id: "publish", label: "traditional.workspace.modes.publish" },
 ];
 
 const WORKSPACE_TITLES: Record<WorkspaceMode, string> = {
-  build: "个性化您的智能体架构",
-  validate: "调试您的智能体",
-  environment: "配置云上环境",
-  publish: "准备好部署您的智能体",
+  build: "traditional.workspace.titles.build",
+  validate: "traditional.workspace.titles.validate",
+  optimize: "traditional.workspace.titles.optimize",
+  environment: "traditional.workspace.titles.environment",
+  publish: "traditional.workspace.titles.publish",
 };
 
-const DEBUG_OPTIMIZATIONS = [
-  {
-    id: "context",
-    label: "上下文优化",
-    description: "压缩历史对话，保留与当前任务相关的信息",
-  },
-  {
-    id: "grounding",
-    label: "幻觉抑制",
-    description: "对不确定内容要求依据，并明确表达未知",
-  },
-  {
-    id: "tools",
-    label: "工具调用优化",
-    description: "减少重复调用，优先复用可信的工具结果",
-  },
-  {
-    id: "latency",
-    label: "响应加速",
-    description: "缓存稳定上下文，降低重复推理开销",
-  },
-] as const;
-
 function WorkspaceHeader({ mode }: { mode: WorkspaceMode }) {
+  const { t } = useTranslation("create");
   return (
     <header className="cw-workspace-header">
-      <h1>{WORKSPACE_TITLES[mode]}</h1>
+      <h1>{t(WORKSPACE_TITLES[mode])}</h1>
     </header>
   );
 }
@@ -3310,22 +3849,27 @@ function WorkspaceHeader({ mode }: { mode: WorkspaceMode }) {
 function WorkspaceLifecycleFooter({
   mode,
   busy,
+  nextDisabled,
   onChange,
   assistant,
   accessory,
 }: {
   mode: WorkspaceMode;
   busy: boolean;
+  nextDisabled?: boolean;
   onChange: (mode: WorkspaceMode) => void;
   assistant?: React.ReactNode;
   accessory?: React.ReactNode;
 }) {
+  const { t } = useTranslation("create");
   const activeIndex = WORKSPACE_MODES.findIndex((item) => item.id === mode);
   const previousMode = WORKSPACE_MODES[activeIndex - 1];
   const nextMode = WORKSPACE_MODES[activeIndex + 1];
   return (
     <footer className="cw-workspace-footer">
-      {accessory ? <div className="cw-workspace-footer-accessory">{accessory}</div> : null}
+      {accessory ? (
+        <div className="cw-workspace-footer-accessory">{accessory}</div>
+      ) : null}
       <div
         className={`cw-workspace-nav-actions${assistant ? " has-assistant" : ""}`}
       >
@@ -3337,7 +3881,7 @@ function WorkspaceLifecycleFooter({
           disabled={!previousMode || busy}
           onClick={() => previousMode && onChange(previousMode.id)}
         >
-          上一步
+          {t("common.previous")}
         </button>
         <span aria-hidden="true" />
         {assistant ? (
@@ -3352,14 +3896,17 @@ function WorkspaceLifecycleFooter({
           <button
             type="button"
             className="cw-workspace-nav-button is-primary"
-            disabled={!nextMode || busy}
+            disabled={!nextMode || busy || nextDisabled}
             onClick={() => nextMode && onChange(nextMode.id)}
           >
-            下一步
+            {t("common.next")}
           </button>
         )}
       </div>
-      <nav className="cw-workspace-progress" aria-label="Agent 创建进度">
+      <nav
+        className="cw-workspace-progress"
+        aria-label={t("traditional.workspace.progress")}
+      >
         {WORKSPACE_MODES.map((item, index) => {
           const active = item.id === mode;
           return (
@@ -3368,7 +3915,7 @@ function WorkspaceLifecycleFooter({
               type="button"
               className={`${active ? "is-active" : ""}${index < activeIndex ? " is-complete" : ""}`}
               aria-current={active ? "step" : undefined}
-              aria-label={item.label}
+              aria-label={t(item.label)}
               disabled={busy}
               onClick={() => onChange(item.id)}
             >
@@ -3393,13 +3940,24 @@ interface CustomCreateProps extends CreateModeProps {
   onDeploymentTaskChange?: (task: DeploymentTaskUpdate) => void;
   /** Specific creation path inside the scratch flow. */
   createMode?: "custom" | "yaml_import";
+  /** Fresh custom creation experience selected by the app-level chooser. */
+  freshCreationSurface?: "vulcan" | "traditional";
+  /** Stable local draft id propagated to persistent deployment tasks. */
+  workspaceDraftId?: string;
   /** Existing Runtime target when editing an Agent from the library. */
   deploymentTarget?: {
     runtimeId: string;
+    agentCategory?: "general" | "mpa";
+    mpaInstanceId?: string;
     name: string;
     region: string;
     appName?: string;
     currentVersion?: number | null;
+    etag?: string;
+    editMode?: "source-preserving" | "regenerate";
+    mpaProfileOnly?: boolean;
+    configuredMcpEnvKeys?: string[];
+    configuredRuntimeEnvKeys?: string[];
   };
   /** Region selected before entering the create flow. */
   initialDeployRegion?: string;
@@ -3423,6 +3981,8 @@ export function CustomCreate({
   features,
   onDeploymentTaskChange,
   createMode = "custom",
+  freshCreationSurface = "traditional",
+  workspaceDraftId,
   deploymentTarget,
   cloudProvider = "volcengine",
   initialDeployRegion = defaultCloudRegion(cloudProvider),
@@ -3431,19 +3991,39 @@ export function CustomCreate({
   onDraftChange,
   onDiscard,
 }: CustomCreateProps) {
+  const { t } = useTranslation("create");
+  const isMpaDeployment = deploymentAgentCategory(deploymentTarget) === "mpa";
   void onCreate; // outcome is the in-pane project preview, not a navigation
-  void onBack; // no footer nav in the single-scroll layout; back lives in app chrome
   void onDiscard; // the discard action is intentionally hidden in this flow
-  const [initialState] = useState<CustomCreateInitialState>(() =>
-    customCreateInitialState(
-      initialDraft ?? emptyDraft(cloudProvider),
+  const isVulcanCreation =
+    createMode === "custom" && freshCreationSurface === "vulcan";
+  const isFreshVulcanCreation = isVulcanCreation && !initialDraft;
+  const [initialState] = useState<CustomCreateInitialState>(() => {
+    const initialCreationDraft = initialDraft ?? emptyDraft(cloudProvider);
+    const creationDraft = isFreshVulcanCreation
+      ? {
+          ...initialCreationDraft,
+          name: initialCreationDraft.name.trim()
+            ? initialCreationDraft.name
+            : "assistant",
+          dynamicAgentDelegation: true,
+        }
+      : initialCreationDraft;
+    return customCreateInitialState(
+      creationDraft,
       cloudProvider,
-    ),
-  );
+    );
+  });
   const [draft, setDraft] = useState<AgentDraft>(initialState.draft);
+  const usesNewAgentWorkbench = isVulcanCreation;
   const [customModelSecretValues, setCustomModelSecretValues] = useState<
     Record<string, string>
   >(initialState.customModelSecretValues);
+  const configuredRuntimeEnvKeys = deploymentTarget?.configuredRuntimeEnvKeys ?? [];
+  const configuredRuntimeEnvKeySet = useMemo(
+    () => new Set(configuredRuntimeEnvKeys),
+    [configuredRuntimeEnvKeys],
+  );
   const configuredRuntimeName = draft.deployment?.runtimeName ?? "";
   const deploymentRuntimeName = deploymentTarget
     ? deploymentTarget.name
@@ -3453,6 +4033,17 @@ export function CustomCreate({
         draft.deployment?.runtimeNameCustomized,
       );
   const transientModelSecretValues = customModelSecretValues;
+  const patchCustomModelSecret = useCallback((key: string, value: string) => {
+    setCustomModelSecretValues((current) => {
+      const next = { ...current };
+      if (value) {
+        next[key] = value;
+      } else {
+        delete next[key];
+      }
+      return next;
+    });
+  }, []);
   useEffect(() => {
     setDraft((current) => draftForCloudProvider(current, cloudProvider));
   }, [cloudProvider]);
@@ -3465,7 +4056,9 @@ export function CustomCreate({
   const aiRequirementError =
     trimmedAiRequirement.length > 0 &&
     trimmedAiRequirement.length < GENERATED_AGENT_REQUIREMENT_MIN_LENGTH
-      ? "请至少输入 4 个字符。"
+      ? t("traditional.ai.minimumLength", {
+          count: GENERATED_AGENT_REQUIREMENT_MIN_LENGTH,
+        })
       : "";
   const initialDraftSnapshotRef = useRef(JSON.stringify(draft));
   const lastNotifiedDraftSnapshotRef = useRef(initialDraftSnapshotRef.current);
@@ -3485,18 +4078,19 @@ export function CustomCreate({
   }, [cloudProvider, draft, draftDirty, draftSnapshot]);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("build");
   const [showErrors, setShowErrors] = useState(false);
+  const [touchedAgentNamePaths, setTouchedAgentNamePaths] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const [validationPulse, setValidationPulse] = useState(0);
   const [project, setProject] = useState<AgentProject | null>(null);
   const [building, setBuilding] = useState(false);
-  const [cloudEnvironmentEditorOpen, setCloudEnvironmentEditorOpen] =
-    useState(false);
   const [deployRegion, setDeployRegion] = useState<string>(
     deploymentTarget?.region ?? initialDeployRegion,
   );
   const debugEnabled = features?.generatedAgentTestRun === true;
   const debugDisabledReason =
     features?.generatedAgentTestRunDisabledReason ||
-    "当前后端暂不支持生成 Agent 调试运行。";
+    t("traditional.debug.unavailable");
   const [debugVariants, setDebugVariants] = useState<DebugVariant[]>(() => {
     const initialProviderDraft = draftForCloudProvider(
       initialDraft ?? emptyDraft(cloudProvider),
@@ -3505,11 +4099,10 @@ export function CustomCreate({
     return [
       {
         id: "baseline",
-        name: "基准组",
+        name: t("traditional.debug.baseline"),
         modelName: defaultDebugModelName(initialProviderDraft),
         description: initialProviderDraft.description,
         instruction: initialProviderDraft.instruction,
-        optimizations: [],
         configOpen: false,
         phase: "idle",
         runtimeSnapshot: "",
@@ -3534,6 +4127,12 @@ export function CustomCreate({
     ((confirmed: boolean) => void) | null
   >(null);
   const [buildErr, setBuildErr] = useState("");
+  const [newWorkbenchDeploying, setNewWorkbenchDeploying] = useState(false);
+  const [newWorkbenchDeployStage, setNewWorkbenchDeployStage] =
+    useState<DeployStage | null>(null);
+  const [newWorkbenchDeployError, setNewWorkbenchDeployError] = useState("");
+  const [newWorkbenchDeploySucceeded, setNewWorkbenchDeploySucceeded] =
+    useState(false);
   const [a2aRegistryAdvancedOpen, setA2aRegistryAdvancedOpen] = useState(false);
 
   // Which tree node is being edited ([] = root). The detail pane and per-node
@@ -3556,7 +4155,7 @@ export function CustomCreate({
           await deleteGeneratedAgentTestRun(runId);
           forgetDebugTestRun(runId);
         } catch (err) {
-          console.warn("清理遗留调试运行失败", err);
+          console.warn("Failed to clean up stale debug run", err);
         }
       }),
     );
@@ -3568,7 +4167,7 @@ export function CustomCreate({
       for (const { run } of debugRunsRef.current.values()) {
         deleteGeneratedAgentTestRun(run.runId)
           .then(() => forgetDebugTestRun(run.runId))
-          .catch((err) => console.warn("清理调试运行失败", err));
+          .catch((err) => console.warn("Failed to clean up debug run", err));
       }
       debugRunsRef.current.clear();
     };
@@ -3602,7 +4201,7 @@ export function CustomCreate({
         className="cw-section"
       >
         <header className="cw-sec-head">
-          <h2 className="cw-sec-title">{meta.label}</h2>
+          <h2 className="cw-sec-title">{t(meta.label)}</h2>
         </header>
         <div className="cw-sec-body">{children}</div>
       </section>
@@ -3614,23 +4213,33 @@ export function CustomCreate({
   const safePath = pathExists(draft, selectedPath) ? selectedPath : [];
   const node = getNode(draft, safePath);
   const isRootAgent = safePath.length === 0;
+  const selectedNamePathKey = safePath.join(".") || "root";
+  const markAgentNameTouched = () => {
+    setTouchedAgentNamePaths((current) => {
+      if (current.has(selectedNamePathKey)) return current;
+      return new Set(current).add(selectedNamePathKey);
+    });
+  };
   const a2aRegistryAdvancedId = `cw-a2a-registry-advanced-${
     safePath.join("-") || "root"
   }`;
   const patch = (p: Partial<AgentDraft>) =>
     setDraft((d) => updateNode(d, safePath, (n) => ({ ...n, ...p })));
 
-  const patchDeploymentEnv = (key: string, value: string) =>
+  const patchDeploymentEnvValues = (values: Record<string, string>) =>
     setDraft((current) => ({
       ...current,
       deployment: {
         ...(current.deployment ?? { feishuEnabled: false }),
         envValues: {
           ...(current.deployment?.envValues ?? {}),
-          [key]: value,
+          ...values,
         },
       },
     }));
+
+  const patchDeploymentEnv = (key: string, value: string) =>
+    patchDeploymentEnvValues({ [key]: value });
 
   const patchA2aRegistry = (
     updates: Partial<NonNullable<AgentDraft["a2aRegistry"]>>,
@@ -3693,7 +4302,7 @@ export function CustomCreate({
     if (requirement.length < GENERATED_AGENT_REQUIREMENT_MIN_LENGTH) return;
     if (
       draftDirty &&
-      !window.confirm("生成的新配置会替换当前画布和属性，确定继续吗？")
+      !window.confirm(t("traditional.ai.replaceConfirmation"))
     ) {
       return;
     }
@@ -3746,7 +4355,7 @@ export function CustomCreate({
 
   const clearRootAgent = () => {
     if (
-      !window.confirm("清空根 Agent 的全部配置和子 Agent？此操作无法撤销。")
+      !window.confirm(t("traditional.actions.clearRootConfirmation"))
     ) {
       return;
     }
@@ -3774,6 +4383,7 @@ export function CustomCreate({
     [createBuiltinTools],
   );
   const mcpTools = node.mcpTools ?? [];
+  const mcpConflict = isRootAgent ? mcpConfigurationConflict(draft) : null;
   const selectedSkills = node.selectedSkills ?? [];
   const toggleBuiltin = (id: string) => {
     if (!createBuiltinToolIds.has(id)) return;
@@ -3787,6 +4397,7 @@ export function CustomCreate({
   // Detail-pane branching is driven by the SELECTED node's type.
   const orchestrator = isOrchestratorType(node.agentType);
   const a2a = isA2aType(node.agentType);
+  const a2aDefaults = a2aRegistryDefaults(cloudProvider);
   const modelSource = resolvedModelSource(node, cloudProvider);
   const selectModelSource = (source: ModelSource) => {
     const nextModelName =
@@ -3798,6 +4409,10 @@ export function CustomCreate({
     patch({
       modelSource: source,
       modelName: nextModelName,
+      modelFallbacks:
+        source === "custom" && modelSource === "ark"
+          ? []
+          : normalizeModelFallbacks(nextModelName, node.modelFallbacks),
     });
   };
 
@@ -3805,17 +4420,21 @@ export function CustomCreate({
   const duplicateNames = useMemo(() => duplicateAgentNames(draft), [draft]);
   const nameProblem = a2a
     ? null
-    : (agentNameProblem(node.name) ??
+    : (agentNameProblem(node.name, (key) =>
+        t(`validation.agentName.${key}`),
+      ) ??
       (duplicateNames.has(node.name)
-        ? "Agent 名称在当前结构中必须唯一"
+        ? t("traditional.validation.duplicateName")
         : null));
   const nameInvalid = nameProblem !== null;
+  const showNameError =
+    showErrors || touchedAgentNamePaths.has(selectedNamePathKey);
   const descriptionMissing = !a2a && node.description.trim().length === 0;
   const instructionMissing = node.instruction.trim().length === 0;
   const a2aRegistrySpaceMissing =
     a2a && !node.a2aRegistry?.registrySpaceId.trim();
-  const invalidClass = (missing: boolean) =>
-    showErrors && missing
+  const invalidClass = (missing: boolean, visible = showErrors) =>
+    visible && missing
       ? `is-error cw-error-shake-${validationPulse % 2}`
       : "";
 
@@ -3829,6 +4448,9 @@ export function CustomCreate({
     () => draftForCloudProvider(draft, cloudProvider),
     [cloudProvider, draft],
   );
+  const harnessOptimizationProfile = selectedHarnessProfile(draft);
+  const harnessOptimizations = selectedHarnessOptimizations(draft);
+  const harnessProviderNotice = harnessSidecarProviderNotice(cloudProvider);
   const currentDebugSnapshot = useMemo(
     () => debugSnapshotKey(providerDraft, transientModelSecretValues),
     [providerDraft, transientModelSecretValues],
@@ -3837,9 +4459,15 @@ export function CustomCreate({
     debugVariants.find((variant) => variant.id === selectedVariantId) ??
     debugVariants[0];
   const deploymentEnv = useMemo(
-    () => collectDeploymentEnv(providerDraft),
-    [providerDraft],
+    () =>
+      collectDeploymentEnv(
+        providerDraft,
+        deploymentTarget?.editMode === "source-preserving",
+      ),
+    [deploymentTarget?.editMode, providerDraft],
   );
+  const showModelFallbacks =
+    !deploymentTarget || deploymentTarget.editMode === "regenerate";
   const customModelCredentials = useMemo(
     () =>
       customModelCredentialRequirements(
@@ -3848,32 +4476,158 @@ export function CustomCreate({
       ),
     [cloudProvider, providerDraft],
   );
+  const arkModelPath = useMemo(
+    () => firstArkModelPath(providerDraft, cloudProvider),
+    [cloudProvider, providerDraft],
+  );
+  const missingCustomModelCredential = useMemo(
+    () =>
+      missingCustomModelCredentialRequirement(
+        providerDraft,
+        defaultModelApiBase(cloudProvider),
+        customModelSecretValues,
+        configuredRuntimeEnvKeys,
+      ),
+    [
+      cloudProvider,
+      configuredRuntimeEnvKeys,
+      customModelSecretValues,
+      providerDraft,
+    ],
+  );
+  const arkModelApiKeyMissing =
+    arkModelPath !== null && !providerDraft.deployment?.modelApiKeyId?.trim();
+  const modelCredentialMissing =
+    arkModelApiKeyMissing || Boolean(missingCustomModelCredential);
   const selectedCustomModelCredential = customModelCredentials.find(
     (requirement) =>
-      requirement.label === `${node.name.trim() || "自定义模型"} 模型 API Key`,
+      requirement.label === createT("helpers.customModel.apiKeyLabel", {
+        name: node.name.trim() || createT("helpers.customModel.fallbackName"),
+      }),
+  );
+  const selectedCustomModelApiKeyConfigured = selectedCustomModelCredential
+    ? configuredRuntimeEnvKeySet.has(selectedCustomModelCredential.key)
+    : false;
+  const selectedCustomModelApiKeyMissing =
+    modelSource === "custom" &&
+    selectedCustomModelCredential !== undefined &&
+    !customModelSecretValues[selectedCustomModelCredential.key]?.trim() &&
+    !selectedCustomModelApiKeyConfigured;
+  const selectedArkModelApiKeyMissing =
+    modelSource === "ark" && !providerDraft.deployment?.modelApiKeyId?.trim();
+  const customModelApiBaseInvalid = !isValidModelApiBaseUrl(
+    node.modelApiBase,
   );
 
-  // Smooth-scroll to the first invalid section during validation.
-  const scrollToSection = (id: StepId) => {
-    sectionRefs.current[id]?.scrollIntoView({
+  const updateNewWorkbenchModelApiKey = useCallback(
+    (key: ModelApiKeyOption) => {
+      setDraft((current) => ({
+        ...current,
+        deployment: {
+          ...(current.deployment ?? { feishuEnabled: false }),
+          modelApiKeyId: key.id,
+          modelApiKeyName: key.name,
+        },
+      }));
+    },
+    [],
+  );
+
+  function focusValidationProblem(problem: TreeProblem) {
+    const sectionId =
+      problem.problem === "mcpDuplicateName" ||
+      problem.problem === "mcpDuplicateUrl"
+        ? "tools"
+        : problem.problem === "missingSubagent"
+          ? "type"
+          : "basic";
+    const section = sectionRefs.current[sectionId];
+    section?.scrollIntoView({
       behavior: "smooth",
       block: "start",
     });
-  };
+
+    const field =
+      problem.problem === "mcpDuplicateName"
+        ? "mcp-name"
+        : problem.problem === "mcpDuplicateUrl"
+          ? "mcp-url"
+          : problem.problem === "missingDescription"
+            ? "description"
+            : problem.problem === "missingPrompt"
+              ? "instruction"
+              : problem.problem === "missingRegistry"
+                ? "a2a-registry"
+                : problem.problem === "missingSubagent" ||
+                    problem.problem === "remoteRoot"
+                  ? null
+                  : "name";
+    const fieldRoot = field
+      ? section?.querySelector<HTMLElement>(
+          `[data-validation-field="${field}"]`,
+        )
+      : section;
+    const focusTarget = fieldRoot?.matches(
+      'input, textarea, button:not([disabled]), [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
+    )
+      ? fieldRoot
+      : fieldRoot?.querySelector<HTMLElement>(
+          'input, textarea, button:not([disabled]), [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
+        );
+    focusTarget?.focus({ preventScroll: true });
+  }
+
+  function focusModelCredential(path: NodePath) {
+    setSelectedPath(path);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const section = sectionRefs.current.model;
+        section?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+        const fieldRoot =
+          section?.querySelector<HTMLElement>(
+            '[data-validation-field="model-api-key"]',
+          ) ?? section;
+        const focusTarget = fieldRoot?.matches(
+          'input, textarea, button:not([disabled]), [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
+        )
+          ? fieldRoot
+          : fieldRoot?.querySelector<HTMLElement>(
+              'input, textarea, button:not([disabled]), [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
+            );
+        focusTarget?.focus({ preventScroll: true });
+      });
+    });
+  }
 
   const requireCompleteDraft = () => {
-    if (canFinish) return true;
-    setShowErrors(true);
-    setValidationPulse((pulse) => pulse + 1);
-    if (problems[0]) {
-      setSelectedPath(problems[0].path);
-      window.requestAnimationFrame(() =>
-        scrollToSection(
-          problems[0].problem === "缺少子 Agent" ? "type" : "basic",
-        ),
-      );
+    if (!canFinish) {
+      setShowErrors(true);
+      setValidationPulse((pulse) => pulse + 1);
+      if (problems[0]) {
+        setSelectedPath(problems[0].path);
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() =>
+            focusValidationProblem(problems[0]),
+          );
+        });
+      }
+      return false;
     }
-    return false;
+    if (modelCredentialMissing) {
+      setShowErrors(true);
+      setValidationPulse((pulse) => pulse + 1);
+      focusModelCredential(
+        arkModelApiKeyMissing
+          ? (arkModelPath ?? [])
+          : (missingCustomModelCredential?.path ?? []),
+      );
+      return false;
+    }
+    setBuildErr("");
+    return true;
   };
 
   const cleanupDebugRuns = async () => {
@@ -3896,7 +4650,7 @@ export function CustomCreate({
           await deleteGeneratedAgentTestRun(run.runId);
           forgetDebugTestRun(run.runId);
         } catch (err) {
-          console.warn("清理调试运行失败", err);
+          console.warn("Failed to clean up debug run", err);
         }
       }),
     );
@@ -3911,7 +4665,7 @@ export function CustomCreate({
       await deleteGeneratedAgentTestRun(runtime.run.runId);
       forgetDebugTestRun(runtime.run.runId);
     } catch (err) {
-      console.warn("清理调试运行失败", err);
+      console.warn("Failed to clean up debug run", err);
     }
   };
 
@@ -3922,7 +4676,7 @@ export function CustomCreate({
     setDebugTraceTarget({
       runId: runtime.run.runId,
       sessionId: runtime.sessionId,
-      variantName: variant.name,
+      variantName: debugVariantDisplayName(variant, t),
     });
   };
 
@@ -3969,27 +4723,15 @@ export function CustomCreate({
     setWorkspaceMode("environment");
   };
 
-  const openPublishPreview = async (variantId?: string) => {
-    if (!(await confirmLeaveDebug())) return;
+  const materializePublishRelease = async (variantId?: string) => {
     setBuildErr("");
     if (!requireCompleteDraft()) {
       setWorkspaceMode("build");
       return;
     }
-    if (
-      providerDraft.cloudEnvironment?.dockerfile !== undefined &&
-      !providerDraft.cloudEnvironment.dockerfile.trim()
-    ) {
-      setBuildErr("Dockerfile 不能为空。请输入有效内容，或恢复自动生成。");
-      setWorkspaceMode("environment");
-      return;
-    }
-    if (
-      (providerDraft.cloudEnvironment?.dockerfile?.length ?? 0) >
-      MAX_CLOUD_DOCKERFILE_LENGTH
-    ) {
-      setBuildErr("Dockerfile 不能超过 64 KiB。请精简内容后重试。");
-      setWorkspaceMode("environment");
+    if (providerDraft.harnessSidecar?.enabled && harnessProviderNotice) {
+      setBuildErr(harnessProviderNotice);
+      setWorkspaceMode("optimize");
       return;
     }
     const invalidEnv = firstInvalidRuntimeEnv(
@@ -4010,15 +4752,10 @@ export function CustomCreate({
         : selectedDebugVariant;
       if (releaseVariant) setSelectedVariantId(releaseVariant.id);
       const releaseDraft = releaseVariant
-        ? {
-            ...providerDraft,
-            modelName: releaseVariant.modelName || providerDraft.modelName,
-            description: releaseVariant.description,
-            instruction: releaseVariant.instruction,
-          }
+        ? releaseDraftFromDebugVariant(providerDraft, releaseVariant)
         : providerDraft;
       const generated = await generateAgentProject(codegenDraft(releaseDraft));
-      if (releaseDraft !== draft) setDraft(releaseDraft);
+      setDraft(releaseDraft);
       setProject(generated);
       setWorkspaceMode("publish");
     } catch (error) {
@@ -4026,6 +4763,15 @@ export function CustomCreate({
     } finally {
       setBuilding(false);
     }
+  };
+
+  const openOptimization = async () => {
+    if (!(await confirmLeaveDebug())) return;
+    if (!requireCompleteDraft()) {
+      setWorkspaceMode("build");
+      return;
+    }
+    setWorkspaceMode("optimize");
   };
 
   const startDebugVariant = async (id: string) => {
@@ -4119,7 +4865,7 @@ export function CustomCreate({
           await deleteGeneratedAgentTestRun(createdRun.runId);
           forgetDebugTestRun(createdRun.runId);
         } catch (cleanupError) {
-          console.warn("清理调试运行失败", cleanupError);
+          console.warn("Failed to clean up debug run", cleanupError);
         }
       }
       setDebugVariants((current) =>
@@ -4236,11 +4982,10 @@ export function CustomCreate({
         ...current,
         {
           id,
-          name: `对照组 ${sequence}`,
+          name: t("traditional.debug.comparison", { count: sequence }),
           modelName: draft.modelName ?? "",
           description: draft.description,
           instruction: draft.instruction,
-          optimizations: [],
           configOpen: true,
           phase: "idle",
           runtimeSnapshot: "",
@@ -4265,6 +5010,45 @@ export function CustomCreate({
         variant.id === id ? { ...variant, ...patch } : variant,
       ),
     );
+
+  const updateHarnessOptimization = (
+    optionId: HarnessSidecarOptionId,
+    selected: boolean,
+  ) => {
+    if (selected && harnessProviderNotice) {
+      setBuildErr(harnessProviderNotice);
+      return;
+    }
+    const optimizations = selected
+      ? [...new Set([...harnessOptimizations, optionId])]
+      : harnessOptimizations.filter((item) => item !== optionId);
+    const profile =
+      harnessOptimizationProfile === "ops"
+        ? "default"
+        : harnessOptimizationProfile;
+    setDraft((current) => ({
+      ...current,
+      harnessSidecar: harnessIntentFromOptimizations(optimizations, profile),
+    }));
+    setBuildErr("");
+    setProject(null);
+  };
+
+  const updateHarnessOptimizationProfile = (
+    profile: HarnessSidecarProfileId,
+  ) => {
+    const optimizations = harnessProfileDefaultOptimizations(profile);
+    if (optimizations.length > 0 && harnessProviderNotice) {
+      setBuildErr(harnessProviderNotice);
+      return;
+    }
+    setDraft((current) => ({
+      ...current,
+      harnessSidecar: harnessIntentFromOptimizations(optimizations, profile),
+    }));
+    setBuildErr("");
+    setProject(null);
+  };
 
   const updateDebugVariantConfig = (
     id: string,
@@ -4309,6 +5093,11 @@ export function CustomCreate({
     onStage?: (s: DeployStage) => void,
     options?: Parameters<typeof deployAgentkitProject>[3],
   ) => {
+    const sourcePreserving =
+      deploymentTarget?.editMode === "source-preserving";
+    const mcpGatewayManaged = selectedHarnessOptimizations(draft).includes(
+      "mcp_resilience",
+    );
     const net = draft.deployment?.network;
     const network =
       net && net.mode && net.mode !== "public"
@@ -4331,9 +5120,41 @@ export function CustomCreate({
         ...options,
         onStage,
         runtimeId: deploymentTarget?.runtimeId,
-        runtimeName: deploymentRuntimeName,
+        runtimeName: options?.runtimeName ?? deploymentRuntimeName,
         appName: deploymentTarget?.appName,
+        agentCategory: deploymentAgentCategory(deploymentTarget),
+        editMode: deploymentTarget?.editMode,
+        draft:
+          deploymentTarget || mcpGatewayManaged ? codegenDraft(draft) : undefined,
+        updateEtag: deploymentTarget?.etag,
+        baseRuntimeVersion: deploymentTarget?.currentVersion,
+        envs: sourcePreserving
+          ? sourcePreservingModelEnvVars(draft, cloudProvider, options?.envs)
+          : options?.envs,
+        mcpSecretValues: sourcePreserving
+          ? sourcePreservingMcpSecretValues(draft)
+          : mcpGatewayManaged
+            ? deploymentMcpSecretValues(draft)
+            : undefined,
+        removeRuntimeEnvKeys: deploymentTarget
+          ? [
+              ...removedConfiguredMcpEnvKeys(
+                deploymentTarget.configuredMcpEnvKeys ?? [],
+                draft,
+              ),
+              ...(!draft.deployment?.feishuEnabled
+                ? ["FEISHU_APP_ID", "FEISHU_APP_SECRET"]
+                : []),
+            ]
+          : undefined,
         description: draft.description,
+        harnessSidecar: draft.harnessSidecar,
+        environment: draft.cloudEnvironment?.environmentId
+          ? {
+              environmentId: draft.cloudEnvironment.environmentId,
+              environmentVersionId: draft.cloudEnvironment.environmentVersionId,
+            }
+          : undefined,
       },
     );
   };
@@ -4359,13 +5180,16 @@ export function CustomCreate({
 
   const handleWorkspaceChange = async (nextMode: WorkspaceMode) => {
     if (nextMode === "publish") {
-      if (!requireCompleteDraft()) return;
-      if (project) setWorkspaceMode("publish");
-      else openPublishPreview();
+      if (!(await confirmLeaveDebug())) return;
+      await materializePublishRelease();
       return;
     }
     if (nextMode === "validate") {
       openValidation();
+      return;
+    }
+    if (nextMode === "optimize") {
+      await openOptimization();
       return;
     }
     if (nextMode === "environment") {
@@ -4385,6 +5209,467 @@ export function CustomCreate({
     setProject(null);
   };
 
+  const deployFromNewWorkbench = async (
+    deploymentOptions: NewAgentDeploymentOptions,
+  ) => {
+    if (newWorkbenchDeploying) return;
+    setNewWorkbenchDeployError("");
+    setNewWorkbenchDeploySucceeded(false);
+    if (!requireCompleteDraft()) return;
+
+    const runtimeError = runtimeNameProblem(deploymentRuntimeName.trim());
+    if (runtimeError) {
+      setNewWorkbenchDeployError(runtimeError);
+      return;
+    }
+    const deploymentDraft: AgentDraft = {
+      ...providerDraft,
+      memory: {
+        ...providerDraft.memory,
+        shortTerm: deploymentOptions.sessionBackend !== "local",
+      },
+      shortTermBackend: deploymentOptions.sessionBackend,
+    };
+    const activeDeploymentEnv = collectDeploymentEnv(
+      deploymentDraft,
+      deploymentTarget?.editMode === "source-preserving",
+    );
+    const network = deploymentDraft.deployment?.network;
+    if (
+      network?.mode !== undefined &&
+      network.mode !== "public" &&
+      !network.vpcId?.trim()
+    ) {
+      setNewWorkbenchDeployError(t("traditional.deployment.vpcRequired"));
+      return;
+    }
+    if (
+      resolvedModelSource(deploymentDraft, cloudProvider) === "ark" &&
+      !deploymentDraft.deployment?.modelApiKeyId?.trim()
+    ) {
+      setNewWorkbenchDeployError(t("traditional.deployment.apiKeyRequired"));
+      return;
+    }
+    const allEnvValues = {
+      ...(deploymentDraft.deployment?.envValues ?? {}),
+      ...customModelSecretValues,
+      ...activeDeploymentEnv.fixedValues,
+    };
+    const invalidEnvKey = Object.keys(allEnvValues).find(
+      (key) => key && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key),
+    );
+    if (invalidEnvKey) {
+      setNewWorkbenchDeployError(
+        t("traditional.deployment.invalidEnvName", { key: invalidEnvKey }),
+      );
+      return;
+    }
+    const activeEnvSpecs = deploymentDraft.deployment?.feishuEnabled
+      ? [...activeDeploymentEnv.specs, ...FEISHU_ENV]
+      : activeDeploymentEnv.specs;
+    const missingEnv = firstMissingRuntimeEnv(
+      activeEnvSpecs,
+      allEnvValues,
+      configuredRuntimeEnvKeys,
+    );
+    if (missingEnv) {
+      setNewWorkbenchDeployError(
+        t("traditional.deployment.requiredEnv", {
+          name: missingEnv.comment || missingEnv.key,
+        }),
+      );
+      return;
+    }
+    const invalidEnv = firstInvalidRuntimeEnv(activeEnvSpecs, allEnvValues);
+    if (invalidEnv) {
+      setNewWorkbenchDeployError(
+        `${invalidEnv.spec.comment || invalidEnv.spec.key}：${invalidEnv.error}`,
+      );
+      return;
+    }
+
+    setNewWorkbenchDeploying(true);
+    setNewWorkbenchDeployStage({
+      level: "info",
+      phase: "prepare",
+      message: t("traditional.deployment.generatingConfiguration"),
+      pct: 0,
+    });
+    let activeTask: DeploymentTaskUpdate | null = null;
+    let latestPhase = "prepare";
+    let latestLabel = t("traditional.deployment.preparing");
+    let latestMessage = t("traditional.deployment.generatingConfiguration");
+    let latestRuntimeId = deploymentTarget?.runtimeId;
+    let latestRegion = deploymentTarget?.region ?? deployRegion;
+    let failedMpaRetry: (() => Promise<void>) | undefined;
+    try {
+      if (!deploymentTarget) {
+        const availability = await checkRuntimeNameAvailability(
+          deploymentRuntimeName.trim(),
+          deployRegion,
+        );
+        if (!availability.available) {
+          throw new Error(t("traditional.deployment.runtimeNameExists"));
+        }
+      }
+      const generated = await generateAgentProject(
+        codegenDraft(deploymentDraft),
+      );
+      setProject(generated);
+      const taskId = crypto.randomUUID();
+      const startedAt = Date.now();
+      const taskBase = {
+        id: taskId,
+        ...(workspaceDraftId ? { draftId: workspaceDraftId } : {}),
+        agentName: deploymentDraft.name,
+        runtimeName: deploymentRuntimeName.trim(),
+        runtimeId: deploymentTarget?.runtimeId,
+        region: deploymentTarget?.region ?? deployRegion,
+        startedAt,
+        agentDraft: deploymentDraft,
+        mpaProfile: isMpaDeployment,
+        mpaSmoke: isMpaDeployment && !deploymentTarget,
+      };
+      const initialTask: DeploymentTaskUpdate = {
+        ...taskBase,
+        status: "running",
+        phase: latestPhase,
+        label: latestLabel,
+        message: latestMessage,
+        pct: 0,
+      };
+      activeTask = initialTask;
+      onDeploymentTaskChange?.(initialTask);
+      onDeploymentStarted?.(initialTask);
+
+      if (isMpaDeployment && deploymentTarget?.mpaProfileOnly) {
+        latestPhase = "profile_applying";
+        latestLabel = t("traditional.deployment.stages.applyMpaProfile");
+        latestMessage = t("traditional.deployment.applyingMpaProfile");
+        setNewWorkbenchDeployStage({
+          level: "info",
+          phase: latestPhase,
+          message: latestMessage,
+          pct: 0,
+        });
+        onDeploymentTaskChange?.({
+          ...taskBase,
+          status: "running",
+          phase: latestPhase,
+          label: latestLabel,
+          message: latestMessage,
+          pct: 0,
+          mpaProfile: isMpaDeployment,
+          mpaSmoke: false,
+        });
+        const operationKind = deploymentTarget.etag ? "update" : "create";
+        const mpaOperation = await applyMpaProfileAfterDeployment({
+          draft: deploymentDraft,
+          taskId,
+          agentName: deploymentDraft.name,
+          runtimeId: deploymentTarget.runtimeId,
+          region: deploymentTarget.region,
+          operationKind,
+          mpaInstanceId: deploymentTarget.mpaInstanceId,
+          runtimeName: deploymentRuntimeName.trim(),
+          sourceDraftId: workspaceDraftId,
+          runtimeRevision: deploymentTarget.etag,
+        });
+        if (mpaOperation.status !== "succeeded") {
+          latestMessage =
+            mpaOperation.safeErrorCode ||
+            t("traditional.deployment.mpaOperationIncomplete");
+          setNewWorkbenchDeployStage({
+            level: "error",
+            phase: latestPhase,
+            message: latestMessage,
+            pct: 100,
+          });
+          throw new Error(latestMessage);
+        }
+        setNewWorkbenchDeploySucceeded(true);
+        setNewWorkbenchDeployStage({
+          level: "success",
+          phase: latestPhase,
+          message: t("traditional.deployment.mpaProfileApplied"),
+          pct: 100,
+        });
+        onDeploymentTaskChange?.({
+          ...taskBase,
+          status: "success",
+          phase: "complete",
+          label: t("traditional.deployment.complete"),
+          message: t("traditional.deployment.mpaProfileApplied"),
+          pct: 100,
+          mpaProfile: isMpaDeployment,
+          mpaSmoke: false,
+        });
+        await onDeploymentComplete?.({
+          apikey: "",
+          url: "",
+          agentName: deploymentDraft.name,
+          runtimeName: deploymentRuntimeName.trim(),
+          runtimeId: deploymentTarget.runtimeId,
+          mpaInstanceId: deploymentTarget.mpaInstanceId,
+          region: deploymentTarget.region,
+          version: deploymentTarget.currentVersion,
+          mpaOperation,
+        });
+        return;
+      }
+
+      const envMap = new Map(
+        Object.entries(allEnvValues)
+          .map(([key, value]) => [key.trim(), value] as const)
+          .filter(([key, value]) => key && value.trim()),
+      );
+      for (const env of runtimeEnvVars(activeEnvSpecs, allEnvValues)) {
+        envMap.set(env.key, env.value);
+      }
+      const modelApiKeyId = deploymentDraft.deployment?.modelApiKeyId?.trim();
+      const modelApiKeyName =
+        deploymentDraft.deployment?.modelApiKeyName?.trim();
+      if (modelApiKeyId) envMap.set("MODEL_AGENT_API_KEY_ID", modelApiKeyId);
+      if (modelApiKeyName)
+        envMap.set("MODEL_AGENT_API_KEY_NAME", modelApiKeyName);
+
+      const result = await handleDeploy(
+        generated,
+        (stage) => {
+          latestPhase = stage.phase;
+          latestLabel =
+            stage.phase === "build"
+              ? t("traditional.deployment.stages.build")
+              : stage.phase === "deploy"
+                ? t("traditional.deployment.stages.deploy")
+                : stage.phase === "publish"
+                  ? t("traditional.deployment.stages.publish")
+                  : t("traditional.deployment.stages.running");
+          latestMessage = stage.message;
+          setNewWorkbenchDeployStage(stage);
+          onDeploymentTaskChange?.({
+            ...taskBase,
+            runtimeName: stage.runtimeName || taskBase.runtimeName,
+            status: "running",
+            phase: latestPhase,
+            label: latestLabel,
+            message: latestMessage,
+            messageCode: stage.messageCode,
+            pct: stage.pct,
+            ...(stage.buildLog ? { buildLog: stage.buildLog } : {}),
+          });
+        },
+        {
+          taskId,
+          runtimeName: deploymentRuntimeName.trim(),
+          sessionStorage: deploymentOptions.sessionStorage,
+          minInstance: deploymentOptions.minInstance,
+          maxInstance: deploymentOptions.maxInstance,
+          authentication: deploymentOptions.authentication,
+          createEvaluationSets: deploymentOptions.createEvaluationSets,
+          resources: deploymentOptions.resources,
+          ...(deploymentDraft.deployment?.feishuEnabled
+            ? { im: { feishu: { enabled: true } } }
+            : {}),
+          envs: [...envMap].map(([key, value]) => ({ key, value })),
+        },
+      );
+      let completeResult = result;
+      const mpaRuntimeId = result.runtimeId || deploymentTarget?.runtimeId || "";
+      const mpaRegion = result.region || deploymentTarget?.region || deployRegion;
+      latestRuntimeId = mpaRuntimeId || latestRuntimeId;
+      latestRegion = mpaRegion;
+      if (isMpaDeployment && mpaRuntimeId) {
+        latestPhase = "profile_applying";
+        latestLabel = t("traditional.deployment.stages.applyMpaProfile");
+        latestMessage = t("traditional.deployment.applyingMpaProfile");
+        setNewWorkbenchDeployStage({
+          level: "info",
+          phase: latestPhase,
+          message: latestMessage,
+          pct: 0,
+        });
+        onDeploymentTaskChange?.({
+          ...taskBase,
+          runtimeName: result.runtimeName || taskBase.runtimeName,
+          runtimeId: mpaRuntimeId,
+          region: mpaRegion,
+          status: "running",
+          phase: latestPhase,
+          label: latestLabel,
+          message: latestMessage,
+          pct: 0,
+          mpaProfile: isMpaDeployment,
+          mpaSmoke: isMpaDeployment && !deploymentTarget,
+        });
+        const mpaOperation = await applyMpaProfileAfterDeployment({
+          draft: deploymentDraft,
+          taskId,
+          agentName: deploymentDraft.name,
+          runtimeId: mpaRuntimeId,
+          region: mpaRegion,
+          operationKind: deploymentTarget ? "update" : "create",
+          mpaInstanceId:
+            deploymentTarget?.mpaInstanceId ?? result.mpaInstanceId,
+          runtimeName: deploymentRuntimeName.trim() || result.runtimeName,
+          sourceDraftId: workspaceDraftId,
+          runtimeRevision: deploymentTarget?.etag,
+        });
+        if (mpaOperation.status !== "succeeded") {
+          latestPhase =
+            mpaOperation.stage === "smoke_running"
+              ? "smoke_running"
+              : "profile_applying";
+          latestLabel =
+            latestPhase === "smoke_running"
+              ? t("traditional.deployment.stages.verifyMpaRuntime")
+              : t("traditional.deployment.stages.applyMpaProfile");
+          latestMessage =
+            mpaOperation.safeErrorCode ||
+            t("traditional.deployment.mpaOperationIncomplete");
+          setNewWorkbenchDeployStage({
+            level: "error",
+            phase: latestPhase,
+            message: latestMessage,
+            pct: 100,
+          });
+          if (mpaOperation.status === "failed_retryable") {
+            const retryParams = {
+              operationKind: deploymentTarget ? "update" as const : "create" as const,
+              runtimeId: mpaRuntimeId,
+              region: mpaRegion,
+              mpaInstanceId:
+                deploymentTarget?.mpaInstanceId ?? result.mpaInstanceId ?? mpaRuntimeId,
+              sourceProfileId: workspaceDraftId?.trim()
+                ? `studio-draft:${workspaceDraftId.trim()}`
+                : `studio-agent:${deploymentDraft.name}:${taskId}`,
+              draft: deploymentDraft,
+              targetKey: deploymentTarget
+                ? deploymentTarget.mpaInstanceId ?? mpaRuntimeId
+                : `runtime:${mpaRegion}:${deploymentRuntimeName.trim() || result.runtimeName}`,
+              runtimeRevision: deploymentTarget?.etag,
+            };
+            failedMpaRetry = async () => {
+              const retried = await retryMpaAgentOperation(
+                mpaOperation.operationId,
+                retryParams,
+              );
+              onDeploymentTaskChange?.({
+                ...taskBase,
+                runtimeId: mpaRuntimeId,
+                mpaInstanceId: retryParams.mpaInstanceId,
+                region: mpaRegion,
+                status: retried.status === "succeeded" ? "success" : "error",
+                phase: retried.stage,
+                label: retried.status === "succeeded"
+                  ? t("traditional.deployment.complete")
+                  : t("traditional.deployment.failed"),
+                message: retried.safeErrorCode || undefined,
+                pct: 100,
+                mpaProfile: isMpaDeployment,
+                mpaSmoke: isMpaDeployment && !deploymentTarget,
+                operationId: retried.operationId,
+              });
+              if (retried.status !== "succeeded") {
+                throw new Error(
+                  retried.safeErrorCode || t("traditional.deployment.mpaOperationIncomplete"),
+                );
+              }
+              await onDeploymentComplete?.({ ...result, mpaOperation: retried });
+            };
+          }
+          throw new Error(latestMessage);
+        }
+        if (deploymentTarget) {
+          latestMessage = t("traditional.deployment.mpaProfileApplied");
+          setNewWorkbenchDeployStage({
+            level: "success",
+            phase: latestPhase,
+            message: latestMessage,
+            pct: 100,
+          });
+        } else {
+          latestPhase = "smoke_running";
+          latestLabel = t("traditional.deployment.stages.verifyMpaRuntime");
+          latestMessage = t("traditional.deployment.runningMpaSmoke");
+          onDeploymentTaskChange?.({
+            ...taskBase,
+            runtimeName: result.runtimeName || taskBase.runtimeName,
+            runtimeId: mpaRuntimeId,
+            region: mpaRegion,
+            status: "running",
+            phase: latestPhase,
+            label: latestLabel,
+            message: latestMessage,
+            pct: 100,
+            mpaProfile: isMpaDeployment,
+            mpaSmoke: true,
+          });
+          latestPhase = "runnable";
+          latestLabel = t("traditional.deployment.stages.mpaReady");
+          latestMessage = t("traditional.deployment.mpaReady");
+          setNewWorkbenchDeployStage({
+            level: "success",
+            phase: latestPhase,
+            message: latestMessage,
+            pct: 100,
+          });
+        }
+        completeResult = { ...result, mpaOperation };
+      }
+      setNewWorkbenchDeploySucceeded(true);
+      setNewWorkbenchDeployStage({
+        level: "success",
+        phase: "complete",
+        message: t("traditional.deployment.complete"),
+        pct: 100,
+      });
+      onDeploymentTaskChange?.({
+        ...taskBase,
+        runtimeName: completeResult.runtimeName || taskBase.runtimeName,
+        runtimeId: completeResult.runtimeId || deploymentTarget?.runtimeId,
+        region: completeResult.region || deploymentTarget?.region || deployRegion,
+        status: "success",
+        phase: completeResult.mpaOperation && !deploymentTarget ? "runnable" : "complete",
+        label: t("traditional.deployment.complete"),
+        message: completeResult.mpaOperation && !deploymentTarget
+          ? t("traditional.deployment.mpaReady")
+          : completeResult.warnings?.join("；"),
+        pct: 100,
+        mpaProfile: isMpaDeployment,
+        mpaSmoke: Boolean(completeResult.mpaOperation && !deploymentTarget),
+      });
+      await onDeploymentComplete?.(completeResult);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setNewWorkbenchDeployError(message);
+      setNewWorkbenchDeployStage(null);
+      const failedTask: DeploymentTaskUpdate = {
+        ...(activeTask ?? {
+          id: crypto.randomUUID(),
+          agentName:
+            providerDraft.name || t("traditional.basic.unnamedAgent"),
+          runtimeName: deploymentRuntimeName.trim(),
+          region: deployRegion,
+          startedAt: Date.now(),
+        }),
+        status: "error",
+        runtimeId: latestRuntimeId,
+        region: latestRegion,
+        phase: latestPhase,
+        label: t("traditional.deployment.failed"),
+        message,
+        mpaProfile: isMpaDeployment,
+        mpaSmoke: isMpaDeployment && !deploymentTarget,
+        operationId: undefined,
+        retry: failedMpaRetry ?? (() => deployFromNewWorkbench(deploymentOptions)),
+      };
+      onDeploymentTaskChange?.(failedTask);
+    } finally {
+      setNewWorkbenchDeploying(false);
+    }
+  };
+
   const Section = sectionImpl.current;
 
   const metaOf = (id: StepId) => STEPS.find((s) => s.id === id)!;
@@ -4392,7 +5677,7 @@ export function CustomCreate({
   const aiComposer = (
     <section
       className={`cw-ai-compose${aiGenerating ? " is-generating" : ""}${aiGenerated ? " is-success" : ""}`}
-      aria-label="AI 自动填写 Agent 配置"
+      aria-label={t("traditional.ai.ariaLabel")}
     >
       <AnimatePresence initial={false} mode="wait">
         {aiGenerated ? (
@@ -4406,13 +5691,13 @@ export function CustomCreate({
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
           >
             <span className="cw-ai-success-check" aria-hidden />
-            <strong>生成成功</strong>
+            <strong>{t("traditional.ai.success")}</strong>
             <button
               type="button"
               className="cw-ai-regenerate"
               onClick={() => setAiGenerated(false)}
             >
-              重新生成
+              {t("traditional.ai.regenerate")}
             </button>
           </motion.div>
         ) : (
@@ -4436,13 +5721,16 @@ export function CustomCreate({
                 value={aiRequirement}
                 maxLength={8000}
                 disabled={aiGenerating}
-                placeholder={`描述目标，使用 ${plannerModelName(cloudProvider)} 模型一键生成配置`}
+                placeholder={t("traditional.ai.placeholder", {
+                  model: plannerModelName(cloudProvider),
+                })}
                 aria-invalid={Boolean(aiRequirementError)}
                 aria-describedby={
                   aiRequirementError ? "ai-requirement-error" : undefined
                 }
                 onChange={(event) => setAiRequirement(event.target.value)}
                 onKeyDown={(event) => {
+                  if (isImeCompositionEvent(event.nativeEvent)) return;
                   if (event.key === "Enter") {
                     event.preventDefault();
                     void handleGenerateDraft();
@@ -4456,14 +5744,18 @@ export function CustomCreate({
                   !trimmedAiRequirement ||
                   Boolean(aiRequirementError)
                 }
-                aria-label={aiGenerating ? "正在智能生成" : "智能生成"}
+                aria-label={
+                  aiGenerating
+                    ? t("traditional.ai.generating")
+                    : t("traditional.ai.generate")
+                }
               >
                 {aiGenerating ? (
                   <span className="cw-ai-orb" aria-hidden>
                     <span />
                   </span>
                 ) : (
-                  "智能生成"
+                  t("traditional.ai.generate")
                 )}
               </button>
             </form>
@@ -4481,6 +5773,79 @@ export function CustomCreate({
       </AnimatePresence>
     </section>
   );
+
+  if (usesNewAgentWorkbench) {
+    return (
+      <NewAgentWorkbench
+        draft={providerDraft}
+        cloudProvider={cloudProvider}
+        deployRegion={deployRegion}
+        runtimeName={deploymentRuntimeName}
+        isRuntimeUpdate={Boolean(deploymentTarget)}
+        profileOnly={isMpaDeployment && deploymentTarget?.mpaProfileOnly}
+        deploying={newWorkbenchDeploying}
+        deployStage={newWorkbenchDeployStage}
+        deployError={newWorkbenchDeployError}
+        deploySucceeded={newWorkbenchDeploySucceeded}
+        showErrors={showErrors}
+        onBack={onBack}
+        onDraftPatch={(updates) => {
+          setDraft((current) => ({ ...current, ...updates }));
+          setProject(null);
+          setBuildErr("");
+        }}
+        onDeploymentPatch={(updates) =>
+          setDraft((current) => ({
+            ...current,
+            deployment: {
+              ...(current.deployment ?? { feishuEnabled: false }),
+              ...updates,
+            },
+          }))
+        }
+        onModelApiKeyChange={updateNewWorkbenchModelApiKey}
+        customModelApiKey={
+          selectedCustomModelCredential
+            ? (customModelSecretValues[selectedCustomModelCredential.key] ?? "")
+            : ""
+        }
+        customModelSecretValues={customModelSecretValues}
+        customModelApiKeyConfigured={selectedCustomModelApiKeyConfigured}
+        configuredRuntimeEnvKeys={configuredRuntimeEnvKeys}
+        showModelFallbacks={showModelFallbacks}
+        onCustomModelApiKeyChange={(value) => {
+          if (!selectedCustomModelCredential) return;
+          patchCustomModelSecret(selectedCustomModelCredential.key, value);
+        }}
+        onCustomModelSecretChange={patchCustomModelSecret}
+        onSelectedSkillsChange={(selectedSkills) =>
+          setDraft((current) => ({ ...current, selectedSkills }))
+        }
+        onCloudEnvironmentChange={updateCloudEnvironment}
+        onDeployRegionChange={setDeployRegion}
+        onRuntimeNameChange={(runtimeName) =>
+          setDraft((current) => ({
+            ...current,
+            deployment: {
+              ...(current.deployment ?? { feishuEnabled: false }),
+              runtimeName,
+              runtimeNameCustomized: true,
+            },
+          }))
+        }
+        onNetworkChange={(network) =>
+          setDraft((current) => ({
+            ...current,
+            deployment: {
+              ...(current.deployment ?? { feishuEnabled: false }),
+              network,
+            },
+          }))
+        }
+        onDeploy={(options) => void deployFromNewWorkbench(options)}
+      />
+    );
+  }
 
   return (
     <div className={`cw-root is-${workspaceMode}`}>
@@ -4514,21 +5879,22 @@ export function CustomCreate({
                         <Section meta={metaOf("type")}>
                           <RadioGroup<AgentType>
                             className="cw-agent-type-options"
-                            aria-label="Agent 类型"
+                            aria-label={t("traditional.agentTypes.ariaLabel")}
                             value={node.agentType ?? "llm"}
                             onChange={selectAgentType}
                           >
-                            {AGENT_TYPES.map((t) => {
-                              const on = (node.agentType ?? "llm") === t.id;
+                            {AGENT_TYPES.map((agentType) => {
+                              const on =
+                                (node.agentType ?? "llm") === agentType.id;
                               const remoteTypeDisabled =
-                                isRootAgent && t.id === "a2a";
+                                isRootAgent && agentType.id === "a2a";
                               const disabledHintId = remoteTypeDisabled
                                 ? "cw-remote-agent-disabled-hint"
                                 : undefined;
                               return (
                                 <div
-                                  key={t.id}
-                                  data-agent-type={t.id}
+                                  key={agentType.id}
+                                  data-agent-type={agentType.id}
                                   className={`cw-agent-type-option ${on ? "is-on" : ""} ${
                                     remoteTypeDisabled ? "is-disabled" : ""
                                   }`}
@@ -4536,14 +5902,16 @@ export function CustomCreate({
                                   aria-describedby={disabledHintId}
                                 >
                                   <RadioGroup.Item
-                                    value={t.id}
+                                    value={agentType.id}
                                     disabled={remoteTypeDisabled}
                                     block
                                     className="cw-agent-type-control"
                                   >
                                     <span className="cw-agent-type-copy">
                                       <strong>
-                                        {AGENT_TYPE_BAR_LABELS[t.id]}
+                                        {t(
+                                          AGENT_TYPE_BAR_LABELS[agentType.id],
+                                        )}
                                       </strong>
                                     </span>
                                   </RadioGroup.Item>
@@ -4553,7 +5921,7 @@ export function CustomCreate({
                                       className="cw-agent-type-disabled-hint"
                                       role="tooltip"
                                     >
-                                      远程智能体只能作为子步骤使用
+                                      {t("traditional.agentTypes.remoteChildOnly")}
                                     </span>
                                   )}
                                 </div>
@@ -4566,11 +5934,10 @@ export function CustomCreate({
                               <span className="cw-error-text">
                                 {validationProblemMessage({
                                   path: safePath,
-                                  name: node.name.trim() || "未命名",
-                                  typeLabel: agentTypeMeta(node.agentType)
-                                    .label,
-                                  problem: "缺少子 Agent",
-                                })}
+                                  name: node.name.trim(),
+                                  agentType: node.agentType,
+                                  problem: "missingSubagent",
+                                }, t)}
                               </span>
                             )}
                         </Section>
@@ -4580,52 +5947,85 @@ export function CustomCreate({
                               <>
                                 <div className="cw-field">
                                   <label className="cw-label">
-                                    {isRootAgent ? "Agent 名称" : "名称"}
+                                    {isRootAgent
+                                      ? t("traditional.basic.agentName")
+                                      : t("traditional.basic.name")}
                                     <span className="cw-req">*</span>
                                   </label>
                                   <input
-                                    className={`cw-input ${invalidClass(nameInvalid)}`}
+                                    className={`cw-input ${invalidClass(nameInvalid, showNameError)}`}
+                                    data-validation-field="name"
                                     value={node.name}
                                     placeholder="assistant"
-                                    onChange={(e) =>
-                                      patch({ name: e.target.value })
+                                    aria-invalid={showNameError && nameInvalid}
+                                    aria-describedby={
+                                      showNameError && nameProblem
+                                        ? "cw-agent-name-error"
+                                        : undefined
                                     }
+                                    onBlur={markAgentNameTouched}
+                                    onChange={(e) => {
+                                      markAgentNameTouched();
+                                      patch({ name: e.target.value });
+                                    }}
                                   />
-                                  {showErrors && nameProblem ? (
-                                    <span className="cw-error-text">
+                                  {showNameError && nameProblem ? (
+                                    <span
+                                      id="cw-agent-name-error"
+                                      role="alert"
+                                      className="cw-error-text"
+                                    >
                                       {nameProblem}
                                     </span>
                                   ) : (
                                     <span className="cw-help">
-                                      遵循 Google ADK
-                                      命名规则，且在执行流程中保持唯一。
+                                      {t("traditional.basic.nameHelp")}
                                     </span>
                                   )}
                                 </div>
                                 <div className="cw-field">
                                   <label className="cw-label">
-                                    {isRootAgent ? "描述" : "智能体描述"}
+                                    {isRootAgent
+                                      ? t("common.description")
+                                      : t("traditional.basic.agentDescription")}
                                     <span className="cw-req">*</span>
                                   </label>
                                   <textarea
                                     className={`cw-textarea cw-textarea-sm ${invalidClass(
                                       descriptionMissing,
                                     )}`}
+                                    data-validation-field="description"
                                     value={node.description}
-                                    placeholder="简要描述这个 Agent 的用途，便于团队识别…"
+                                    placeholder={t(
+                                      "traditional.basic.descriptionPlaceholder",
+                                    )}
+                                    aria-invalid={
+                                      showErrors && descriptionMissing
+                                    }
+                                    aria-describedby={
+                                      showErrors && descriptionMissing
+                                        ? "cw-agent-description-error"
+                                        : undefined
+                                    }
                                     onChange={(e) =>
                                       patch({ description: e.target.value })
                                     }
                                   />
                                   {showErrors && descriptionMissing ? (
-                                    <span className="cw-error-text">
-                                      描述为必填项
+                                    <span
+                                      id="cw-agent-description-error"
+                                      role="alert"
+                                      className="cw-error-text"
+                                    >
+                                      {t(
+                                        "traditional.validation.missingDescription",
+                                      )}
                                     </span>
                                   ) : (
                                     <span className="cw-help">
                                       {isRootAgent
-                                        ? "完整描述会保留；部署时会自动整理为符合 Runtime 规范的单行描述。"
-                                        : "描述会显示在 Agent 列表与选择器中。"}
+                                        ? t("traditional.basic.rootDescriptionHelp")
+                                        : t("traditional.basic.descriptionHelp")}
                                     </span>
                                   )}
                                 </div>
@@ -4634,12 +6034,13 @@ export function CustomCreate({
                             {orchestrator ? (
                               <>
                                 <p className="cw-section-desc cw-dependency-hint">
-                                  这是一个协作容器，本身不生成回答。请在左侧画布中
-                                  添加任务步骤，并通过拖拽调整它们的位置。
+                                  {t("traditional.basic.orchestratorHelp")}
                                 </p>
                                 {node.agentType === "loop" && (
                                   <div className="cw-field">
-                                    <label className="cw-label">最大轮次</label>
+                                    <label className="cw-label">
+                                      {t("traditional.basic.maxIterations")}
+                                    </label>
                                     <input
                                       className="cw-input"
                                       type="number"
@@ -4655,24 +6056,23 @@ export function CustomCreate({
                                       }
                                     />
                                     <span className="cw-help">
-                                      循环编排反复执行子
-                                      Agent，直到满足条件或达到该轮次上限。
+                                      {t("traditional.basic.maxIterationsHelp")}
                                     </span>
                                   </div>
                                 )}
                               </>
                             ) : a2a ? (
-                              <div className="cw-field cw-remote-center-fields">
+                              <div
+                                className="cw-field cw-remote-center-fields"
+                                data-validation-field="a2a-registry"
+                              >
                                 <div className="cw-remote-center-head">
                                   <div className="cw-label">
-                                    AgentKit 智能体中心
+                                    {t("traditional.basic.agentCenter")}
                                     <span className="cw-req">*</span>
                                   </div>
                                   <p className="cw-help cw-remote-center-description">
-                                    远程 Agent 的名称、描述和能力来自中心返回的
-                                    Agent Card。
-                                    系统会根据每轮任务动态发现并挂载匹配的
-                                    Agent。
+                                    {t("traditional.basic.agentCenterHelp")}
                                   </p>
                                 </div>
                                 <A2aSpaceSelect
@@ -4681,7 +6081,7 @@ export function CustomCreate({
                                   }
                                   region={
                                     node.a2aRegistry?.registryRegion ||
-                                    A2A_REGISTRY_DEFAULTS.region
+                                    a2aDefaults.region
                                   }
                                   invalid={
                                     showErrors && a2aRegistrySpaceMissing
@@ -4702,7 +6102,7 @@ export function CustomCreate({
                                     setA2aRegistryAdvancedOpen((open) => !open)
                                   }
                                 >
-                                  <span>更多选项</span>
+                                  <span>{t("traditional.basic.moreOptions")}</span>
                                   <ChevronRight
                                     className={`cw-more-options-chevron ${
                                       a2aRegistryAdvancedOpen ? "is-open" : ""
@@ -4724,10 +6124,14 @@ export function CustomCreate({
                                       }}
                                     >
                                       <RuntimeEnvFields
-                                        env={A2A_REGISTRY_RUNTIME_ENV}
+                                        env={providerRuntimeEnv(
+                                          A2A_REGISTRY_RUNTIME_ENV,
+                                          cloudProvider,
+                                        )}
                                         values={a2aRegistryEnvValues(
                                           node.a2aRegistry,
                                           { includeDefaults: false },
+                                          cloudProvider,
                                         )}
                                         onChange={patchA2aRegistryEnv}
                                       />
@@ -4735,15 +6139,19 @@ export function CustomCreate({
                                   )}
                                 </AnimatePresence>
                                 {showErrors && a2aRegistrySpaceMissing && (
-                                  <span className="cw-error-text">
-                                    请选择 AgentKit 智能体中心
+                                  <span className="cw-error-text" role="alert">
+                                    {t("traditional.validation.missingRegistry")}
                                   </span>
                                 )}
                               </div>
                             ) : (
-                              <div className="cw-field">
+                              <div
+                                className="cw-field"
+                                data-validation-field="instruction"
+                              >
                                 <label className="cw-label">
-                                  系统提示词<span className="cw-req">*</span>
+                                  {t("traditional.basic.systemPrompt")}
+                                  <span className="cw-req">*</span>
                                 </label>
                                 <Suspense
                                   fallback={
@@ -4751,7 +6159,7 @@ export function CustomCreate({
                                       className="cw-markdown-loading"
                                       role="status"
                                     >
-                                      正在加载 Markdown 编辑器…
+                                      {t("traditional.basic.loadingMarkdown")}
                                     </div>
                                   }
                                 >
@@ -4764,13 +6172,12 @@ export function CustomCreate({
                                   />
                                 </Suspense>
                                 {showErrors && instructionMissing ? (
-                                  <span className="cw-error-text">
-                                    系统提示词为必填项
+                                  <span className="cw-error-text" role="alert">
+                                    {t("traditional.validation.missingPrompt")}
                                   </span>
                                 ) : (
                                   <span className="cw-help">
-                                    支持 Markdown 快捷输入，例如键入 ##
-                                    加空格创建二级标题。
+                                    {t("traditional.basic.markdownHelp")}
                                   </span>
                                 )}
                               </div>
@@ -4785,10 +6192,12 @@ export function CustomCreate({
                             <Section meta={metaOf("model")}>
                               <div className="cw-form">
                                 <div className="cw-field cw-model-source-field">
-                                  <label className="cw-label">模型来源</label>
+                                  <label className="cw-label">
+                                    {t("traditional.model.source")}
+                                  </label>
                                   <RadioGroup<ModelSource | "gateway">
                                     className="cw-model-source-options"
-                                    aria-label="模型来源"
+                                    aria-label={t("traditional.model.source")}
                                     value={modelSource}
                                     onChange={(source) => {
                                       if (source !== "gateway")
@@ -4800,16 +6209,16 @@ export function CustomCreate({
                                         value: "ark" as const,
                                         label:
                                           cloudProvider === "byteplus"
-                                            ? "BytePlus ModelArk"
-                                            : "火山方舟",
+                                            ? t("traditional.model.bytePlusModelArk")
+                                            : t("traditional.model.volcanoArk"),
                                       },
                                       {
                                         value: "custom" as const,
-                                        label: "自定义",
+                                        label: t("traditional.model.custom"),
                                       },
                                       {
                                         value: "gateway" as const,
-                                        label: "模型网关",
+                                        label: t("traditional.model.gateway"),
                                         disabled: true,
                                       },
                                     ].map((option) => (
@@ -4830,7 +6239,7 @@ export function CustomCreate({
                                           <span>{option.label}</span>
                                           {option.disabled && (
                                             <span className="cw-model-source-coming-soon">
-                                              待上线
+                                              {t("traditional.model.comingSoon")}
                                             </span>
                                           )}
                                         </RadioGroup.Item>
@@ -4839,13 +6248,30 @@ export function CustomCreate({
                                   </RadioGroup>
                                 </div>
                                 {modelSource === "ark" ? (
-                                  <div className="cw-field">
-                                    <label className="cw-label">模型配置</label>
+                                  <div
+                                    className="cw-field"
+                                    data-validation-field="model-api-key"
+                                  >
+                                    <label className="cw-label">
+                                      {t("traditional.model.configuration")}
+                                    </label>
                                     <ModelOptionSelect
                                       value={node.modelName ?? ""}
+                                      fallbacks={node.modelFallbacks ?? []}
                                       cloudProvider={cloudProvider}
+                                      agentName={node.name}
                                       apiKeyId={draft.deployment?.modelApiKeyId}
-                                      apiKeyName={draft.deployment?.modelApiKeyName}
+                                      apiKeyName={
+                                        draft.deployment?.modelApiKeyName
+                                      }
+                                      customModelSecretValues={
+                                        customModelSecretValues
+                                      }
+                                      configuredRuntimeEnvKeys={
+                                        configuredRuntimeEnvKeys
+                                      }
+                                      showFallbacks={showModelFallbacks}
+                                      showMissingApiKeyErrors={showErrors}
                                       onApiKeyChange={(key) =>
                                         setDraft((current) => ({
                                           ...current,
@@ -4859,27 +6285,56 @@ export function CustomCreate({
                                         }))
                                       }
                                       onChange={(modelName) =>
-                                        patch({ modelName })
+                                        patch({
+                                          modelName,
+                                          modelFallbacks: normalizeModelFallbacks(
+                                            modelName,
+                                            node.modelFallbacks,
+                                          ),
+                                        })
+                                      }
+                                      onFallbacksChange={(modelFallbacks) =>
+                                        patch({ modelFallbacks })
+                                      }
+                                      onCustomModelSecretChange={
+                                        patchCustomModelSecret
                                       }
                                     />
+                                    {showErrors &&
+                                    selectedArkModelApiKeyMissing ? (
+                                      <span
+                                        className="cw-error-text"
+                                        role="alert"
+                                      >
+                                        {t(
+                                          "traditional.deployment.apiKeyRequired",
+                                        )}
+                                      </span>
+                                    ) : null}
                                   </div>
                                 ) : (
                                   <>
                                     <div className="cw-field">
                                       <label className="cw-label">
-                                        模型名称
+                                        {t("traditional.model.name")}
                                       </label>
                                       <input
                                         className="cw-input"
                                         value={node.modelName ?? ""}
                                         onChange={(e) =>
-                                          patch({ modelName: e.target.value })
+                                          patch({
+                                            modelName: e.target.value,
+                                            modelFallbacks: normalizeModelFallbacks(
+                                              e.target.value,
+                                              node.modelFallbacks,
+                                            ),
+                                          })
                                         }
                                       />
                                     </div>
                                     <div className="cw-field">
                                       <label className="cw-label cw-label-with-link">
-                                        <span>服务商 Provider</span>
+                                        <span>{t("traditional.model.provider")}</span>
                                         <a
                                           href="https://docs.litellm.ai/docs/providers"
                                           target="_blank"
@@ -4888,7 +6343,7 @@ export function CustomCreate({
                                             event.stopPropagation()
                                           }
                                         >
-                                          LiteLLM 支持列表
+                                          {t("traditional.model.liteLlmProviders")}
                                           <ExternalLink aria-hidden="true" />
                                         </a>
                                       </label>
@@ -4909,23 +6364,40 @@ export function CustomCreate({
                                       </label>
                                       <input
                                         className="cw-input"
+                                        type="url"
+                                        inputMode="url"
                                         value={node.modelApiBase ?? ""}
                                         placeholder={defaultModelApiBase(
                                           cloudProvider,
                                         )}
+                                        aria-invalid={
+                                          customModelApiBaseInvalid
+                                        }
                                         onChange={(e) =>
                                           patch({
                                             modelApiBase: e.target.value,
                                           })
                                         }
                                       />
+                                      {customModelApiBaseInvalid ? (
+                                        <span className="cw-env-error">
+                                          {t(
+                                            "traditional.model.invalidApiBase",
+                                          )}
+                                        </span>
+                                      ) : null}
                                     </div>
-                                    <div className="cw-field">
+                                    <div
+                                      className="cw-field"
+                                      data-validation-field="model-api-key"
+                                    >
                                       <label className="cw-label">
                                         API Key
                                       </label>
                                       <input
-                                        className="cw-input"
+                                        className={`cw-input ${invalidClass(
+                                          selectedCustomModelApiKeyMissing,
+                                        )}`}
                                         type="password"
                                         value={
                                           selectedCustomModelCredential
@@ -4935,24 +6407,61 @@ export function CustomCreate({
                                               ] ?? "")
                                             : ""
                                         }
-                                        placeholder="请输入模型 API Key"
+                                        placeholder={
+                                          selectedCustomModelApiKeyConfigured &&
+                                          !(
+                                            selectedCustomModelCredential
+                                              ? customModelSecretValues[
+                                                  selectedCustomModelCredential
+                                                    .key
+                                                ]
+                                              : ""
+                                          )
+                                            ? "••••••"
+                                            : t(
+                                                "traditional.model.apiKeyPlaceholder",
+                                              )
+                                        }
                                         autoComplete="new-password"
                                         onChange={(event) => {
                                           if (!selectedCustomModelCredential)
                                             return;
                                           const value =
                                             event.currentTarget.value;
-                                          setCustomModelSecretValues(
-                                            (current) => ({
-                                              ...current,
-                                              [selectedCustomModelCredential.key]:
-                                                value,
-                                            }),
+                                          patchCustomModelSecret(
+                                            selectedCustomModelCredential.key,
+                                            value,
                                           );
                                         }}
                                       />
+                                      {showErrors &&
+                                      selectedCustomModelApiKeyMissing ? (
+                                        <span
+                                          className="cw-error-text"
+                                          role="alert"
+                                        >
+                                          {t(
+                                            "traditional.deployment.apiKeyRequired",
+                                          )}
+                                        </span>
+                                      ) : null}
                                     </div>
                                   </>
+                                )}
+                                {modelSource === "custom" && showModelFallbacks && (
+                                  <ModelFallbackFields
+                                    variant="traditional"
+                                    primaryModelName={node.modelName ?? ""}
+                                    agentName={node.name}
+                                    value={node.modelFallbacks ?? []}
+                                    secretValues={customModelSecretValues}
+                                    configuredSecretEnvKeys={configuredRuntimeEnvKeys}
+                                    showMissingApiKeyErrors={showErrors}
+                                    onChange={(modelFallbacks) =>
+                                      patch({ modelFallbacks })
+                                    }
+                                    onSecretChange={patchCustomModelSecret}
+                                  />
                                 )}
                               </div>
                             </Section>
@@ -4960,10 +6469,11 @@ export function CustomCreate({
                             <Section meta={metaOf("tools")}>
                               <div className="cw-form">
                                 <div className="cw-field">
-                                  <label className="cw-label">内置工具</label>
+                                  <label className="cw-label">
+                                    {t("traditional.tools.builtIn")}
+                                  </label>
                                   <span className="cw-help">
-                                    勾选 VeADK 提供的内置能力，生成时会自动补全
-                                    import 与所需环境变量。
+                                    {t("traditional.tools.builtInHelp")}
                                   </span>
                                   <div className="cw-tools-list-shell">
                                     <Checklist
@@ -4987,10 +6497,10 @@ export function CustomCreate({
                                       >
                                         <div className="cw-tool-config-head">
                                           <span className="cw-label">
-                                            代码执行配置
+                                            {t("traditional.tools.codeExecution")}
                                           </span>
                                           <span className="cw-help">
-                                            指定 AgentKit 代码执行沙箱。
+                                            {t("traditional.tools.codeExecutionHelp")}
                                           </span>
                                         </div>
                                         <RuntimeEnvFields
@@ -5009,9 +6519,13 @@ export function CustomCreate({
                                   </AnimatePresence>
                                 </div>
                                 <div className="cw-field cw-mcp-field">
-                                  <label className="cw-label">MCP 工具</label>
+                                  <label className="cw-label">
+                                    {t("traditional.tools.mcp")}
+                                  </label>
                                   <McpToolEditor
                                     tools={mcpTools}
+                                    conflict={mcpConflict}
+                                    showConflict={showErrors}
                                     onChange={(next) =>
                                       patch({ mcpTools: next })
                                     }
@@ -5022,7 +6536,7 @@ export function CustomCreate({
 
                             <Section meta={metaOf("skills")}>
                               <div className="cw-form">
-                                <SkillsSourceTabs
+                                <SkillSourcePicker
                                   selected={selectedSkills}
                                   onChange={(next) =>
                                     patch({ selectedSkills: next })
@@ -5037,18 +6551,19 @@ export function CustomCreate({
                                 <Toggle
                                   checked={node.knowledgebase}
                                   onChange={(v) => patch({ knowledgebase: v })}
-                                  title="知识库"
-                                  desc="启用外部知识检索（RAG），让 Agent 基于你的资料作答。"
+                                  title={t("traditional.knowledge.title")}
+                                  desc={t("traditional.knowledge.description")}
                                   icon={Database}
                                 />
                                 {node.knowledgebase && (
                                   <div className="cw-field cw-subfield">
                                     <label className="cw-label">
-                                      知识库后端
+                                      {t("traditional.knowledge.backend")}
                                     </label>
                                     <BackendSelect
                                       options={KB_BACKENDS}
                                       value={node.knowledgebaseBackend}
+                                      translationGroup="knowledge"
                                       onChange={(id) =>
                                         patch({
                                           knowledgebaseBackend: id,
@@ -5064,7 +6579,7 @@ export function CustomCreate({
                                       DEFAULT_KB_BACKEND) === "viking" && (
                                       <div className="cw-field cw-subfield">
                                         <label className="cw-label">
-                                          VikingDB 知识库
+                                          {t("traditional.knowledge.vikingDatabase")}
                                         </label>
                                         <VikingKnowledgebaseSelect
                                           value={node.knowledgebaseIndex ?? ""}
@@ -5151,19 +6666,20 @@ export function CustomCreate({
                                         },
                                       })
                                     }
-                                    title="短期记忆"
-                                    desc="存储单会话上下文"
+                                    title={t("traditional.memory.shortTerm")}
+                                    desc={t("traditional.memory.shortTermDescription")}
                                     showDescription
                                     icon={Layers}
                                   />
                                   {node.memory.shortTerm && (
                                     <div className="cw-field cw-subfield">
                                       <label className="cw-label">
-                                        短期记忆后端
+                                        {t("traditional.memory.shortTermBackend")}
                                       </label>
                                       <BackendSelect
                                         options={STM_BACKENDS}
                                         value={node.shortTermBackend}
+                                        translationGroup="shortTerm"
                                         onChange={(id) =>
                                           patch({ shortTermBackend: id })
                                         }
@@ -5194,23 +6710,62 @@ export function CustomCreate({
                                         },
                                       })
                                     }
-                                    title="长期记忆"
-                                    desc="存储跨会话上下文，通常使用向量化检索"
+                                    title={t("traditional.memory.longTerm")}
+                                    desc={t("traditional.memory.longTermDescription")}
                                     showDescription
                                     icon={Database}
                                   />
                                   {node.memory.longTerm && (
                                     <div className="cw-field cw-subfield">
                                       <label className="cw-label">
-                                        长期记忆后端
+                                        {t("traditional.memory.longTermBackend")}
                                       </label>
                                       <BackendSelect
                                         options={LTM_BACKENDS}
                                         value={node.longTermBackend}
+                                        translationGroup="longTerm"
                                         onChange={(id) =>
-                                          patch({ longTermBackend: id })
+                                          patch({
+                                            longTermBackend: id,
+                                            longTermMemoryIndex:
+                                              id === "viking"
+                                                ? node.longTermMemoryIndex
+                                                : "",
+                                          })
                                         }
                                       />
+                                      {(node.longTermBackend ?? "local") ===
+                                        "viking" && (
+                                        <div className="cw-field cw-subfield">
+                                          <label className="cw-label">
+                                            {t("traditional.memory.vikingDatabase")}
+                                          </label>
+                                          <VikingMemorySelect
+                                            value={
+                                              node.longTermMemoryIndex ?? ""
+                                            }
+                                            onChange={(memory) => {
+                                              patch({
+                                                longTermMemoryIndex: memory.id,
+                                              });
+                                              patchDeploymentEnv(
+                                                "DATABASE_VIKINGMEM_PROJECT",
+                                                memory.projectName,
+                                              );
+                                              patchDeploymentEnv(
+                                                "DATABASE_VIKING_REGION",
+                                                memory.region,
+                                              );
+                                              patchDeploymentEnv(
+                                                "DATABASE_VIKINGMEM_MEMORY_TYPE",
+                                                (memory.memoryTypes ?? []).join(
+                                                  ",",
+                                                ),
+                                              );
+                                            }}
+                                          />
+                                        </div>
+                                      )}
                                       <RuntimeEnvFields
                                         env={
                                           LTM_BACKENDS.find(
@@ -5229,8 +6784,8 @@ export function CustomCreate({
                                         onChange={(v) =>
                                           patch({ autoSaveSession: v })
                                         }
-                                        title="自动保存会话到长期记忆"
-                                        desc="会话结束时自动把内容写入长期记忆，无需手动调用。"
+                                        title={t("traditional.memory.autoSave")}
+                                        desc={t("traditional.memory.autoSaveDescription")}
                                         icon={Database}
                                       />
                                     </div>
@@ -5265,7 +6820,7 @@ export function CustomCreate({
                 onInput={setDebugInput}
                 onSend={sendDebugMessage}
                 onStartVariant={startDebugVariant}
-                onDeployVariant={(id) => void openEnvironment(id)}
+                onUseVariant={(id) => void openEnvironment(id)}
                 onAddVariant={addDebugVariant}
                 onRemoveVariant={removeDebugVariant}
                 onToggleConfig={(id) => {
@@ -5281,14 +6836,25 @@ export function CustomCreate({
           </div>
         )}
 
+        {workspaceMode === "optimize" && (
+          <HarnessOptimizationWorkspace
+            profile={harnessOptimizationProfile}
+            optimizations={harnessOptimizations}
+            onProfileChange={updateHarnessOptimizationProfile}
+            onOptimizationChange={updateHarnessOptimization}
+          />
+        )}
+
         {workspaceMode === "environment" && (
           <div className="cw-environment-workspace">
             <CloudEnvironmentConfigurator
-              cloudProvider={cloudProvider}
-              value={draft.cloudEnvironment ?? { cliTools: [] }}
+              value={
+                draft.cloudEnvironment ?? {
+                  environmentId: "",
+                  environmentVersionId: "",
+                }
+              }
               onChange={updateCloudEnvironment}
-              editorOpen={cloudEnvironmentEditorOpen}
-              onEditorOpenChange={setCloudEnvironmentEditorOpen}
               disabled={building}
             />
           </div>
@@ -5302,7 +6868,8 @@ export function CustomCreate({
                 cloudProvider={cloudProvider}
                 project={project}
                 agentDraft={draft}
-                agentName={draft.name || "未命名 Agent"}
+                agentCategory={deploymentAgentCategory(deploymentTarget)}
+                agentName={draft.name || t("traditional.basic.unnamedAgent")}
                 agentCount={countDraftAgents(draft)}
                 releaseConfiguration={
                   selectedDebugVariant
@@ -5310,16 +6877,19 @@ export function CustomCreate({
                         modelName:
                           selectedDebugVariant.modelName ||
                           draft.modelName ||
-                          "默认模型",
+                          t("traditional.debug.defaultModel"),
                         description: selectedDebugVariant.description,
                         instruction: selectedDebugVariant.instruction,
-                        optimizations:
-                          selectedDebugVariant.optimizations.flatMap((id) => {
-                            const option = DEBUG_OPTIMIZATIONS.find(
-                              (item) => item.id === id,
-                            );
-                            return option ? [option.label] : [];
+                        optimizations: [
+                          t("traditional.optimization.releaseScenario", {
+                            profile: t(
+                              `traditional.optimization.profiles.${harnessOptimizationProfile}.label`,
+                            ),
                           }),
+                          ...harnessOptimizations.map((id) =>
+                            t(`traditional.optimization.options.${id}.label`),
+                          ),
+                        ],
                       }
                     : undefined
                 }
@@ -5327,12 +6897,19 @@ export function CustomCreate({
                 onDeploy={handleDeploy}
                 onAgentAdded={onAgentAdded}
                 onDeploymentTaskChange={onDeploymentTaskChange}
-                deploymentActionLabel={deploymentTarget ? "更新并发布" : "部署"}
+                deploymentActionLabel={
+                  deploymentTarget
+                    ? t("traditional.deployment.updateAndPublish")
+                    : t("common.deploy")
+                }
                 deploymentActionTargetId="cw-publish-primary-action"
                 deploymentRuntimeId={deploymentTarget?.runtimeId}
+                deploymentMpaInstanceId={deploymentTarget?.mpaInstanceId}
                 deploymentRuntimeName={deploymentRuntimeName}
+                deploymentRuntimeRevision={deploymentTarget?.etag}
                 deploymentRuntimeNameCustomized={
-                  !!deploymentTarget || !!draft.deployment?.runtimeNameCustomized
+                  !!deploymentTarget ||
+                  !!draft.deployment?.runtimeNameCustomized
                 }
                 onDeploymentRuntimeNameChange={(runtimeName) =>
                   setDraft((current) => ({
@@ -5347,7 +6924,10 @@ export function CustomCreate({
                 onDeploymentStarted={onDeploymentStarted}
                 onDeploymentComplete={onDeploymentComplete}
                 feishuEnabled={!!draft.deployment?.feishuEnabled}
-                onFeishuEnabledChange={(feishuEnabled) => {
+                configuredRuntimeEnvKeys={
+                  deploymentTarget?.configuredRuntimeEnvKeys
+                }
+                onFeishuEnabledChange={async (feishuEnabled) => {
                   const nextDraft: AgentDraft = {
                     ...draft,
                     deployment: {
@@ -5355,23 +6935,28 @@ export function CustomCreate({
                       feishuEnabled,
                     },
                   };
+                  const generated = await generateAgentProject(
+                    codegenDraft(nextDraft),
+                  );
                   setDraft(nextDraft);
+                  setProject(generated);
                 }}
                 deploymentEnv={deploymentEnv.specs}
                 requiredSecretEnv={customModelCredentials}
                 requiredSecretEnvValues={customModelSecretValues}
-                onRequiredSecretEnvChange={(key, value) =>
-                  setCustomModelSecretValues((current) => ({
-                    ...current,
-                    [key]: value,
-                  }))
-                }
+                onRequiredSecretEnvChange={patchCustomModelSecret}
                 deploymentEnvValues={{
                   ...providerDraft.deployment?.envValues,
                   ...customModelSecretValues,
                   ...deploymentEnv.fixedValues,
                 }}
                 onDeploymentEnvChange={patchDeploymentEnv}
+                onFeishuCredentialsChange={(appId, appSecret) =>
+                  patchDeploymentEnvValues({
+                    FEISHU_APP_ID: appId,
+                    FEISHU_APP_SECRET: appSecret,
+                  })
+                }
                 network={draft.deployment?.network}
                 onNetworkChange={(network) =>
                   setDraft((current) => ({
@@ -5392,7 +6977,10 @@ export function CustomCreate({
                 onExportYaml={() =>
                   downloadText(
                     `${providerDraft.name || "agent"}.yaml`,
-                    draftToYaml(providerDraft),
+                    draftToYaml(providerDraft, {
+                      heading: t("yaml.heading"),
+                      importHint: t("yaml.importHint"),
+                    }),
                     "text/yaml",
                   )
                 }
@@ -5400,8 +6988,8 @@ export function CustomCreate({
             ) : (
               <div className="cw-publish-loading" role="status">
                 <Loader2 className="cw-i cw-spin" />
-                <strong>正在生成发布配置</strong>
-                <span>校验 Agent 结构并准备部署快照…</span>
+                <strong>{t("traditional.publish.generating")}</strong>
+                <span>{t("traditional.publish.validating")}</span>
               </div>
             )}
           </div>
@@ -5410,33 +6998,31 @@ export function CustomCreate({
       <WorkspaceLifecycleFooter
         mode={workspaceMode}
         busy={building}
+        nextDisabled={workspaceMode === "build" && modelCredentialMissing && showErrors}
         onChange={handleWorkspaceChange}
         assistant={workspaceMode === "build" ? aiComposer : undefined}
-        accessory={
-          workspaceMode === "environment" ? (
-            <CloudEnvironmentAdvancedTrigger
-              customized={draft.cloudEnvironment?.dockerfile !== undefined}
-              disabled={building}
-              onClick={() => setCloudEnvironmentEditorOpen(true)}
-            />
-          ) : undefined
-        }
       />
       {debugTraceTarget && (
         <TraceDrawer
           testRunId={debugTraceTarget.runId}
           sessionId={debugTraceTarget.sessionId}
-          title={`调用链路 · ${debugTraceTarget.variantName}`}
+          title={t("traditional.debug.traceTitle", {
+            name: debugTraceTarget.variantName,
+          })}
           onClose={() => setDebugTraceTarget(null)}
         />
       )}
       {debugLeaveConfirmOpen && (
         <StudioConfirmDialog
           variant="warning"
-          title="离开调试？"
-          description="离开调试页面后，当前环境将被清理。您可以通过重新启动环境进行新的测试。"
-          confirmLabel={debugLeaveCleaning ? "清理中..." : "确定离开"}
-          closeLabel="关闭离开调试确认"
+          title={t("traditional.debug.leaveTitle")}
+          description={t("traditional.debug.leaveDescription")}
+          confirmLabel={
+            debugLeaveCleaning
+              ? t("traditional.debug.cleaning")
+              : t("traditional.debug.confirmLeave")
+          }
+          closeLabel={t("traditional.debug.closeLeaveConfirmation")}
           busy={debugLeaveCleaning}
           onCancel={cancelDebugLeaveConfirm}
           onConfirm={() => void acceptDebugLeaveConfirm()}
@@ -5453,7 +7039,7 @@ export function CustomCreate({
             onClick={(event) => event.stopPropagation()}
           >
             <div className="confirm-title" id="ai-generate-error-title">
-              智能生成失败
+              {t("traditional.ai.failed")}
             </div>
             <div className="cw-ai-error-message" id="ai-generate-error-message">
               {aiErrorDialog}
@@ -5464,7 +7050,7 @@ export function CustomCreate({
                 className="confirm-btn cw-ai-error-close"
                 onClick={() => setAiErrorDialog(null)}
               >
-                关闭
+                {t("common.close")}
               </button>
             </div>
           </div>

@@ -1,0 +1,78 @@
+@import "../../tokens/didact-gothic.css";
+
+/* Figma 607:220149 — 196 × 36, outside stroke, 94 × 30 items */
+.studio-glass-tabs {
+  --glass-tabs-selected: #111112;
+  --glass-tabs-text: #dbdee7;
+  --glass-tabs-fill: rgba(0, 0, 0, .26);
+  --glass-tabs-border: rgba(255, 255, 255, .1);
+  box-sizing: border-box;
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  padding: 3px;
+  gap: 2px;
+  border: 0;
+  border-radius: 72px;
+  background: var(--glass-tabs-fill);
+  box-shadow: 0 0 0 1px var(--glass-tabs-border);
+  backdrop-filter: blur(2px);
+}
+.studio-glass-tabs__tab {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 94px;
+  width: 94px;
+  max-width: 200px;
+  height: 30px;
+  margin: 0;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  color: var(--glass-tabs-text);
+  font: 400 14px/22px "Studio Didact Gothic", sans-serif;
+  font-synthesis: none;
+  letter-spacing: 0;
+  text-align: center;
+  cursor: pointer;
+  transition: color var(--studio-motion-duration-fast, 140ms) ease-out, background-color var(--studio-motion-duration-fast, 140ms) ease-out;
+}
+.studio-glass-tabs__tab > span { display: block; width: 78px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; transition: opacity var(--studio-motion-duration-fast, 140ms) ease-out, color var(--studio-motion-duration-fast, 140ms) ease-out; }
+.studio-glass-tabs__tab[aria-selected="false"] > span { opacity: .5; }
+.studio-glass-tabs__tab[aria-selected="true"] { border-radius: 62px; }
+.studio-glass-tabs:not([data-indicator-ready]) .studio-glass-tabs__tab[aria-selected="true"] { background: var(--glass-tabs-selected); }
+.studio-glass-tabs[data-indicator-ready]::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  left: 0;
+  top: 3px;
+  width: var(--tab-indicator-width);
+  height: 30px;
+  border-radius: 62px;
+  background: var(--glass-tabs-selected);
+  transform: translateX(var(--tab-indicator-left));
+  transition: transform 160ms ease, width 160ms ease;
+  pointer-events: none;
+}
+.studio-glass-tabs__tab:focus-visible { outline: 1px solid var(--studio-focus-ring, #fff); outline-offset: -1px; }
+@media (hover: hover) {
+  .studio-glass-tabs__tab[aria-selected="false"]:hover { background-color: var(--studio-fill-subtle, rgba(219, 222, 231, .05)); }
+  .studio-glass-tabs__tab[aria-selected="false"]:hover > span { opacity: .75; }
+}
+[data-theme="light"] .studio-glass-tabs {
+  --glass-tabs-selected: var(--studio-bg-panel);
+  --glass-tabs-text: var(--studio-text-primary);
+  --glass-tabs-fill: var(--studio-bg-track);
+  --glass-tabs-border: var(--studio-border-subtle);
+}
+@media (prefers-reduced-motion: reduce) {
+  .studio-glass-tabs[data-indicator-ready]::before,
+  .studio-glass-tabs__tab,
+  .studio-glass-tabs__tab > span { transition: none; }
+}

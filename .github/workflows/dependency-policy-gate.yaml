@@ -1,0 +1,21 @@
+name: Dependency Policy Gate
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  dependency-policy-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install policy check dependencies
+        run: python3 -m pip install packaging 'tomli; python_version<"3.11"'
+      - name: Check runtime dependency policy
+        run: python3 scripts/check_dependency_e2e.py policy

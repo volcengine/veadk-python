@@ -1,0 +1,258 @@
+#!/opt/studio-sandbox/venv/bin/python
+"""Check or install a code-server release without restarting the running editor."""
+
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+import platform
+import re
+import subprocess
+import sys
+import tarfile
+import tempfile
+import urllib.error
+import urllib.request
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from editor_assets import apply_fonts
+from editor_routing import patch_editor
+
+STUDIO = Path("/opt/studio-sandbox")
+
+
+def https_url(url: str) -> str:
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
+        raise ValueError("下载地址必须使用 HTTPS，不能携带账号密码")
+    return url
+
+
+def get_release(
+    version: str | None, api: str, architecture: str
+) -> tuple[str, str, str]:
+    suffix = f"tags/v{version}" if version else "latest"
+    request = urllib.request.Request(
+        https_url(api.rstrip("/") + "/" + suffix),
+        headers={"Accept": "application/vnd.github+json"},
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        data = json.load(response)
+    actual = str(data["tag_name"]).removeprefix("v")
+    if (
+        not re.fullmatch(r"\d+\.\d+\.\d+", actual)
+        or data.get("prerelease")
+        or data.get("draft")
+    ):
+        raise ValueError("升级源未返回正式稳定版本")
+    filename = f"code-server-{actual}-linux-{architecture}.tar.gz"
+    for asset in data["assets"]:
+        if asset["name"] == filename:
+            digest = str(asset.get("digest", ""))
+            if not re.fullmatch(r"sha256:[a-f0-9]{64}", digest):
+                raise ValueError(
+                    "该版本没有官方 SHA256，请使用 --archive-url 和 --sha256 指定已校验安装包"
+                )
+            return (
+                actual,
+                https_url(asset["browser_download_url"]),
+                digest.split(":", 1)[1],
+            )
+    raise ValueError("该版本没有适配当前架构的安装包")
+
+
+def activate(home: Path, target: Path) -> None:
+    current = home / "current"
+    if current.exists():
+        previous = home / "previous.next"
+        if previous.is_symlink():
+            previous.unlink()
+        previous.symlink_to(current.resolve())
+        previous.replace(home / "previous")
+    pending = home / "current.next"
+    if pending.is_symlink():
+        pending.unlink()
+    pending.symlink_to(target)
+    pending.replace(current)
+
+
+def confirm(yes: bool) -> None:
+    print("请先保存编辑器中尚未保存的文件；本命令不会重启编辑器或修改项目和设置")
+    if not yes:
+        if (
+            not sys.stdin.isatty()
+            or input("已保存并继续？[y/N] ").strip().lower() != "y"
+        ):
+            raise ValueError("已取消，可在保存文件后使用 --yes 确认升级")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    choice = parser.add_mutually_exclusive_group()
+    choice.add_argument(
+        "--check",
+        action="store_true",
+        help="Check the stable release without installing",
+    )
+    choice.add_argument(
+        "--latest", action="store_true", help="Install the latest stable release"
+    )
+    choice.add_argument(
+        "--version", help="Install a specific stable version, for example 4.104.0"
+    )
+    choice.add_argument(
+        "--rollback",
+        action="store_true",
+        help="Select the previous installation for the next editor restart",
+    )
+    parser.add_argument(
+        "--archive-url", help="Use a trusted HTTPS mirror or private object-storage URL"
+    )
+    parser.add_argument("--sha256", help="Expected SHA256, required with --archive-url")
+    parser.add_argument(
+        "--yes", action="store_true", help="Confirm that unsaved files have been saved"
+    )
+    parser.add_argument(
+        "--release-api",
+        default=os.environ.get(
+            "STUDIO_CODE_SERVER_RELEASE_API",
+            "https://api.github.com/repos/coder/code-server/releases",
+        ),
+    )
+    args = parser.parse_args()
+    if args.version and not re.fullmatch(r"\d+\.\d+\.\d+", args.version):
+        parser.error("版本号格式须为 x.y.z")
+    if args.archive_url and (
+        not args.version or not re.fullmatch(r"[a-fA-F0-9]{64}", args.sha256 or "")
+    ):
+        parser.error("镜像下载地址必须同时指定 --version 和 --sha256")
+    if args.sha256 and not args.archive_url:
+        parser.error("--sha256 必须与 --archive-url 一起使用")
+    home = Path(
+        os.environ.get(
+            "STUDIO_CODE_SERVER_HOME", "/home/gem/.local/share/studio-code-server"
+        )
+    )
+    try:
+        if args.rollback:
+            confirm(args.yes)
+            if not (home / "previous").exists():
+                raise ValueError("没有可回退的版本，当前编辑器未更改")
+            activate(home, (home / "previous").resolve())
+            print("已选择上一版本，保存所有文件后手动重启编辑器生效")
+            return 0
+        architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine())
+        if architecture is None or platform.system() != "Linux":
+            raise ValueError("升级命令仅支持 Linux amd64/arm64")
+        if args.archive_url:
+            version, url, digest = (
+                args.version,
+                https_url(args.archive_url),
+                args.sha256.lower(),
+            )
+        else:
+            version, url, digest = get_release(
+                args.version, args.release_api, architecture
+            )
+        current = subprocess.run(
+            ["/usr/bin/code-server", "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()[0]
+        print(f"当前版本 {current}\n目标稳定版本 {version}")
+        if args.check or not (args.latest or args.version):
+            print(
+                "仅检查，没有下载或更改；国内下载可指定 --version、--archive-url 和 --sha256"
+            )
+            return 0
+        confirm(args.yes)
+        home.mkdir(parents=True, exist_ok=True)
+        with (home / "upgrade.lock").open("w") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            releases = home / "releases"
+            releases.mkdir(exist_ok=True)
+            release_name = f"code-server-{version}-linux-{architecture}"
+            target = releases / release_name
+            if target.exists():
+                raise ValueError("目标版本目录已存在，未覆盖已有安装")
+            with tempfile.TemporaryDirectory(prefix=".upgrade-", dir=home) as temporary:
+                archive_path = Path(temporary) / "release.tar.gz"
+                # curl gives bounded, resumable transport; signed mirror URLs are never printed
+                subprocess.run(
+                    [
+                        "curl",
+                        "--fail",
+                        "--silent",
+                        "--show-error",
+                        "--location",
+                        "--retry",
+                        "2",
+                        "--connect-timeout",
+                        "15",
+                        "--max-time",
+                        "600",
+                        "--output",
+                        str(archive_path),
+                        url,
+                    ],
+                    check=True,
+                )
+                with archive_path.open("rb") as stream:
+                    actual = hashlib.file_digest(stream, "sha256").hexdigest()
+                if actual != digest:
+                    raise ValueError("安装包校验失败，当前编辑器未更改")
+                with tarfile.open(archive_path, "r:gz") as archive:
+                    if any(
+                        not member.name.startswith(release_name + "/")
+                        and member.name != release_name
+                        for member in archive.getmembers()
+                    ):
+                        raise ValueError("安装包目录结构不符合预期")
+                    archive.extractall(temporary, filter="data")
+                staged = Path(temporary) / release_name
+                apply_fonts(staged, STUDIO / "fonts")
+                patch_editor(staged)
+                subprocess.run(
+                    [str(staged / "bin/code-server"), "--version"],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                )
+                staged.rename(target)
+            if not (home / "current").exists():
+                (home / "current").symlink_to(
+                    (STUDIO / "base-code-server").resolve().parent.parent
+                )
+            activate(home, target)
+        print("新版本已准备好，保存所有文件后手动重启编辑器生效；当前会话不会自动重启")
+        print(
+            "用户设置、插件、Projects 和 .venv 保持不变；新 Sandbox 会话仍使用镜像中的默认版本"
+        )
+        return 0
+    except (
+        ValueError,
+        OSError,
+        KeyError,
+        tarfile.TarError,
+        subprocess.CalledProcessError,
+        urllib.error.URLError,
+    ) as error:
+        if isinstance(error, ValueError):
+            print(error, file=sys.stderr)
+        else:
+            print(
+                "升级未完成，请检查下载源、网络、目录权限或是否已有升级任务；当前编辑器不会被重启",
+                file=sys.stderr,
+            )
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

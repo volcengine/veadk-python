@@ -16,6 +16,10 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from google.adk.agents.run_config import RunConfig, StreamingMode
+from google.adk.models.llm_request import LlmRequest
+from google.adk.models.llm_response import LlmResponse
+from google.genai import types
 from opentelemetry import metrics as metrics_api
 from opentelemetry.metrics import _internal as metrics_internal
 from opentelemetry.sdk import metrics as metrics_sdk
@@ -136,6 +140,79 @@ def test_proxy_instruments_follow_provider_installed_later(
     assert [(dict(point.attributes), point.value) for point in points] == [
         ({"phase": "after"}, 2)
     ]
+
+
+@pytest.mark.parametrize(
+    "server_address",
+    [
+        "https://ark.cn-beijing.volces.com/api/v3/",
+        "https://ark.ap-southeast.bytepluses.com/api/v3",
+    ],
+    ids=["volcengine", "byteplus"],
+)
+@pytest.mark.parametrize("streaming_mode", [StreamingMode.NONE, StreamingMode.SSE])
+@pytest.mark.parametrize("cached_tokens", [600, 0, None])
+def test_cache_read_token_metrics_preserve_input_usage(
+    fresh_global_meter_provider, server_address, streaming_mode, cached_tokens
+):
+    reader = InMemoryMetricReader()
+    metrics_api.set_meter_provider(metrics_sdk.MeterProvider(metric_readers=[reader]))
+    recorder = PortalMetricRecorder(name="test-cache-read")
+    context = SimpleNamespace(
+        agent=SimpleNamespace(model_api_base=server_address),
+        run_config=RunConfig(streaming_mode=streaming_mode),
+    )
+    request = LlmRequest(model="test-model")
+
+    if streaming_mode == StreamingMode.SSE:
+        recorder.record_call_llm(context, "partial", request, LlmResponse(partial=True))
+
+    recorder.record_call_llm(
+        context,
+        "final",
+        request,
+        LlmResponse(
+            usage_metadata=types.GenerateContentResponseUsageMetadata(
+                prompt_token_count=1000,
+                candidates_token_count=200,
+                total_token_count=1200,
+                cached_content_token_count=cached_tokens,
+            ),
+        ),
+    )
+
+    metrics_data = reader.get_metrics_data()
+    recorded_metrics = {
+        metric.name: list(metric.data.data_points)
+        for resource_metrics in metrics_data.resource_metrics
+        for scope_metrics in resource_metrics.scope_metrics
+        for metric in scope_metrics.metrics
+    }
+    points = recorded_metrics["gen_ai.client.token.usage"]
+    expected = {"input": 1000, "output": 200}
+    if cached_tokens is not None:
+        expected["cache_read"] = cached_tokens
+    assert {point.attributes["gen_ai_token_type"]: point.sum for point in points} == (
+        expected
+    )
+    assert len(points) == len(expected)
+    for point in points:
+        assert point.count == 1
+        assert point.attributes["server_address"] == server_address
+        assert point.attributes["stream"] == (streaming_mode == StreamingMode.SSE)
+        assert point.attributes["gen_ai_response_model"] == "test-model"
+    assert [point.value for point in recorded_metrics["gen_ai.chat.count"]] == [1]
+
+
+def test_missing_usage_does_not_record_token_metrics(fresh_global_meter_provider):
+    reader = InMemoryMetricReader()
+    metrics_api.set_meter_provider(metrics_sdk.MeterProvider(metric_readers=[reader]))
+    recorder = PortalMetricRecorder(name="test-missing-usage")
+    context = SimpleNamespace(agent=SimpleNamespace(), run_config=None)
+
+    recorder.record_call_llm(context, "event", LlmRequest(), LlmResponse())
+
+    assert reader.get_metrics_data() is None
 
 
 def test_apmplus_reuses_preconfigured_global_provider(

@@ -21,6 +21,7 @@ from frontend.server.studio_update_resources import (
     _provision_snapshot_tool,
     reconcile_studio_update_resources,
 )
+from veadk.utils.cloud_provider import CloudProvider
 
 
 def _client(
@@ -28,6 +29,7 @@ def _client(
     *,
     role: str = "trn:iam::123:role/CustomerStudioRole",
 ) -> SimpleNamespace:
+    environment = {"STUDIO_WORKSPACE_TOOL_ID": "existing-workspace", **environment}
     return SimpleNamespace(
         get_function=lambda _request: SimpleNamespace(
             role=role,
@@ -40,21 +42,82 @@ def _client(
 
 
 @pytest.mark.parametrize(
+    "provider,region",
+    [
+        ("volcengine", "cn-beijing"),
+        ("volcengine", "cn-shanghai"),
+        ("byteplus", "ap-southeast-1"),
+    ],
+)
+def test_frontend_update_migrates_the_deployed_role_lists(
+    monkeypatch, provider, region
+):
+    environment = {
+        "OAUTH2_USER_POOL_ID": "pool",
+        "OAUTH2_USER_POOL_CLIENT_ID": "client",
+        "VEADK_STUDIO_ADMINS": "admin@example.com",
+        "VEADK_STUDIO_DEVELOPERS": "dev@example.com",
+        "VEIDENTITY_REGION": region,
+        "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": "stable-key",
+        "VEADK_STUDIO_TOS_BUCKET": "bucket",
+        "VEADK_STUDIO_TOS_REGION": region,
+        "SANDBOX_CHAT_CODEX_SNAPSHOT": "code",
+        "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "claw",
+        "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes",
+    }
+    calls = []
+
+    def prepare(**kwargs):
+        calls.append(kwargs)
+        return {
+            "VEADK_STUDIO_IDENTITY_ROLES": "1",
+            "VEADK_STUDIO_ADMINS": "",
+            "VEADK_STUDIO_DEVELOPERS": "",
+        }
+
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.prepare_identity_roles", prepare
+    )
+    overrides = reconcile_studio_update_resources(
+        provider=provider,
+        region=region,
+        application_id="app",
+        function_id="function",
+        function_client=_client(environment),
+        access_key="ak",
+        secret_key="sk",
+        session_token="token",
+    )
+    assert overrides["VEADK_STUDIO_IDENTITY_ROLES"] == "1"
+    assert (
+        overrides["VEADK_STUDIO_ADMINS"] == overrides["VEADK_STUDIO_DEVELOPERS"] == ""
+    )
+    assert calls[0]["legacy_environment"]["VEADK_STUDIO_ADMINS"] == "admin@example.com"
+    assert (
+        calls[0]["legacy_environment"]["VEADK_STUDIO_DEVELOPERS"] == "dev@example.com"
+    )
+    assert calls[0]["pool_uid"] == "pool"
+    assert calls[0]["client_uid"] == "client"
+    assert calls[0]["provider"] == provider
+    assert calls[0]["region"] == region
+    assert "super_admin" not in calls[0]
+
+
+@pytest.mark.parametrize(
     ("provider", "region"),
     [
         ("volcengine", "cn-beijing"),
         ("byteplus", "ap-southeast-1"),
     ],
 )
-def test_reconcile_refreshes_the_default_function_role_policy(
+def test_reconcile_does_not_mutate_the_function_role_policy(
     monkeypatch: pytest.MonkeyPatch,
-    provider: str,
+    provider: CloudProvider,
     region: str,
 ) -> None:
-    calls: list[dict[str, str]] = []
     monkeypatch.setattr(
-        "frontend.server.studio_update_resources.ensure_default_frontend_role_policy",
-        lambda role, **kwargs: calls.append({"role": role, **kwargs}) or True,
+        "veadk.cli.frontend_deploy_iam.ensure_default_frontend_role_policy",
+        lambda *_args, **_kwargs: pytest.fail("self-update must not mutate IAM"),
     )
     monkeypatch.setattr(
         "frontend.server.studio_update_resources.resolve_studio_storage_for_deploy",
@@ -73,31 +136,22 @@ def test_reconcile_refreshes_the_default_function_role_policy(
         "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-tool",
     }
 
-    assert (
-        reconcile_studio_update_resources(
-            provider=provider,
-            region=region,
-            application_id="application-id",
-            function_id="function-id",
-            function_client=_client(
-                environment,
-                role="trn:iam::123:role/VeADKFrontendServiceRole",
-            ),
-            access_key="ak",
-            secret_key="sk",
-            session_token="token",
-        )
-        == {}
-    )
-    assert calls == [
-        {
-            "role": "trn:iam::123:role/VeADKFrontendServiceRole",
-            "access_key": "ak",
-            "secret_key": "sk",
-            "session_token": "token",
-            "provider": provider,
-        }
-    ]
+    assert reconcile_studio_update_resources(
+        provider=provider,
+        region=region,
+        application_id="application-id",
+        function_id="function-id",
+        function_client=_client(
+            environment,
+            role="trn:iam::123:role/VeADKFrontendServiceRole",
+        ),
+        access_key="ak",
+        secret_key="sk",
+        session_token="token",
+    ) == {
+        "VEADK_STUDIO_ACCOUNT_ID": "123",
+        "VEADK_STUDIO_ACCOUNT_ID_RESOLUTION_ERROR": "",
+    }
 
 
 def test_reconcile_studio_update_resources_reuses_existing_resources(
@@ -120,24 +174,51 @@ def test_reconcile_studio_update_resources_reuses_existing_resources(
         lambda **_kwargs: pytest.fail("snapshot tools must not be reprovisioned"),
     )
 
-    assert (
-        reconcile_studio_update_resources(
-            provider="byteplus",
-            region="ap-southeast-1",
-            application_id="application-id",
-            function_id="function-id",
-            function_client=_client(environment),
-            access_key="ak",
-            secret_key="sk",
-            session_token="token",
-        )
-        == {}
-    )
+    assert reconcile_studio_update_resources(
+        provider="byteplus",
+        region="ap-southeast-1",
+        application_id="application-id",
+        function_id="function-id",
+        function_client=_client(environment),
+        access_key="ak",
+        secret_key="sk",
+        session_token="token",
+    ) == {
+        "VEADK_STUDIO_ACCOUNT_ID": "123",
+        "VEADK_STUDIO_ACCOUNT_ID_RESOLUTION_ERROR": "",
+    }
 
 
 def test_reconcile_studio_update_resources_provisions_missing_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    workspace_models = []
+
+    def workspace_tool(client, image, provider, model_environment):
+        from frontend.server.workspace_tool import workspace_tool_request
+
+        assert provider == "byteplus"
+        request = workspace_tool_request(image, provider, model_environment)
+        assert request.tool_type == "StudioEnv"
+        assert request.enable_snapshot is True
+        assert request.authorizer_configuration.key_auth.api_key_location == "Header"
+        workspace_models.append(model_environment)
+        return "workspace-tool"
+
+    def model_token(**kwargs):
+        assert kwargs == {
+            "cloud_provider": "byteplus",
+            "region": "ap-southeast-1",
+            "access_key": "ak",
+            "secret_key": "sk",
+            "session_token": "token",
+        }
+        return "test-workspace-model-token"
+
+    monkeypatch.setattr(
+        "frontend.server.workspace_tool.ensure_workspace_tool", workspace_tool
+    )
+    monkeypatch.setattr("veadk.auth.veauth.ark_veauth.get_ark_token", model_token)
     storage_calls: list[dict[str, Any]] = []
     tool_calls: list[dict[str, Any]] = []
 
@@ -167,16 +248,25 @@ def test_reconcile_studio_update_resources_provisions_missing_resources(
         region="ap-southeast-1",
         application_id="application-id",
         function_id="function-id",
-        function_client=_client({"SANDBOX_CHAT_CODEX": "existing-tool"}),
+        function_client=_client(
+            {"SANDBOX_CHAT_CODEX": "existing-tool", "STUDIO_WORKSPACE_TOOL_ID": ""}
+        ),
         access_key="ak",
         secret_key="sk",
         session_token="token",
     )
 
+    assert len(workspace_models) == 1
+    assert workspace_models[0]["MODEL_AGENT_API_KEY"] == "test-workspace-model-token"
+    assert workspace_models[0]["MODEL_AGENT_NAME"]
+    assert workspace_models[0]["MODEL_AGENT_BASE_URL"].startswith("https://")
     assert overrides == {
+        "STUDIO_WORKSPACE_TOOL_ID": "workspace-tool",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": "generated-key",
         "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
         "VEADK_STUDIO_TOS_REGION": "ap-southeast-1",
+        "VEADK_STUDIO_ACCOUNT_ID": "123",
+        "VEADK_STUDIO_ACCOUNT_ID_RESOLUTION_ERROR": "",
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-tool",
         "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-tool",
         "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-tool",
@@ -188,7 +278,10 @@ def test_reconcile_studio_update_resources_provisions_missing_resources(
             "access_key": "ak",
             "secret_key": "sk",
             "session_token": "token",
-            "source": {"SANDBOX_CHAT_CODEX": "existing-tool"},
+            "source": {
+                "SANDBOX_CHAT_CODEX": "existing-tool",
+                "STUDIO_WORKSPACE_TOOL_ID": "",
+            },
         }
     ]
     assert {call["kind"] for call in tool_calls} == {"codex", "openclaw", "hermes"}
@@ -231,8 +324,51 @@ def test_reconcile_studio_update_resources_only_repairs_missing_items(
         session_token="",
     )
 
-    assert overrides == {"SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-tool"}
+    assert overrides == {
+        "VEADK_STUDIO_ACCOUNT_ID": "123",
+        "VEADK_STUDIO_ACCOUNT_ID_RESOLUTION_ERROR": "",
+        "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-tool",
+    }
     assert tool_calls == ["hermes"]
+
+
+def test_reconcile_studio_update_resources_recovers_account_id_from_tos_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources.resolve_studio_storage_for_deploy",
+        lambda **_kwargs: pytest.fail("existing storage must be reused"),
+    )
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources._provision_snapshot_tool",
+        lambda **_kwargs: pytest.fail("snapshot tools must not be reprovisioned"),
+    )
+
+    overrides = reconcile_studio_update_resources(
+        provider="volcengine",
+        region="cn-beijing",
+        application_id="application-id",
+        function_id="function-id",
+        function_client=_client(
+            {
+                "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": "stable-key",
+                "VEADK_STUDIO_TOS_BUCKET": "veadk-studio-2100123456",
+                "VEADK_STUDIO_TOS_REGION": "cn-beijing",
+                "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-tool",
+                "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-tool",
+                "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-tool",
+            },
+            role="custom-role-without-account-id",
+        ),
+        access_key="",
+        secret_key="",
+        session_token="",
+    )
+
+    assert overrides == {
+        "VEADK_STUDIO_ACCOUNT_ID": "2100123456",
+        "VEADK_STUDIO_ACCOUNT_ID_RESOLUTION_ERROR": "",
+    }
 
 
 def test_provision_codex_snapshot_tool_binds_model_credential(

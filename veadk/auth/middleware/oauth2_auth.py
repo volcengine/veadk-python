@@ -71,6 +71,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import random
 import secrets
 import time
@@ -104,6 +105,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 # Maximum cookie size before warning (browsers typically limit to 4KB).
 _MAX_COOKIE_SIZE_WARNING = 3800
+_REFRESH_RETRY_HEADER = "X-VeADK-OAuth-Refresh-Retry"
 
 logger = logging.getLogger(__name__)
 
@@ -283,7 +285,9 @@ class OAuth2Config(BaseModel):
 
     # Session + cookie configuration
     session_cookie_name: str = "veadk_session"
-    session_timeout_seconds: int = 3600  # 1 hour
+    # Absolute browser-session lifetime. VeIdentity clients override this with
+    # their configured refresh-token lifetime when it is available.
+    session_timeout_seconds: int = 3600
     cookie_secure: bool = True
     cookie_samesite: str = "lax"
     cookie_domain: Optional[str] = None
@@ -335,6 +339,7 @@ class OAuth2Config(BaseModel):
         user_pool_uid: Optional[str] = None,
         client_name: Optional[str] = None,
         client_uid: Optional[str] = None,
+        client_secret: Optional[str] = None,
         redirect_uri: str,
         auto_create: bool = True,
         auto_register_callback: bool = True,
@@ -357,6 +362,8 @@ class OAuth2Config(BaseModel):
             user_pool_uid: UID of the VeIdentity user pool (takes precedence over name).
             client_name: Name of the user pool client (used if client_uid not set).
             client_uid: UID of the user pool client (takes precedence over name).
+            client_secret: Existing client secret. When paired with ``client_uid``,
+                avoids a redundant client lookup during Runtime startup.
             redirect_uri: OAuth2 callback URL (e.g., https://myapp.com/oauth2/callback).
             auto_create: Create user pool and client if not found (default: True).
             auto_register_callback: Register callback URL with client (default: True).
@@ -432,13 +439,19 @@ class OAuth2Config(BaseModel):
             )
 
         # Step 2: Get or create client
-        client = identity_client.get_user_pool_client(
-            user_pool_uid=user_pool_id,
-            name=client_name,
-            client_uid=client_uid,
-        )
+        resolved_client_secret = client_secret
+        client = None
+        if client_uid and resolved_client_secret:
+            resolved_client_id = client_uid
+            logger.info("Using configured existing client: %s", client_uid)
+        else:
+            client = identity_client.get_user_pool_client(
+                user_pool_uid=user_pool_id,
+                name=client_name,
+                client_uid=client_uid,
+            )
         if client:
-            resolved_client_id, client_secret = client
+            resolved_client_id, resolved_client_secret = client
             logger.info("Using existing client: %s", client_uid or client_name)
         elif auto_create and client_name:
             client_type_value = (
@@ -446,17 +459,39 @@ class OAuth2Config(BaseModel):
                 if isinstance(client_type, UserPoolClientType)
                 else client_type
             )
-            resolved_client_id, client_secret = identity_client.create_user_pool_client(
-                user_pool_uid=user_pool_id,
-                name=client_name,
-                client_type=client_type_value,
+            resolved_client_id, resolved_client_secret = (
+                identity_client.create_user_pool_client(
+                    user_pool_uid=user_pool_id,
+                    name=client_name,
+                    client_type=client_type_value,
+                )
             )
             logger.info("Created client: %s", client_name)
-        else:
+        elif not (client_uid and resolved_client_secret):
             identifier = client_uid or client_name
             raise ValueError(
                 f"Client '{identifier}' not found (auto_create=False or only UID provided)"
             )
+
+        # Keep the stateless browser session for no longer than the provider's
+        # refresh token. All Studio instances can then recover the same session
+        # from the signed cookie without relying on instance-local storage.
+        if "session_timeout_seconds" not in extra_config:
+            try:
+                refresh_token_lifetime = (
+                    identity_client.get_user_pool_client_refresh_token_lifetime(
+                        user_pool_uid=user_pool_id,
+                        client_uid=resolved_client_id,
+                    )
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to read refresh-token lifetime for user-pool client: %s",
+                    e,
+                )
+            else:
+                if refresh_token_lifetime:
+                    extra_config["session_timeout_seconds"] = refresh_token_lifetime
 
         # Step 3: Register callback URL
         if auto_register_callback:
@@ -473,8 +508,18 @@ class OAuth2Config(BaseModel):
             except Exception as e:
                 logger.warning("Callback registration skipped (may exist): %s", e)
 
-        # Step 4: Fetch OIDC discovery configuration
-        base_url = f"https://{user_pool_domain}"
+        # Step 4: Fetch OIDC discovery configuration. Public-cloud user pools
+        # expose discovery at the domain root over HTTPS. VeStack installations
+        # may expose it over HTTP under /userpool/<uid>; allow deploy-time
+        # configuration without changing the provider-returned OAuth endpoints.
+        base_url_template = os.getenv("VEIDENTITY_OIDC_BASE_URL", "").strip()
+        if base_url_template:
+            base_url = base_url_template.format(
+                user_pool_uid=user_pool_id,
+                user_pool_domain=user_pool_domain,
+            ).rstrip("/")
+        else:
+            base_url = f"https://{user_pool_domain}"
         oidc_config = _fetch_oidc_discovery(base_url)
 
         # Step 5: Build OAuth2Config from discovered endpoints
@@ -487,11 +532,11 @@ class OAuth2Config(BaseModel):
             jwks_uri=oidc_config.jwks_uri,
             introspection_url=oidc_config.introspection_endpoint,
             client_id=resolved_client_id,
-            client_secret=client_secret,
+            client_secret=resolved_client_secret,
             redirect_uri=redirect_uri,
             scope=scope,
             cookie_signing_secret=extra_config.pop(
-                "cookie_signing_secret", client_secret
+                "cookie_signing_secret", resolved_client_secret
             ),
             **extra_config,
         )
@@ -501,9 +546,11 @@ class OAuth2Session(BaseModel):
     """OAuth2 session data stored in cookies."""
 
     access_token: str
+    id_token: Optional[str] = None
     token_type: str = "Bearer"
     expires_at: float
     refresh_token: Optional[str] = None
+    session_expires_at: Optional[float] = None
     user_info: Optional[dict[str, Any]] = None
 
     def is_expired(self) -> bool:
@@ -516,7 +563,14 @@ class OAuth2Session(BaseModel):
 
     def can_refresh(self) -> bool:
         """Check if this session has a refresh token available."""
-        return bool(self.refresh_token)
+        return bool(self.refresh_token) and not self.is_session_expired()
+
+    def is_session_expired(self) -> bool:
+        """Check whether the absolute browser session lifetime has elapsed."""
+        return (
+            self.session_expires_at is not None
+            and time.time() >= self.session_expires_at
+        )
 
     def time_until_expiry(self) -> float:
         """Return seconds until token expires (negative if expired)."""
@@ -525,6 +579,22 @@ class OAuth2Session(BaseModel):
     def to_authorization_header(self) -> str:
         """Convert to Authorization header value."""
         return f"{self.token_type} {self.access_token}"
+
+
+_USERINFO_SESSION_FIELDS = frozenset(
+    {
+        "sub",
+        "email",
+        "email_verified",
+        "name",
+        "given_name",
+        "family_name",
+        "preferred_username",
+        "picture",
+        "locale",
+        "updated_at",
+    }
+)
 
 
 @runtime_checkable
@@ -667,9 +737,22 @@ class OAuth2Handler:
         self._jwks_last_kid_miss_refresh = 0.0
         self._jwks_lock = asyncio.Lock()
         self._introspection_cache: dict[str, tuple[dict[str, Any], float]] = {}
+        # Coalesce concurrent refreshes that reach the same Studio instance.
+        # The key is a digest so refresh tokens never become dictionary keys or
+        # appear in diagnostics. Completed results remain briefly reusable for
+        # requests that arrived with the same pre-rotation browser cookie.
+        self._refresh_tasks: dict[
+            str, tuple[asyncio.Task[Optional[OAuth2Session]], float]
+        ] = {}
+        self._refresh_tasks_lock = asyncio.Lock()
+        self._refresh_result_ttl_seconds = 30.0
 
     async def close(self) -> None:
         """Close the HTTP client."""
+        for task, _ in self._refresh_tasks.values():
+            if not task.done():
+                task.cancel()
+        self._refresh_tasks.clear()
         await self._http_client.aclose()
 
     def build_authorization_request(self, redirect_after_auth: str) -> tuple[str, str]:
@@ -762,13 +845,21 @@ class OAuth2Handler:
             except (TypeError, ValueError):
                 expires_in = 3600
 
-            expires_at = time.time() + max(0, expires_in)
+            issued_at = time.time()
+            expires_at = issued_at + max(0, expires_in)
+            session_expires_at = (
+                issued_at + self.config.session_timeout_seconds
+                if self.config.session_timeout_seconds > 0
+                else None
+            )
 
             session = OAuth2Session(
                 access_token=token_response["access_token"],
+                id_token=token_response.get("id_token"),
                 token_type=token_response.get("token_type", "Bearer"),
                 expires_at=expires_at,
                 refresh_token=token_response.get("refresh_token"),
+                session_expires_at=session_expires_at,
             )
 
             if self.config.userinfo_url:
@@ -805,11 +896,45 @@ class OAuth2Handler:
     ) -> Optional[OAuth2Session]:
         """Refresh the access token using the refresh token.
 
+        Concurrent requests carrying the same pre-rotation cookie share one
+        refresh operation on each Studio instance.
+        """
+        if not session.refresh_token or session.is_session_expired():
+            logger.debug("Cannot refresh: no usable refresh_token available")
+            return None
+
+        refresh_key = hashlib.sha256(session.refresh_token.encode("utf-8")).hexdigest()
+        now = time.monotonic()
+        async with self._refresh_tasks_lock:
+            self._refresh_tasks = {
+                key: value
+                for key, value in self._refresh_tasks.items()
+                if now - value[1] <= self._refresh_result_ttl_seconds
+            }
+            existing = self._refresh_tasks.get(refresh_key)
+            if existing is None:
+                task = asyncio.create_task(self._refresh_access_token_once(session))
+                self._refresh_tasks[refresh_key] = (task, now)
+            else:
+                task = existing[0]
+
+        result = await asyncio.shield(task)
+        if result is None:
+            async with self._refresh_tasks_lock:
+                current = self._refresh_tasks.get(refresh_key)
+                if current and current[0] is task:
+                    self._refresh_tasks.pop(refresh_key, None)
+        return result
+
+    async def _refresh_access_token_once(
+        self, session: OAuth2Session
+    ) -> Optional[OAuth2Session]:
+        """Perform one token-endpoint refresh request.
+
         Returns a new OAuth2Session with updated tokens, or None if refresh fails.
         The original session's user_info is preserved in the new session.
         """
         if not session.refresh_token:
-            logger.debug("Cannot refresh: no refresh_token available")
             return None
 
         token_data = {
@@ -854,11 +979,18 @@ class OAuth2Handler:
             # Create new session with refreshed tokens, preserving user_info.
             new_session = OAuth2Session(
                 access_token=token_response["access_token"],
+                id_token=token_response.get("id_token"),
                 token_type=token_response.get("token_type", "Bearer"),
                 expires_at=expires_at,
                 # Use new refresh_token if provided, otherwise keep the old one.
                 refresh_token=token_response.get(
                     "refresh_token", session.refresh_token
+                ),
+                session_expires_at=session.session_expires_at
+                or (
+                    time.time() + self.config.session_timeout_seconds
+                    if self.config.session_timeout_seconds > 0
+                    else None
                 ),
                 user_info=session.user_info,
             )
@@ -877,7 +1009,7 @@ class OAuth2Handler:
             return None
 
     async def _fetch_user_info(self, access_token: str) -> dict[str, Any]:
-        """Fetch user information from the userinfo endpoint."""
+        """Fetch the userinfo fields safe to store in a browser session cookie."""
         if not self.config.userinfo_url:
             raise ValueError("userinfo_url not configured")
 
@@ -894,8 +1026,22 @@ class OAuth2Handler:
             response.raise_for_status()
 
             user_info = response.json()
-            logger.debug("Fetched user info: %s", user_info)
-            return user_info
+            if not isinstance(user_info, dict):
+                raise ValueError("User info response is not a JSON object")
+
+            fields = _USERINFO_SESSION_FIELDS | {self.config.user_id_field}
+            filtered_user_info = {
+                field: value
+                for field, value in user_info.items()
+                if field in fields
+                and isinstance(value, (str, int, float, bool))
+                and value is not None
+            }
+            logger.debug(
+                "Fetched user info with cookie-safe fields: %s",
+                sorted(filtered_user_info),
+            )
+            return filtered_user_info
 
         except httpx.HTTPStatusError as e:
             logger.error("User info fetch failed: %s", e.response.text)
@@ -1177,12 +1323,23 @@ class OAuth2Handler:
             return await self._validate_with_introspection(token)
         return await self._validate_with_jwks(token)
 
+    async def validate_id_token(self, token: str) -> dict[str, Any]:
+        """Validate a UserPool ID token against the configured OIDC client."""
+        claims = await self._validate_with_jwks(token)
+        audience = claims.get("aud")
+        audiences = audience if isinstance(audience, list) else [audience]
+        if self.config.client_id not in audiences:
+            raise HTTPException(status_code=403, detail="ID token client mismatch")
+        return claims
+
     def encode_session(self, session: OAuth2Session) -> str:
         """Encode OAuth2 session data for cookie storage.
 
         Warns if the encoded session exceeds the recommended cookie size limit.
         """
-        session_json = session.model_dump_json()
+        # ID tokens are request-local. Persisting another JWT can push an
+        # otherwise valid browser session beyond the 4 KB cookie limit.
+        session_json = session.model_dump_json(exclude={"id_token"})
         payload = self._base64url_encode(session_json.encode("utf-8"))
         signing_key = self._get_cookie_signing_key()
 
@@ -1237,16 +1394,75 @@ class OAuth2Handler:
             return None
 
     def get_session_from_request(self, request: Request) -> Optional[OAuth2Session]:
-        """Extract OAuth2 session from request cookies."""
+        """Extract a browser session, including an expired access token.
+
+        Access-token expiry does not invalidate the browser session while its
+        refresh token and absolute session lifetime remain usable.
+        """
         session_cookie = request.cookies.get(self.config.session_cookie_name)
         if not session_cookie:
             return None
 
         session = self.decode_session(session_cookie)
-        if not session or session.is_expired():
+        if not session or session.is_session_expired():
             return None
 
         return session
+
+    async def get_or_refresh_session(
+        self, request: Request
+    ) -> tuple[Optional[OAuth2Session], bool]:
+        """Return a usable access-token session, refreshing it when necessary.
+
+        The boolean indicates that callers must write the refreshed stateless
+        session back to the browser cookie.
+        """
+        session = self.get_session_from_request(request)
+        if not session:
+            return None, False
+
+        cookie_changed = False
+        if (
+            session.refresh_token
+            and session.session_expires_at is None
+            and self.config.session_timeout_seconds > 0
+        ):
+            # Cookies issued before refresh-backed browser sessions were added
+            # do not carry an absolute session expiry. Upgrade them on their
+            # next request so existing users receive the longer-lived cookie
+            # immediately, without waiting for the access token to expire.
+            session = session.model_copy(
+                update={
+                    "session_expires_at": time.time()
+                    + self.config.session_timeout_seconds
+                }
+            )
+            cookie_changed = True
+
+        refresh_needed = session.is_expired() or session.is_refresh_needed(
+            self.config.token_refresh_threshold_seconds
+        )
+        if not refresh_needed:
+            return session, cookie_changed
+
+        refresh_attempted = False
+        if self.config.auto_refresh_token and session.can_refresh():
+            refresh_attempted = True
+            logger.debug(
+                "Token expires in %.0f seconds, attempting refresh",
+                session.time_until_expiry(),
+            )
+            refreshed = await self.refresh_access_token(session)
+            if refreshed:
+                return refreshed, True
+
+        # A still-valid access token can continue serving requests after a
+        # proactive refresh failure. An expired one cannot.
+        if session.is_expired():
+            if refresh_attempted:
+                request.state.oauth2_refresh_retryable = True
+            return None, False
+        return session, cookie_changed
 
     def create_session_cookie(self, session: OAuth2Session) -> dict[str, Any]:
         """Create session cookie parameters."""
@@ -1288,9 +1504,15 @@ class OAuth2Handler:
 
     def _session_cookie_max_age(self, session: OAuth2Session) -> int:
         token_ttl = max(0, int(session.expires_at - time.time()))
-        if self.config.session_timeout_seconds <= 0:
+        if not session.refresh_token:
             return token_ttl
-        return min(self.config.session_timeout_seconds, token_ttl)
+
+        if session.session_expires_at is not None:
+            return max(0, int(session.session_expires_at - time.time()))
+
+        if self.config.session_timeout_seconds > 0:
+            return self.config.session_timeout_seconds
+        return token_ttl
 
     def _get_cookie_signing_key(self) -> Optional[bytes]:
         # Fall back to client_secret when a dedicated signing secret is not provided.
@@ -1523,10 +1745,19 @@ def register_oauth2_routes(
 
     async def get_current_user_info(request: Request) -> JSONResponse:
         """Get current user information from OAuth2 session."""
-        session = oauth2_handler.get_session_from_request(request)
+        session, refreshed = await oauth2_handler.get_or_refresh_session(request)
 
-        if not session or session.is_expired():
-            raise HTTPException(status_code=401, detail="Not authenticated")
+        if not session:
+            headers = (
+                {_REFRESH_RETRY_HEADER: "1"}
+                if getattr(request.state, "oauth2_refresh_retryable", False)
+                else None
+            )
+            raise HTTPException(
+                status_code=401,
+                detail="Not authenticated",
+                headers=headers,
+            )
 
         if not _is_access_token_already_validated(request, session.access_token):
             try:
@@ -1534,6 +1765,7 @@ def register_oauth2_routes(
             except HTTPException as exc:
                 raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
+        session_changed = refreshed
         if not session.user_info:
             if oauth2_handler.config.userinfo_url:
                 try:
@@ -1541,34 +1773,27 @@ def register_oauth2_routes(
                         session.access_token
                     )
                     session.user_info = user_info
-
-                    session_cookie_params = oauth2_handler.create_session_cookie(
-                        session
-                    )
-                    response = JSONResponse(content=user_info)
-                    response.set_cookie(**session_cookie_params)
-
-                    user_id_cookie_params = oauth2_handler.create_user_id_cookie(
-                        session
-                    )
-                    if user_id_cookie_params:
-                        response.set_cookie(**user_id_cookie_params)
-
-                    return response
+                    session_changed = True
                 except Exception as e:
                     logger.error("Failed to fetch user info: %s", e)
                     raise HTTPException(
                         status_code=500, detail="Failed to fetch user info"
                     )
+            else:
+                return JSONResponse(
+                    content={
+                        "message": "User info not available",
+                        "reason": "userinfo_url not configured",
+                    }
+                )
 
-            return JSONResponse(
-                content={
-                    "message": "User info not available",
-                    "reason": "userinfo_url not configured",
-                }
-            )
-
-        return JSONResponse(content=session.user_info)
+        response = JSONResponse(content=session.user_info)
+        if session_changed:
+            response.set_cookie(**oauth2_handler.create_session_cookie(session))
+            user_id_cookie_params = oauth2_handler.create_user_id_cookie(session)
+            if user_id_cookie_params:
+                response.set_cookie(**user_id_cookie_params)
+        return response
 
     # Register routes using Starlette's Route objects (works with both Starlette and FastAPI)
     oauth2_routes = [
@@ -1794,32 +2019,15 @@ def create_oauth2_middleware(
             _mark_access_token_validated(request, token)
             return await call_next(request)
 
-        session = oauth2_handler.get_session_from_request(request)
+        session, refreshed = await oauth2_handler.get_or_refresh_session(request)
         response_cookies: list[dict[str, Any]] = []
+        if session and refreshed:
+            response_cookies.append(oauth2_handler.create_session_cookie(session))
+            user_id_cookie = oauth2_handler.create_user_id_cookie(session)
+            if user_id_cookie:
+                response_cookies.append(user_id_cookie)
 
-        # Attempt token refresh if session is close to expiry.
-        if session and not session.is_expired():
-            if (
-                config.auto_refresh_token
-                and session.can_refresh()
-                and session.is_refresh_needed(config.token_refresh_threshold_seconds)
-            ):
-                logger.debug(
-                    "Token expires in %.0f seconds, attempting refresh",
-                    session.time_until_expiry(),
-                )
-                refreshed = await oauth2_handler.refresh_access_token(session)
-                if refreshed:
-                    session = refreshed
-                    # Queue cookies to be set on the response.
-                    response_cookies.append(
-                        oauth2_handler.create_session_cookie(session)
-                    )
-                    user_id_cookie = oauth2_handler.create_user_id_cookie(session)
-                    if user_id_cookie:
-                        response_cookies.append(user_id_cookie)
-
-        if session and not session.is_expired():
+        if session:
             try:
                 claims = await oauth2_handler.validate_access_token(
                     session.access_token
@@ -1831,6 +2039,7 @@ def create_oauth2_middleware(
                     )
                 session = None
             else:
+                request.state.oauth2_session = session
                 auth_header_value = session.to_authorization_header().encode()
 
                 # Update the scope headers so downstream dependencies can read it.
@@ -1854,6 +2063,13 @@ def create_oauth2_middleware(
 
                 response = await call_next(request)
 
+                # A downstream identity handoff may rotate the refresh token
+                # again. Its newest session must win over this middleware's
+                # earlier refresh, including when the handoff returns an error.
+                override = getattr(request.state, "oauth2_session_override", None)
+                if override is not None:
+                    response_cookies = [oauth2_handler.create_session_cookie(override)]
+
                 # Set any refreshed session cookies on the response.
                 for cookie_params in response_cookies:
                     response.set_cookie(**cookie_params)
@@ -1862,10 +2078,13 @@ def create_oauth2_middleware(
 
         # No valid session - handle API vs browser requests differently.
         if _is_api_request(request, config.api_path_prefixes):
+            headers = {"WWW-Authenticate": "Bearer"}
+            if getattr(request.state, "oauth2_refresh_retryable", False):
+                headers[_REFRESH_RETRY_HEADER] = "1"
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Not authenticated"},
-                headers={"WWW-Authenticate": "Bearer"},
+                headers=headers,
             )
 
         # Browser request: redirect to OAuth2 authorization.

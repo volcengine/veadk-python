@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { CircleAlert } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import "./AuthExpiredDialog.css";
 
 interface AuthExpiredDialogProps {
@@ -16,6 +17,7 @@ export function AuthExpiredDialog({
   error,
   onLogin,
 }: AuthExpiredDialogProps) {
+  const { t } = useTranslation("shell");
   const loginButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -43,9 +45,9 @@ export function AuthExpiredDialog({
           <CircleAlert />
         </div>
         <div className="auth-expired-copy">
-          <h2 id="auth-expired-title">登录状态已过期</h2>
+          <h2 id="auth-expired-title">{t("authExpired.title")}</h2>
           <p id="auth-expired-description">
-            当前编辑内容会保留。重新登录后，刚才的操作将自动继续。
+            {t("authExpired.description")}
           </p>
           {error && (
             <p className="auth-expired-error" role="alert">
@@ -60,7 +62,7 @@ export function AuthExpiredDialog({
             onClick={onLogin}
             disabled={checking}
           >
-            {checking ? "等待登录完成…" : "重新登录"}
+            {checking ? t("authExpired.waiting") : t("authExpired.signInAgain")}
           </button>
         </footer>
       </section>

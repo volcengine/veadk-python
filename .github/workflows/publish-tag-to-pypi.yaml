@@ -5,7 +5,11 @@ on:
   workflow_dispatch:
 
 jobs:
+  harness-sidecar-release-gate:
+    uses: ./.github/workflows/harness-sidecar-release-gate.yaml
+
   build:
+    needs: harness-sidecar-release-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,11 +22,45 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
-      - name: Install build tool
-        run: python3 -m pip install build --user --upgrade
+          python-version: "3.10"
+      - name: Install build tools
+        run: python3 -m pip install build packaging 'tomli; python_version<"3.11"' --user --upgrade
       - name: Build wheel and source distribution
         run: python3 -m build
+      - name: Check runtime dependency policy
+        run: python3 scripts/check_dependency_e2e.py policy
+      - name: Verify native AgentKit CLI archives stay outside Python distributions
+        run: |
+          python3 - <<'PY'
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          root = Path.cwd()
+          wheels = list((root / "dist").glob("*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit("Expected exactly one VeADK wheel")
+          with zipfile.ZipFile(wheels[0]) as archive:
+              names = archive.namelist()
+              if any("agentkit-linux-" in name or "agentkit-windows-" in name for name in names):
+                  raise SystemExit("VeADK wheel must not embed an AgentKit CLI archive")
+              metadata_name = next(
+                  name for name in names if name.endswith(".dist-info/METADATA")
+              )
+              metadata = archive.read(metadata_name).decode()
+          if "volcengine-agentkit-cli-bin" in metadata:
+              raise SystemExit("VeADK wheel must not depend on an unpublished CLI companion")
+
+          sdists = list((root / "dist").glob("*.tar.gz"))
+          if len(sdists) != 1:
+              raise SystemExit("Expected exactly one VeADK source distribution")
+          with tarfile.open(sdists[0], "r:gz") as archive:
+              if any(
+                  "agentkit-linux-" in member.name or "agentkit-windows-" in member.name
+                  for member in archive.getmembers()
+              ):
+                  raise SystemExit("VeADK sdist must not embed an AgentKit CLI archive")
+          PY
       - name: Reject distributions over the PyPI file-size limit
         run: |
           oversized_file="$(find dist -type f -size +100M -print -quit)"
@@ -31,6 +69,12 @@ jobs:
             echo "Distribution exceeds PyPI's 100 MiB limit: ${oversized_file} (${bytes} bytes)"
             exit 1
           fi
+      - name: Verify clean wheel install
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        run: python3 scripts/check_dependency_e2e.py clean-install
+      - name: Verify high-risk dependency upgrades against runtime pins
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        run: python3 scripts/check_dependency_e2e.py declared-range
       - name: Upload distributables as artifact
         uses: actions/upload-artifact@v4
         with:

@@ -3,6 +3,8 @@
 // verbatim from the previous monolithic skills.ts so both the Skill Hub
 // downloader and the local .zip uploader can share it.
 
+import { createT } from "../i18n";
+
 export interface ZipEntry {
   name: string;
   text: string;
@@ -43,11 +45,13 @@ export async function unzip(
       break;
     }
   }
-  if (eocd < 0) throw new Error("无效的 zip：找不到 EOCD");
+  if (eocd < 0) throw new Error(createT("helpers.zip.invalid"));
 
   const count = u16(buf, eocd + 10);
   if (options.maxEntries !== undefined && count > options.maxEntries) {
-    throw new Error(`zip 文件数不能超过 ${options.maxEntries} 个`);
+    throw new Error(
+      createT("helpers.zip.tooManyFiles", { count: options.maxEntries }),
+    );
   }
   let p = u32(buf, eocd + 16); // central directory offset
   const dec = new TextDecoder("utf-8");
@@ -69,7 +73,7 @@ export async function unzip(
       options.maxUncompressedBytes !== undefined &&
       uncompressedBytes > options.maxUncompressedBytes
     ) {
-      throw new Error("zip 解压后的内容过大");
+      throw new Error(createT("helpers.zip.tooLarge"));
     }
 
     // Local file header: 30 bytes fixed + name + extra, then file data.

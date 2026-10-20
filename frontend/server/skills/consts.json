@@ -1,0 +1,16 @@
+{
+  "share": {
+    "name": "studio_share_space",
+    "label": "企业共享空间",
+    "description": "Skills shared with everyone in this Studio",
+    "marker": "[studio:share:v1]",
+    "visibility": "shared"
+  },
+  "review": {
+    "name": "studio_review_space",
+    "label": "待审核空间",
+    "description": "Skill versions awaiting administrator review",
+    "marker": "[studio:review:v1]",
+    "visibility": "private"
+  }
+}

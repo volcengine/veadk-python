@@ -22,6 +22,12 @@ from google.adk.tools import BaseTool, ToolContext
 from typing import Any, Dict, Optional, Callable
 
 from veadk.skills.skill import Skill
+from veadk.skills.policy import (
+    SKILL_SPACE_POLICY_ENV,
+    SkillSpacePolicyError,
+    SkillSpacePolicySet,
+    parse_skill_space_policy,
+)
 from veadk.utils.logger import get_logger
 from veadk.utils.volcengine_sign import ve_request, volcengine_signed_request
 
@@ -134,9 +140,17 @@ def load_skills_from_directory(skills_directory: Path) -> list[Skill]:
     return skills
 
 
-def load_skills_from_cloud(skill_space_ids: str) -> list[Skill]:
+def load_skills_from_cloud(
+    skill_space_ids: str, *, raise_on_error: bool = False
+) -> list[Skill]:
     skill_space_ids_list = [x.strip() for x in skill_space_ids.split(",") if x.strip()]
     logger.info(f"Load skills from cloud skill sources: {skill_space_ids_list}")
+
+    try:
+        policy = _parse_skill_space_policy_env()
+    except SkillSpacePolicyError as exc:
+        _log_invalid_skill_space_policy(exc)
+        return []
 
     skills = []
 
@@ -144,19 +158,72 @@ def load_skills_from_cloud(skill_space_ids: str) -> list[Skill]:
         # SkillHub space ids use the `sp-` prefix; all other ids keep the
         # legacy AgentKit skill-space behavior for backward compatibility.
         if skill_space_id.startswith("sp-"):
-            skills.extend(_load_skills_from_skillhub_space_id(skill_space_id))
+            skills.extend(
+                _load_skills_from_skillhub_space_id(
+                    skill_space_id,
+                    raise_on_error=raise_on_error,
+                )
+            )
         else:
-            skills.extend(_load_skills_from_space_id(skill_space_id))
+            skills.extend(
+                _load_skills_from_space_id(
+                    skill_space_id,
+                    raise_on_error=raise_on_error,
+                )
+            )
 
-    return skills
+    return _filter_skills_by_policy(skills, policy)
+
+
+def _filter_skills_by_policy_env(skills: list[Skill]) -> list[Skill]:
+    try:
+        policy = _parse_skill_space_policy_env()
+    except SkillSpacePolicyError as exc:
+        _log_invalid_skill_space_policy(exc)
+        return []
+
+    return _filter_skills_by_policy(skills, policy)
+
+
+def _parse_skill_space_policy_env() -> SkillSpacePolicySet | None:
+    raw_policy = os.getenv(SKILL_SPACE_POLICY_ENV)
+    if raw_policy is None:
+        return None
+    return parse_skill_space_policy(raw_policy)
+
+
+def _filter_skills_by_policy(
+    skills: list[Skill],
+    policy: SkillSpacePolicySet | None,
+) -> list[Skill]:
+    if policy is None:
+        return skills
+
+    filtered_skills = [
+        skill for skill in skills if policy.allows(skill.id, skill.skill_space_id)
+    ]
+    logger.info(
+        f"Applied {SKILL_SPACE_POLICY_ENV}: "
+        f"kept {len(filtered_skills)} of {len(skills)} remote skills"
+    )
+    return filtered_skills
+
+
+def _log_invalid_skill_space_policy(exc: SkillSpacePolicyError) -> None:
+    logger.error(
+        f"Invalid {SKILL_SPACE_POLICY_ENV}; remote Skill Space skills "
+        f"are disabled for this session: {exc}"
+    )
 
 
 def _get_cloud_credentials() -> tuple[str, str, str]:
     from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 
-    access_key = os.getenv("VOLCENGINE_ACCESS_KEY")
-    secret_key = os.getenv("VOLCENGINE_SECRET_KEY")
-    session_token = os.getenv("VOLCENGINE_SESSION_TOKEN", "")
+    provider = (os.getenv("CLOUD_PROVIDER") or "volcengine").lower()
+    prefix = "BYTEPLUS" if provider == "byteplus" else "VOLCENGINE"
+    access_key = os.getenv(f"{prefix}_ACCESS_KEY")
+    secret_key = os.getenv(f"{prefix}_SECRET_KEY")
+    session_token = os.getenv(f"{prefix}_SESSION_TOKEN", "")
 
     if not (access_key and secret_key):
         cred = get_credential_from_vefaas_iam()
@@ -167,7 +234,7 @@ def _get_cloud_credentials() -> tuple[str, str, str]:
     return access_key, secret_key, session_token
 
 
-def _get_agentkit_endpoint() -> tuple[str, str, str]:
+def _get_agentkit_endpoint(region_override: str | None = None) -> tuple[str, str, str]:
     service = os.getenv("AGENTKIT_TOOL_SERVICE_CODE", "agentkit")
 
     provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
@@ -178,7 +245,12 @@ def _get_agentkit_endpoint() -> tuple[str, str, str]:
         sld = "volcengineapi"
         default_region = "cn-beijing"
 
-    region = os.getenv("AGENTKIT_TOOL_REGION", default_region)
+    region = (
+        region_override
+        or os.getenv("AGENTKIT_TOOL_REGION")
+        or (os.getenv("REGION") if provider != "byteplus" else None)
+        or default_region
+    )
     host = os.getenv("AGENTKIT_SKILL_HOST", service + "." + region + f".{sld}.com")
     return service, region, host
 
@@ -220,6 +292,7 @@ def _build_skill_from_space_item(
         skill_space_id=skill_space_id,
         bucket_name=item.get("BucketName"),
         id=item.get("SkillId"),
+        version_id=item.get("Version") or item.get("SkillVersion"),
     )
 
 
@@ -257,7 +330,9 @@ def _build_skill_from_skillhub_item(
     )
 
 
-def _load_skills_from_space_id(skill_space_id: str) -> list[Skill]:
+def _load_skills_from_space_id(
+    skill_space_id: str, *, raise_on_error: bool = False
+) -> list[Skill]:
     logger.info(f"Load skills from skill space: {skill_space_id}")
 
     skills = []
@@ -307,6 +382,8 @@ def _load_skills_from_space_id(skill_space_id: str) -> list[Skill]:
             )
     except Exception as e:
         logger.error(f"Failed to load skills from skill space={skill_space_id}: {e}")
+        if raise_on_error:
+            raise
 
     return skills
 
@@ -358,7 +435,9 @@ def _get_skillhub_page_size(default: int = 100) -> int:
     return value
 
 
-def _load_skills_from_skillhub_space_id(skill_space_id: str) -> list[Skill]:
+def _load_skills_from_skillhub_space_id(
+    skill_space_id: str, *, raise_on_error: bool = False
+) -> list[Skill]:
     logger.info(f"Load skills from SkillHub skill space: {skill_space_id}")
 
     skills = []
@@ -430,6 +509,8 @@ def _load_skills_from_skillhub_space_id(skill_space_id: str) -> list[Skill]:
             page_number += 1
     except Exception as e:
         logger.error(f"Failed to load skills from SkillHub skill space: {e}")
+        if raise_on_error:
+            raise
 
     return skills
 

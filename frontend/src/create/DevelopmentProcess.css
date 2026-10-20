@@ -1,0 +1,48 @@
+.development-process { width: 100%; min-width: 0; margin: 8px 0; color: hsl(var(--muted-foreground)); }
+.development-process__toggle { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 4px 0; background: none; border: 0; color: inherit; cursor: pointer; text-align: left; font: inherit; font-size: 13px; }
+.development-process__toggle:hover { color: hsl(var(--foreground)); }
+.development-process__toggle:focus-visible { outline: 2px solid hsl(var(--primary)); outline-offset: 2px; border-radius: 4px; }
+.development-process__toggle .tool-chevron { flex: 0 0 14px; }
+.development-process__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.development-process__duration { flex-shrink: 0; font-size: 12px; }
+.development-process__items { padding: 4px 0 4px 20px; min-width: 0; }
+.development-process__items[hidden] { display: none; }
+.development-process__status { min-height: 32px; display: flex; align-items: center; font-size: 13px; color: hsl(var(--muted-foreground)); }
+.development-process__items pre, .development-diff pre { max-height: 320px; overflow: auto; white-space: pre; }
+.development-diff { min-width: 0; font-size: 13px; margin: 8px 0; }
+.development-diff summary { cursor: pointer; min-height: 32px; }
+.development-diff pre { padding: 12px; background: hsl(var(--muted)); border-radius: 6px; font-size: 12px; }
+.development-tool-meta { font-size: 12px; color: hsl(var(--muted-foreground)); overflow-wrap: anywhere; }
+.development-preparation { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.development-preparation .transcript { flex: 1; }
+.development-preparation-source { display: contents; }
+.development-preparation-source[hidden] { display: none; }
+.development-preparation__status { display: flex; align-items: center; gap: 12px; max-width: 100%; color: hsl(var(--muted-foreground)); font-size: 13px; }
+.development-preparation__message { display: grid; min-width: 0; }
+.development-preparation__message > span { grid-area: 1 / 1; }
+.development-preparation__message > [aria-hidden="true"] { visibility: hidden; }
+.development-preparation__spinner { flex-shrink: 0; }
+.development-preparation__cancel { flex-shrink: 0; min-height: 32px; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.development-preparation__cancel:hover { color: hsl(var(--foreground)); background: hsl(var(--accent)); }
+.development-preparation__cancel:focus-visible { outline: 2px solid hsl(var(--primary)); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .development-preparation__spinner { animation: none; }
+}
+
+.development-tool-failure { color: hsl(var(--destructive)); font-size: 12px; flex-shrink: 0; }
+
+.development-process__items .think-head, .development-process__items .tool-head { display: flex; max-width: 100%; text-align: left; }
+.development-process__items .think-label, .development-process__items .tool-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.development-tool-meta { flex-shrink: 0; white-space: nowrap; }
+.development-process__toggle { flex-wrap: wrap; }
+.development-process__title { flex: 1; text-align: left; }
+.development-diff summary { display: flex; align-items: center; gap: 8px; padding: 3px 7px 3px 3px; list-style: none; }
+.development-diff summary::-webkit-details-marker { display: none; }
+.development-diff[open] > summary .tool-chevron { transform: rotate(90deg); }
+
+.development-process__status { gap: 8px; }
+.development-process__items .plan-head { display: flex; width: 100%; min-height: 32px; gap: 8px; padding: 3px 7px 3px 3px; text-align: left; }
+.development-process__items .plan-icon { width: 20px; height: 26px; flex: 0 0 20px; display: grid; place-items: center; }
+.development-process__items .plan-icon > svg { width: 18px; height: 18px; }
+.development-process__items .plan-title { font-size: 13px; font-weight: 400; }
+.development-process__items .plan-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

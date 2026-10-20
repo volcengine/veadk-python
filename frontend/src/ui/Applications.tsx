@@ -1,17 +1,22 @@
 import { useDeferredValue, useMemo, useState, type SVGProps } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   AUTOMATION_CATEGORIES,
   AUTOMATIONS,
   type AutomationId,
 } from "../automations/registry";
+import type { AutomationCategoryId } from "../automations/types";
 import { isCodingAgentsAutomationAvailable } from "../automations/codingAgents";
 import feishuLogo from "../assets/feishu-logo.svg";
+import { MpaChannelsIcon } from "../automations/mpa-channels/MpaChannelsIcon";
 import { GitHubLogo } from "./GitHubLogo";
 import "./Applications.css";
 
 interface ApplicationsProps {
   onOpen: (automation: AutomationId) => void;
+  initialCategory?: AutomationCategoryId;
+  onCategoryChange?: (category: AutomationCategoryId) => void;
 }
 
 export type ApplicationId = AutomationId;
@@ -38,8 +43,34 @@ function CodingAgentsIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-export function Applications({ onOpen }: ApplicationsProps) {
-  const [activeCategory, setActiveCategory] = useState("development");
+function WebsiteIntegrationIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 36 36" fill="none" aria-hidden="true" {...props}>
+      <rect x="3.5" y="5" width="22" height="18" rx="4" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M4.5 10h20M9 7.5h.1M12 7.5h.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M18 18.5c0-3 2.5-5.5 5.5-5.5h3c3 0 5.5 2.5 5.5 5.5v5c0 3-2.5 5.5-5.5 5.5H25l-4 3v-3.6a5.5 5.5 0 0 1-3-4.9v-5Z" fill="hsl(var(--background))" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M22 19.5h6M22 23h4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function GitLabIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 36 36" fill="none" aria-hidden="true" {...props}>
+      <path d="M18 31 5.5 21.8 8.7 6.5 14 17.1h8L27.3 6.5l3.2 15.3L18 31Z" fill="currentColor" opacity="0.12" />
+      <path d="M18 31 5.5 21.8 8.7 6.5 14 17.1h8L27.3 6.5l3.2 15.3L18 31Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="m14 17.1 4 13.9 4-13.9M5.5 21.8h25" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function Applications({
+  onOpen,
+  initialCategory = "development",
+  onCategoryChange,
+}: ApplicationsProps) {
+  const { t } = useTranslation("automations");
+  const [activeCategory, setActiveCategory] = useState<AutomationCategoryId>(initialCategory);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const visibleApplications = useMemo(() => {
@@ -47,48 +78,48 @@ export function Applications({ onOpen }: ApplicationsProps) {
     return AUTOMATIONS.filter(
       (application) => application.category === activeCategory,
     ).filter((application) =>
-      !normalized || `${application.name} ${application.description}`.toLocaleLowerCase().includes(normalized),
+      !normalized || `${t(`cards.${application.id}.name`)} ${t(`cards.${application.id}.description`)}`.toLocaleLowerCase().includes(normalized),
     );
-  }, [activeCategory, deferredQuery]);
+  }, [activeCategory, deferredQuery, t]);
   const activeCategoryLabel = AUTOMATION_CATEGORIES.find(
     (category) => category.id === activeCategory,
-  )?.label;
+  )?.id;
   const codingAgentsAvailable = isCodingAgentsAutomationAvailable(window.location.hostname);
 
   return (
     <div className="applications-page">
       <header className="applications-header">
         <div>
-          <h1>自动化</h1>
-          <p>连接研发工具，为智能体扩展自动化工作流</p>
+          <h1>{t("title")}</h1>
+          <p>{t("description")}</p>
         </div>
         <label className="applications-search">
           <SearchIcon />
           <input
             type="search"
-            aria-label="搜索自动化"
+            aria-label={t("search")}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索自动化"
+            placeholder={t("search")}
           />
         </label>
       </header>
 
-      <nav className="applications-categories" aria-label="自动化分类">
+      <nav className="applications-categories" aria-label={t("categoriesLabel")}>
         {AUTOMATION_CATEGORIES.map((category) => (
           <button
             type="button"
             key={category.id}
             className={activeCategory === category.id ? "is-active" : ""}
             aria-pressed={activeCategory === category.id}
-            onClick={() => setActiveCategory(category.id)}
+            onClick={() => { setActiveCategory(category.id); onCategoryChange?.(category.id); }}
           >
-            {category.label}
+            {t(`categories.${category.id}`)}
           </button>
         ))}
       </nav>
 
-      <section className="applications-results" aria-label={`${activeCategoryLabel}自动化列表`}>
+      <section className="applications-results" aria-label={t("resultsLabel", { category: t(`categories.${activeCategoryLabel}`) })}>
         {visibleApplications.length ? (
           <div className="applications-grid">
             {visibleApplications.map((application) => {
@@ -106,7 +137,7 @@ export function Applications({ onOpen }: ApplicationsProps) {
                     type="button"
                     className="application-card"
                     onClick={() => onOpen(application.id)}
-                    aria-label={`打开${application.name}`}
+                    aria-label={t("open", { name: t(`cards.${application.id}.name`) })}
                     disabled={disabled}
                   >
                     {application.icon === "feishu" ? (
@@ -116,24 +147,30 @@ export function Applications({ onOpen }: ApplicationsProps) {
                         alt=""
                         aria-hidden="true"
                       />
+                    ) : application.icon === "mpa-channels" ? (
+                      <MpaChannelsIcon className="application-card-icon" />
                     ) : application.icon === "coding-agents" ? (
                       <CodingAgentsIcon className="application-card-icon" />
+                    ) : application.icon === "website-integration" ? (
+                      <WebsiteIntegrationIcon className="application-card-icon" />
+                    ) : application.icon === "gitlab" ? (
+                      <GitLabIcon className="application-card-icon" />
                     ) : (
                       <GitHubLogo className="application-card-icon" />
                     )}
                     <div className="application-card-copy">
                       <div className="application-card-title">
-                        <h2>{application.name}</h2>
+                        <h2>{t(`cards.${application.id}.name`)}</h2>
                         {application.badge ? (
-                          <span className={`application-card-badge is-${application.badgeTone || "default"}`}>{application.badge}</span>
+                          <span className={`application-card-badge is-${application.badgeTone || "default"}`}>{t(`cards.${application.id}.badge`, { defaultValue: application.badge })}</span>
                         ) : null}
                       </div>
-                      <p>{application.description}</p>
+                      <p>{t(`cards.${application.id}.description`)}</p>
                     </div>
                   </button>
                   {disabled ? (
                     <span id={tooltipId} className="application-card-tooltip" role="tooltip">
-                      仅本地部署可用
+                      {t("localOnly")}
                     </span>
                   ) : null}
                 </div>
@@ -143,8 +180,8 @@ export function Applications({ onOpen }: ApplicationsProps) {
         ) : (
           <div className="applications-empty" role="status">
             <SearchIcon />
-            <h2>没有匹配的自动化</h2>
-            <p>请尝试搜索其他名称</p>
+            <h2>{t("emptyTitle")}</h2>
+            <p>{t("emptyDescription")}</p>
           </div>
         )}
       </section>

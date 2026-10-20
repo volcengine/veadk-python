@@ -5,10 +5,13 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useCallback,
   useMemo,
   useRef,
   useState,
 } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
@@ -60,30 +63,42 @@ import { generateRuntimeName, runtimeNameProblem } from "../create/runtimeName";
 import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
 import {
   FEISHU_ENV,
-  type EnvVar,
 } from "../create/veadkCatalog";
 import {
   firstInvalidRuntimeEnv,
-  firstMissingRuntimeEnv,
+  missingRuntimeEnvs,
   runtimeEnvDisplayRows,
   runtimeEnvJsonError,
+  runtimeEnvMissingError,
+  runtimeEnvRequirementHint,
   runtimeEnvVars,
+  type RuntimeEnvSpec,
 } from "../create/deploymentEnv";
 import {
   checkRuntimeNameAvailability,
   listIdentityUserPools,
   revealModelApiKey,
+  bindGithubCicdRuntime,
+  initializeGithubDeliveryMain,
+  syncGithubCicdRuntime,
+  applyMpaProfileAfterDeployment,
+  retryMpaAgentOperation,
   RuntimeProbeError,
   type DeployAuthentication,
   type DeployBuildLogSnapshot,
+  type MpaAgentOperation,
   type DeployResources,
   type DeployStage,
   type IdentityUserPool,
+  type GithubCicdPipelineResult,
 } from "../adk/client";
+import { localizeDeployStageMessage } from "../adk/deploymentI18n";
+import { isDeploymentStatusUnconfirmedError } from "../adk/deploymentStatus";
 import {
   beginAgentDeploy,
   beginAgentSourceDownload,
   classifyTelemetryError,
+  safeTelemetryErrorMessage,
   type AgentDeployFailedProps,
   type AgentDeployStartedProps,
 } from "../telemetry";
@@ -93,10 +108,10 @@ import {
   formatCloudRegion,
   type CloudProvider,
 } from "../adk/cloudProvider";
-import feishuLogo from "../assets/feishu-logo.svg";
 import { buildZip } from "./zip";
 import { ProjectCodeBrowser } from "./CodeBrowserDialog";
 import { DeploymentErrorMessage } from "./DeploymentErrorMessage";
+import { FeishuDeploymentCard } from "./FeishuDeploymentCard";
 import {
   DEFAULT_DEPLOY_RESOURCES,
   DeploymentResources,
@@ -108,6 +123,10 @@ import {
   type DeploymentSelectOption,
 } from "./DeploymentSelect";
 import { mergeDeployBuildLog } from "./deployBuildLog";
+import {
+  GithubCicdPanel,
+  type PendingGithubCicdConfig,
+} from "./GithubCicdPanel";
 import "./ProjectPreview.css";
 
 interface DeploymentTelemetryOrigin {
@@ -131,6 +150,33 @@ function telemetryDeployPhase(
     default:
       return "unknown";
   }
+}
+
+const DEPLOY_PHASE_ORDER: Record<string, number> = {
+  prepare: 0,
+  upload: 1,
+  build: 2,
+  deploy: 3,
+  publish: 4,
+  update: 5,
+  evaluation: 6,
+  profile_applying: 7,
+  smoke_running: 8,
+  runnable: 9,
+  complete: 10,
+  github: 11,
+};
+
+function advanceDeploymentPhase(
+  current: string | undefined,
+  next: string | undefined,
+): string {
+  if (!next) return current ?? "prepare";
+  if (!current) return next;
+  const currentOrder = DEPLOY_PHASE_ORDER[current];
+  const nextOrder = DEPLOY_PHASE_ORDER[next];
+  if (currentOrder === undefined || nextOrder === undefined) return next;
+  return nextOrder >= currentOrder ? next : current;
 }
 
 const CodeEditor = lazy(() => import("./CodeEditor"));
@@ -191,6 +237,9 @@ const HIDDEN_MODEL_API_KEY_REVEAL: ModelApiKeyRevealState = {
 interface DeploymentConfirmDialogProps {
   open: boolean;
   isUpdate: boolean;
+  title?: string;
+  description?: string;
+  confirmLabel?: string;
   onCancel: () => void;
   onConfirm: () => void;
 }
@@ -198,9 +247,13 @@ interface DeploymentConfirmDialogProps {
 function DeploymentConfirmDialog({
   open,
   isUpdate,
+  title,
+  description,
+  confirmLabel,
   onCancel,
   onConfirm,
 }: DeploymentConfirmDialogProps) {
+  const { t } = useTranslation("ui");
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -239,30 +292,30 @@ function DeploymentConfirmDialog({
             <span className="code-browser-title-icon pp-confirm-icon" aria-hidden="true">
               <AlertTriangle />
             </span>
-            <h2 id="pp-confirm-title">{isUpdate ? "确认更新" : "确认部署"}</h2>
+            <h2 id="pp-confirm-title">{title ?? (isUpdate ? t("projectPreview.confirm.updateTitle") : t("projectPreview.confirm.deployTitle"))}</h2>
           </div>
           <button
             type="button"
             className="code-browser-close"
             onClick={onCancel}
-            aria-label="关闭部署确认"
+            aria-label={t("projectPreview.confirm.closeLabel")}
           >
             <X aria-hidden="true" />
           </button>
         </header>
         <div className="pp-confirm-body">
           <p id="pp-confirm-description">
-            {isUpdate
-              ? "将更新并发布到当前云端 Runtime，过程可能需要几分钟。确定继续吗？"
-              : "将创建新的云端 Runtime，部署过程可能需要几分钟。确定继续吗？"}
+            {description ?? (isUpdate
+              ? t("projectPreview.confirm.updateDescription")
+              : t("projectPreview.confirm.deployDescription"))}
           </p>
         </div>
         <footer className="pp-confirm-actions">
           <button ref={cancelButtonRef} type="button" onClick={onCancel}>
-            取消
+            {t("common.cancel")}
           </button>
           <button type="button" className="is-primary" onClick={onConfirm}>
-            {isUpdate ? "确定更新" : "确定部署"}
+            {confirmLabel ?? (isUpdate ? t("projectPreview.confirm.update") : t("projectPreview.confirm.deploy"))}
           </button>
         </footer>
       </section>
@@ -280,6 +333,7 @@ function IdentityUserPoolSelect({
   disabled: boolean;
   onChange: (uid: string) => void;
 }) {
+  const { t } = useTranslation("ui");
   const [pools, setPools] = useState<IdentityUserPool[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -308,20 +362,20 @@ function IdentityUserPoolSelect({
         .sort((left, right) => Number(right.isCurrent) - Number(left.isCurrent))
         .map((pool) => ({
           value: pool.uid,
-          label: pool.name.trim() || "未命名用户池",
+          label: pool.name.trim() || t("projectPreview.userPool.unnamed"),
           description: pool.domain || pool.uid,
-          badge: pool.isCurrent ? "当前用户池" : undefined,
+          badge: pool.isCurrent ? t("projectPreview.userPool.current") : undefined,
         })),
-    [pools],
+    [pools, t],
   );
   const selectedPool = pools.find((pool) => pool.uid === value);
 
   return (
     <div className="pp-user-pool-picker">
       <DeploymentSelect
-        ariaLabel="部署用户池"
+        ariaLabel={t("projectPreview.userPool.ariaLabel")}
         value={value}
-        placeholder={loading ? "正在加载用户池…" : "请选择用户池"}
+        placeholder={loading ? t("projectPreview.userPool.loading") : t("projectPreview.userPool.placeholder")}
         options={options}
         disabled={disabled || loading || Boolean(error)}
         onChange={onChange}
@@ -330,48 +384,41 @@ function IdentityUserPoolSelect({
         <div className="pp-user-pool-error" role="alert">
           <span>{error}</span>
           <button type="button" onClick={() => setReloadKey((key) => key + 1)}>
-            重试
+            {t("common.retry")}
           </button>
         </div>
       ) : loading ? (
         <span className="pp-user-pool-status" aria-live="polite">
           <Loader2 aria-hidden="true" className="pp-user-pool-spinner" />
-          正在加载 Identity 用户池…
+          {t("projectPreview.userPool.loadingIdentity")}
         </span>
       ) : pools.length === 0 ? (
-        <span className="pp-user-pool-status">当前账号下暂无 Identity 用户池。</span>
+        <span className="pp-user-pool-status">{t("projectPreview.userPool.empty")}</span>
       ) : selectedPool?.isCurrent ? (
         <span className="pp-user-pool-status">
-          当前 Studio 的登录 JWT 将透传访问此 Runtime。
+          {t("projectPreview.userPool.currentHint")}
         </span>
       ) : selectedPool ? (
         <div className="pp-user-pool-error" role="alert">
           <span>
-            所选用户池不是当前 Studio 使用的用户池，部署后无法从 Studio
-            调用此 Runtime。
+            {t("projectPreview.userPool.mismatchHint")}
           </span>
         </div>
       ) : (
         <span className="pp-user-pool-status">
-          当前 Studio 使用的用户池已在列表中标注。
+          {t("projectPreview.userPool.markedHint")}
         </span>
       )}
     </div>
   );
 }
 
-const DEPLOYMENT_AUTHENTICATION_OPTIONS: DeploymentSelectOption[] = [
-  {
-    value: "api_key",
-    label: "API Key",
-    description: "默认方式，使用 Runtime API Key 访问",
-  },
-  {
-    value: "user_pool",
-    label: "用户池",
-    description: "使用 Identity 用户池签发的 JWT",
-  },
-];
+function deploymentAuthenticationOptions(t: TFunction): DeploymentSelectOption[] {
+  return [
+    { value: "api_key", label: "API Key", description: t("projectPreview.authentication.apiKeyDescription") },
+    { value: "user_pool", label: t("projectPreview.authentication.userPool"), description: t("projectPreview.authentication.userPoolDescription") },
+  ];
+}
 
 // --- syntax highlighting ----------------------------------------------------
 
@@ -459,10 +506,12 @@ export interface DeployResult {
   agentName: string;
   runtimeName: string;
   runtimeId?: string;
+  mpaInstanceId?: string;
   consoleUrl?: string;
   region?: string;
   version?: number | null;
   warnings?: string[];
+  mpaOperation?: MpaAgentOperation;
   feishuChannel?: {
     enabled: boolean;
     transport: string;
@@ -471,28 +520,22 @@ export interface DeployResult {
 }
 
 /** The ordered deploy phases shown in the stepper (keys match DeployStage.phase). */
-const DEPLOY_STEPS: { phase: string; label: string }[] = [
-  { phase: "build", label: "构建镜像" },
-  { phase: "deploy", label: "部署" },
-  { phase: "publish", label: "发布" },
-];
+function deploySteps(t: TFunction): { phase: string; label: string }[] {
+  return [
+    { phase: "build", label: t("projectPreview.steps.buildImage") },
+    { phase: "deploy", label: t("projectPreview.steps.deploy") },
+    { phase: "publish", label: t("projectPreview.steps.publish") },
+  ];
+}
 
-const CODE_PACKAGE_DEPLOY_STEPS: { phase: string; label: string }[] = [
-  { phase: "upload", label: "上传代码包" },
-  { phase: "build", label: "镜像打包" },
-  { phase: "deploy", label: "创建 Runtime" },
-  { phase: "publish", label: "发布服务" },
-];
-
-const INSTANCE_UPDATE_STEP = {
-  phase: "update",
-  label: "更新实例配置",
-} as const;
-
-const EVALUATION_SET_STEP = {
-  phase: "evaluation",
-  label: "创建评测集",
-} as const;
+function codePackageDeploySteps(t: TFunction): { phase: string; label: string }[] {
+  return [
+    { phase: "upload", label: t("projectPreview.steps.uploadPackage") },
+    { phase: "build", label: t("projectPreview.steps.packageImage") },
+    { phase: "deploy", label: t("projectPreview.steps.createRuntime") },
+    { phase: "publish", label: t("projectPreview.steps.publishService") },
+  ];
+}
 
 function usesInMemorySession(agentDraft?: AgentDraft): boolean {
   if (!agentDraft) return false;
@@ -509,6 +552,7 @@ type RuntimeInstanceRangeValidation =
 function validateRuntimeInstanceRange(
   minValue: string,
   maxValue: string,
+  t: TFunction,
 ): RuntimeInstanceRangeValidation {
   const min = Number(minValue);
   const max = Number(maxValue);
@@ -517,13 +561,16 @@ function validateRuntimeInstanceRange(
     !maxValue.trim() ||
     !Number.isSafeInteger(min) ||
     !Number.isSafeInteger(max) ||
-    min < 1 ||
+    min < 0 ||
     max < 1
   ) {
-    return { valid: false, error: "实例数必须为大于 0 的整数。" };
+    return {
+      valid: false,
+      error: t("projectPreview.errors.instanceRangeInteger"),
+    };
   }
   if (min > max) {
-    return { valid: false, error: "最小实例数不能大于最大实例数。" };
+    return { valid: false, error: t("projectPreview.errors.instanceRangeOrder") };
   }
   return { valid: true, min, max };
 }
@@ -534,6 +581,8 @@ export interface DeployOptions {
   sessionStorage?: "in-memory" | "persistent";
   minInstance?: number;
   maxInstance?: number;
+  agentCategory?: "general" | "mpa";
+  mpaCompatibilityManifest?: Record<string, unknown>;
   authentication?: DeployAuthentication;
   createEvaluationSets?: boolean;
   im?: {
@@ -543,6 +592,7 @@ export interface DeployOptions {
   };
   envs?: DeployEnvVar[];
   resources?: DeployResources;
+  runtimeRevisionForMpa?: string;
 }
 
 export interface DeployEnvVar {
@@ -558,18 +608,32 @@ export interface DeploymentTaskUpdate {
   agentName: string;
   runtimeName: string;
   runtimeId?: string;
+  mpaInstanceId?: string;
+  /** Server-persisted MPA lifecycle operation recovered after refresh. */
+  operationId?: string;
   region: string;
   startedAt: number;
   status: "running" | "success" | "error" | "cancelled";
+  /** The request may still be running, but this browser cannot confirm it. */
+  statusUnconfirmed?: boolean;
   phase?: string;
   label: string;
   message?: string;
+  messageCode?: string;
   pct?: number;
   buildLog?: DeployBuildLogSnapshot;
+  /** Whether the detail progress card should include the GitHub delivery step. */
+  githubDelivery?: boolean;
+  /** Logs for GitHub source / workflow initialization shown on the delivery step. */
+  githubLog?: DeployBuildLogSnapshot;
   /** Instance range applied through UpdateRuntime after creation. */
   instanceRange?: { min: number; max: number };
   /** Whether this deployment initializes the Studio feedback evaluation sets. */
   createEvaluationSets?: boolean;
+  /** Whether this deployment applies a Studio Agent profile to an MPA Runtime. */
+  mpaProfile?: boolean;
+  /** Whether a create deployment runs the MPA Runtime execution smoke before becoming runnable. */
+  mpaSmoke?: boolean;
   /** Draft used to render the Agent detail while its Runtime is still publishing. */
   agentDraft?: AgentDraft;
   /** Re-runs the same project/config as a new deployment task. */
@@ -584,6 +648,8 @@ export interface ProjectPreviewProps {
   deployDisabledReason?: string;
   /** Draft metadata summarized on the deployment page. */
   agentDraft?: AgentDraft;
+  /** Explicit deployment intent; ordinary drafts remain general by default. */
+  agentCategory?: "general" | "mpa";
   /** Main Agent display name. Generated project names may be normalized. */
   agentName?: string;
   /** Root Agent plus all recursively nested sub-Agents. */
@@ -594,6 +660,9 @@ export interface ProjectPreviewProps {
     description: string;
     instruction: string;
     optimizations: string[];
+    effectiveOptimizations?: string[];
+    autoAddedOptimizations?: string[];
+    planHash?: string;
   };
   /** When provided, files are editable and changes call onChange with the new project. Omit for read-only. */
   onChange?: (project: AgentProject) => void;
@@ -605,31 +674,46 @@ export interface ProjectPreviewProps {
     options?: DeployOptions,
   ) => Promise<DeployResult>;
   /** Called after successfully adding the agent to the connection list. */
-  onAgentAdded?: (agentId: string, agentName: string) => void;
+  onAgentAdded?: (agentId: string, agentName: string) => void | Promise<void>;
   /** Called as soon as the Runtime has been deployed or updated successfully. */
   onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
   /** Label for the floating deployment action. */
   deploymentActionLabel?: string;
+  /** Overrides the final confirmation copy for deployments with extra risk. */
+  deploymentConfirmation?: {
+    title: string;
+    description: string;
+    confirmLabel: string;
+  };
   /** Optional external footer slot for the deployment action. */
   deploymentActionTargetId?: string;
   /** Existing Runtime id when this deployment updates an Agent in place. */
   deploymentRuntimeId?: string;
+  /** Existing MPA instance id when it differs from the platform Runtime id. */
+  deploymentMpaInstanceId?: string;
   /** Existing platform Runtime resource name when publishing an update. */
   deploymentRuntimeName?: string;
+  /** Current Runtime profile revision/ETag used for MPA Profile update CAS. */
+  deploymentRuntimeRevision?: string;
   /** Whether a new Runtime name was explicitly edited instead of generated. */
   deploymentRuntimeNameCustomized?: boolean;
   /** Updates the explicit Runtime name for a new deployment. */
   onDeploymentRuntimeNameChange?: (runtimeName: string) => void;
-  /** Opens the persistent Agent detail as soon as deployment starts. */
+  /** Persists the deployment task without forcing the active editor to navigate. */
   onDeploymentStarted?: (task: DeploymentTaskUpdate) => void;
   /** Mirrors deployment progress into the app shell so it survives page switches. */
   onDeploymentTaskChange?: (task: DeploymentTaskUpdate) => void;
+  showGitSync?: boolean;
+  showMessageChannels?: boolean;
+  showEvaluationSets?: boolean;
   /** Whether Feishu Channel was enabled in the configuration step. */
   feishuEnabled?: boolean;
   /** Update the Feishu channel selection from the deploy page. */
   onFeishuEnabledChange?: (enabled: boolean) => void | Promise<void>;
+  /** Runtime keys whose values remain configured but are not returned to the browser. */
+  configuredRuntimeEnvKeys?: readonly string[];
   /** Environment variables required by the selected memory/knowledge backends. */
-  deploymentEnv?: EnvVar[];
+  deploymentEnv?: RuntimeEnvSpec[];
   /** Required deployment secrets kept only in this mounted publish page. */
   requiredSecretEnv?: Array<{ key: string; label: string }>;
   /** Optional controlled secret values entered earlier in the configuration flow. */
@@ -638,6 +722,8 @@ export interface ProjectPreviewProps {
   /** Deployment-only values entered in each feature's configuration area. */
   deploymentEnvValues?: Record<string, string>;
   onDeploymentEnvChange?: (key: string, value: string) => void;
+  /** Atomically updates the Feishu app credentials returned by automatic setup. */
+  onFeishuCredentialsChange?: (appId: string, appSecret: string) => void;
   /** Runtime network settings edited on the deploy page. */
   network?: NetworkConfig;
   onNetworkChange?: (network: NetworkConfig | undefined) => void;
@@ -755,6 +841,7 @@ export function ProjectPreview({
   embedded = false,
   deployDisabledReason,
   agentDraft,
+  agentCategory = "general",
   agentName,
   agentCount,
   releaseConfiguration,
@@ -762,22 +849,30 @@ export function ProjectPreview({
   onDeploy,
   onAgentAdded,
   onDeploymentComplete,
-  deploymentActionLabel = "部署",
+  deploymentActionLabel: deploymentActionLabelProp,
+  deploymentConfirmation,
   deploymentActionTargetId,
   deploymentRuntimeId,
+  deploymentMpaInstanceId,
   deploymentRuntimeName,
+  deploymentRuntimeRevision,
   deploymentRuntimeNameCustomized = false,
   onDeploymentRuntimeNameChange,
   onDeploymentStarted,
   onDeploymentTaskChange,
+  showGitSync = true,
+  showMessageChannels = true,
+  showEvaluationSets = true,
   feishuEnabled = false,
   onFeishuEnabledChange,
+  configuredRuntimeEnvKeys = [],
   deploymentEnv = [],
   requiredSecretEnv = [],
   requiredSecretEnvValues,
   onRequiredSecretEnvChange,
   deploymentEnvValues = {},
   onDeploymentEnvChange,
+  onFeishuCredentialsChange,
   network,
   onNetworkChange,
   cloudProvider = "volcengine",
@@ -789,13 +884,20 @@ export function ProjectPreview({
     aiAssisted: false,
   },
   onBack,
-  backLabel = "返回配置",
+  backLabel: backLabelProp,
   onExportYaml,
   deploymentPrimaryPane,
   deployDisabled = false,
 }: ProjectPreviewProps) {
+  const { t } = useTranslation("ui");
+  const deploymentActionLabel = deploymentActionLabelProp ?? t("projectPreview.deploy");
+  const backLabel = backLabelProp ?? t("projectPreview.backToConfiguration");
   const editable = typeof onChange === "function";
   const isRuntimeUpdate = Boolean(deploymentRuntimeId);
+  const configuredRuntimeEnvKeySet = useMemo(
+    () => new Set(configuredRuntimeEnvKeys),
+    [configuredRuntimeEnvKeys],
+  );
   const inMemorySession = usesInMemorySession(agentDraft);
   const runtimeNameSource =
     agentName?.trim() || agentDraft?.name || project.name;
@@ -830,6 +932,7 @@ export function ProjectPreview({
   const runtimeNameError = runtimeNameSyntaxError ?? runtimeNameConflictError;
   const selectedModelApiKeyId =
     agentDraft?.deployment?.modelApiKeyId?.trim() ?? "";
+  const sidecarEnabled = agentDraft?.harnessSidecar?.enabled === true;
 
   // Initialize all hooks BEFORE any conditional returns (React hooks rule)
   const [selected, setSelected] = useState<string | null>(
@@ -844,11 +947,17 @@ export function ProjectPreview({
   const [adding, setAdding] = useState(false);
   const [newPath, setNewPath] = useState("");
   const [deploying, setDeploying] = useState(false);
+  const [deploymentStatusUnconfirmed, setDeploymentStatusUnconfirmed] =
+    useState(false);
   const [deployConfirmOpen, setDeployConfirmOpen] = useState(false);
   const [flowPreviewOpen, setFlowPreviewOpen] = useState(false);
   const [feishuUpdating, setFeishuUpdating] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
+  const [githubCicdBinding, setGithubCicdBinding] =
+    useState<GithubCicdPipelineResult | null>(null);
+  const [pendingGithubCicd, setPendingGithubCicd] =
+    useState<PendingGithubCicdConfig | null>(null);
   // Latest progress frame per deploy phase + the phase currently in flight,
   // driving the build/deploy/publish stepper.
   const [stageMap, setStageMap] = useState<Record<string, DeployStage>>({});
@@ -865,6 +974,12 @@ export function ProjectPreview({
   );
   const effectiveSecretEnvValues = requiredSecretEnvValues ?? secretEnvValues;
   const [secretEnvErrorKey, setSecretEnvErrorKey] = useState<string | null>(null);
+  const [deploymentEnvErrors, setDeploymentEnvErrors] = useState<
+    Record<string, string>
+  >({});
+  const deploymentEnvInputRefs = useRef(
+    new Map<string, HTMLInputElement | HTMLTextAreaElement>(),
+  );
   const [deployResources, setDeployResources] = useState<DeployResources>(
     DEFAULT_DEPLOY_RESOURCES,
   );
@@ -882,10 +997,10 @@ export function ProjectPreview({
   const deployRegionLabel = formatCloudRegion(deployRegion, cloudProvider);
   const [minInstance, setMinInstance] = useState("1");
   const [maxInstance, setMaxInstance] = useState(
-    inMemorySession ? "1" : "5",
+    inMemorySession || sidecarEnabled ? "1" : "5",
   );
-  const [createEvaluationSets, setCreateEvaluationSets] = useState(true);
-  const supportsEvaluationSets = cloudProvider !== "byteplus";
+  const [createEvaluationSets, setCreateEvaluationSets] = useState(false);
+  const supportsEvaluationSets = showEvaluationSets && cloudProvider !== "byteplus";
   const effectiveCreateEvaluationSets =
     supportsEvaluationSets && createEvaluationSets;
   const [deploymentActionTarget, setDeploymentActionTarget] =
@@ -894,21 +1009,47 @@ export function ProjectPreview({
   const requiredSecretEnvSignature = requiredSecretEnv
     .map((env) => `${env.key}:${env.label}`)
     .join("|");
+  const deploymentEnvRequirementSignature = deploymentEnv
+    .map(
+      (env) =>
+        `${env.key}:${env.required}:${env.serverManaged ?? false}:${(env.requiredBy ?? []).join(",")}`,
+    )
+    .join("|");
   const previousDeployRegionRef = useRef(deployRegion);
-  const instanceRange = validateRuntimeInstanceRange(minInstance, maxInstance);
+  const instanceRange = validateRuntimeInstanceRange(minInstance, maxInstance, t);
   const needsInstanceUpdate =
     !isRuntimeUpdate &&
     instanceRange.valid &&
     (instanceRange.min !== 1 || instanceRange.max !== 5);
+  const githubUpdateOffloaded =
+    Boolean(deploymentRuntimeId && githubCicdBinding?.pipelineId);
+  const isMpaDeployment = agentCategory === "mpa";
+  const shouldRunMpaLifecycle = isMpaDeployment && !githubUpdateOffloaded;
   const baseDeploymentSteps = deploymentPrimaryPane
-    ? CODE_PACKAGE_DEPLOY_STEPS
-    : DEPLOY_STEPS;
+    ? codePackageDeploySteps(t)
+    : deploySteps(t);
   const deploymentStepsWithInstanceUpdate = needsInstanceUpdate
-    ? [...baseDeploymentSteps, INSTANCE_UPDATE_STEP]
+    ? [...baseDeploymentSteps, { phase: "update", label: t("projectPreview.steps.updateInstances") }]
     : baseDeploymentSteps;
-  const deploymentSteps = effectiveCreateEvaluationSets
-    ? [...deploymentStepsWithInstanceUpdate, EVALUATION_SET_STEP]
+  const deploymentStepsBeforeGithub = effectiveCreateEvaluationSets
+    ? [...deploymentStepsWithInstanceUpdate, { phase: "evaluation", label: t("projectPreview.steps.createEvaluationSets") }]
     : deploymentStepsWithInstanceUpdate;
+  const deploymentStepsWithGithub =
+    githubUpdateOffloaded || pendingGithubCicd
+      ? [...deploymentStepsBeforeGithub, { phase: "github", label: t("projectPreview.steps.syncCode") }]
+      : deploymentStepsBeforeGithub;
+  const deploymentSteps = shouldRunMpaLifecycle
+    ? [
+        ...deploymentStepsWithGithub,
+        { phase: "profile_applying", label: t("projectPreview.steps.applyMpaProfile") },
+        ...(!isRuntimeUpdate
+          ? [
+              { phase: "smoke_running", label: t("projectPreview.steps.verifyMpaRuntime") },
+              { phase: "runnable", label: t("projectPreview.steps.mpaReady") },
+            ]
+          : []),
+      ]
+    : deploymentStepsWithGithub;
 
   function clearModelApiKeyReveal() {
     modelApiKeyRevealAbortRef.current?.abort();
@@ -923,7 +1064,7 @@ export function ProjectPreview({
         status: "error",
         apiKeyId: "",
         value: "",
-        error: "请先在模型配置中选择 API Key。",
+        error: t("projectPreview.errors.selectApiKey"),
       });
       return;
     }
@@ -962,7 +1103,7 @@ export function ProjectPreview({
         error:
           error instanceof Error
             ? error.message
-            : "加载 API Key 失败，请重试。",
+            : t("projectPreview.errors.loadApiKey"),
       });
     } finally {
       if (modelApiKeyRevealAbortRef.current === controller) {
@@ -973,6 +1114,14 @@ export function ProjectPreview({
 
   useEffect(() => {
     clearModelApiKeyReveal();
+    if (selectedModelApiKeyId) {
+      setDeploymentEnvErrors((current) => {
+        if (!("MODEL_AGENT_API_KEY" in current)) return current;
+        const next = { ...current };
+        delete next.MODEL_AGENT_API_KEY;
+        return next;
+      });
+    }
   }, [selectedModelApiKeyId]);
 
   useEffect(() => {
@@ -996,6 +1145,18 @@ export function ProjectPreview({
       current && allowed.has(current) ? current : null,
     );
   }, [requiredSecretEnvSignature, requiredSecretEnvValues]);
+
+  useEffect(() => {
+    const activeKeys = new Set(deploymentEnv.map((env) => env.key));
+    setDeploymentEnvErrors((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([key]) => activeKeys.has(key)),
+      );
+      return Object.keys(next).length === Object.keys(current).length
+        ? current
+        : next;
+    });
+  }, [deploymentEnvRequirementSignature]);
 
   useEffect(() => {
     if (!onDeployRegionChange || isRuntimeUpdate) return;
@@ -1024,11 +1185,11 @@ export function ProjectPreview({
         if (event.key === "Escape") setRegionMenuOpen(false);
       }}
     >
-      {showLabel && <span>发布区域</span>}
+      {showLabel && <span>{t("projectPreview.releaseRegion")}</span>}
       <button
         type="button"
         className="pp-region-trigger"
-        aria-label="部署区域"
+        aria-label={t("projectPreview.deployRegion")}
         aria-haspopup="listbox"
         aria-expanded={regionMenuOpen}
         aria-describedby={isRuntimeUpdate ? deploymentRegionHelpId : undefined}
@@ -1043,7 +1204,7 @@ export function ProjectPreview({
       {regionMenuOpen && (
         <>
           <div className="menu-scrim" onClick={() => setRegionMenuOpen(false)} />
-          <div className="pp-region-menu" role="listbox" aria-label="部署区域">
+          <div className="pp-region-menu" role="listbox" aria-label={t("projectPreview.deployRegion")}>
             {deployRegionOptions.map((region) => {
               const selected = region.value === deployRegion;
               return (
@@ -1068,7 +1229,7 @@ export function ProjectPreview({
       )}
       {isRuntimeUpdate && (
         <span id={deploymentRegionHelpId} className="pp-region-help">
-          更新时沿用现有 Runtime 的部署区域，无法修改。
+          {t("projectPreview.regionPreserved")}
         </span>
       )}
     </div>
@@ -1083,8 +1244,8 @@ export function ProjectPreview({
 
   useEffect(() => {
     setMinInstance("1");
-    setMaxInstance(inMemorySession ? "1" : "5");
-  }, [inMemorySession]);
+    setMaxInstance(inMemorySession || sidecarEnabled ? "1" : "5");
+  }, [inMemorySession, sidecarEnabled]);
 
   useEffect(() => {
     if (previousDeployRegionRef.current === deployRegion) return;
@@ -1123,7 +1284,7 @@ export function ProjectPreview({
 
   // Validate project structure AFTER all hooks
   if (!project || !Array.isArray(project.files)) {
-    return <div className="pp-error">项目数据无效</div>;
+    return <div className="pp-error">{t("projectPreview.errors.invalidProject")}</div>;
   }
 
   const selectedFile =
@@ -1153,14 +1314,14 @@ export function ProjectPreview({
   const modelApiKeyRevealVisible =
     currentModelApiKeyRevealState.status === "visible";
   const modelApiKeyRevealLabel = !selectedModelApiKeyId
-    ? "请先选择 API Key"
+    ? t("projectPreview.apiKey.selectFirst")
     : currentModelApiKeyRevealState.status === "loading"
-      ? "正在显示 API Key"
+      ? t("projectPreview.apiKey.revealing")
       : modelApiKeyRevealVisible
-        ? "隐藏 API Key"
+        ? t("projectPreview.apiKey.hide")
         : currentModelApiKeyRevealState.status === "error"
-          ? "重试显示 API Key"
-          : "显示 API Key";
+          ? t("projectPreview.apiKey.retryReveal")
+          : t("projectPreview.apiKey.reveal");
 
   function toggleFolder(key: string) {
     setCollapsed((prev) => {
@@ -1200,7 +1361,7 @@ export function ProjectPreview({
 
   function handleRename() {
     if (!selectedFile) return;
-    const next = window.prompt("重命名文件", selectedFile.path);
+    const next = window.prompt(t("projectPreview.files.renamePrompt"), selectedFile.path);
     const path = next?.trim();
     if (!path || path === selectedFile.path) return;
     if (project.files.some((f) => f.path === path)) return;
@@ -1230,6 +1391,24 @@ export function ProjectPreview({
 
   function addEnvRow() {
     setEnvRows((rows) => [...rows, newEnvRow()]);
+  }
+
+  function clearDeploymentEnvError(key: string) {
+    setDeploymentEnvErrors((current) => {
+      if (!(key in current)) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }
+
+  function focusDeploymentEnv(key: string) {
+    window.requestAnimationFrame(() => {
+      const field = deploymentEnvInputRefs.current.get(key);
+      if (!field) return;
+      field.focus({ preventScroll: true });
+      field.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
   }
 
   function setNetworkMode(mode: NetworkConfig["mode"]) {
@@ -1282,7 +1461,9 @@ export function ProjectPreview({
     } catch (error) {
       if (mountedRef.current) {
         setDeployError(
-          `更新飞书配置失败：${error instanceof Error ? error.message : String(error)}`,
+          t("projectPreview.errors.updateFeishu", {
+            message: error instanceof Error ? error.message : String(error),
+          }),
         );
       }
     } finally {
@@ -1290,8 +1471,21 @@ export function ProjectPreview({
     }
   }
 
+  const handleGithubCicdBindingChange = useCallback(
+    (binding: GithubCicdPipelineResult | null) => {
+      setGithubCicdBinding(binding);
+    },
+    [],
+  );
+
   async function requestDeploymentConfirmation() {
-    if (!onDeploy || deploying || runtimeNameChecking || deployDisabled) return;
+    if (
+      !onDeploy ||
+      deploying ||
+      deploymentStatusUnconfirmed ||
+      runtimeNameChecking ||
+      deployDisabled
+    ) return;
     if (runtimeNameError) {
       setDeployError(runtimeNameError);
       return;
@@ -1314,31 +1508,57 @@ export function ProjectPreview({
       authenticationType === "user_pool" &&
       !userPoolUid
     ) {
-      setDeployError("请选择用于 Runtime 鉴权的用户池。");
+      setDeployError(t("projectPreview.errors.userPoolRequired"));
       return;
     }
     if (networkMode !== "public" && !network?.vpcId?.trim()) {
-      setDeployError("使用 VPC 网络时，请填写 VPC ID。");
+      setDeployError(t("projectPreview.errors.vpcRequired"));
       return;
     }
     const missingSecret = requiredSecretEnv.find(
-      (env) => !(effectiveSecretEnvValues[env.key] ?? "").trim(),
+      (env) =>
+        !(effectiveSecretEnvValues[env.key] ?? "").trim() &&
+        !configuredRuntimeEnvKeySet.has(env.key),
     );
     if (missingSecret) {
       setSecretEnvErrorKey(missingSecret.key);
-      setDeployError(`请填写 ${missingSecret.label}，用于访问对应的自定义模型地址。`);
+      setDeployError(t("projectPreview.errors.modelSecretRequired", { label: missingSecret.label }));
       return;
     }
     setSecretEnvErrorKey(null);
-    const missingFeatureEnv = firstMissingRuntimeEnv(
+    const missingFeatureEnvs = missingRuntimeEnvs(
       deploymentEnv,
       deploymentEnvValues,
+      configuredRuntimeEnvKeys,
     );
-    if (missingFeatureEnv) {
-      const env = deploymentEnv.find((item) => item.key === missingFeatureEnv.key);
-      setDeployError(`请返回配置页填写 ${env?.comment || env?.key}（${env?.key}）。`);
+    const missingManagedModelEnv = deploymentEnv.find(
+      (env) =>
+        env.key === "MODEL_AGENT_API_KEY" &&
+        env.required &&
+        env.serverManaged &&
+        !selectedModelApiKeyId,
+    );
+    const missingEnvs = [
+      ...(missingManagedModelEnv ? [missingManagedModelEnv] : []),
+      ...missingFeatureEnvs,
+    ];
+    if (missingEnvs.length) {
+      const errors = Object.fromEntries(
+        missingEnvs.map((env) => [
+          env.key,
+          env.serverManaged
+            ? t("projectPreview.errors.managedApiKeyRequired", {
+                requirement: runtimeEnvRequirementHint(env)?.replace(/。$/, "") || env.comment || env.key,
+              })
+            : runtimeEnvMissingError(env),
+        ]),
+      );
+      setDeploymentEnvErrors(errors);
+      setDeployError(errors[missingEnvs[0].key]);
+      focusDeploymentEnv(missingEnvs[0].key);
       return;
     }
+    setDeploymentEnvErrors({});
     const invalidFeatureEnv = firstInvalidRuntimeEnv(
       deploymentEnv,
       deploymentEnvValues,
@@ -1350,13 +1570,14 @@ export function ProjectPreview({
       return;
     }
     if (feishuEnabled) {
-      const missingFeishuEnv = firstMissingRuntimeEnv(
-        FEISHU_ENV,
-        deploymentEnvValues,
+      const missingFeishuEnv = FEISHU_ENV.find(
+        (env) =>
+          !String(deploymentEnvValues[env.key] ?? "").trim() &&
+          !configuredRuntimeEnvKeySet.has(env.key),
       );
       if (missingFeishuEnv) {
         const env = FEISHU_ENV.find((item) => item.key === missingFeishuEnv.key);
-        setDeployError(`启用飞书后，请填写${env?.comment || env?.key}。`);
+        setDeployError(t("projectPreview.errors.feishuEnvRequired", { field: env?.comment || env?.key }));
         return;
       }
     }
@@ -1373,7 +1594,7 @@ export function ProjectPreview({
         if (!mountedRef.current) return;
         if (runtimeNameCheckKeyRef.current !== checkedKey) return;
         if (!result.available) {
-          const message = "Runtime 名称已存在，请修改后重试。";
+          const message = t("projectPreview.errors.runtimeNameExists");
           setRuntimeNameConflict({ key: checkedKey, message });
           setDeployError(message);
           return;
@@ -1391,7 +1612,7 @@ export function ProjectPreview({
   }
 
   async function performDeployment() {
-    if (!onDeploy || deploying) return;
+    if (!onDeploy || deploying || deploymentStatusUnconfirmed) return;
     if (runtimeNameError) {
       setDeployConfirmOpen(false);
       setDeployError(runtimeNameError);
@@ -1406,6 +1627,7 @@ export function ProjectPreview({
     const envs = deployEnvVars();
     if (mountedRef.current) {
       setDeployError(null);
+      setDeploymentStatusUnconfirmed(false);
       setDeployResult(null);
       setStageMap({});
       setActivePhase(null);
@@ -1426,17 +1648,27 @@ export function ProjectPreview({
       startedAt: taskStartedAt,
       status: "running",
       phase: "prepare",
-      label: "准备部署",
+      label: t("projectPreview.task.preparing"),
       agentDraft,
+      githubDelivery: Boolean(pendingGithubCicd),
       instanceRange: needsInstanceUpdate
         ? { min: instanceRange.min, max: instanceRange.max }
         : undefined,
       createEvaluationSets: effectiveCreateEvaluationSets,
+      mpaProfile: shouldRunMpaLifecycle,
+      mpaSmoke: shouldRunMpaLifecycle && !isRuntimeUpdate,
     };
     onDeploymentTaskChange?.(initialTask);
     onDeploymentStarted?.(initialTask);
     let latestBuildLog: DeployBuildLogSnapshot | undefined;
+    let latestGithubLog: DeployBuildLogSnapshot | undefined;
     let latestPhase = initialTask.phase ?? "prepare";
+    let latestMessage = initialTask.message;
+    let latestMessageCode = initialTask.messageCode;
+    let latestRuntimeId = deploymentRuntimeId;
+    let latestRegion = deployRegion;
+    let latestMpaInstanceId = deploymentMpaInstanceId;
+    let failedMpaRetry: (() => Promise<void>) | undefined;
     const terminalBuildLog = (
       status: DeployBuildLogSnapshot["status"],
     ): DeployBuildLogSnapshot | undefined => (
@@ -1457,39 +1689,162 @@ export function ProjectPreview({
       lineCount: 0,
       truncated: false,
       updatedAt: Date.now(),
-      pendingMessage: "正在等待构建日志…",
+      pendingMessage: t("projectPreview.task.waitingBuildLog"),
     });
-    const mergeBuildFailureLog = (message: string): DeployBuildLogSnapshot | undefined => {
-      if (latestPhase !== "build") return undefined;
-      const failureText = [
-        "",
-        "----- 构建失败 -----",
-        message,
-      ].join("\n");
-      latestBuildLog = mergeDeployBuildLog(latestBuildLog, {
-        source: "code-pipeline",
-        status: "error",
-        text: failureText,
-        lineCount: failureText.split("\n").length,
+    const githubDeliveryLog = (
+      line: string,
+      status: DeployBuildLogSnapshot["status"] = "running",
+    ): DeployBuildLogSnapshot => {
+      const previousText = latestGithubLog?.text ?? "";
+      const text = [previousText, line].filter(Boolean).join("\n");
+      latestGithubLog = {
+        source: "github-delivery",
+        status,
+        text,
+        lineCount: text ? text.split("\n").length : 0,
         truncated: false,
         updatedAt: Date.now(),
-      });
+        pendingMessage: status === "running" ? t("projectPreview.task.waitingGithubLog") : undefined,
+      };
+      return latestGithubLog;
+    };
+    const finalizeBuildFailureLog = (): DeployBuildLogSnapshot | undefined => {
+      if (latestPhase !== "build" || !latestBuildLog?.text) return undefined;
+      latestBuildLog = {
+        ...latestBuildLog,
+        status: "error",
+        updatedAt: Date.now(),
+      };
       return latestBuildLog;
     };
+    const telemetryErrorMessage = (error: unknown): string | undefined => {
+      if (latestPhase === "build" && latestBuildLog?.text) {
+        return safeTelemetryErrorMessage(latestBuildLog.text, { preserveEnd: true });
+      }
+      return safeTelemetryErrorMessage(error);
+    };
+    const publishMpaStage = (
+      phase: string,
+      message: string,
+      pct = 0,
+      level: DeployStage["level"] = "info",
+    ) => {
+      const stage: DeployStage = { level, phase, message, pct };
+      latestPhase = phase;
+      latestMessage = message;
+      latestMessageCode = undefined;
+      if (mountedRef.current) {
+        setStageMap((prev) => ({ ...prev, [phase]: stage }));
+        setActivePhase(phase);
+      }
+      onDeploymentTaskChange?.({
+        id: taskId,
+        agentName: taskAgentName,
+        runtimeName: taskRuntimeName,
+        runtimeId: latestRuntimeId,
+        region: latestRegion,
+        startedAt: taskStartedAt,
+        status: "running",
+        phase,
+        label: deploymentSteps.find((step) => step.phase === phase)?.label ?? phase,
+        message,
+        pct,
+        githubDelivery: Boolean(pendingGithubCicd || latestGithubLog),
+        mpaProfile: shouldRunMpaLifecycle,
+        mpaSmoke: shouldRunMpaLifecycle && !isRuntimeUpdate,
+        ...(latestGithubLog ? { githubLog: latestGithubLog } : {}),
+        ...terminalBuildLogUpdate("complete"),
+      });
+    };
     try {
+      let activeGithubBinding = githubCicdBinding;
+      if (deploymentRuntimeId && githubCicdBinding?.pipelineId) {
+        latestPhase = "github";
+        const githubLog = githubDeliveryLog(t("projectPreview.task.syncingGithub"));
+        const githubSyncStage: DeployStage = {
+          level: "info",
+          phase: "github",
+          message: t("projectPreview.task.syncingGithub"),
+          pct: 0,
+        };
+        if (mountedRef.current) {
+          setStageMap((prev) => ({ ...prev, github: githubSyncStage }));
+          setActivePhase("github");
+        }
+        onDeploymentTaskChange?.({
+          id: taskId,
+          agentName: taskAgentName,
+          runtimeName: taskRuntimeName,
+          runtimeId: latestRuntimeId,
+          region: latestRegion,
+          startedAt: taskStartedAt,
+          status: "running",
+          phase: "github",
+          label: t("projectPreview.task.syncGithubCode"),
+          message: githubSyncStage.message,
+          pct: 0,
+          githubDelivery: true,
+          githubLog,
+        });
+        const synced = await syncGithubCicdRuntime({
+          runtimeId: deploymentRuntimeId,
+          project,
+          agentCategory: isMpaDeployment ? "mpa" : "general",
+        });
+        activeGithubBinding = synced;
+        if (mountedRef.current) {
+          setGithubCicdBinding(synced);
+          setStageMap((prev) => ({
+            ...prev,
+            github: {
+              level: "success",
+              phase: "github",
+              message: t("projectPreview.task.githubSynced"),
+              pct: 100,
+            },
+          }));
+          setActivePhase(null);
+        }
+        if (synced.cicd?.enabled) {
+          onDeploymentTaskChange?.({
+            id: taskId,
+            agentName: taskAgentName,
+            runtimeName: taskRuntimeName,
+            runtimeId: deploymentRuntimeId,
+            region: deployRegion,
+            startedAt: taskStartedAt,
+            status: "success",
+            phase: "github",
+            label: t("projectPreview.task.githubSubmitted"),
+            message: t("projectPreview.task.githubUpdatingRuntime"),
+            pct: 100,
+            githubDelivery: true,
+            githubLog: githubDeliveryLog(
+              t("projectPreview.task.githubUpdatingRuntime"),
+              "complete",
+            ),
+          });
+          return;
+        }
+      }
       const result = await onDeploy(
         project,
         (s) => {
           if (s.runtimeName) taskRuntimeName = s.runtimeName;
-          latestPhase = s.phase;
+          const nextPhase = advanceDeploymentPhase(latestPhase, s.phase);
           if (s.buildLog) {
             latestBuildLog = mergeDeployBuildLog(latestBuildLog, s.buildLog);
           } else if (s.phase === "build" && !latestBuildLog) {
             latestBuildLog = pendingBuildLog();
           }
+          if (s.phase === nextPhase) {
+            latestMessage = s.message;
+            latestMessageCode = s.messageCode;
+          }
+          latestPhase = nextPhase;
           if (mountedRef.current) {
             setStageMap((prev) => ({ ...prev, [s.phase]: s }));
-            setActivePhase(s.phase);
+            setActivePhase(latestPhase);
           }
           onDeploymentTaskChange?.({
             id: taskId,
@@ -1499,12 +1854,15 @@ export function ProjectPreview({
             region: deployRegion,
             startedAt: taskStartedAt,
             status: "running",
-            phase: s.phase,
+            phase: latestPhase,
             label:
-              deploymentSteps.find((step) => step.phase === s.phase)?.label ??
-              s.phase,
-            message: s.message,
+              deploymentSteps.find((step) => step.phase === latestPhase)?.label ??
+              latestPhase,
+            message: latestMessage,
+            messageCode: latestMessageCode,
             pct: s.pct,
+            mpaProfile: shouldRunMpaLifecycle,
+            mpaSmoke: shouldRunMpaLifecycle && !isRuntimeUpdate,
             ...(latestBuildLog ? { buildLog: latestBuildLog } : {}),
           });
         },
@@ -1514,6 +1872,7 @@ export function ProjectPreview({
           sessionStorage: inMemorySession ? "in-memory" : "persistent",
           minInstance: instanceRange.min,
           maxInstance: instanceRange.max,
+          agentCategory: isMpaDeployment ? "mpa" : "general",
           ...(!isRuntimeUpdate
             ? {
                 authentication:
@@ -1539,41 +1898,295 @@ export function ProjectPreview({
           ...(!isRuntimeUpdate ? { resources: deployResources } : {}),
         },
       );
+      latestRuntimeId = result.runtimeId || deploymentRuntimeId;
+      latestRegion = result.region || deployRegion;
+      let completeResult = result;
+      latestMpaInstanceId =
+        completeResult.mpaInstanceId || deploymentMpaInstanceId;
+      if (shouldRunMpaLifecycle && !latestRuntimeId) {
+        throw new Error(t("projectPreview.errors.mpaRuntimeIdMissing"));
+      }
+      if (
+        !deploymentRuntimeId &&
+        pendingGithubCicd &&
+        completeResult.runtimeId
+      ) {
+        latestPhase = "github";
+        const githubLog = githubDeliveryLog(t("projectPreview.task.initializingGithub"));
+        const githubAttachStage: DeployStage = {
+          level: "info",
+          phase: "github",
+          message: t("projectPreview.task.initializingGithubBranch"),
+          pct: 0,
+        };
+        if (mountedRef.current) {
+          setStageMap((prev) => ({ ...prev, github: githubAttachStage }));
+          setActivePhase("github");
+        }
+        onDeploymentTaskChange?.({
+          id: taskId,
+          agentName: completeResult.agentName || taskAgentName,
+          runtimeName: completeResult.runtimeName || taskRuntimeName,
+          runtimeId: completeResult.runtimeId,
+          region: completeResult.region || deployRegion,
+          startedAt: taskStartedAt,
+          status: "running",
+          phase: "github",
+          label: t("projectPreview.task.mountGithubDelivery"),
+          message: githubAttachStage.message,
+          pct: 0,
+          githubDelivery: true,
+          githubLog,
+        });
+        try {
+          const attached = await initializeGithubDeliveryMain({
+            project,
+            githubUrl: pendingGithubCicd.githubUrl,
+            githubToken: pendingGithubCicd.githubToken,
+            baseBranch: pendingGithubCicd.baseBranch,
+            runtimeName: completeResult.agentName || taskRuntimeName,
+            runtimeId: completeResult.runtimeId,
+            region: completeResult.region || deployRegion,
+            agentCategory: isMpaDeployment ? "mpa" : "general",
+            cloudProvider: pendingGithubCicd.cloudProvider,
+            projectPath: ".",
+            volcengineAccessKey: pendingGithubCicd.volcengineAccessKey,
+            volcengineSecretKey: pendingGithubCicd.volcengineSecretKey,
+            volcengineSessionToken: pendingGithubCicd.volcengineSessionToken,
+          });
+          activeGithubBinding = attached;
+          if (mountedRef.current) {
+            setGithubCicdBinding(attached);
+            setPendingGithubCicd(null);
+            setStageMap((prev) => ({
+              ...prev,
+              github: {
+                level: "success",
+                phase: "github",
+                message: t("projectPreview.task.githubBranchInitialized"),
+                pct: 100,
+              },
+            }));
+            setActivePhase(null);
+          }
+          onDeploymentTaskChange?.({
+            id: taskId,
+            agentName: completeResult.agentName || taskAgentName,
+            runtimeName: completeResult.runtimeName || taskRuntimeName,
+            runtimeId: completeResult.runtimeId,
+            region: completeResult.region || deployRegion,
+            startedAt: taskStartedAt,
+            status: "running",
+            phase: "github",
+            label: t("projectPreview.task.githubDeliveryMounted"),
+            message: t("projectPreview.task.githubBranchInitialized"),
+            pct: 100,
+            githubDelivery: true,
+            githubLog: githubDeliveryLog(t("projectPreview.task.githubBranchInitialized"), "complete"),
+          });
+        } catch (error) {
+          const githubLog = githubDeliveryLog(
+            t("projectPreview.task.githubMountFailedDetail", {
+              message: error instanceof Error ? error.message : String(error),
+            }),
+            "error",
+          );
+          onDeploymentTaskChange?.({
+            id: taskId,
+            agentName: completeResult.agentName || taskAgentName,
+            runtimeName: completeResult.runtimeName || taskRuntimeName,
+            runtimeId: completeResult.runtimeId,
+            region: completeResult.region || deployRegion,
+            startedAt: taskStartedAt,
+            status: "error",
+            phase: "github",
+            label: t("projectPreview.task.githubMountFailed"),
+            message: t("projectPreview.task.githubMountFailedHint"),
+            pct: 100,
+            githubDelivery: true,
+            githubLog,
+          });
+          throw new Error(
+            t("projectPreview.errors.deployedButGithubMountFailed", {
+              message: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        }
+      } else if (!deploymentRuntimeId && activeGithubBinding?.pipelineId && completeResult.runtimeId) {
+        try {
+          const bound = await bindGithubCicdRuntime({
+            pipelineId: activeGithubBinding.pipelineId,
+            runtimeId: completeResult.runtimeId,
+            region: completeResult.region || deployRegion,
+            cloudProvider: activeGithubBinding.cloudProvider ?? cloudProvider,
+          });
+          activeGithubBinding = bound;
+          if (mountedRef.current) setGithubCicdBinding(bound);
+        } catch (error) {
+          if (mountedRef.current) {
+            setDeployError(
+              t("projectPreview.errors.deployedButGithubBindFailed", {
+                message: error instanceof Error ? error.message : String(error),
+              }),
+            );
+          }
+        }
+      }
+      let mpaOperation: MpaAgentOperation | undefined;
+      if (shouldRunMpaLifecycle && agentDraft && (completeResult.runtimeId || deploymentRuntimeId)) {
+        const runtimeId = String(completeResult.runtimeId || deploymentRuntimeId || "");
+        const runtimeRegion = completeResult.region || deployRegion;
+        latestRuntimeId = runtimeId;
+        latestRegion = runtimeRegion;
+        taskRuntimeName = completeResult.runtimeName || taskRuntimeName;
+        publishMpaStage(
+          "profile_applying",
+          t("projectPreview.task.applyingMpaProfile"),
+        );
+        mpaOperation = await applyMpaProfileAfterDeployment({
+          operationKind: isRuntimeUpdate ? "update" : "create",
+          runtimeId,
+          region: runtimeRegion,
+          mpaInstanceId:
+            deploymentMpaInstanceId ?? completeResult.mpaInstanceId,
+          agentName: taskAgentName,
+          sourceDraftId: initialTask.draftId,
+          draft: agentDraft,
+          runtimeName: requestedRuntimeName || runtimeId,
+          runtimeRevision: isRuntimeUpdate ? deploymentRuntimeRevision : undefined,
+          taskId,
+        });
+        if (mpaOperation.status !== "succeeded") {
+          const failedPhase =
+            mpaOperation.stage === "smoke_running"
+              ? "smoke_running"
+              : "profile_applying";
+          const failedMessage =
+            mpaOperation.safeErrorCode ||
+            t("projectPreview.errors.mpaOperationIncomplete");
+          publishMpaStage(failedPhase, failedMessage, 100, "error");
+          if (mpaOperation.status === "failed_retryable") {
+            const operationId = mpaOperation.operationId;
+            const retryParams = {
+              operationKind: isRuntimeUpdate ? "update" as const : "create" as const,
+              runtimeId,
+              region: runtimeRegion,
+              mpaInstanceId:
+                deploymentMpaInstanceId ?? completeResult.mpaInstanceId ?? runtimeId,
+              sourceProfileId: initialTask.draftId?.trim()
+                ? `studio-draft:${initialTask.draftId.trim()}`
+                : `studio-agent:${taskAgentName}:${taskId}`,
+              draft: agentDraft,
+              targetKey: isRuntimeUpdate
+                ? deploymentMpaInstanceId ?? runtimeId
+                : `runtime:${runtimeRegion}:${requestedRuntimeName || runtimeId}`,
+              runtimeRevision: isRuntimeUpdate ? deploymentRuntimeRevision : undefined,
+            };
+            failedMpaRetry = async () => {
+              const retried = await retryMpaAgentOperation(
+                operationId,
+                retryParams,
+              );
+              onDeploymentTaskChange?.({
+                ...initialTask,
+                runtimeName: completeResult.runtimeName || taskRuntimeName,
+                runtimeId,
+                mpaInstanceId: retryParams.mpaInstanceId,
+                region: runtimeRegion,
+                status: retried.status === "succeeded" ? "success" : "error",
+                phase: retried.stage,
+                label: retried.status === "succeeded"
+                  ? t("projectPreview.task.deploymentComplete")
+                  : t("projectPreview.task.deploymentFailed"),
+                message: retried.safeErrorCode || undefined,
+                pct: 100,
+                mpaProfile: true,
+                mpaSmoke: !isRuntimeUpdate,
+                operationId: retried.operationId,
+              });
+              if (retried.status !== "succeeded") {
+                throw new Error(
+                  retried.safeErrorCode || t("projectPreview.errors.mpaOperationIncomplete"),
+                );
+              }
+              await onDeploymentComplete?.({
+                ...completeResult,
+                mpaOperation: retried,
+              });
+            };
+          }
+          throw new Error(
+            failedMessage,
+          );
+        }
+        if (isRuntimeUpdate) {
+          publishMpaStage(
+            "profile_applying",
+            t("projectPreview.task.mpaProfileApplied"),
+            100,
+            "success",
+          );
+        } else {
+          publishMpaStage(
+            "smoke_running",
+            t("projectPreview.task.runningMpaSmoke"),
+            100,
+            "success",
+          );
+          publishMpaStage(
+            "runnable",
+            t("projectPreview.task.mpaReady"),
+            100,
+            "success",
+          );
+        }
+        completeResult = { ...completeResult, mpaOperation };
+      }
       if (mountedRef.current) {
-        setDeployResult(result);
+        setDeployResult(completeResult);
         setActivePhase(null);
       }
       operation.succeed({
-        runtimeId: String(result.runtimeId || deploymentRuntimeId || ""),
+        runtimeId: String(completeResult.runtimeId || deploymentRuntimeId || ""),
       });
       onDeploymentTaskChange?.({
         id: taskId,
-        agentName: result.agentName || taskAgentName,
-        runtimeName: result.runtimeName || taskRuntimeName,
-        runtimeId: result.runtimeId || deploymentRuntimeId,
-        region: result.region || deployRegion,
+        agentName: completeResult.agentName || taskAgentName,
+        runtimeName: completeResult.runtimeName || taskRuntimeName,
+        runtimeId: latestRuntimeId,
+        mpaInstanceId: completeResult.mpaInstanceId,
+        region: latestRegion,
         startedAt: taskStartedAt,
         status: "success",
-        phase: "complete",
-        label: "部署完成",
-        message: result.warnings?.join("；"),
+        phase: mpaOperation && !isRuntimeUpdate ? "runnable" : "complete",
+        label: t("projectPreview.task.deploymentComplete"),
+        message:
+          mpaOperation && !isRuntimeUpdate
+            ? t("projectPreview.task.mpaReady")
+            : completeResult.warnings?.join(t("environmentCenter.listSeparator")),
+        githubDelivery: Boolean(pendingGithubCicd || latestGithubLog),
+        mpaProfile: Boolean(mpaOperation),
+        mpaSmoke: Boolean(mpaOperation && !isRuntimeUpdate),
+        ...(latestGithubLog ? { githubLog: latestGithubLog } : {}),
         ...terminalBuildLogUpdate("complete"),
       });
       try {
-        await onDeploymentComplete?.(result);
+        await onDeploymentComplete?.(completeResult);
       } catch (error) {
         if (!(error instanceof RuntimeProbeError)) throw error;
         onDeploymentTaskChange?.({
           id: taskId,
-          agentName: result.agentName || taskAgentName,
-          runtimeName: result.runtimeName || taskRuntimeName,
-          runtimeId: result.runtimeId || deploymentRuntimeId,
-          region: result.region || deployRegion,
+          agentName: completeResult.agentName || taskAgentName,
+          runtimeName: completeResult.runtimeName || taskRuntimeName,
+          runtimeId: latestRuntimeId,
+          region: latestRegion,
           startedAt: taskStartedAt,
           status: "success",
           phase: "complete",
-          label: "部署完成，暂未连接",
+          label: t("projectPreview.task.deployedNotConnected"),
           message: error.message,
+          mpaProfile: Boolean(mpaOperation),
+          mpaSmoke: Boolean(mpaOperation && !isRuntimeUpdate),
           ...terminalBuildLogUpdate("complete"),
         });
       }
@@ -1583,6 +2196,7 @@ export function ProjectPreview({
         operation.fail({
           failedPhase: telemetryDeployPhase(latestPhase),
           ...classifyTelemetryError(err, { phase: latestPhase }),
+          errorMessage: safeTelemetryErrorMessage(err),
         });
         if (mountedRef.current) {
           setDeployError(null);
@@ -1592,35 +2206,82 @@ export function ProjectPreview({
           id: taskId,
           agentName: taskAgentName,
           runtimeName: taskRuntimeName,
-          runtimeId: deploymentRuntimeId,
-          region: deployRegion,
+          runtimeId: latestRuntimeId,
+          mpaInstanceId: latestMpaInstanceId,
+          region: latestRegion,
           startedAt: taskStartedAt,
           status: "cancelled",
-          label: "已取消",
-          message: "部署已取消，相关 Runtime 资源已请求销毁。",
+          label: t("projectPreview.task.cancelled"),
+          message: t("projectPreview.task.cancelledHint"),
+          mpaProfile: Boolean(latestPhase === "profile_applying" || latestPhase === "smoke_running"),
+          mpaSmoke: Boolean(latestPhase === "smoke_running"),
           ...terminalBuildLogUpdate("complete"),
         });
         return;
       }
+      const statusUnconfirmed = isDeploymentStatusUnconfirmedError(err);
+      if (statusUnconfirmed) {
+        if (mountedRef.current) {
+          setDeployError(null);
+          setDeployResult(null);
+          setDeploymentStatusUnconfirmed(true);
+        }
+        operation.fail({
+          failedPhase: telemetryDeployPhase(latestPhase),
+          ...classifyTelemetryError(err, { phase: latestPhase }),
+          errorMessage: safeTelemetryErrorMessage(err),
+        });
+        onDeploymentTaskChange?.({
+          id: taskId,
+          agentName: taskAgentName,
+          runtimeName: taskRuntimeName,
+          runtimeId: latestRuntimeId,
+          mpaInstanceId: latestMpaInstanceId,
+          region: latestRegion,
+          startedAt: taskStartedAt,
+          status: "running",
+          statusUnconfirmed: true,
+          phase: latestPhase,
+          label: t("projectPreview.task.deploymentStatusUnconfirmed"),
+          message: t("projectPreview.errors.deploymentStatusUnconfirmed"),
+          mpaProfile: shouldRunMpaLifecycle,
+          mpaSmoke: shouldRunMpaLifecycle && !isRuntimeUpdate,
+          ...(latestBuildLog ? { buildLog: latestBuildLog } : {}),
+        });
+        return;
+      }
       if (mountedRef.current) setDeployError(message);
-      const buildLog = mergeBuildFailureLog(message);
+      if (mountedRef.current) setDeployResult(null);
+      const buildLog = finalizeBuildFailureLog();
       operation.fail({
         failedPhase: telemetryDeployPhase(latestPhase),
         ...classifyTelemetryError(err, { phase: latestPhase }),
+        errorMessage: telemetryErrorMessage(err),
       });
+      const failedInBuild = Boolean(buildLog);
+      const failedInGithub = latestPhase === "github" && Boolean(latestGithubLog);
       onDeploymentTaskChange?.({
         id: taskId,
         agentName: taskAgentName,
         runtimeName: taskRuntimeName,
-        runtimeId: deploymentRuntimeId,
-        region: deployRegion,
+        runtimeId: latestRuntimeId,
+        region: latestRegion,
         startedAt: taskStartedAt,
         status: "error",
         phase: latestPhase,
-        label: "部署失败",
-        message,
+        label: t("projectPreview.task.deploymentFailed"),
+        message: failedInBuild
+          ? t("projectPreview.task.buildFailedHint")
+          : failedInGithub
+            ? t("projectPreview.task.githubMountFailedHint")
+            : message,
         ...(buildLog ? { buildLog } : terminalBuildLogUpdate("complete")),
-        retry: requestDeploymentConfirmation,
+        ...(failedInGithub
+          ? { githubDelivery: true, githubLog: latestGithubLog }
+          : {}),
+        mpaProfile: Boolean(latestPhase === "profile_applying" || latestPhase === "smoke_running"),
+        mpaSmoke: Boolean(latestPhase === "smoke_running"),
+        retry: failedMpaRetry ?? requestDeploymentConfirmation,
       });
     } finally {
       if (mountedRef.current) setDeploying(false);
@@ -1674,7 +2335,7 @@ export function ProjectPreview({
       }
 
       if (conn.apps.length === 0) {
-        setDeployError("连接成功，但该地址未发现任何 Agent（/list-apps 为空）。");
+        setDeployError(t("projectPreview.errors.noAgentAtEndpoint"));
       } else {
         const label = { [conn.apps[0]]: deployResult.agentName };
         const updatedConn = {
@@ -1696,14 +2357,16 @@ export function ProjectPreview({
 
         if (onAgentAdded) {
           const agentId = remoteAppId(conn.id, conn.apps[0]);
-          onAgentAdded(agentId, deployResult.agentName);
+          await onAgentAdded(agentId, deployResult.agentName);
         } else {
-          alert(`🎉 Agent "${deployResult.agentName}" 已添加到左上角下拉列表！`);
+          alert(t("projectPreview.agentAdded", { name: deployResult.agentName }));
         }
       }
     } catch (err) {
       setDeployError(
-        `添加 Agent 失败：${err instanceof Error ? err.message : String(err)}`,
+        t("projectPreview.errors.addAgent", {
+          message: err instanceof Error ? err.message : String(err),
+        }),
       );
     } finally {
       setAddingAgent(false);
@@ -1745,12 +2408,12 @@ export function ProjectPreview({
   const artifactActions = (
     <div
       className={`pp-artifact-actions${embedded ? " is-rail" : ""}`}
-      aria-label="发布产物操作"
+      aria-label={t("projectPreview.artifactActions")}
     >
       {onExportYaml && (
         <button type="button" className="pp-secondary" onClick={onExportYaml}>
           <FileDown className="pp-ic" />
-          导出 YAML
+          {t("projectPreview.exportYaml")}
         </button>
       )}
       {editable && onChange && (
@@ -1758,7 +2421,7 @@ export function ProjectPreview({
           project={project}
           onChange={onChange}
           className="pp-artifact-source"
-          label="查看源代码"
+          label={t("projectPreview.viewSource")}
         />
       )}
       {project.files.length > 0 && (
@@ -1768,7 +2431,7 @@ export function ProjectPreview({
           onClick={handleDownloadZip}
         >
           <Download className="pp-ic" />
-          下载源代码
+          {t("projectPreview.downloadSource")}
         </button>
       )}
     </div>
@@ -1829,8 +2492,12 @@ export function ProjectPreview({
                 </button>
               )}
               <span className="pp-toolbar-title">
-                部署 {agentName || project.name || "未命名 Agent"}
-                {agentCount && agentCount > 1 ? ` 等 ${agentCount} 个智能体` : ""}
+                {t("projectPreview.deployTitle", {
+                  name: agentName || project.name || t("projectPreview.unnamedAgent"),
+                })}
+                {agentCount && agentCount > 1
+                  ? t("projectPreview.additionalAgentCount", { count: agentCount })
+                  : ""}
               </span>
             </div>
           }
@@ -1840,7 +2507,7 @@ export function ProjectPreview({
 
       <div className="pp-body">
         {onDeploy && !deploymentPrimaryPane && (
-          <section className="pp-release-overview" aria-label="发布概览">
+          <section className="pp-release-overview" aria-label={t("projectPreview.releaseOverview")}>
             <div className={`pp-release-preview${embedded ? " is-embedded" : ""}`}>
               <div className="pp-flow-thumbnail">
                 {agentDraft && (
@@ -1860,8 +2527,8 @@ export function ProjectPreview({
                   type="button"
                   className="pp-flow-expand"
                   onClick={() => setFlowPreviewOpen(true)}
-                  aria-label="放大查看执行流程"
-                  title="放大查看"
+                  aria-label={t("projectPreview.expandFlow")}
+                  title={t("projectPreview.expand")}
                 >
                   <Maximize2 aria-hidden />
                 </button>
@@ -1869,10 +2536,10 @@ export function ProjectPreview({
               {embedded && artifactActions}
               {!embedded && (
                 <div className="pp-release-info">
-                <div className="pp-release-card-head">Agent 概览</div>
+                <div className="pp-release-card-head">{t("projectPreview.agentOverview")}</div>
                 <div className="pp-release-info-body">
                   <div className="pp-release-info-main">
-                    <h2>{agentName || project.name || "未命名 Agent"}</h2>
+                    <h2>{agentName || project.name || t("projectPreview.unnamedAgent")}</h2>
                     {agentDraft?.description && (
                       <p
                         className="pp-release-description"
@@ -1883,35 +2550,61 @@ export function ProjectPreview({
                     )}
                     <dl className="pp-release-facts">
                     <div>
-                      <dt>Agent 数量</dt>
+                      <dt>{t("projectPreview.agentCount")}</dt>
                       <dd>{agentCount ?? 1}</dd>
                     </div>
                     {releaseConfiguration && (
                       <>
                         <div>
-                          <dt>模型</dt>
+                          <dt>{t("projectPreview.model")}</dt>
                           <dd>{releaseConfiguration.modelName}</dd>
                         </div>
                         <div>
-                          <dt>描述</dt>
+                          <dt>{t("common.description")}</dt>
                           <dd className="pp-release-fact-long">
                             {releaseConfiguration.description}
                           </dd>
                         </div>
                         <div>
-                          <dt>系统提示词</dt>
+                          <dt>{t("projectPreview.systemPrompt")}</dt>
                           <dd className="pp-release-fact-long pp-release-prompt">
                             {releaseConfiguration.instruction}
                           </dd>
                         </div>
                         <div>
-                          <dt>优化选项</dt>
+                          <dt>{t("projectPreview.optimizations")}</dt>
                           <dd>
                             {releaseConfiguration.optimizations.length > 0
-                              ? releaseConfiguration.optimizations.join("、")
-                              : "未启用"}
+                              ? releaseConfiguration.optimizations.join(t("environmentCenter.listSeparator"))
+                              : t("projectPreview.notEnabled")}
                           </dd>
                         </div>
+                        {releaseConfiguration.effectiveOptimizations &&
+                          releaseConfiguration.effectiveOptimizations.length > 0 && (
+                            <div>
+                              <dt>{t("projectPreview.effectiveCapabilities")}</dt>
+                              <dd>
+                                {releaseConfiguration.effectiveOptimizations.join(t("environmentCenter.listSeparator"))}
+                              </dd>
+                            </div>
+                          )}
+                        {releaseConfiguration.autoAddedOptimizations &&
+                          releaseConfiguration.autoAddedOptimizations.length > 0 && (
+                            <div>
+                              <dt>{t("projectPreview.automaticProtection")}</dt>
+                              <dd>
+                                {releaseConfiguration.autoAddedOptimizations.join(t("environmentCenter.listSeparator"))}
+                              </dd>
+                            </div>
+                          )}
+                        {releaseConfiguration.planHash && (
+                          <div>
+                            <dt>{t("projectPreview.planHash")}</dt>
+                            <dd className="pp-release-fact-long">
+                              {releaseConfiguration.planHash}
+                            </dd>
+                          </div>
+                        )}
                       </>
                     )}
                     </dl>
@@ -1927,13 +2620,13 @@ export function ProjectPreview({
           <div className="pp-sidebar">
             <div className="pp-sidebar-head">
               <span className="pp-project-name" title={project.name}>
-                文件预览
+                {t("projectPreview.files.preview")}
               </span>
               {editable && (
                 <button
                   type="button"
                   className="pp-icon-btn"
-                  title="新建文件"
+                  title={t("projectPreview.files.new")}
                   onClick={() => {
                     setAdding(true);
                     setNewPath("");
@@ -1962,7 +2655,7 @@ export function ProjectPreview({
                 />
               )}
               {project.files.length === 0 && !adding ? (
-                <div className="pp-empty">暂无文件</div>
+                <div className="pp-empty">{t("projectPreview.files.empty")}</div>
               ) : (
                 renderNode(tree, 0, "")
               )}
@@ -1972,7 +2665,7 @@ export function ProjectPreview({
           <div className="pp-main">
             <div className="pp-main-head">
               <span className="pp-path" title={selectedFile?.path}>
-                {selectedFile?.path ?? "未选择文件"}
+                {selectedFile?.path ?? t("projectPreview.files.noneSelected")}
               </span>
               <div className="pp-actions">
                 {editable && selectedFile && (
@@ -1980,7 +2673,7 @@ export function ProjectPreview({
                     <button
                       type="button"
                       className="pp-icon-btn"
-                      title="重命名"
+                      title={t("projectPreview.files.rename")}
                       onClick={handleRename}
                     >
                       <Pencil className="pp-ic" />
@@ -1988,7 +2681,7 @@ export function ProjectPreview({
                     <button
                       type="button"
                       className="pp-icon-btn pp-danger"
-                      title="删除"
+                      title={t("common.delete")}
                       onClick={handleDelete}
                     >
                       <Trash2 className="pp-ic" />
@@ -1999,10 +2692,10 @@ export function ProjectPreview({
             </div>
             <div className="pp-content">
               {selectedFile == null ? (
-                <div className="pp-placeholder">选择左侧文件以查看内容</div>
+                <div className="pp-placeholder">{t("projectPreview.files.selectToView")}</div>
               ) : editable ? (
                 <div className="pp-codemirror">
-                  <Suspense fallback={<div className="pp-editor-loading">加载编辑器…</div>}>
+                  <Suspense fallback={<div className="pp-editor-loading">{t("projectPreview.files.loadingEditor")}</div>}>
                     <CodeEditor
                       value={selectedFile.content}
                       path={selectedFile.path}
@@ -2023,9 +2716,9 @@ export function ProjectPreview({
         </div>
 
         {onDeploy && (
-          <aside className="pp-config" aria-label="部署配置">
+          <aside className="pp-config" aria-label={t("projectPreview.deploymentConfiguration")}>
             <div className="pp-config-head">
-              <div className="pp-config-title">部署配置</div>
+              <div className="pp-config-title">{t("projectPreview.deploymentConfiguration")}</div>
             </div>
             <div className="pp-config-scroll">
               {deploymentPrimaryPane}
@@ -2033,7 +2726,7 @@ export function ProjectPreview({
               {!deploymentPrimaryPane && (
                 <section className="pp-config-section">
                   <label className="pp-config-label" htmlFor={runtimeNameInputId}>
-                    Runtime 名称
+                    {t("projectPreview.runtimeName")}
                   </label>
                   <div className="pp-runtime-name-field">
                     <input
@@ -2043,7 +2736,7 @@ export function ProjectPreview({
                       disabled={deploying || runtimeNameChecking || isRuntimeUpdate}
                       maxLength={64}
                       autoComplete="off"
-                      aria-label="Runtime 名称"
+                      aria-label={t("projectPreview.runtimeName")}
                       aria-invalid={Boolean(runtimeNameError)}
                       aria-describedby={`${runtimeNameHelpId}${runtimeNameError ? ` ${runtimeNameErrorId}` : ""}`}
                       onChange={(event) => {
@@ -2059,8 +2752,8 @@ export function ProjectPreview({
                     />
                     <p id={runtimeNameHelpId} className="pp-config-note">
                       {isRuntimeUpdate
-                        ? "更新时保持现有 Runtime 名称不变。"
-                        : "默认根据 Root Agent 名称生成，并添加随机后缀避免重名；支持 4-64 位字母、数字、连字符和下划线"}
+                        ? t("projectPreview.runtimeNamePreserved")
+                        : t("projectPreview.runtimeNameHint")}
                     </p>
                     {runtimeNameError && (
                       <p
@@ -2077,27 +2770,28 @@ export function ProjectPreview({
 
               {!deploymentPrimaryPane && (
                 <section className="pp-config-section">
-                  <div className="pp-config-label">发布区域</div>
+                  <div className="pp-config-label">{t("projectPreview.releaseRegion")}</div>
                   {deploymentRegionPicker(false)}
                 </section>
               )}
 
               {!deploymentPrimaryPane && (
+                <>
                 <section className="pp-config-section pp-auth-section">
-                  <div className="pp-config-label">访问鉴权</div>
+                  <div className="pp-config-label">{t("projectPreview.accessAuthentication")}</div>
                   {isRuntimeUpdate ? (
                     <p className="pp-config-note pp-auth-preserved-note">
-                      更新时保持现有 Runtime 的鉴权方式不变。
+                      {t("projectPreview.authenticationPreserved")}
                     </p>
                   ) : (
                     <div className="pp-auth-fields">
                       <label>
-                        <span>鉴权方式</span>
+                        <span>{t("projectPreview.authenticationMethod")}</span>
                         <DeploymentSelect
-                          ariaLabel="部署鉴权方式"
+                          ariaLabel={t("projectPreview.authenticationAriaLabel")}
                           value={authenticationType}
-                          placeholder="请选择鉴权方式"
-                          options={DEPLOYMENT_AUTHENTICATION_OPTIONS}
+                          placeholder={t("projectPreview.authenticationPlaceholder")}
+                          options={deploymentAuthenticationOptions(t)}
                           disabled={deploying}
                           onChange={(value) => {
                             setDeployError(null);
@@ -2109,7 +2803,7 @@ export function ProjectPreview({
                       </label>
                       {authenticationType === "user_pool" && (
                         <label>
-                          <span>用户池</span>
+                          <span>{t("projectPreview.userPool.label")}</span>
                           <IdentityUserPoolSelect
                             value={userPoolUid}
                             disabled={deploying}
@@ -2123,119 +2817,75 @@ export function ProjectPreview({
                     </div>
                   )}
                 </section>
+                {showGitSync && <GithubCicdPanel
+                  project={project}
+                  region={deployRegion}
+                  cloudProvider={cloudProvider}
+                  runtimeId={deploymentRuntimeId}
+                  agentCategory={isMpaDeployment ? "mpa" : "general"}
+                  binding={githubCicdBinding}
+                  showSetup={!isRuntimeUpdate}
+                  onPendingCicdChange={setPendingGithubCicd}
+                  onBindingChange={handleGithubCicdBindingChange}
+                  disabled={
+                    deploying ||
+                    feishuUpdating ||
+                    deployDisabled ||
+                    !!deployDisabledReason
+                  }
+                />}
+                </>
               )}
 
-              {!deploymentPrimaryPane && (
+              {!deploymentPrimaryPane && showMessageChannels && (
                 <section className="pp-config-section">
-                <div className="pp-config-label">消息渠道</div>
-                <div
-                  className={`pp-channel-card${feishuEnabled ? " is-flipped" : ""}`}
-                >
-                  <div className="pp-channel-card-inner">
-                    <button
-                      type="button"
-                      className="pp-channel-card-face pp-channel-card-front"
-                      aria-pressed={feishuEnabled}
-                      aria-hidden={feishuEnabled}
-                      tabIndex={feishuEnabled ? -1 : 0}
-                      onClick={() => void handleFeishuToggle()}
-                      disabled={
-                        feishuEnabled ||
-                        deploying ||
-                        runtimeNameChecking ||
-                        feishuUpdating ||
-                        !onFeishuEnabledChange
-                      }
-                    >
-                      <span className="pp-channel-logo">
-                        <img src={feishuLogo} alt="" />
-                      </span>
-                      <span className="pp-channel-card-copy">
-                        <strong>飞书</strong>
-                        <small>
-                          {feishuUpdating
-                            ? "正在启用并更新配置…"
-                            : "接收消息并通过飞书机器人回复"}
-                        </small>
-                      </span>
-                    </button>
-                    <div
-                      className="pp-channel-card-face pp-channel-card-back"
-                      aria-hidden={!feishuEnabled}
-                    >
-                      <div className="pp-channel-card-head">
-                        <strong>飞书配置</strong>
-                        <button
-                          type="button"
-                          className="pp-channel-remove"
-                          tabIndex={feishuEnabled ? 0 : -1}
-                          onClick={() => void handleFeishuToggle()}
-                          disabled={
-                            !feishuEnabled ||
-                            deploying ||
-                            feishuUpdating ||
-                            !onFeishuEnabledChange
-                          }
-                        >
-                          {feishuUpdating ? "取消中…" : "取消"}
-                        </button>
-                      </div>
-                      <div className="pp-channel-fields">
-                        {FEISHU_ENV.map((env) => (
-                          <label key={env.key}>
-                            <span>
-                              {env.comment || env.key}
-                              {env.required && <small>必填</small>}
-                            </span>
-                            <input
-                              type={
-                                env.key.includes("SECRET") ? "password" : "text"
-                              }
-                              value={deploymentEnvValues[env.key] ?? ""}
-                              placeholder={env.placeholder}
-                              tabIndex={feishuEnabled ? 0 : -1}
-                              disabled={
-                                !feishuEnabled ||
-                                deploying ||
-                                !onDeploymentEnvChange
-                              }
-                              autoComplete="off"
-                              onChange={(event) =>
-                                onDeploymentEnvChange?.(
-                                  env.key,
-                                  event.currentTarget.value,
-                                )
-                              }
-                            />
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <div className="pp-config-label">{t("projectPreview.messageChannels")}</div>
+                <FeishuDeploymentCard
+                  enabled={feishuEnabled}
+                  updating={feishuUpdating}
+                  disabled={
+                    deploying ||
+                    runtimeNameChecking ||
+                    !onFeishuEnabledChange ||
+                    !onFeishuCredentialsChange
+                  }
+                  agentName={agentName || project.name}
+                  appId={deploymentEnvValues.FEISHU_APP_ID ?? ""}
+                  appSecret={deploymentEnvValues.FEISHU_APP_SECRET ?? ""}
+                  appIdConfigured={configuredRuntimeEnvKeySet.has(
+                    "FEISHU_APP_ID",
+                  )}
+                  appSecretConfigured={configuredRuntimeEnvKeySet.has(
+                    "FEISHU_APP_SECRET",
+                  )}
+                  onToggle={handleFeishuToggle}
+                  onCredentialsChange={(appId, appSecret) => {
+                    onFeishuCredentialsChange?.(appId, appSecret);
+                  }}
+                />
               </section>
               )}
 
               {!isRuntimeUpdate && (
                 <section className="pp-config-section">
-                  <div className="pp-config-label">实例设置</div>
+                  <div className="pp-config-label">{t("projectPreview.instanceSettings")}</div>
                   <div className="pp-instance-fields">
                     <label htmlFor="runtime-min-instance">
-                      <span>最小实例数</span>
+                      <span>{t("projectPreview.minInstances")}</span>
                       <input
                         id="runtime-min-instance"
                         type="number"
-                        min="1"
+                        min="0"
                         step="1"
                         inputMode="numeric"
                         value={minInstance}
-                        disabled={deploying}
+                        disabled={deploying || sidecarEnabled}
                         aria-invalid={!instanceRange.valid}
                         onChange={(event) => setMinInstance(event.currentTarget.value)}
                       />
                     </label>
                     <label htmlFor="runtime-max-instance">
-                      <span>最大实例数</span>
+                      <span>{t("projectPreview.maxInstances")}</span>
                       <input
                         id="runtime-max-instance"
                         type="number"
@@ -2243,15 +2893,17 @@ export function ProjectPreview({
                         step="1"
                         inputMode="numeric"
                         value={maxInstance}
-                        disabled={deploying}
+                        disabled={deploying || sidecarEnabled}
                         aria-invalid={!instanceRange.valid}
                         onChange={(event) => setMaxInstance(event.currentTarget.value)}
                       />
                     </label>
                   </div>
-                  {inMemorySession && (
+                  {(inMemorySession || sidecarEnabled) && (
                     <p className="pp-instance-note" role="note">
-                      为避免多实例间会话丢失，推荐将 Runtime 固定为 1～1
+                      {sidecarEnabled
+                        ? t("projectPreview.sidecarSingleInstance")
+                        : t("projectPreview.inMemorySingleInstance")}
                     </p>
                   )}
                   {!instanceRange.valid && (
@@ -2263,13 +2915,13 @@ export function ProjectPreview({
               )}
 
               <section className="pp-config-section">
-                <div className="pp-config-label">网络</div>
+                <div className="pp-config-label">{t("projectPreview.network")}</div>
                 {deploymentPrimaryPane && deploymentRegionPicker(true)}
                 {isRuntimeUpdate && (
-                  <p className="pp-config-note">现有 Runtime 的区域与网络模式保持不变。</p>
+                  <p className="pp-config-note">{t("projectPreview.networkPreserved")}</p>
                 )}
                 <div className="pp-network-layout">
-                  <div className="pp-network-modes" role="radiogroup" aria-label="网络模式">
+                  <div className="pp-network-modes" role="radiogroup" aria-label={t("projectPreview.networkMode")}>
                     {(["public", "private", "both"] as const).map((mode) => (
                       <label className="pp-network-option" key={mode}>
                         <input
@@ -2282,10 +2934,10 @@ export function ProjectPreview({
                         />
                         <span>
                           {mode === "public"
-                            ? "公网"
+                            ? t("projectPreview.networkModes.public")
                             : mode === "private"
                               ? "VPC"
-                              : "公网 + VPC"}
+                              : t("projectPreview.networkModes.both")}
                         </span>
                       </label>
                     ))}
@@ -2302,7 +2954,7 @@ export function ProjectPreview({
                         />
                       </label>
                       <label>
-                        <span>子网 ID <small>可选，多个用逗号分隔</small></span>
+                        <span>{t("projectPreview.subnetId")} <small>{t("projectPreview.subnetHint")}</small></span>
                         <input
                           value={network?.subnetIds ?? ""}
                           placeholder="subnet-xxx, subnet-yyy"
@@ -2319,7 +2971,7 @@ export function ProjectPreview({
                             patchNetwork({ enableSharedInternetAccess: e.target.checked })
                           }
                         />
-                        VPC 内共享公网出口
+                        {t("projectPreview.sharedInternetAccess")}
                       </label>
                     </div>
                   )}
@@ -2328,7 +2980,7 @@ export function ProjectPreview({
 
               {supportsEvaluationSets && (
                 <section className="pp-config-section">
-                  <div className="pp-config-label">评测集</div>
+                  <div className="pp-config-label">{t("projectPreview.evaluationSets")}</div>
                   <label className="pp-evaluation-set-option">
                     <input
                       type="checkbox"
@@ -2339,9 +2991,9 @@ export function ProjectPreview({
                       }
                     />
                     <span>
-                      <strong>自动创建评测集</strong>
+                      <strong>{t("projectPreview.createEvaluationSets")}</strong>
                       <small>
-                        部署成功后，自动创建 Good Case 和 Bad Case 评测集。
+                        {t("projectPreview.createEvaluationSetsHint")}
                       </small>
                     </span>
                   </label>
@@ -2350,7 +3002,7 @@ export function ProjectPreview({
 
               {!isRuntimeUpdate && (
                 <section className="pp-config-section pp-resource-section">
-                  <div className="pp-config-label">资源配置</div>
+                  <div className="pp-config-label">{t("projectPreview.resourceConfiguration")}</div>
                   <DeploymentResources
                     value={deployResources}
                     agentName={agentName || project.name || "agentkit-app"}
@@ -2370,13 +3022,13 @@ export function ProjectPreview({
                 <div className="pp-env-head">
                   <div>
                     <div className="pp-config-label">
-                      环境变量
+                      {t("projectPreview.environmentVariables")}
                       <span className="pp-agent-child-count pp-env-count">
-                        {environmentVariableCount} 项
+                        {t("projectPreview.itemCount", { count: environmentVariableCount })}
                       </span>
                     </div>
                     <div className="pp-env-sub">
-                      组件配置会自动同步到这里，部署前可核对最终值。
+                      {t("projectPreview.environmentVariablesHint")}
                     </div>
                   </div>
                 </div>
@@ -2387,7 +3039,7 @@ export function ProjectPreview({
                   disabled={deploying}
                 >
                   <Plus className="pp-ic" />
-                  添加变量
+                  {t("projectPreview.addVariable")}
                 </button>
                 {(automaticEnvRows.length > 0 ||
                   requiredSecretEnv.length > 0 ||
@@ -2396,8 +3048,8 @@ export function ProjectPreview({
                     {automaticEnvRows.length > 0 && (
                       <div className="pp-env-group">
                         <div className="pp-env-group-head">
-                          <span>组件自动生成</span>
-                          <small>{automaticEnvRows.length} 项</small>
+                          <span>{t("projectPreview.componentGenerated")}</span>
+                          <small>{t("projectPreview.itemCount", { count: automaticEnvRows.length })}</small>
                         </div>
                         {automaticEnvRows.map((row) => {
                           const fixed =
@@ -2408,12 +3060,18 @@ export function ProjectPreview({
                           const displayedValue = serverManagedModelApiKey
                             ? modelApiKeyRevealVisible
                               ? currentModelApiKeyRevealState.value
-                              : "由所选 API Key 注入"
+                              : t("projectPreview.injectedByApiKey")
                             : row.value;
                           const jsonError = runtimeEnvJsonError(
                             row,
                             deploymentEnvValues,
                           );
+                          const fieldError = deploymentEnvErrors[row.key];
+                          const errorId = `deployment-env-${row.key.toLowerCase()}-error`;
+                          const helpText =
+                            runtimeEnvRequirementHint(row) ||
+                            row.help ||
+                            row.comment;
                           const multiline = row.multiline || row.format === "json";
                           return (
                             <div
@@ -2422,20 +3080,20 @@ export function ProjectPreview({
                             >
                               <div
                                 className="pp-env-key-fixed pp-env-key-cell"
-                                aria-label={`${row.key} 环境变量名`}
+                                aria-label={t("projectPreview.envNameAriaLabel", { key: row.key })}
                                 aria-disabled={deploying}
                               >
                                 <span title={row.key}>{row.key}</span>
-                                {(row.help || row.comment) && (
+                                {helpText && (
                                   <span
                                     className="pp-env-help"
                                     tabIndex={0}
-                                    data-help={row.help || row.comment}
-                                    aria-label={`${row.key}说明：${row.help || row.comment}`}
+                                    data-help={helpText}
+                                    aria-label={t("projectPreview.envDescriptionAriaLabel", { key: row.key, description: helpText })}
                                   >
                                     ?
                                     <span className="pp-env-help-popover" role="tooltip">
-                                      {row.help || row.comment}
+                                      {helpText}
                                     </span>
                                   </span>
                                 )}
@@ -2445,8 +3103,8 @@ export function ProjectPreview({
                                     href={row.link.url}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    title={`打开 OpenViking ${row.link.label}`}
-                                    aria-label={`${row.key}：打开 OpenViking ${row.link.label}`}
+                                    title={t("projectPreview.openOpenViking", { label: row.link.label })}
+                                    aria-label={t("projectPreview.openOpenVikingAriaLabel", { key: row.key, label: row.link.label })}
                                   >
                                     <ExternalLink aria-hidden="true" />
                                   </a>
@@ -2455,10 +3113,23 @@ export function ProjectPreview({
                               <div className="pp-env-value-wrap">
                                 {multiline ? (
                                   <textarea
+                                    ref={(element) => {
+                                      if (element) {
+                                        deploymentEnvInputRefs.current.set(
+                                          row.key,
+                                          element,
+                                        );
+                                      } else {
+                                        deploymentEnvInputRefs.current.delete(row.key);
+                                      }
+                                    }}
                                     className="pp-env-value pp-env-json-value"
                                     value={row.value}
                                     placeholder={
-                                      row.required ? "必填，尚未填写" : "可选，尚未填写"
+                                      row.placeholder ||
+                                      (row.required
+                                        ? t("projectPreview.requiredEmpty")
+                                        : t("projectPreview.optionalEmpty"))
                                     }
                                     readOnly={fixed}
                                     disabled={
@@ -2466,14 +3137,22 @@ export function ProjectPreview({
                                     }
                                     autoComplete="off"
                                     spellCheck={false}
-                                    aria-invalid={!!jsonError}
-                                    aria-label={`${row.key} 环境变量值`}
-                                    onChange={(event) =>
+                                    aria-invalid={Boolean(fieldError || jsonError)}
+                                    aria-describedby={
+                                      fieldError ? errorId : undefined
+                                    }
+                                    aria-label={t("projectPreview.envValueAriaLabel", { key: row.key })}
+                                    onChange={(event) => {
+                                      const value = event.currentTarget.value;
                                       onDeploymentEnvChange?.(
                                         row.key,
-                                        event.currentTarget.value,
-                                      )
-                                    }
+                                        value,
+                                      );
+                                      if (fieldError && value.trim()) {
+                                        clearDeploymentEnvError(row.key);
+                                        setDeployError(null);
+                                      }
+                                    }}
                                   />
                                 ) : (
                                   <div
@@ -2484,6 +3163,18 @@ export function ProjectPreview({
                                     }
                                   >
                                     <input
+                                      ref={(element) => {
+                                        if (element) {
+                                          deploymentEnvInputRefs.current.set(
+                                            row.key,
+                                            element,
+                                          );
+                                        } else {
+                                          deploymentEnvInputRefs.current.delete(
+                                            row.key,
+                                          );
+                                        }
+                                      }}
                                       className="pp-env-value"
                                       type={
                                         serverManagedModelApiKey
@@ -2494,9 +3185,10 @@ export function ProjectPreview({
                                       }
                                       value={displayedValue}
                                       placeholder={
-                                        row.required
-                                          ? "必填，尚未填写"
-                                          : "可选，尚未填写"
+                                        row.placeholder ||
+                                        (row.required
+                                          ? t("projectPreview.requiredEmpty")
+                                          : t("projectPreview.optionalEmpty"))
                                       }
                                       readOnly={fixed}
                                       disabled={
@@ -2507,14 +3199,22 @@ export function ProjectPreview({
                                         row.secret ? "new-password" : "off"
                                       }
                                       spellCheck={row.secret ? false : undefined}
-                                      aria-invalid={!!jsonError}
-                                      aria-label={`${row.key} 环境变量值`}
-                                      onChange={(event) =>
+                                      aria-invalid={Boolean(fieldError || jsonError)}
+                                      aria-describedby={
+                                        fieldError ? errorId : undefined
+                                      }
+                                      aria-label={t("projectPreview.envValueAriaLabel", { key: row.key })}
+                                      onChange={(event) => {
+                                        const value = event.currentTarget.value;
                                         onDeploymentEnvChange?.(
                                           row.key,
-                                          event.currentTarget.value,
-                                        )
-                                      }
+                                          value,
+                                        );
+                                        if (fieldError && value.trim()) {
+                                          clearDeploymentEnvError(row.key);
+                                          setDeployError(null);
+                                        }
+                                      }}
                                     />
                                     {serverManagedModelApiKey && (
                                       <button
@@ -2550,6 +3250,15 @@ export function ProjectPreview({
                                     )}
                                   </div>
                                 )}
+                                {fieldError && (
+                                  <span
+                                    id={errorId}
+                                    className="pp-env-error"
+                                    role="alert"
+                                  >
+                                    {fieldError}
+                                  </span>
+                                )}
                                 {jsonError && (
                                   <span className="pp-env-error">{jsonError}</span>
                                 )}
@@ -2565,7 +3274,7 @@ export function ProjectPreview({
                                   )}
                               </div>
                               <span className="pp-env-source">
-                                {fixed ? "自动" : "同步"}
+                                {fixed ? t("projectPreview.automatic") : t("projectPreview.synced")}
                               </span>
                             </div>
                           );
@@ -2575,12 +3284,15 @@ export function ProjectPreview({
                     {requiredSecretEnv.length > 0 && (
                       <div className="pp-env-group">
                         <div className="pp-env-group-head">
-                          <span>自定义模型凭据</span>
-                          <small>{requiredSecretEnv.length} 项</small>
+                          <span>{t("projectPreview.customModelCredentials")}</span>
+                          <small>{t("projectPreview.itemCount", { count: requiredSecretEnv.length })}</small>
                         </div>
                         {requiredSecretEnv.map((env) => {
                           const invalid = secretEnvErrorKey === env.key;
                           const errorId = `${env.key.toLowerCase()}-error`;
+                          const value = effectiveSecretEnvValues[env.key] ?? "";
+                          const configuredSecret =
+                            configuredRuntimeEnvKeySet.has(env.key);
                           return (
                             <div
                               className="pp-env-row pp-env-row-derived"
@@ -2598,8 +3310,12 @@ export function ProjectPreview({
                                   id={env.key}
                                   className="pp-env-value"
                                   type="password"
-                                  value={effectiveSecretEnvValues[env.key] ?? ""}
-                                  placeholder="必填，仅用于本次发布"
+                                  value={value}
+                                  placeholder={
+                                    configuredSecret && !value
+                                      ? "••••••"
+                                      : t("projectPreview.releaseOnlySecret")
+                                  }
                                   disabled={deploying}
                                   autoComplete="new-password"
                                   spellCheck={false}
@@ -2628,11 +3344,15 @@ export function ProjectPreview({
                                     className="pp-env-error"
                                     role="alert"
                                   >
-                                    请填写此模型地址对应的 API Key。
+                                    {t("projectPreview.errors.modelApiKeyRequired")}
                                   </span>
                                 )}
                               </div>
-                              <span className="pp-env-source">本次发布</span>
+                              <span className="pp-env-source">
+                                {configuredSecret && !value.trim()
+                                  ? t("projectPreview.synced")
+                                  : t("projectPreview.thisRelease")}
+                              </span>
                             </div>
                           );
                         })}
@@ -2640,15 +3360,15 @@ export function ProjectPreview({
                     )}
                     {envRows.length > 0 && (
                       <div className="pp-env-group-head pp-env-group-head-custom">
-                        <span>自定义变量</span>
-                        <small>{envRows.length} 项</small>
+                        <span>{t("projectPreview.customVariables")}</span>
+                        <small>{t("projectPreview.itemCount", { count: envRows.length })}</small>
                       </div>
                     )}
                     {envRows.map((row) => (
                       <div className="pp-env-row" key={row.id}>
                         <input
                           value={row.key}
-                          placeholder="名称"
+                          placeholder={t("common.name")}
                           disabled={deploying}
                           autoComplete="off"
                           onChange={(e) => updateEnvRow(row.id, { key: e.currentTarget.value })}
@@ -2656,7 +3376,7 @@ export function ProjectPreview({
                         <input
                           type="text"
                           value={row.value}
-                          placeholder="值"
+                          placeholder={t("projectPreview.value")}
                           disabled={deploying}
                           autoComplete="off"
                           onChange={(e) => updateEnvRow(row.id, { value: e.currentTarget.value })}
@@ -2664,7 +3384,7 @@ export function ProjectPreview({
                         <button
                           type="button"
                           className="pp-icon-btn pp-env-remove"
-                          title="删除变量"
+                          title={t("projectPreview.deleteVariable")}
                           disabled={deploying}
                           onClick={() => removeEnvRow(row.id)}
                         >
@@ -2678,7 +3398,7 @@ export function ProjectPreview({
 
               {(deploying || deployResult || Object.keys(stageMap).length > 0) && (
                 <section className="pp-config-section pp-progress-section">
-                  <div className="pp-config-label">部署进度</div>
+                  <div className="pp-config-label">{t("projectPreview.deploymentProgress")}</div>
                   <ol className="pp-steps">
                     {deploymentSteps.map((step, index) => {
                       const activeIndex = activePhase
@@ -2687,14 +3407,14 @@ export function ProjectPreview({
                       const failed =
                         !!deployError &&
                         (activeIndex === -1 ? index === 0 : index === activeIndex);
+                      const frame = stageMap[step.phase];
                       let status: "pending" | "active" | "done" | "failed";
-                      if (deployResult) status = "done";
+                      if (deployResult || frame?.level === "success") status = "done";
                       else if (failed) status = "failed";
                       else if (activeIndex === -1) status = deploying ? "active" : "pending";
                       else if (index < activeIndex) status = "done";
                       else if (index === activeIndex) status = deployError ? "failed" : "active";
                       else status = "pending";
-                      const frame = stageMap[step.phase];
                       return (
                         <li key={step.phase} className={`pp-step is-${status}`}>
                           <span className="pp-step-dot">
@@ -2712,7 +3432,7 @@ export function ProjectPreview({
                             <span className="pp-step-label">{step.label}</span>
                             {status === "active" && frame?.message && (
                               <span className="pp-step-msg">
-                                {frame.message}
+                                {localizeDeployStageMessage(frame)}
                                 {typeof frame.pct === "number" ? ` (${frame.pct}%)` : ""}
                               </span>
                             )}
@@ -2727,23 +3447,35 @@ export function ProjectPreview({
               {deployError && (
                 <DeploymentErrorMessage
                   className="pp-error"
-                  message={`${activePhase
-                    ? `${isRuntimeUpdate ? "更新" : "部署"}失败（${
-                        deploymentSteps.find((step) => step.phase === activePhase)?.label ??
-                        activePhase
-                      }阶段）：`
-                    : ""}${deployError}`}
+                  message={
+                    activePhase
+                      ? t("projectPreview.errors.failedAtStage", {
+                          action: isRuntimeUpdate ? t("projectPreview.update") : t("projectPreview.deploy"),
+                          stage: deploymentSteps.find(
+                            (step) => step.phase === activePhase,
+                          )?.label ?? activePhase,
+                          message: deployError,
+                        })
+                      : deployError
+                  }
                   onRetry={requestDeploymentConfirmation}
                   retryLabel={
-                    isRuntimeUpdate ? "重试更新" : "重试部署"
+                    isRuntimeUpdate ? t("projectPreview.retryUpdate") : t("projectPreview.retryDeploy")
                   }
                 />
+              )}
+
+              {deploymentStatusUnconfirmed && (
+                <div className="pp-status-unconfirmed" role="status">
+                  <strong>{t("projectPreview.task.deploymentStatusUnconfirmed")}</strong>
+                  <span>{t("projectPreview.errors.deploymentStatusUnconfirmed")}</span>
+                </div>
               )}
 
               {deployResult && (
                 <section className="pp-deploy-result">
                   <div className="pp-deploy-result-header">
-                    {isRuntimeUpdate ? "更新成功" : "部署成功"}
+                    {isRuntimeUpdate ? t("projectPreview.updateSucceeded") : t("projectPreview.deploySucceeded")}
                   </div>
                   <div className="pp-deploy-result-body">
                     {deployResult.warnings && deployResult.warnings.length > 0 && (
@@ -2755,22 +3487,22 @@ export function ProjectPreview({
                     )}
                     {deployResult.region && (
                       <div className="pp-deploy-result-field">
-                        <label>区域</label>
+                        <label>{t("projectPreview.region")}</label>
                         <code>
                           {formatCloudRegion(deployResult.region, cloudProvider)}
                         </code>
                       </div>
                     )}
                     <div className="pp-deploy-result-field">
-                      <label>Agent 名称</label>
+                      <label>{t("projectPreview.agentName")}</label>
                       <code>{deployResult.agentName}</code>
                     </div>
                     <div className="pp-deploy-result-field">
-                      <label>Runtime 名称</label>
+                      <label>{t("projectPreview.runtimeName")}</label>
                       <code>{deployResult.runtimeName}</code>
                     </div>
                     <div className="pp-deploy-result-field">
-                      <label>API 端点</label>
+                      <label>{t("projectPreview.apiEndpoint")}</label>
                       <code className="pp-deploy-result-url">{deployResult.url}</code>
                     </div>
                   </div>
@@ -2786,7 +3518,7 @@ export function ProjectPreview({
                       ) : (
                         <MessageSquare className="pp-ic" />
                       )}
-                      {addingAgent ? "连接中…" : "立即对话"}
+                      {addingAgent ? t("projectPreview.connecting") : t("projectPreview.chatNow")}
                     </button>
                     {deployResult.consoleUrl && (
                       <a
@@ -2796,7 +3528,7 @@ export function ProjectPreview({
                         className="pp-console-link pp-console-link-btn"
                       >
                         <ExternalLink className="pp-ic" />
-                        控制台
+                        {t("projectPreview.console")}
                       </a>
                     )}
                   </div>
@@ -2814,6 +3546,7 @@ export function ProjectPreview({
                       onClick={requestDeploymentConfirmation}
                       disabled={
                         deploying ||
+                        deploymentStatusUnconfirmed ||
                         runtimeNameChecking ||
                         feishuUpdating ||
                         deployDisabled ||
@@ -2823,12 +3556,14 @@ export function ProjectPreview({
                       title={deployDisabledReason || runtimeNameError || undefined}
                     >
                       {deploying
-                        ? `${deploymentActionLabel}中…`
-                        : runtimeNameChecking
-                          ? "正在检查名称…"
-                        : deployError
-                          ? `重试${deploymentActionLabel}`
-                          : deploymentActionLabel}
+                        ? t("projectPreview.actionInProgress", { action: deploymentActionLabel })
+                        : deploymentStatusUnconfirmed
+                          ? t("projectPreview.task.deploymentStatusUnconfirmed")
+                          : runtimeNameChecking
+                            ? t("projectPreview.checkingName")
+                            : deployError
+                              ? t("projectPreview.retryAction", { action: deploymentActionLabel })
+                              : deploymentActionLabel}
                     </button>,
                     deploymentActionTarget,
                   )
@@ -2839,6 +3574,7 @@ export function ProjectPreview({
                 onClick={requestDeploymentConfirmation}
                 disabled={
                   deploying ||
+                  deploymentStatusUnconfirmed ||
                   runtimeNameChecking ||
                   feishuUpdating ||
                   deployDisabled ||
@@ -2848,12 +3584,14 @@ export function ProjectPreview({
                 title={deployDisabledReason || runtimeNameError || undefined}
               >
                 {deploying
-                  ? `${deploymentActionLabel}中…`
-                  : runtimeNameChecking
-                    ? "正在检查名称…"
-                  : deployError
-                    ? `重试${deploymentActionLabel}`
-                    : deploymentActionLabel}
+                  ? t("projectPreview.actionInProgress", { action: deploymentActionLabel })
+                  : deploymentStatusUnconfirmed
+                    ? t("projectPreview.task.deploymentStatusUnconfirmed")
+                    : runtimeNameChecking
+                      ? t("projectPreview.checkingName")
+                      : deployError
+                        ? t("projectPreview.retryAction", { action: deploymentActionLabel })
+                        : deploymentActionLabel}
               </button>
                   )}
             </div>
@@ -2874,17 +3612,17 @@ export function ProjectPreview({
               className="pp-flow-dialog"
               role="dialog"
               aria-modal="true"
-              aria-label="执行流程预览"
+              aria-label={t("projectPreview.flowPreview")}
             >
               <header>
                 <div>
-                  <strong>执行流程</strong>
-                  <span>只读预览，可缩放与拖动画布</span>
+                  <strong>{t("projectPreview.executionFlow")}</strong>
+                  <span>{t("projectPreview.flowPreviewHint")}</span>
                 </div>
                 <button
                   type="button"
                   onClick={() => setFlowPreviewOpen(false)}
-                  aria-label="关闭执行流程预览"
+                  aria-label={t("projectPreview.closeFlowPreview")}
                 >
                   <X aria-hidden />
                 </button>
@@ -2909,6 +3647,7 @@ export function ProjectPreview({
       <DeploymentConfirmDialog
         open={deployConfirmOpen}
         isUpdate={isRuntimeUpdate}
+        {...deploymentConfirmation}
         onCancel={cancelDeploymentConfirmation}
         onConfirm={() => void performDeployment()}
       />

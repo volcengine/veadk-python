@@ -1,0 +1,215 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Stage VeADK's public Sidecar integration in a managed build snapshot."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import shutil
+import struct
+from dataclasses import dataclass
+from pathlib import Path
+
+
+_REQUIREMENT_NAME_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)")
+_REMOVED_DISTRIBUTIONS = {
+    "agentkit-sdk-python",
+    "agentkit-harness-sidecar-integration",
+    "google-adk",
+    "mcp",
+    "veadk-python",
+}
+_MANAGED_SDK_REQUIREMENT = "agentkit-sdk-python==0.8.1"
+_MANAGED_MCP_REQUIREMENT = "mcp==1.26.0"
+_MANAGED_ADK_REQUIREMENT = "google-adk>=1.34.0"
+_IGNORED_PARTS = {".git", "__pycache__", "assets", "webui"}
+_IGNORED_SUFFIXES = {".pyc", ".pyo"}
+_BLOCKED_SUFFIXES = {".key", ".p12", ".pem", ".pfx"}
+_REQUIRED_SOURCE_FILES = (
+    "__init__.py",
+    "extensions/harness/__init__.py",
+    "extensions/harness/sidecar.py",
+    "extensions/harness/sidecar_runtime/mcp_client.py",
+    "extensions/harness/sidecar_runtime/mcp_loopback_proxy.py",
+    "extensions/harness/sidecar_runtime/mcp_upstream_proxy.py",
+    "extensions/harness/sidecar_runtime/sidecar.py",
+    "integrations/agentkit/app.py",
+)
+_MAX_SOURCE_FILE_BYTES = 8 * 1024 * 1024
+_MAX_SOURCE_TOTAL_BYTES = 16 * 1024 * 1024
+MANAGED_SIDECAR_SOURCE_SCHEMA = "veadk.managed-sidecar-source/v1"
+MANAGED_SIDECAR_SOURCE_MARKER = ".veadk-managed-sidecar-source.json"
+_SOURCE_FINGERPRINT_DOMAIN = f"{MANAGED_SIDECAR_SOURCE_SCHEMA}\0".encode()
+
+
+class ManagedSidecarSourceError(RuntimeError):
+    """The managed source snapshot cannot be constructed safely."""
+
+
+@dataclass(frozen=True)
+class ManagedSidecarSourceSnapshot:
+    file_count: int
+    total_bytes: int
+    sha256: str
+
+
+def _canonical_requirement_name(line: str) -> str | None:
+    normalized = line.strip()
+    if not normalized or normalized.startswith(("#", "-")):
+        return None
+    match = _REQUIREMENT_NAME_RE.match(normalized)
+    if match is None:
+        return None
+    return match.group(1).lower().replace("_", "-").replace(".", "-")
+
+
+def rewrite_managed_sidecar_requirements(requirements: str) -> str:
+    """Use in-snapshot VeADK and install approved runtime dependencies."""
+
+    lines: list[str] = []
+    veadk_removed = False
+    for line in requirements.splitlines():
+        name = _canonical_requirement_name(line)
+        if name in _REMOVED_DISTRIBUTIONS:
+            veadk_removed = veadk_removed or name == "veadk-python"
+            continue
+        lines.append(line)
+    if not veadk_removed:
+        raise ManagedSidecarSourceError("veadk_requirement_missing")
+    lines = [
+        "# veadk-python is provided by the managed Sidecar platform contract.",
+        _MANAGED_SDK_REQUIREMENT,
+        _MANAGED_MCP_REQUIREMENT,
+        _MANAGED_ADK_REQUIREMENT,
+        *lines,
+    ]
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _source_files(package_dir: Path) -> list[tuple[Path, Path, int]]:
+    files: list[tuple[Path, Path, int]] = []
+    total_bytes = 0
+    for source in sorted(package_dir.rglob("*")):
+        relative = source.relative_to(package_dir)
+        if any(
+            part in _IGNORED_PARTS or part.startswith(".") for part in relative.parts
+        ):
+            continue
+        if source.is_symlink():
+            raise ManagedSidecarSourceError("source_symlink_forbidden")
+        if not source.is_file() or source.suffix.lower() in _IGNORED_SUFFIXES:
+            continue
+        if source.suffix.lower() in _BLOCKED_SUFFIXES:
+            raise ManagedSidecarSourceError("sensitive_source_type_forbidden")
+        size = source.stat().st_size
+        if size > _MAX_SOURCE_FILE_BYTES:
+            raise ManagedSidecarSourceError("source_file_too_large")
+        total_bytes += size
+        if total_bytes > _MAX_SOURCE_TOTAL_BYTES:
+            raise ManagedSidecarSourceError("source_snapshot_too_large")
+        files.append((source, relative, size))
+    return files
+
+
+def _fingerprint_source_files(files: list[tuple[Path, Path, int]]) -> str:
+    digest = hashlib.sha256(_SOURCE_FINGERPRINT_DOMAIN)
+    for source, relative, size in files:
+        relative_bytes = relative.as_posix().encode("utf-8")
+        digest.update(struct.pack(">Q", len(relative_bytes)))
+        digest.update(relative_bytes)
+        digest.update(struct.pack(">Q", size))
+        with source.open("rb") as source_file:
+            while chunk := source_file.read(1024 * 1024):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _validated_source_root(package_dir: Path | None) -> Path:
+    source_root = (package_dir or Path(__file__).resolve().parents[1]).resolve()
+    if source_root.name != "veadk" or any(
+        not (source_root / relative).is_file() for relative in _REQUIRED_SOURCE_FILES
+    ):
+        raise ManagedSidecarSourceError("managed_source_incomplete")
+    return source_root
+
+
+def _snapshot_from_files(
+    files: list[tuple[Path, Path, int]],
+) -> ManagedSidecarSourceSnapshot:
+    return ManagedSidecarSourceSnapshot(
+        file_count=len(files),
+        total_bytes=sum(size for _source, _relative, size in files),
+        sha256=_fingerprint_source_files(files),
+    )
+
+
+def managed_sidecar_source_snapshot(
+    package_dir: Path | None = None,
+) -> ManagedSidecarSourceSnapshot:
+    """Fingerprint the public VeADK source owned by a managed Sidecar base."""
+
+    return _snapshot_from_files(_source_files(_validated_source_root(package_dir)))
+
+
+def _marker_payload(snapshot: ManagedSidecarSourceSnapshot) -> dict[str, int | str]:
+    return {
+        "fileCount": snapshot.file_count,
+        "schemaVersion": MANAGED_SIDECAR_SOURCE_SCHEMA,
+        "sha256": snapshot.sha256,
+        "totalBytes": snapshot.total_bytes,
+    }
+
+
+def stage_managed_sidecar_veadk_source(
+    project_dir: Path,
+    *,
+    package_dir: Path | None = None,
+) -> ManagedSidecarSourceSnapshot:
+    """Copy public VeADK runtime source into one ephemeral deployment tree."""
+
+    project_dir = project_dir.resolve()
+    source_root = _validated_source_root(package_dir)
+
+    requirements_path = project_dir / "requirements.txt"
+    if not requirements_path.is_file():
+        raise ManagedSidecarSourceError("requirements_missing")
+    target_root = project_dir / "veadk"
+    if target_root.exists():
+        raise ManagedSidecarSourceError("managed_source_target_exists")
+    marker_path = project_dir / MANAGED_SIDECAR_SOURCE_MARKER
+    if marker_path.exists():
+        raise ManagedSidecarSourceError("managed_source_marker_exists")
+
+    rewritten = rewrite_managed_sidecar_requirements(
+        requirements_path.read_text(encoding="utf-8")
+    )
+    files = _source_files(source_root)
+    snapshot = _snapshot_from_files(files)
+
+    target_root.mkdir(mode=0o755)
+    for source, relative, _size in files:
+        target = target_root / relative
+        target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        target.chmod(source.stat().st_mode & 0o777)
+    requirements_path.write_text(rewritten, encoding="utf-8")
+    marker_path.write_text(
+        json.dumps(_marker_payload(snapshot), sort_keys=True, separators=(",", ":"))
+        + "\n",
+        encoding="utf-8",
+    )
+    return snapshot

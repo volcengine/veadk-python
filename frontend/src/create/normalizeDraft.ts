@@ -4,10 +4,18 @@ import {
   type AgentDraft,
   type CloudCliToolId,
   type CustomTool,
+  type HarnessSidecarIntent,
+  type HarnessSidecarOptionId,
+  type HarnessSidecarProfileId,
   type SelectedSkill,
 } from "./types";
 import { createBuiltinToolsForProvider, DEFAULT_KB_BACKEND } from "./veadkCatalog";
 import type { CloudProvider } from "../adk/cloudProvider";
+import {
+  HARNESS_SIDECAR_OPTION_IDS,
+  normalizeHarnessSidecarIntent,
+} from "./harnessSidecarOptions";
+import { normalizeDraftModelNames } from "./modelFallbacks";
 
 const STM_IDS = new Set(["local", "sqlite", "mysql", "postgresql"]);
 const LTM_IDS = new Set([
@@ -38,6 +46,10 @@ const CLOUD_CLI_TOOL_IDS = new Set<CloudCliToolId>([
   "github-cli",
   "pandoc",
 ]);
+const HARNESS_SIDECAR_PROFILE_IDS = new Set<HarnessSidecarProfileId>([
+  "default",
+  "ops",
+]);
 
 function asString(v: unknown, fallback = ""): string {
   return typeof v === "string" ? v : fallback;
@@ -45,6 +57,13 @@ function asString(v: unknown, fallback = ""): string {
 
 function asBool(v: unknown): boolean {
   return v === true;
+}
+
+function asHarnessSidecarProfile(v: unknown): HarnessSidecarProfileId {
+  return typeof v === "string" &&
+    HARNESS_SIDECAR_PROFILE_IDS.has(v as HarnessSidecarProfileId)
+    ? (v as HarnessSidecarProfileId)
+    : "default";
 }
 
 function asStringArray(v: unknown): string[] {
@@ -113,6 +132,29 @@ function asA2aRegistry(v: unknown): A2aRegistryConfig {
   };
 }
 
+function asHarnessSidecarIntent(v: unknown): HarnessSidecarIntent | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const raw = v as Record<string, unknown>;
+  const rawOverrides = (
+    raw.componentOverrides && typeof raw.componentOverrides === "object"
+      ? raw.componentOverrides
+      : {}
+  ) as Record<string, unknown>;
+  const componentOverrides = Object.fromEntries(
+    HARNESS_SIDECAR_OPTION_IDS.map((id) => [id, rawOverrides[id] === true]),
+  ) as Record<HarnessSidecarOptionId, boolean>;
+  const intent: HarnessSidecarIntent = {
+    enabled: Object.values(componentOverrides).some(Boolean),
+    profile: asHarnessSidecarProfile(raw.profile),
+    componentOverrides,
+  };
+  const catalogVersion = asString(raw.catalogVersion).trim();
+  const planHash = asString(raw.planHash).trim();
+  if (catalogVersion) intent.catalogVersion = catalogVersion;
+  if (planHash) intent.planHash = planHash;
+  return normalizeHarnessSidecarIntent(intent);
+}
+
 function parseSubAgents(
   v: unknown,
   cloudProvider: NonNullable<AgentDraft["cloudProvider"]> = "volcengine",
@@ -128,6 +170,7 @@ function parseSubAgents(
     const parsedType = asAgentType(so.agentType);
     const agentType =
       a2aRegistry.enabled && parsedType === "llm" ? "a2a" : parsedType;
+    const modelNames = normalizeDraftModelNames(so.modelName, so.modelFallbacks);
     return {
       ...emptyDraft(childCloudProvider),
       cloudProvider: childCloudProvider,
@@ -137,7 +180,8 @@ function parseSubAgents(
       agentType,
       maxIterations: asMaxIterations(so.maxIterations),
       a2aUrl: asString(so.a2aUrl),
-      modelName: asString(so.modelName),
+      modelName: modelNames.modelName,
+      modelFallbacks: modelNames.modelFallbacks,
       modelSource:
         so.modelSource === "custom" || so.modelSource === "ark"
           ? so.modelSource
@@ -149,6 +193,7 @@ function parseSubAgents(
       memory: { shortTerm: asBool(mem.shortTerm), longTerm: asBool(mem.longTerm) },
       shortTermBackend: pick(so.shortTermBackend, STM_IDS, "local"),
       longTermBackend: pick(so.longTermBackend, LTM_IDS, "local"),
+      longTermMemoryIndex: asString(so.longTermMemoryIndex),
       autoSaveSession: asBool(so.autoSaveSession),
       knowledgebase: asBool(so.knowledgebase),
       knowledgebaseBackend: pick(
@@ -176,7 +221,12 @@ function parseSelectedSkills(o: Record<string, unknown>): SelectedSkill[] {
     const so = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
     const src = asString(so.source);
     const source: SelectedSkill["source"] =
-      src === "local" || src === "skillspace" || src === "skillhub" ? src : "skillhub";
+      src === "local" ||
+      src === "skillspace" ||
+      src === "skillhub" ||
+      src === "runtime"
+        ? src
+        : "skillhub";
     const name =
       asString(so.name) ||
       asString(so.slug) ||
@@ -185,6 +235,11 @@ function parseSelectedSkills(o: Record<string, unknown>): SelectedSkill[] {
       "skill";
     const folder = asString(so.folder) || name;
     const description = asString(so.description);
+    if (source === "runtime") {
+      if (!name || folder !== name) continue;
+      out.push({ source, folder, name, description });
+      continue;
+    }
     if (source === "skillhub") {
       const slug = asString(so.slug);
       if (!slug) continue;
@@ -250,6 +305,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
   const agentType =
     a2aRegistry.enabled && parsedType === "llm" ? "a2a" : parsedType;
   const cloudProvider = asCloudProvider(o.cloudProvider);
+  const modelNames = normalizeDraftModelNames(o.modelName, o.modelFallbacks);
 
   const mcpTools = Array.isArray(o.mcpTools)
     ? (o.mcpTools as unknown[])
@@ -262,6 +318,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
             url: asString(mo.url),
             authToken: asString(mo.authToken),
             authTokenEnv: asString(mo.authTokenEnv),
+            credentialConfigured: mo.credentialConfigured === true,
             command: asString(mo.command),
             args: asStringArray(mo.args),
           };
@@ -275,10 +332,12 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     name: asString(o.name) || "my_agent",
     description: asString(o.description),
     instruction: asString(o.instruction) || "You are a helpful assistant.",
+    dynamicAgentDelegation: asBool(o.dynamicAgentDelegation),
     agentType,
     maxIterations: asMaxIterations(o.maxIterations),
     a2aUrl: asString(o.a2aUrl),
-    modelName: asString(o.modelName),
+    modelName: modelNames.modelName,
+    modelFallbacks: modelNames.modelFallbacks,
     modelSource:
       o.modelSource === "custom" || o.modelSource === "ark"
         ? o.modelSource
@@ -293,6 +352,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     memory: { shortTerm: asBool(mem.shortTerm), longTerm: asBool(mem.longTerm) },
     shortTermBackend: pick(o.shortTermBackend, STM_IDS, "local"),
     longTermBackend: pick(o.longTermBackend, LTM_IDS, "local"),
+    longTermMemoryIndex: asString(o.longTermMemoryIndex),
     autoSaveSession: asBool(o.autoSaveSession),
     knowledgebase: asBool(o.knowledgebase),
     knowledgebaseBackend: pick(o.knowledgebaseBackend, KB_IDS, DEFAULT_KB_BACKEND),
@@ -314,11 +374,14 @@ export function normalizeDraft(raw: unknown): AgentDraft {
         : {}),
     },
     cloudEnvironment: {
+      environmentId: asString(cloudEnvironment.environmentId),
+      environmentVersionId: asString(cloudEnvironment.environmentVersionId),
       cliTools: asCloudCliTools(cloudEnvironment.cliTools),
       ...(typeof cloudEnvironment.dockerfile === "string"
         ? { dockerfile: cloudEnvironment.dockerfile }
         : {}),
     },
+    harnessSidecar: asHarnessSidecarIntent(o.harnessSidecar),
     subAgents: parseSubAgents(o.subAgents, cloudProvider),
     selectedSkills: parseSelectedSkills(o),
   };
@@ -342,6 +405,7 @@ export function sanitizeGeneratedDraftCapabilities(
     memory: { shortTerm: false, longTerm: false },
     shortTermBackend: "local",
     longTermBackend: "local",
+    longTermMemoryIndex: "",
     autoSaveSession: false,
     knowledgebase: false,
     knowledgebaseBackend: DEFAULT_KB_BACKEND,

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import os
 import time
 from typing import Any
 from uuid import uuid4
@@ -46,6 +47,9 @@ class CloudApp:
     Note:
         At least one of name, endpoint, or ID must be provided during init.
         Agent card mode fetches card from the endpoint's public path.
+        Proxies follow the VeFaaS SDK: use the endpoint's HTTP(S) proxy variable,
+        preferring uppercase over lowercase. ALL_PROXY, NO_PROXY, and system
+        proxy settings are not used.
 
     Examples:
         ```python
@@ -120,7 +124,15 @@ class CloudApp:
                 "Use agent card to invoke agent. The agent endpoint will use the `url` in agent card."
             )
 
-        self.httpx_client = httpx.AsyncClient()
+        scheme = httpx.URL(self.vefaas_endpoint).scheme
+        proxy = (
+            os.getenv(f"{scheme.upper()}_PROXY") or os.getenv(f"{scheme}_proxy") or None
+        )
+        # An explicit transport prevents HTTPX from loading unrelated proxies
+        # while retaining environment-based certificate configuration
+        self.httpx_client = httpx.AsyncClient(
+            transport=httpx.AsyncHTTPTransport(proxy=proxy)
+        )
 
     def _get_vefaas_endpoint(
         self,

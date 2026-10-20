@@ -1,0 +1,34 @@
+import { useId, type HTMLAttributes, type ReactNode } from "react";
+import { Button } from "../../primitives/Button";
+import closeIcon from "./assets/close.svg";
+import "./ModalLayout.css";
+
+export interface ModalLayoutProps extends Omit<HTMLAttributes<HTMLDivElement>, "title"> {
+  title: ReactNode;
+  topGlow?: boolean;
+  /** Custom footer; null omits it while undefined preserves the default actions. */
+  footer?: ReactNode;
+  cancelLabel?: string;
+  confirmLabel?: string;
+  closeLabel?: string;
+  onClose?: () => void;
+  onCancel?: () => void;
+  onConfirm?: () => void;
+}
+
+export function ModalLayout({ title, topGlow = true, children, footer, cancelLabel = "Cancel", confirmLabel = "Confirm", closeLabel = "Close", onClose, onCancel, onConfirm, className = "", ...props }: ModalLayoutProps) {
+  const titleId = useId();
+  return <div role="dialog" aria-labelledby={titleId} {...props} className={`studio-modal-layout ${topGlow ? "studio-modal-layout--glow" : ""} ${className}`.trim()}>
+    <header className="studio-modal-layout__header">
+      <h3 id={titleId}>{title}</h3>
+      <Button variant="ghost" size="compact" iconOnly className="studio-modal-layout__close" aria-label={closeLabel} onClick={onClose} startIcon={<img src={closeIcon} alt="" />} />
+    </header>
+    <div className="studio-modal-layout__body">{children}</div>
+    {footer !== null && <footer className="studio-modal-layout__footer">
+      {footer === undefined ? <>
+      <Button variant="outline" className="studio-modal-layout__cancel" onClick={onCancel}>{cancelLabel}</Button>
+      <Button className="studio-modal-layout__confirm" onClick={onConfirm}>{confirmLabel}</Button>
+      </> : footer}
+    </footer>}
+  </div>;
+}

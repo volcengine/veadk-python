@@ -14,19 +14,25 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
+import threading
 import time
 import uuid
 from typing import Optional
 from urllib import error, request
 from urllib.parse import urlsplit, urlunsplit
 
+from google.adk.agents.callback_context import CallbackContext
 from google.adk.tools import ToolContext
 
 from veadk.tools.builtin_tools._agentkit import (
     ensure_agentkit_session_endpoint,
     resolve_agentkit_tool_id,
 )
+from veadk.utils.auth import build_auth_config
+from veadk.utils.logger import get_logger
 
 _SKILL_API_TIMEOUT = 1800
 _A2A_POLL_INTERVAL = 2.0
@@ -44,6 +50,8 @@ _A2A_TERMINAL_STATES = frozenset(
         "auth-required",
     }
 )
+logger = get_logger(__name__)
+_INBOUND_AUTH_CREDENTIAL_KEY = "inbound_auth"
 
 
 def _validate_timeout(timeout: int) -> None:
@@ -59,6 +67,115 @@ def _tool_user_session_id(tool_context: ToolContext) -> str:
     agent_name = invocation_context.agent.name
     user_id = invocation_context.user_id
     return agent_name + "_" + user_id + "_" + session_id
+
+
+def _await_sync(awaitable):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(awaitable)
+
+    result = {}
+
+    def run_in_thread():
+        try:
+            result["value"] = asyncio.run(awaitable)
+        except BaseException as exc:
+            result["error"] = exc
+
+    thread = threading.Thread(target=run_in_thread)
+    thread.start()
+    thread.join()
+    if "error" in result:
+        raise result["error"]
+    return result.get("value")
+
+
+def _inbound_auth_debug_summary(value: object | None) -> dict[str, object]:
+    if value is None:
+        return {"present": False, "len": 0, "sha256_8": ""}
+    text = str(value)
+    return {
+        "present": bool(text),
+        "len": len(text),
+        "sha256_8": hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+        if text
+        else "",
+    }
+
+
+def _load_credential_from_service(
+    *,
+    tool_context: ToolContext,
+    auth_config: object,
+) -> object | None:
+    invocation_context = getattr(tool_context, "_invocation_context", None)
+    credential_service = getattr(invocation_context, "credential_service", None)
+    if not credential_service:
+        return None
+    credential = credential_service.load_credential(
+        auth_config=auth_config,
+        callback_context=CallbackContext(invocation_context),
+    )
+    if hasattr(credential, "__await__"):
+        credential = _await_sync(credential)
+    return credential
+
+
+def _credential_token_value(credential: object | None) -> str | None:
+    if credential is None:
+        return None
+    api_key = getattr(credential, "api_key", None)
+    if api_key:
+        return str(api_key)
+    http = getattr(credential, "http", None)
+    http_credentials = getattr(http, "credentials", None) if http is not None else None
+    http_token = (
+        getattr(http_credentials, "token", None)
+        if http_credentials is not None
+        else None
+    )
+    if http_token:
+        return str(http_token)
+    oauth2 = getattr(credential, "oauth2", None)
+    oauth2_access_token = (
+        getattr(oauth2, "access_token", None) if oauth2 is not None else None
+    )
+    if oauth2_access_token:
+        return str(oauth2_access_token)
+    return None
+
+
+def _inbound_auth_token_from_credential_service(
+    tool_context: ToolContext,
+) -> str | None:
+    invocation_context = getattr(tool_context, "_invocation_context", None)
+    credential_service = getattr(invocation_context, "credential_service", None)
+    inbound_auth_token = None
+    if credential_service:
+        auth_config = build_auth_config(
+            credential_key=_INBOUND_AUTH_CREDENTIAL_KEY,
+            auth_method="header",
+            header_scheme="bearer",
+        )
+        credential = _load_credential_from_service(
+            tool_context=tool_context,
+            auth_config=auth_config,
+        )
+        inbound_auth_token = _credential_token_value(credential)
+    logger.debug(
+        "execute_skills inbound_auth received before sandbox send: %s",
+        json.dumps(
+            _inbound_auth_debug_summary(inbound_auth_token),
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+    )
+    return inbound_auth_token
+
+
+def _inbound_auth_token(tool_context: ToolContext) -> str | None:
+    return _inbound_auth_token_from_credential_service(tool_context)
 
 
 def _skill_api_url(endpoint: str, path: str) -> str:
@@ -210,6 +327,7 @@ def _post_a2a_jsonrpc(
     payload: dict[str, object],
     timeout: int,
     retry_until: float | None = None,
+    inbound_auth: str | None = None,
 ) -> dict:
     url = _a2a_jsonrpc_url(endpoint)
     while True:
@@ -221,7 +339,10 @@ def _post_a2a_jsonrpc(
         req = request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                **({"inbound_auth": inbound_auth} if inbound_auth else {}),
+            },
             method="POST",
         )
         try:
@@ -277,6 +398,15 @@ def _execute_skills_via_a2a(
         "user_id": invocation_context.user_id,
         "session_id": invocation_context.session.id,
     }
+    inbound_auth = _inbound_auth_token(tool_context)
+    logger.debug(
+        "execute_skills inbound_auth header before sandbox request: %s",
+        json.dumps(
+            _inbound_auth_debug_summary(inbound_auth),
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+    )
     task = _a2a_result_task(
         "A2ASendMessage",
         _post_a2a_jsonrpc(
@@ -296,6 +426,7 @@ def _execute_skills_via_a2a(
             },
             timeout=_a2a_request_timeout(deadline),
             retry_until=deadline,
+            inbound_auth=inbound_auth,
         ),
     )
     task_id = _a2a_task_id(task)
@@ -321,6 +452,7 @@ def _execute_skills_via_a2a(
                 },
                 timeout=_a2a_request_timeout(deadline),
                 retry_until=deadline,
+                inbound_auth=inbound_auth,
             ),
         )
         poll_interval = min(poll_interval * 2, _A2A_MAX_POLL_INTERVAL)

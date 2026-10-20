@@ -1,0 +1,44 @@
+.studio-modal-button__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: rgba(0, 0, 0, .48);
+  opacity: 1;
+  transition: opacity 180ms ease-out;
+}
+
+.studio-modal-button__popup {
+  position: fixed;
+  z-index: 901;
+  top: 50%;
+  left: 50%;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 32px);
+  outline: none;
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+  transition: opacity 180ms ease-out, transform 180ms cubic-bezier(.22, 1, .36, 1);
+}
+
+.studio-modal-button__backdrop[data-starting-style],
+.studio-modal-button__backdrop[data-ending-style] {
+  opacity: 0;
+}
+
+.studio-modal-button__popup[data-starting-style],
+.studio-modal-button__popup[data-ending-style] {
+  opacity: 0;
+  transform: translate(-50%, calc(-50% + 6px)) scale(.985);
+}
+
+.studio-modal-button__body {
+  height: 100%;
+  min-height: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-modal-button__backdrop,
+  .studio-modal-button__popup { transition: none; }
+  .studio-modal-button__popup[data-starting-style],
+  .studio-modal-button__popup[data-ending-style] { transform: translate(-50%, -50%); }
+}

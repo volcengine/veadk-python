@@ -1,11 +1,17 @@
-import { memo, useState } from "react";
+import { SandboxFileContext, SandboxFileLink, sandboxFilePath } from "./SandboxFileLink";
+import { Children, isValidElement, memo, useContext, useState, type ReactNode } from "react";
 import { Maximize2, X, Download } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { PhotoView } from "react-photo-view";
+import { useTranslation } from "react-i18next";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
 import "highlight.js/styles/github.css";
+import { EChartsDiagram } from "./EChartsDiagram";
+import { MermaidDiagram } from "./MermaidDiagram";
+import { VisualizationPanel } from "./VisualizationPanel";
+import { normalizeVisualizationLanguage } from "./visualizationLanguage";
 
 interface VideoData {
   src: string;
@@ -13,6 +19,24 @@ interface VideoData {
 }
 
 const VIDEO_EXTENSIONS = [".mp4", ".webm", ".mov", ".m4v", ".ogg", ".avi"];
+
+function textFromReactNode(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(textFromReactNode).join("");
+  if (isValidElement<{ children?: ReactNode }>(node)) {
+    return textFromReactNode(node.props.children);
+  }
+  return "";
+}
+
+function codeBlockLanguage(node: ReactNode): string | undefined {
+  const child = Children.toArray(node)[0];
+  if (!isValidElement<{ className?: string }>(child)) return undefined;
+  const languageClass = child.props.className
+    ?.split(/\s+/)
+    .find((className) => className.startsWith("language-"));
+  return normalizeVisualizationLanguage(languageClass?.slice("language-".length));
+}
 
 function isVideoUrl(url: string): boolean {
   if (!url) return false;
@@ -53,11 +77,15 @@ function MarkdownImpl({
   text,
   className,
   allowRawHtml = true,
+  streaming = false,
 }: {
   text: string;
   className?: string;
   allowRawHtml?: boolean;
+  streaming?: boolean;
 }) {
+  const { t } = useTranslation("conversation");
+  const sandboxContext = useContext(SandboxFileContext);
   const [videoViewerOpen, setVideoViewerOpen] = useState<VideoData | null>(null);
 
   // Extract video src from props or source children
@@ -108,11 +136,37 @@ function MarkdownImpl({
   return (
     <div className={className ? `md ${className}` : "md"}>
       <ReactMarkdown
+        disallowedElements={sandboxContext ? ["file-card", "personal-drive-enable-card"] : undefined}
         remarkPlugins={[remarkGfm]}
         rehypePlugins={allowRawHtml ? [rehypeRaw, rehypeHighlight] : [rehypeHighlight]}
         components={{
+          pre: ({ node: _node, children, ...props }) => {
+            const language = codeBlockLanguage(children);
+            if (language === "mermaid" || language === "echarts") {
+              const source = textFromReactNode(children).replace(/\n$/, "");
+              return (
+                <VisualizationPanel
+                  label={language === "mermaid" ? "Mermaid" : "ECharts"}
+                  language={language}
+                  source={source}
+                  streaming={streaming}
+                >
+                  {language === "mermaid" ? (
+                    <MermaidDiagram source={source} />
+                  ) : (
+                    <EChartsDiagram source={source} />
+                  )}
+                </VisualizationPanel>
+              );
+            }
+            return <pre {...props}>{children}</pre>;
+          },
           a: ({ node, ...props }) => {
             const href = props.href;
+            const sandboxPath = sandboxContext && sandboxFilePath(href);
+            if (sandboxPath) {
+              return <SandboxFileLink {...sandboxContext!} path={sandboxPath}>{props.children}</SandboxFileLink>;
+            }
             if (href && (isVideoUrl(href) || isVideoLink(node))) {
               const videoSrc = href;
               const linkText = getLinkText(node?.children);
@@ -121,7 +175,7 @@ function MarkdownImpl({
                   <button
                     type="button"
                     className="video-preview-trigger"
-                    aria-label={`点击播放视频: ${linkText}`}
+                    aria-label={t("markdown.playVideo", { name: linkText })}
                     onClick={() => setVideoViewerOpen({ src: videoSrc, title: linkText })}
                   >
                     <video
@@ -159,7 +213,7 @@ function MarkdownImpl({
                 <button
                   type="button"
                   className="image-preview-trigger"
-                  aria-label={`放大预览：${alt || "图片"}`}
+                  aria-label={t("markdown.enlargeImage", { name: alt || t("markdown.image") })}
                 >
                   {image}
                   <span className="image-preview-hint" aria-hidden="true">
@@ -190,7 +244,7 @@ function MarkdownImpl({
                 <button
                   type="button"
                   className="video-preview-trigger"
-                  aria-label="点击放大视频"
+                  aria-label={t("markdown.enlargeVideo")}
                   onClick={() => setVideoViewerOpen({ src: videoSrc })}
                 >
                   <video
@@ -219,7 +273,7 @@ function MarkdownImpl({
           className="video-viewer-backdrop"
           role="dialog"
           aria-modal="true"
-          aria-label="视频预览"
+          aria-label={t("markdown.videoPreview")}
           onClick={() => setVideoViewerOpen(null)}
         >
           <div className="video-viewer" onClick={(e) => e.stopPropagation()}>
@@ -231,8 +285,8 @@ function MarkdownImpl({
                 <a
                   href={videoViewerOpen.src}
                   download={videoViewerOpen.title || getVideoFilename(videoViewerOpen.src)}
-                  aria-label="下载视频"
-                  title="下载视频"
+                  aria-label={t("markdown.downloadVideo")}
+                  title={t("markdown.downloadVideo")}
                   className="video-viewer-download"
                 >
                   <Download />
@@ -240,7 +294,7 @@ function MarkdownImpl({
                 <button
                   type="button"
                   className="video-viewer-close"
-                  aria-label="关闭"
+                  aria-label={t("markdown.close")}
                   onClick={() => setVideoViewerOpen(null)}
                 >
                   <X />

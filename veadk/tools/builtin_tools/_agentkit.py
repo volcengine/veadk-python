@@ -68,7 +68,11 @@ def get_agentkit_endpoint_config(
         sld = "volces"
         default_region = "cn-beijing"
 
-    region = getenv("AGENTKIT_TOOL_REGION", default_region)
+    region = getenv(
+        "AGENTKIT_TOOL_REGION",
+        (os.getenv("REGION") if cloud_provider != "byteplus" else None)
+        or default_region,
+    )
     host = getenv(host_env_name, service + "." + region + f".{sld}.com")
     scheme = getenv("AGENTKIT_TOOL_SCHEME", "https", allow_false_values=True).lower()
     if scheme not in {"http", "https"}:
@@ -278,13 +282,27 @@ def _get_or_create_agentkit_session(
         )
         return chosen
 
-    return client.create_session(
-        tools_types.CreateSessionRequest(
-            ToolId=tool_id,
-            UserSessionId=tool_user_session_id,
-            Ttl=ttl,
+    request_kwargs: dict[str, Any] = {
+        "ToolId": tool_id,
+        "UserSessionId": tool_user_session_id,
+        "Ttl": ttl,
+    }
+    raw_skill_space_policy = os.getenv("SKILL_SPACE_POLICY")
+    if raw_skill_space_policy is not None:
+        from veadk.skills.policy import (
+            SKILL_SPACE_POLICY_ENV,
+            parse_skill_space_policy,
         )
-    )
+
+        policy = parse_skill_space_policy(raw_skill_space_policy)
+        request_kwargs["Envs"] = [
+            tools_types.EnvsItemForCreateSession(
+                Key=SKILL_SPACE_POLICY_ENV,
+                Value=policy.to_json(),
+            )
+        ]
+
+    return client.create_session(tools_types.CreateSessionRequest(**request_kwargs))
 
 
 def ensure_agentkit_session_endpoint(

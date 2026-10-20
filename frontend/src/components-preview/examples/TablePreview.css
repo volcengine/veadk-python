@@ -1,0 +1,40 @@
+.table-preview__example {
+  min-width: 0;
+  margin-top: 32px;
+}
+
+.table-preview__heading {
+  margin: 0 0 8px;
+  color: var(--studio-text-primary);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 24px;
+}
+
+.table-preview__description,
+.table-preview__feedback {
+  color: var(--studio-text-secondary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.table-preview__description {
+  margin: 0 0 16px;
+}
+
+.table-preview__feedback {
+  min-height: 20px;
+  margin: 8px 0 0;
+}
+
+.table-preview__search {
+  width: 280px;
+}
+
+.table-preview__actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  vertical-align: middle;
+}

@@ -51,11 +51,16 @@ export function canSubmitResponseAnnotation(note: string): boolean {
 export function formatResponseAnnotationComment(
   selectedText: string,
   note: string,
+  labels: { selectedExcerpt: string; annotation: string; separator: string } = {
+    selectedExcerpt: "选中片段",
+    annotation: "批注",
+    separator: "：",
+  },
 ): string {
   const selection = prepareResponseAnnotationSelection(selectedText);
   const annotation = prepareResponseAnnotationNote(note.trim());
   return truncateCodePoints(
-    `选中片段：${selection}\n\n批注：${annotation}`,
+    `${labels.selectedExcerpt}${labels.separator}${selection}\n\n${labels.annotation}${labels.separator}${annotation}`,
     RESPONSE_ANNOTATION_COMMENT_MAX_LENGTH,
   );
 }

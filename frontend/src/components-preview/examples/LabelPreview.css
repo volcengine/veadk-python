@@ -1,0 +1,24 @@
+.label-preview-examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 40px;
+}
+
+.label-preview-examples h3 {
+  margin: 0 0 16px;
+  color: var(--studio-text-preview, #a1a1aa);
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 400;
+}
+
+.label-preview-default {
+  width: 166px;
+}
+
+.label-preview-with-icon {
+  width: 62px;
+}
+
+.label-preview-status { width: 74px; }

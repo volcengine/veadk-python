@@ -59,6 +59,266 @@ def test_ve_tos_explicit_bucket_wins_over_environment(monkeypatch, fake_tos):
     assert client.bucket_name == "explicit-bucket"
 
 
+def test_ve_tos_uses_region_env_as_fallback(monkeypatch, fake_tos):
+    monkeypatch.setenv("CLOUD_PROVIDER", "volces")
+    monkeypatch.delenv("DATABASE_TOS_REGION", raising=False)
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
+    client = VeTOS()
+
+    assert client.region == "cn-shanghai"
+    assert client._client.init_kwargs["region"] == "cn-shanghai"
+    assert client._client.init_kwargs["endpoint"] == "tos-cn-shanghai.volces.com"
+
+
+def test_ve_tos_database_region_wins_over_region_env(monkeypatch, fake_tos):
+    monkeypatch.setenv("CLOUD_PROVIDER", "volces")
+    monkeypatch.setenv("DATABASE_TOS_REGION", "cn-beijing")
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
+    client = VeTOS()
+
+    assert client.region == "cn-beijing"
+    assert client._client.init_kwargs["region"] == "cn-beijing"
+    assert client._client.init_kwargs["endpoint"] == "tos-cn-beijing.volces.com"
+
+
+def test_download_can_propagate_tos_error(monkeypatch, fake_tos, tmp_path) -> None:
+    client = VeTOS(bucket_name="test-bucket")
+
+    def fail_get_object(*_args, **_kwargs):
+        raise RuntimeError("upstream TOS failure")
+
+    monkeypatch.setattr(client._client, "get_object", fail_get_object, raising=False)
+
+    assert (
+        client.download("test-bucket", "skill.zip", str(tmp_path / "first.zip"))
+        is False
+    )
+    with pytest.raises(RuntimeError, match="upstream TOS failure"):
+        client.download(
+            "test-bucket",
+            "skill.zip",
+            str(tmp_path / "second.zip"),
+            raise_on_error=True,
+        )
+
+
+def test_download_rejects_object_over_byte_limit(monkeypatch, fake_tos, tmp_path):
+    client = VeTOS(bucket_name="test-bucket")
+
+    monkeypatch.setattr(
+        client._client,
+        "get_object",
+        lambda *_args, **_kwargs: iter([b"123", b"45"]),
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="exceeds download byte limit"):
+        client.download(
+            "test-bucket",
+            "skills/reporting/large.bin",
+            str(tmp_path / "large.bin"),
+            raise_on_error=True,
+            max_bytes=4,
+        )
+
+
+def test_download_directory_rejects_too_many_objects(monkeypatch, fake_tos, tmp_path):
+    client = VeTOS(bucket_name="test-bucket")
+    listing = SimpleNamespace(
+        is_truncated=False,
+        next_continuation_token="",
+        contents=[
+            SimpleNamespace(key="skills/reporting/SKILL.md", size=10),
+            SimpleNamespace(key="skills/reporting/run.py", size=10),
+        ],
+    )
+
+    monkeypatch.setattr(
+        client._client,
+        "list_objects_type2",
+        lambda *_args, **_kwargs: listing,
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="file count limit"):
+        client.download_directory(
+            "test-bucket",
+            "skills/reporting/",
+            str(tmp_path),
+            raise_on_error=True,
+            max_files=0,
+        )
+
+
+def test_download_directory_rejects_total_bytes_from_listing(
+    monkeypatch,
+    fake_tos,
+    tmp_path,
+):
+    client = VeTOS(bucket_name="test-bucket")
+    listing = SimpleNamespace(
+        is_truncated=False,
+        next_continuation_token="",
+        contents=[
+            SimpleNamespace(key="skills/reporting/SKILL.md", size=10),
+            SimpleNamespace(key="skills/reporting/run.py", size=10),
+        ],
+    )
+
+    monkeypatch.setattr(
+        client._client,
+        "list_objects_type2",
+        lambda *_args, **_kwargs: listing,
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="byte limit"):
+        client.download_directory(
+            "test-bucket",
+            "skills/reporting/",
+            str(tmp_path),
+            raise_on_error=True,
+            max_bytes=5,
+        )
+
+
+def test_tos_config_uses_region_env_fallback_and_updates_endpoint(monkeypatch):
+    from veadk.configs.database_configs import TOSConfig
+
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+    monkeypatch.setenv("CLOUD_PROVIDER", "volces")
+    monkeypatch.delenv("DATABASE_TOS_REGION", raising=False)
+    monkeypatch.delenv("DATABASE_TOS_ENDPOINT", raising=False)
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
+    config = TOSConfig()
+
+    assert config.region == "cn-shanghai"
+    assert config.endpoint == "tos-cn-shanghai.volces.com"
+
+
+def test_tos_config_database_region_wins_over_region_env(monkeypatch):
+    from veadk.configs.database_configs import TOSConfig
+
+    monkeypatch.setenv("CLOUD_PROVIDER", "volces")
+    monkeypatch.setenv("DATABASE_TOS_REGION", "cn-beijing")
+    monkeypatch.delenv("DATABASE_TOS_ENDPOINT", raising=False)
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
+    config = TOSConfig()
+
+    assert config.region == "cn-beijing"
+    assert config.endpoint == "tos-cn-beijing.volces.com"
+
+
+def test_related_database_configs_use_region_env_fallback(monkeypatch):
+    from veadk.configs.database_configs import (
+        NormalTOSConfig,
+        TOSContextBucketConfig,
+        TOSVectorConfig,
+        VikingKnowledgebaseConfig,
+    )
+
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+    monkeypatch.setenv("CLOUD_PROVIDER", "volces")
+    for env_name in [
+        "DATABASE_VIKING_REGION",
+        "DATABASE_TOS_REGION",
+        "DATABASE_TOS_ENDPOINT",
+        "DATABASE_TOS_VECTOR_REGION",
+        "DATABASE_TOS_VECTOR_ENDPOINT",
+        "DATABASE_TOS_CONTEXT_REGION",
+        "DATABASE_TOS_CONTEXT_ENDPOINT",
+    ]:
+        monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setenv("REGION", "cn-shanghai")
+
+    viking_config = VikingKnowledgebaseConfig()
+    normal_tos_config = NormalTOSConfig(bucket="bucket")
+    vector_config = TOSVectorConfig()
+    context_config = TOSContextBucketConfig()
+
+    assert viking_config.region == "cn-shanghai"
+    assert normal_tos_config.region == "cn-shanghai"
+    assert normal_tos_config.endpoint == "tos-cn-shanghai.volces.com"
+    assert vector_config.region == "cn-shanghai"
+    assert vector_config.endpoint == "tosvectors-cn-shanghai.volces.com"
+    assert context_config.region == "cn-shanghai"
+    assert context_config.endpoint == "tos-cn-shanghai.volces.com"
+
+
+def test_byteplus_related_database_configs_ignore_region_env(monkeypatch):
+    from veadk.configs.database_configs import (
+        NormalTOSConfig,
+        TOSContextBucketConfig,
+        TOSVectorConfig,
+        VikingKnowledgebaseConfig,
+    )
+
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "byteplus")
+    for env_name in [
+        "DATABASE_VIKING_REGION",
+        "DATABASE_TOS_REGION",
+        "DATABASE_TOS_ENDPOINT",
+        "DATABASE_TOS_VECTOR_REGION",
+        "DATABASE_TOS_VECTOR_ENDPOINT",
+        "DATABASE_TOS_CONTEXT_REGION",
+        "DATABASE_TOS_CONTEXT_ENDPOINT",
+    ]:
+        monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setenv("REGION", "cn-hongkong")
+
+    assert VikingKnowledgebaseConfig().region == "cn-beijing"
+    normal_tos_config = NormalTOSConfig(bucket="bucket")
+    assert normal_tos_config.region == "cn-beijing"
+    assert normal_tos_config.endpoint == "tos-cn-beijing.volces.com"
+    assert TOSVectorConfig().region == "cn-beijing"
+    assert TOSContextBucketConfig().region == "cn-beijing"
+
+
+def test_byteplus_tos_config_ignores_region_env_fallback(monkeypatch):
+    from veadk.configs.database_configs import TOSConfig
+
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    monkeypatch.delenv("DATABASE_TOS_REGION", raising=False)
+    monkeypatch.delenv("DATABASE_TOS_ENDPOINT", raising=False)
+    monkeypatch.setenv("REGION", "cn-hongkong")
+
+    config = TOSConfig()
+
+    assert config.region == "ap-southeast-1"
+    assert config.endpoint == "tos-ap-southeast-1.bytepluses.com"
+
+
+def test_byteplus_ve_tos_keeps_existing_region_precedence(monkeypatch, fake_tos):
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("DATABASE_TOS_REGION", "ap-southeast-1")
+    monkeypatch.setenv("REGION", "cn-hongkong")
+
+    client = VeTOS()
+
+    assert client.region == "cn-hongkong"
+    assert client._client.init_kwargs["region"] == "cn-hongkong"
+    assert client._client.init_kwargs["endpoint"] == "tos-cn-hongkong.bytepluses.com"
+
+
+def test_byteplus_tos_config_database_region_still_sets_endpoint(monkeypatch):
+    from veadk.configs.database_configs import TOSConfig
+
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setenv("DATABASE_TOS_REGION", "ap-southeast-1")
+    monkeypatch.delenv("DATABASE_TOS_ENDPOINT", raising=False)
+    monkeypatch.setenv("REGION", "cn-hongkong")
+
+    config = TOSConfig()
+
+    assert config.region == "ap-southeast-1"
+    assert config.endpoint == "tos-ap-southeast-1.bytepluses.com"
+
+
 @pytest.mark.asyncio
 async def test_async_upload_bytes_reports_success(monkeypatch, fake_tos):
     client = VeTOS(bucket_name="test-bucket")

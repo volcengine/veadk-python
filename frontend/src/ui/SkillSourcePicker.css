@@ -1,0 +1,54 @@
+/* The picker reuses the established Studio skill controls while the legacy
+ * create-workspace stylesheet remains their visual source of truth. */
+@import "../create/CustomCreate.css";
+
+.cw-skill-add:disabled,
+.cw-selected-skill-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.cw-skill-tab-label-short {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .cw-skill-dialog-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .cw-skill-dialog {
+    width: 100%;
+    height: min(720px, 92dvh);
+    min-height: 360px;
+    border-radius: 14px 14px 0 0;
+  }
+
+  .cw-skill-dialog-body {
+    padding: 14px 12px 16px;
+  }
+
+  .cw-skill-pickertab {
+    gap: 4px;
+    padding-inline: 4px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .cw-skill-tab-label-full {
+    display: none;
+  }
+
+  .cw-skill-tab-label-short {
+    display: inline;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cw-skill-tab-slider,
+  .cw-skill-add,
+  .cw-skill-result {
+    transition: none;
+  }
+}

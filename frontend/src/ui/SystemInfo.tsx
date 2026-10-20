@@ -1,12 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
+  getEnvironmentResources,
   getSystemInfo,
   listIdentityUserPools,
+  getSandboxImageUpdates,
+  updateSandboxTool,
+  type SandboxImageState,
   type IdentityUserPool,
+  type EnvironmentResourcesResponse,
   type SandboxToolInfo,
   type StudioRole,
 } from "../adk/client";
 import type { CloudProvider } from "../adk/cloudProvider";
+import { PageBackButton } from "./PageBackButton";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import {
   identityUserPoolConsoleUrl,
@@ -21,6 +28,7 @@ export interface SystemInfoProps {
   role: StudioRole;
   provider: CloudProvider;
   region: string;
+  onBack: () => void;
 }
 
 interface ConsoleLinkProps {
@@ -56,23 +64,142 @@ function isMissingLocalCredentials(cause: unknown): boolean {
   );
 }
 
+function SandboxUpdateIcon({ spinning }: { spinning: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true" className={spinning ? "is-spinning" : ""}>
+      <path d="M19.5 9A8 8 0 0 0 5 6L3 9m0-5v5h5M4.5 15A8 8 0 0 0 19 18l2-3m0 5v-5h-5" />
+    </svg>
+  );
+}
+
+interface SandboxToolUpdateState {
+  busy: boolean;
+  error: string;
+  message: string;
+}
+
+function defaultSandboxToolUpdateState(): SandboxToolUpdateState {
+  return { busy: false, error: "", message: "" };
+}
+
 export function SystemInfo({
   version,
   localMode,
   role,
   provider,
   region,
+  onBack,
 }: SystemInfoProps) {
-  const isAdmin = role === "admin";
+  const { t } = useTranslation("ui");
+  const isAdmin = role === "admin" || role === "super_admin";
   const [tosAddress, setTosAddress] = useState("");
   const [sandboxTools, setSandboxTools] = useState<SandboxToolInfo[]>([]);
   const [userPools, setUserPools] = useState<IdentityUserPool[]>([]);
+  const [environmentResources, setEnvironmentResources] =
+    useState<EnvironmentResourcesResponse | null>(null);
   const [sandboxLoading, setSandboxLoading] = useState(true);
   const [sandboxError, setSandboxError] = useState("");
   const [userPoolsLoading, setUserPoolsLoading] = useState(true);
   const [userPoolsError, setUserPoolsError] = useState("");
+  const [environmentResourcesLoading, setEnvironmentResourcesLoading] = useState(true);
+  const [environmentResourcesError, setEnvironmentResourcesError] = useState("");
   const [sandboxReloadKey, setSandboxReloadKey] = useState(0);
   const [userPoolsReloadKey, setUserPoolsReloadKey] = useState(0);
+  const [environmentResourcesReloadKey, setEnvironmentResourcesReloadKey] = useState(0);
+  const mountedRef = useRef(false);
+  const [sandboxToolUpdates, setSandboxToolUpdates] = useState<
+    Record<string, SandboxToolUpdateState>
+  >({});
+
+  const [imageStates, setImageStates] = useState<Record<string, SandboxImageState>>({});
+  const [imageError, setImageError] = useState("");
+  const [imageLoading, setImageLoading] = useState(true);
+  const pendingTools = useRef(new Set<string>());
+  const imageRequestVersion = useRef(0);
+  const scope = `${provider}:${region}`;
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+
+  useEffect(() => {
+    setImageStates({});
+    setSandboxToolUpdates({});
+  }, [scope]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  function patchSandboxToolUpdate(
+    kind: string,
+    patch: Partial<SandboxToolUpdateState>,
+  ) {
+    setSandboxToolUpdates((current) => ({
+      ...current,
+      [kind]: {
+        ...defaultSandboxToolUpdateState(),
+        ...current[kind],
+        ...patch,
+      },
+    }));
+  }
+
+  async function updateSandboxToolModelEnv(tool: SandboxToolInfo) {
+    if (!tool.toolId || pendingTools.current.has(tool.toolId)) return;
+    const updateScope = scope;
+    pendingTools.current.add(tool.toolId);
+    imageRequestVersion.current += 1;
+    patchSandboxToolUpdate(tool.toolId, { busy: true, error: "", message: "" });
+    try {
+      const result = await updateSandboxTool(tool.kind);
+      if (!mountedRef.current || scopeRef.current !== updateScope) return;
+      imageRequestVersion.current += 1;
+      setImageStates((current) => ({ ...current, [tool.toolId]: result.state }));
+      patchSandboxToolUpdate(tool.toolId, {
+        busy: false, error: "",
+        message: result.updated ? t("systemInfo.modelEnvUpdated") : t("systemInfo.modelEnvAlreadyCurrent"),
+      });
+    } catch (cause) {
+      if (!mountedRef.current || scopeRef.current !== updateScope) return;
+      imageRequestVersion.current += 1;
+      patchSandboxToolUpdate(tool.toolId, {
+        busy: false,
+        error: t("systemInfo.sandboxUpdateError"),
+        message: "",
+      });
+    } finally {
+      pendingTools.current.delete(tool.toolId);
+    }
+  }
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const controller = new AbortController();
+    const version = ++imageRequestVersion.current;
+    setImageError("");
+    setImageLoading(true);
+    void getSandboxImageUpdates(controller.signal).then((states) => {
+      if (controller.signal.aborted || version !== imageRequestVersion.current) return;
+      setImageStates(Object.fromEntries(states.map((state) => [state.toolId, state])));
+    }).catch(() => {
+      if (!controller.signal.aborted && version === imageRequestVersion.current) {
+        setImageError(t("systemInfo.versionCheckError"));
+      }
+    }).finally(() => {
+      if (!controller.signal.aborted) setImageLoading(false);
+    });
+    return () => controller.abort();
+  }, [isAdmin, provider, region, sandboxReloadKey]);
+
+  useEffect(() => {
+    if (!Object.values(imageStates).some((state) => state.status === "Updating" || state.status === "Creating")) return;
+    const timer = window.setTimeout(() => setSandboxReloadKey((key) => key + 1), 5000);
+    return () => window.clearTimeout(timer);
+  }, [imageStates]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -87,18 +214,19 @@ export function SystemInfo({
     setSandboxError("");
     void getSystemInfo(controller.signal)
       .then((systemInfo) => {
+        if (controller.signal.aborted) return;
         setTosAddress(systemInfo.storage.tosAddress);
         setSandboxTools(systemInfo.sandboxTools);
       })
       .catch((cause) => {
         if ((cause as Error)?.name === "AbortError") return;
-        setSandboxError(cause instanceof Error ? cause.message : String(cause));
+        setSandboxError(t("systemInfo.sandboxInfoError"));
       })
       .finally(() => {
         if (!controller.signal.aborted) setSandboxLoading(false);
       });
     return () => controller.abort();
-  }, [isAdmin, sandboxReloadKey]);
+  }, [isAdmin, provider, region, sandboxReloadKey]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -120,7 +248,7 @@ export function SystemInfo({
           setUserPools([]);
           return;
         }
-        setUserPoolsError(cause instanceof Error ? cause.message : String(cause));
+        setUserPoolsError(t("systemInfo.userPoolError"));
       })
       .finally(() => {
         if (!controller.signal.aborted) setUserPoolsLoading(false);
@@ -128,11 +256,36 @@ export function SystemInfo({
     return () => controller.abort();
   }, [isAdmin, localMode, userPoolsReloadKey]);
 
+  useEffect(() => {
+    if (!isAdmin) {
+      setEnvironmentResources(null);
+      setEnvironmentResourcesLoading(false);
+      setEnvironmentResourcesError("");
+      return;
+    }
+    const controller = new AbortController();
+    setEnvironmentResourcesLoading(true);
+    setEnvironmentResourcesError("");
+    void getEnvironmentResources(controller.signal)
+      .then(setEnvironmentResources)
+      .catch((cause) => {
+        if ((cause as Error)?.name === "AbortError") return;
+        setEnvironmentResourcesError(t("systemInfo.environmentResourcesError"));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setEnvironmentResourcesLoading(false);
+      });
+    return () => controller.abort();
+  }, [isAdmin, environmentResourcesReloadKey]);
+
   return (
     <div className="system-info-page">
       <header className="system-info-page-header">
-        <h1>系统信息</h1>
-        <p>查看当前 Studio 版本及关联的基础资源</p>
+        <PageBackButton label={t("common.back")} onClick={onBack} />
+        <div>
+          <h1>{t("systemInfo.title")}</h1>
+          <p>{t("systemInfo.description")}</p>
+        </div>
       </header>
 
       <div className="system-info-scroll">
@@ -140,10 +293,10 @@ export function SystemInfo({
           className="system-info-section"
           aria-labelledby="studio-info-title"
         >
-          <h2 id="studio-info-title">通用</h2>
+          <h2 id="studio-info-title">{t("systemInfo.general")}</h2>
           <dl className="system-info-summary">
             <div>
-              <dt>当前版本</dt>
+              <dt>{t("systemInfo.currentVersion")}</dt>
               <dd>{version || "—"}</dd>
             </div>
           </dl>
@@ -155,14 +308,14 @@ export function SystemInfo({
               className="system-info-section"
               aria-labelledby="storage-info-title"
             >
-              <h2 id="storage-info-title">存储</h2>
+              <h2 id="storage-info-title">{t("systemInfo.storage")}</h2>
               {sandboxLoading ? (
                 <div
                   className="system-info-loading"
                   role="status"
                   aria-live="polite"
                 >
-                  <TextShimmer as="span">正在加载存储信息</TextShimmer>
+                  <TextShimmer as="span">{t("systemInfo.loadingStorage")}</TextShimmer>
                 </div>
               ) : sandboxError ? (
                 <div className="system-info-error" role="alert">
@@ -171,21 +324,21 @@ export function SystemInfo({
                     type="button"
                     onClick={() => setSandboxReloadKey((key) => key + 1)}
                   >
-                    重新加载
+                    {t("common.reload")}
                   </button>
                 </div>
               ) : (
                 <dl className="system-info-summary">
                   <div className="system-info-resource-row">
-                    <dt>TOS 地址</dt>
+                    <dt>{t("systemInfo.tosAddress")}</dt>
                     <dd
                       className={`system-info-resource-value${tosAddress ? "" : " is-empty"}`}
                     >
                       <ConsoleLink
                         href={tosConsoleUrl(provider, tosAddress)}
-                        label="在云控制台中打开 TOS 存储桶"
+                        label={t("systemInfo.openTosConsole")}
                       >
-                        {tosAddress || "未配置"}
+                        {tosAddress || t("common.notConfigured")}
                       </ConsoleLink>
                     </dd>
                   </div>
@@ -195,16 +348,83 @@ export function SystemInfo({
 
             <section
               className="system-info-section"
+              aria-labelledby="environment-build-info-title"
+            >
+              <h2 id="environment-build-info-title">{t("systemInfo.environmentBuild")}</h2>
+              {environmentResourcesLoading ? (
+                <div className="system-info-loading" role="status" aria-live="polite">
+                  <TextShimmer as="span">{t("systemInfo.loadingEnvironmentResources")}</TextShimmer>
+                </div>
+              ) : environmentResourcesError ? (
+                <div className="system-info-error" role="alert">
+                  <p>{environmentResourcesError}</p>
+                  <button
+                    type="button"
+                    onClick={() => setEnvironmentResourcesReloadKey((key) => key + 1)}
+                  >
+                    {t("common.reload")}
+                  </button>
+                </div>
+              ) : environmentResources ? (
+                <dl className="system-info-summary">
+                  <div className="system-info-resource-row">
+                    <dt>{t("systemInfo.codePipelineWorkspace")}</dt>
+                    <dd className="system-info-resource-value">
+                      <ConsoleLink
+                        href={environmentResources.codePipeline.consoleUrl || null}
+                        label={t("systemInfo.openCodePipelineWorkspace")}
+                      >
+                        {environmentResources.codePipeline.workspaceName ||
+                          environmentResources.codePipeline.workspaceId ||
+                          t("systemInfo.createdOnFirstBuild")}
+                      </ConsoleLink>
+                    </dd>
+                  </div>
+                  <div className="system-info-resource-row">
+                    <dt>{t("systemInfo.codePipelinePipeline")}</dt>
+                    <dd className="system-info-resource-value">
+                      {environmentResources.codePipeline.pipelineName ||
+                        environmentResources.codePipeline.pipelineId ||
+                        t("systemInfo.createdOnFirstBuild")}
+                    </dd>
+                  </div>
+                  <div className="system-info-resource-row">
+                    <dt>{t("systemInfo.containerRegistryRepository")}</dt>
+                    <dd className="system-info-resource-value">
+                      <ConsoleLink
+                        href={environmentResources.containerRegistry.consoleUrl || null}
+                        label={t("systemInfo.openContainerRegistryRepository")}
+                      >
+                        {environmentResources.containerRegistry.imageRepository ||
+                          [
+                            environmentResources.containerRegistry.registry,
+                            environmentResources.containerRegistry.namespace,
+                            environmentResources.containerRegistry.repository,
+                          ].filter(Boolean).join("/") ||
+                          t("systemInfo.createdOnFirstBuild")}
+                      </ConsoleLink>
+                    </dd>
+                  </div>
+                </dl>
+              ) : null}
+            </section>
+
+            <section
+              className="system-info-section"
               aria-labelledby="sandbox-tool-title"
             >
-              <h2 id="sandbox-tool-title">沙箱信息</h2>
+              <h2 id="sandbox-tool-title">{t("systemInfo.sandboxInfo")}</h2>
+              <button type="button" className="system-info-refresh"
+                disabled={imageLoading} onClick={() => setSandboxReloadKey((key) => key + 1)}>
+                {imageLoading ? t("systemInfo.checkingVersions") : t("systemInfo.checkUpdates")}
+              </button>
               {sandboxLoading ? (
                 <div
                   className="system-info-loading"
                   role="status"
                   aria-live="polite"
                 >
-                  <TextShimmer as="span">正在加载沙箱信息</TextShimmer>
+                  <TextShimmer as="span">{t("systemInfo.loadingSandboxInfo")}</TextShimmer>
                 </div>
               ) : sandboxError ? (
                 <div className="system-info-error" role="alert">
@@ -213,37 +433,80 @@ export function SystemInfo({
                     type="button"
                     onClick={() => setSandboxReloadKey((key) => key + 1)}
                   >
-                    重新加载
+                    {t("common.reload")}
                   </button>
                 </div>
               ) : (
                 <div className="system-info-tool-list">
-                  {sandboxTools.map((tool) => (
-                    <dl className="system-info-tool" key={tool.kind}>
-                      <div className="system-info-resource-row">
-                        <dt className="system-info-tool-label">
-                          <span>{tool.label}</span>
-                          {tool.snapshot ? (
-                            <span className="system-info-tool-badge">快照版</span>
-                          ) : null}
-                        </dt>
-                        <dd
-                          className={`system-info-resource-value${tool.toolId ? "" : " is-empty"}`}
-                        >
-                          <ConsoleLink
-                            href={sandboxToolConsoleUrl(
-                              provider,
-                              region,
-                              tool.toolId,
-                            )}
-                            label={`在云控制台中打开${tool.label}`}
+                  {imageError ? <span className="system-info-inline-error" role="alert">{imageError}</span> : null}
+                  {sandboxTools.map((tool) => {
+                    const imageState = imageStates[tool.toolId];
+                    const updateState = sandboxToolUpdates[tool.toolId];
+                    const updateVisible = Boolean(tool.toolId) && Boolean(imageState?.canUpdate);
+                    const inlineError = updateState?.error || (imageState?.error ? t("systemInfo.versionCheckError") : imageState?.modelEnvError ? t("systemInfo.modelEnvRepairUnavailable") : "");
+                    return (
+                      <dl className="system-info-tool" key={tool.kind}>
+                        <div className="system-info-resource-row">
+                          <dt className="system-info-tool-label">
+                            <span>{tool.label}</span>
+                            {tool.snapshot ? (
+                              <span className="system-info-tool-badge">{t("systemInfo.snapshot")}</span>
+                            ) : null}
+                          </dt>
+                          <dd
+                            className={`system-info-resource-value${tool.toolId ? "" : " is-empty"}`}
                           >
-                            {tool.toolId || "未配置"}
-                          </ConsoleLink>
-                        </dd>
-                      </div>
-                    </dl>
-                  ))}
+                            <ConsoleLink
+                              href={sandboxToolConsoleUrl(
+                                provider,
+                                imageState?.region || region,
+                                tool.toolId,
+                              )}
+                              label={t("systemInfo.openToolConsole", { name: tool.label })}
+                            >
+                              {tool.toolId || t("common.notConfigured")}
+                            </ConsoleLink>
+                            {updateVisible ? (
+                              <button
+                                type="button"
+                                className="system-info-resource-update"
+                                disabled={updateState?.busy}
+                                aria-busy={updateState?.busy || undefined}
+                                aria-label={t("systemInfo.updateSandbox", {
+                                  name: tool.label,
+                                  variant: tool.snapshot ? t("systemInfo.snapshotWithSpace") : "",
+                                })}
+                                title={t("systemInfo.updateSandbox", {
+                                  name: tool.label,
+                                  variant: tool.snapshot ? t("systemInfo.snapshotWithSpace") : "",
+                                })}
+                                onClick={() => void updateSandboxToolModelEnv(tool)}
+                              >
+                                <SandboxUpdateIcon spinning={updateState?.busy || false} />
+                              </button>
+                            ) : null}
+                            {imageState?.currentImage ? (
+                              <span className="system-info-inline-status" title={`${imageState.currentImage} → ${imageState.latestImage}`}>
+                                {imageState.currentImage.split(":").pop()}
+                                {imageState.needsImageUpdate ? ` → ${imageState.latestImage?.split(":").pop()}` : ""}
+                                {imageState.status === "Updating" ? ` · ${t("systemInfo.updatingSandbox")}` : ""}
+                              </span>
+                            ) : null}
+                            {updateState?.message ? (
+                              <span className="system-info-inline-status" role="status">
+                                {updateState.message}
+                              </span>
+                            ) : null}
+                            {inlineError ? (
+                              <span className="system-info-inline-error" role="alert">
+                                {inlineError}
+                              </span>
+                            ) : null}
+                          </dd>
+                        </div>
+                      </dl>
+                    );
+                  })}
                 </div>
               )}
             </section>
@@ -252,14 +515,14 @@ export function SystemInfo({
               className="system-info-section"
               aria-labelledby="user-pool-title"
             >
-              <h2 id="user-pool-title">用户池</h2>
+              <h2 id="user-pool-title">{t("systemInfo.userPool")}</h2>
               {userPoolsLoading ? (
                 <div
                   className="system-info-loading"
                   role="status"
                   aria-live="polite"
                 >
-                  <TextShimmer as="span">正在加载用户池</TextShimmer>
+                  <TextShimmer as="span">{t("systemInfo.loadingUserPool")}</TextShimmer>
                 </div>
               ) : userPoolsError ? (
                 <div className="system-info-error" role="alert">
@@ -268,7 +531,7 @@ export function SystemInfo({
                     type="button"
                     onClick={() => setUserPoolsReloadKey((key) => key + 1)}
                   >
-                    重新加载
+                    {t("common.reload")}
                   </button>
                 </div>
               ) : userPools.length > 0 ? (
@@ -276,7 +539,7 @@ export function SystemInfo({
                   {userPools.map((pool) => (
                     <dl className="system-info-pool" key={pool.uid}>
                       <div>
-                        <dt>名称</dt>
+                        <dt>{t("common.name")}</dt>
                         <dd className="system-info-resource-value">
                           <ConsoleLink
                             href={identityUserPoolConsoleUrl(
@@ -284,22 +547,24 @@ export function SystemInfo({
                               pool.region || region,
                               pool.uid,
                             )}
-                            label={`在云控制台中打开用户池${pool.name ? `“${pool.name}”` : ""}`}
+                            label={t("systemInfo.openUserPoolConsole", {
+                              name: pool.name || "",
+                            })}
                           >
-                            {pool.name || "未命名用户池"}
+                            {pool.name || t("systemInfo.unnamedUserPool")}
                           </ConsoleLink>
                         </dd>
                       </div>
                       <div>
-                        <dt>ID</dt>
+                        <dt>{t("systemInfo.id")}</dt>
                         <dd>{pool.uid || "—"}</dd>
                       </div>
                       <div>
-                        <dt>域名</dt>
+                        <dt>{t("systemInfo.domain")}</dt>
                         <dd>{pool.domain || "—"}</dd>
                       </div>
                       <div>
-                        <dt>区域</dt>
+                        <dt>{t("systemInfo.region")}</dt>
                         <dd>{pool.region || "—"}</dd>
                       </div>
                     </dl>
@@ -308,8 +573,8 @@ export function SystemInfo({
               ) : (
                 <p className="system-info-empty">
                   {localMode
-                    ? "本地模式未配置用户池"
-                    : "当前 Studio 未配置用户池"}
+                    ? t("systemInfo.noLocalUserPool")
+                    : t("systemInfo.noUserPool")}
                 </p>
               )}
             </section>

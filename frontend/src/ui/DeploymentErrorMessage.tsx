@@ -1,11 +1,17 @@
 import { useState } from "react";
-import { Check, Copy, Loader2, Maximize2, Minimize2, RotateCcw } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { Button, CopyButton } from "@openai/apps-sdk-ui/components/Button";
+import {
+  ArrowRotateCcw,
+  Collapse,
+  Expand,
+} from "@openai/apps-sdk-ui/components/Icon";
 
 export function DeploymentErrorMessage({
   message,
   className = "",
   onRetry,
-  retryLabel = "重试部署",
+  retryLabel,
   defaultExpanded = true,
 }: {
   message: string;
@@ -14,19 +20,10 @@ export function DeploymentErrorMessage({
   retryLabel?: string;
   defaultExpanded?: boolean;
 }) {
+  const { t } = useTranslation("ui");
+  const resolvedRetryLabel = retryLabel ?? t("deploymentError.retryDeployment");
   const [expanded, setExpanded] = useState(defaultExpanded);
-  const [copied, setCopied] = useState(false);
   const [retrying, setRetrying] = useState(false);
-
-  const copyMessage = async () => {
-    try {
-      await navigator.clipboard.writeText(message);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      setCopied(false);
-    }
-  };
 
   const retry = async () => {
     if (!onRetry || retrying) return;
@@ -48,32 +45,43 @@ export function DeploymentErrorMessage({
       <p className="deploy-error-message-text">{message}</p>
       <div className="deploy-error-message-actions">
         {onRetry && (
-          <button
+          <Button
             type="button"
             className="deploy-error-retry"
-            disabled={retrying}
+            color="danger"
+            variant="soft"
+            size="sm"
+            pill={false}
+            loading={retrying}
             onClick={() => void retry()}
           >
-            {retrying ? <Loader2 className="spin" /> : <RotateCcw />}
-            {retrying ? "重试中…" : retryLabel}
-          </button>
+            {!retrying && <ArrowRotateCcw />}
+            {retrying ? t("deploymentError.retrying") : resolvedRetryLabel}
+          </Button>
         )}
-        <button
+        <Button
           type="button"
-          title={expanded ? "收起错误信息" : "展开完整错误信息"}
-          aria-label={expanded ? "收起错误信息" : "展开完整错误信息"}
+          color="secondary"
+          variant="ghost"
+          size="sm"
+          uniform
+          pill={false}
+          title={expanded ? t("deploymentError.collapse") : t("deploymentError.expand")}
+          aria-label={expanded ? t("deploymentError.collapse") : t("deploymentError.expand")}
           onClick={() => setExpanded((value) => !value)}
         >
-          {expanded ? <Minimize2 /> : <Maximize2 />}
-        </button>
-        <button
-          type="button"
-          title={copied ? "已复制" : "复制完整错误信息"}
-          aria-label={copied ? "已复制" : "复制完整错误信息"}
-          onClick={() => void copyMessage()}
-        >
-          {copied ? <Check /> : <Copy />}
-        </button>
+          {expanded ? <Collapse /> : <Expand />}
+        </Button>
+        <CopyButton
+          copyValue={message}
+          color="secondary"
+          variant="ghost"
+          size="sm"
+          uniform
+          pill={false}
+          title={t("deploymentError.copy")}
+          aria-label={t("deploymentError.copy")}
+        />
       </div>
     </div>
   );

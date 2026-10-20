@@ -1,8 +1,10 @@
+import { fetchMpaCronTasks, manageMpaTask, fetchMpaRuns, type MpaRuntime } from "./mpaCronTasks";
 // Thin client for the Google ADK API server (the same server `veadk frontend`
 // launches). Uses relative URLs so it works same-origin in production and via
 // the Vite dev proxy in development.
 
 import { withAuth } from "./auth";
+import { adkT, withLocaleHeaders } from "./i18n";
 import { isOAuthLoginRequired, withLocalUser } from "./identity";
 import {
   isAuthenticationRedirect,
@@ -10,15 +12,30 @@ import {
 } from "./authSession";
 import { parseJsonResponse } from "./jsonResponse";
 import { formatRunSseError } from "./runSseError";
-import { parseSSE } from "./sse";
+import {
+  runtimeContextFromResponse,
+  type RuntimeLogTarget,
+} from "./runtimeLogs";
+import { parseSSE, SSE_EVENT_NAME } from "./sse";
 import { normalizeRuntimeDescription } from "./runtimeDescription";
+import {
+  DeploymentStatusUnconfirmedError,
+  isDeploymentAbortError,
+  isDeploymentStatusUnconfirmedError,
+  pollDeploymentRecovery,
+} from "./deploymentStatus";
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   requestSignal,
   TRANSFER_REQUEST_TIMEOUT_MS,
 } from "./timeout";
 import type { AgentProject } from "../create/project";
-import type { AgentDraft, NetworkConfig } from "../create/types";
+import type {
+  AgentDraft,
+  McpCredentialValue,
+  NetworkConfig,
+  SelectedSkill,
+} from "../create/types";
 import type { IssueFeedbackReport } from "./issueFeedback";
 import {
   BYTEPLUS_DEFAULT_REGION,
@@ -34,17 +51,28 @@ export interface ModelOption {
   activationState: string;
   lifecycleStatus: string;
   available: boolean;
+  apiKeyAllowed?: boolean;
+  unavailableReason?: ModelApiKeyModelPermission["state"];
 }
 
 export interface ModelOptionsResponse {
   provider: CloudProvider;
   selectedApiKeyId?: string;
   models: ModelOption[];
+  apiKeyModelPermissions?: ModelApiKeyModelPermission[];
+}
+
+export interface ModelApiKeyModelPermission {
+  name: string;
+  modelId?: string;
+  state: "Available" | "Shutdown" | "VideoGeneration" | "Unsupported" | "NotActivated" | "Unknown";
 }
 
 export interface ModelApiKeyOption {
   id: string;
   name: string;
+  status?: string;
+  allowAll?: boolean;
 }
 
 export interface ModelApiKeysResponse {
@@ -77,6 +105,8 @@ export interface AdkEvent {
   timestamp?: number;
   usageMetadata?: AdkUsage;
   usage_metadata?: AdkUsage;
+  customMetadata?: Record<string, unknown>;
+  custom_metadata?: Record<string, unknown>;
   // Set when the model/run fails; /run_sse emits it as a `data: {"error": ...}`
   // frame (also seen as errorMessage / error_message).
   error?: string;
@@ -115,6 +145,8 @@ export interface TraceSpan {
 export interface AdkSession {
   id: string;
   lastUpdateTime?: number;
+  title?: string;
+  status?: string;
   events?: AdkEvent[];
   state?: Record<string, unknown>;
   [k: string]: unknown;
@@ -350,7 +382,10 @@ export interface AdkEndpoint {
   base?: string;
   apiKey?: string;
   runtimeId?: string;
+  mpaInstanceId?: string;
   region?: string;
+  runtimeVersion?: number | null;
+  agentCategory?: "general" | "mpa";
   retryProbe?: boolean;
 }
 
@@ -369,7 +404,9 @@ interface RemoteApp {
   base?: string;
   apiKey?: string;
   runtimeId?: string;
+  mpaInstanceId?: string;
   region?: string;
+  agentCategory?: "general" | "mpa";
 }
 const remoteApps = new Map<string, RemoteApp>();
 
@@ -386,8 +423,21 @@ function resolve(appName: string): { app: string; ep: AdkEndpoint } {
   if (!r) return { app: appName, ep: {} };
   return {
     app: r.app,
-    ep: { base: r.base, apiKey: r.apiKey, runtimeId: r.runtimeId, region: r.region },
+    ep: {
+      base: r.base,
+      apiKey: r.apiKey,
+      runtimeId: r.runtimeId,
+      mpaInstanceId: r.mpaInstanceId,
+      region: r.region,
+      agentCategory: r.agentCategory,
+    },
   };
+}
+
+function isMpaEndpoint(app: string, ep: AdkEndpoint): boolean {
+  // Discovery selects the transport; product metadata must not override A2A.
+  return app !== "a2a-default" &&
+    Boolean(ep.runtimeId && (ep.agentCategory === "mpa" || ep.mpaInstanceId));
 }
 
 /** fetch wrapper. Routing, in priority order:
@@ -401,21 +451,24 @@ async function apiFetch(
   ep: AdkEndpoint = {},
   timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
 ): Promise<Response> {
+  const operationSignal = requestSignal(init.signal, timeoutMs);
   const runtimeMethodOverride =
     Boolean(ep.runtimeId) && String(init.method ?? "GET").toUpperCase() === "DELETE";
   const baseOpts = {
     ...init,
     ...(runtimeMethodOverride ? { method: "POST" } : {}),
-    headers: withLocalUser(init.headers),
+    headers: withLocaleHeaders(withLocalUser(init.headers)),
   };
   const send = () => {
     const opts = {
       ...baseOpts,
-      signal: requestSignal(init.signal, timeoutMs),
+      signal: operationSignal,
     };
     if (ep.runtimeId) {
       const runtimeParams = new URLSearchParams();
-      if (ep.region) runtimeParams.set("region", ep.region);
+      // Keep the proxy's control-plane region separate from API query params.
+      // Skill Catalog endpoints also use `region` for their own filtering.
+      if (ep.region) runtimeParams.set("_runtime_region", ep.region);
       if (ep.retryProbe) runtimeParams.set("probe_retry", "connect");
       if (runtimeMethodOverride) runtimeParams.set("_method", "DELETE");
       const rq = runtimeParams.toString()
@@ -440,6 +493,7 @@ async function apiFetch(
   };
 
   const requiresLogin = async (response: Response) => {
+    if (response.headers.get("X-Studio-Error-Source") === "upstream") return false;
     if (isAuthenticationRedirect(response)) return true;
     if (response.status !== 401) return false;
     try {
@@ -451,7 +505,7 @@ async function apiFetch(
 
   let response = await send();
   while (await requiresLogin(response)) {
-    await waitForAuthentication(init.signal);
+    await waitForAuthentication(operationSignal);
     response = await send();
   }
   return response;
@@ -487,19 +541,63 @@ function formatErrorDetail(detail: unknown): string {
   return "";
 }
 
-async function httpErrorMessage(res: Response, fallback: string): Promise<string> {
-  const context = `${fallback}（HTTP ${res.status}）`;
+async function httpErrorCode(res: Response): Promise<string> {
+  const text = await res.clone().text().catch(() => "");
+  if (!text) return "";
+  try {
+    const data = JSON.parse(text) as { detail?: unknown; error?: unknown };
+    const detail = data.detail ?? data.error;
+    if (typeof detail === "string") return detail;
+    if (detail && typeof detail === "object" && "code" in detail) {
+      return String((detail as { code?: unknown }).code ?? "");
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+export async function httpErrorMessage(
+  res: Response,
+  fallback: string,
+): Promise<string> {
+  const source = res.headers.get("X-Studio-Error-Source");
+  const status = source === "upstream"
+    ? res.headers.get("X-Studio-Upstream-Status") ?? res.status
+    : res.status;
+  const context = adkT("common.fallbackWithHttpStatus", { fallback, status });
   const text = await res.text().catch(() => "");
+  if (source === "upstream") {
+    return adkT("client.errorWithCloudResponse", {
+      context,
+      action: res.headers.get("X-Studio-Upstream-Action") ?? "",
+      response: text || adkT("client.emptyCloudResponse"),
+    });
+  }
   if (!text) return context;
   try {
     const data = JSON.parse(text) as { detail?: unknown; error?: unknown };
     const detail = formatErrorDetail(data.detail ?? data.error);
+    if (source === "transport" || source === "studio") {
+      return detail ? `${context}\n${detail}` : context;
+    }
     return detail
-      ? `${context}\n${detail}\n原始响应：\n${text}`
-      : `${context}\n原始响应：\n${text}`;
+      ? adkT("client.errorWithDetailAndRawResponse", { context, detail, response: text })
+      : adkT("client.errorWithRawResponse", { context, response: text });
   } catch {
-    return `${context}\n原始响应：\n${text}`;
+    return adkT("client.errorWithRawResponse", { context, response: text });
   }
+}
+
+async function mpaRuntimeSessionListError(res: Response): Promise<string> {
+  const detail = await httpErrorMessage(
+    res,
+    adkT("client.mpaRuntimeSessionsLoadFailed"),
+  );
+  if (res.status === 401 && /X-Jwt-Token/i.test(detail)) {
+    return adkT("client.mpaRuntimeLegacyAuthUnsupported", { detail });
+  }
+  return detail;
 }
 
 export async function listModelApiKeys(
@@ -511,7 +609,7 @@ export async function listModelApiKeys(
     { signal, cache: "no-store" },
   );
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "加载 Ark API Key 失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.loadArkApiKeysFailed")));
   }
   return (await res.json()) as ModelApiKeysResponse;
 }
@@ -526,7 +624,7 @@ export async function revealModelApiKey(
     { method: "POST", signal, cache: "no-store" },
   );
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "加载 Ark API Key 失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.loadArkApiKeysFailed")));
   }
   return (await res.json()) as ModelApiKeyValueResponse;
 }
@@ -535,17 +633,19 @@ export async function listModelOptions(options?: {
   signal?: AbortSignal;
   apiKeyId?: string;
   refresh?: boolean;
+  scope?: "development";
 }): Promise<ModelOptionsResponse> {
   const params = new URLSearchParams();
   if (options?.apiKeyId) params.set("apiKeyId", options.apiKeyId);
   if (options?.refresh) params.set("refresh", "true");
+  if (options?.scope) params.set("scope", options.scope);
   const query = params.toString();
   const res = await apiFetch(`/web/model-options${query ? `?${query}` : ""}`, {
     signal: options?.signal,
     cache: "no-store",
   });
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "加载模型列表失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.loadModelsFailed")));
   }
   return (await res.json()) as ModelOptionsResponse;
 }
@@ -559,7 +659,7 @@ export async function listApps(): Promise<string[]> {
 /** A runtime exists but the current identity is not allowed to use it. */
 export class RuntimeAccessDeniedError extends Error {
   constructor() {
-    super("当前账号无权访问该 Runtime，请刷新列表或重新登录后重试。");
+    super(adkT("client.runtimeAccessDenied"));
     this.name = "RuntimeAccessDeniedError";
   }
 }
@@ -576,10 +676,8 @@ export class RuntimeProbeError extends Error {
   }
 }
 
-const PRIVATE_RUNTIME_UNREACHABLE_MESSAGE =
-  "Runtime 已部署成功，但当前 Studio 无法访问私网 Runtime。请使用已绑定相同 VPC 的 Studio 访问，或改用公网 / 公网+VPC 部署。";
-const RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE =
-  "Runtime 已部署成功，但 Studio 暂时无法连接服务。网关域名可能仍在生效，或当前网络/DNS 无法访问该 Runtime，请稍后在智能体管理页重试连接。";
+const privateRuntimeUnreachableMessage = () => adkT("client.privateRuntimeUnavailable");
+const runtimeEndpointUnreachableMessage = () => adkT("client.runtimeTemporarilyUnavailable");
 const VOLCENGINE_RUNTIME_REGION_FALLBACKS = ["cn-beijing", "cn-shanghai"] as const;
 const RUNTIME_APPS_CACHE_TTL_MS = 30_000;
 const RUNTIME_METADATA_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -604,12 +702,19 @@ const runtimeAgentInfoCache = new Map<string, ClientCacheEntry<AgentInfo>>();
 const runtimeDetailCache = new Map<string, ClientCacheEntry<RuntimeDetail>>();
 const feedbackCasesCache =
   new Map<string, ClientCacheEntry<AgentFeedbackCasesResponse>>();
+const runtimeUpdateCapabilityCache =
+  new Map<string, ClientCacheEntry<RuntimeUpdateCapability>>();
 
-function runtimeAppsCacheKey(runtimeId: string, region: string): string {
-  return `${region}:${runtimeId}`;
+function runtimeAppsCacheKey(
+  runtimeId: string,
+  region: string,
+  runtimeVersion?: number | null,
+): string {
+  return `${region}:${runtimeId}:${runtimeVersion ?? ""}`;
 }
 
 export function setClientCloudProvider(provider: CloudProvider): void {
+  if (provider !== activeCloudProvider) runtimeUpdateCapabilityCache.clear();
   activeCloudProvider = provider;
 }
 
@@ -635,6 +740,11 @@ export function runtimeRegionCandidates(region?: string): string[] {
   ];
 }
 
+function selectedRuntimeRegionCandidates(region?: string): string[] {
+  const explicit = (region || "").trim();
+  return explicit ? [explicit] : runtimeRegionCandidates();
+}
+
 function cacheKey(...parts: Array<string | number | undefined>): string {
   return parts.map((part) => String(part ?? "")).join("\u0001");
 }
@@ -658,6 +768,32 @@ function rememberClientCache<T>(
   return value;
 }
 
+function waitForSharedRequest<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    return Promise.reject(new DOMException("The operation was aborted.", "AbortError"));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => {
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    void promise.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
+}
+
 async function runtimeProxyErrorCode(response: Response): Promise<string> {
   try {
     const payload = (await response.clone().json()) as {
@@ -675,8 +811,15 @@ export async function fetchRemoteApps(
   base: string,
   apiKey: string,
   ep?: AdkEndpoint,
+  signal?: AbortSignal,
+  timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
 ): Promise<string[]> {
-  const res = await apiFetch(`/list-apps`, {}, ep ?? { base, apiKey });
+  const res = await apiFetch(
+    `/list-apps`,
+    { signal },
+    ep ?? { base, apiKey },
+    timeoutMs,
+  );
   const runtimeErrorCode = ep?.runtimeId
     ? await runtimeProxyErrorCode(res)
     : "";
@@ -687,7 +830,7 @@ export async function fetchRemoteApps(
     ep?.runtimeId &&
     runtimeErrorCode === "runtime_private_endpoint_unreachable"
   ) {
-    throw new RuntimeProbeError(PRIVATE_RUNTIME_UNREACHABLE_MESSAGE);
+    throw new RuntimeProbeError(privateRuntimeUnreachableMessage());
   }
   if (
     ep?.runtimeId &&
@@ -698,29 +841,48 @@ export async function fetchRemoteApps(
       "runtime_json_timeout",
     ].includes(runtimeErrorCode)
   ) {
-    throw new RuntimeProbeError(RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE, false, true);
+    throw new RuntimeProbeError(runtimeEndpointUnreachableMessage(), false, true);
   }
   if (ep?.runtimeId && res.status === 404) {
     throw new RuntimeProbeError(
-      "该 Runtime 的 Agent Server 未提供连接接口，请确认 Runtime 已就绪且版本兼容。",
+      adkT("client.runtimeConnectionUnsupported"),
       true,
       true,
     );
   }
   if (ep?.runtimeId && (res.status === 401 || res.status === 403)) {
     throw new RuntimeProbeError(
-      "Runtime 服务拒绝了连接请求，请检查 Runtime 的鉴权配置。",
+      adkT("client.runtimeConnectionDenied"),
     );
   }
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "读取 Agent 列表失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.listAgentsFailed")));
   }
-  const apps = (await res.json()) as string[];
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch {
+    throw new RuntimeProbeError(
+      adkT("client.invalidListAppsJson"),
+    );
+  }
+  if (
+    !Array.isArray(payload) ||
+    payload.some((app) => typeof app !== "string" || !app.trim())
+  ) {
+    throw new RuntimeProbeError(
+      adkT("client.invalidListAppsFormat"),
+    );
+  }
+  const apps = payload.map((app) => app.trim());
   if (ep?.runtimeId) {
-    runtimeAppsCache.set(runtimeAppsCacheKey(ep.runtimeId, ep.region ?? ""), {
-      apps,
-      expiresAt: Date.now() + RUNTIME_APPS_CACHE_TTL_MS,
-    });
+    runtimeAppsCache.set(
+      runtimeAppsCacheKey(ep.runtimeId, ep.region ?? "", ep.runtimeVersion),
+      {
+        apps,
+        expiresAt: Date.now() + RUNTIME_APPS_CACHE_TTL_MS,
+      },
+    );
   }
   return apps;
 }
@@ -730,18 +892,89 @@ export async function createSession(
   userId: string,
 ): Promise<string> {
   const { app, ep } = resolve(appName);
+  if (isMpaEndpoint(app, ep)) {
+    const mpaInstanceId = await resolveMpaRuntimeInstanceId(ep);
+    const statusRes = await apiFetch(
+      `/api/v1/agents/${encodeURIComponent(mpaInstanceId)}/profile-status`,
+      { cache: "no-store" },
+      ep,
+    );
+    const profileNotFound =
+      !statusRes.ok && (await httpErrorCode(statusRes)) === "profile_not_found";
+    if (!statusRes.ok && !profileNotFound) {
+      const fallback = adkT("client.createSessionFailedWithStatus", {
+        status: statusRes.status,
+      });
+      const detail = await httpErrorMessage(
+        statusRes,
+        adkT("client.createSessionFailed"),
+      );
+      throw new Error(
+        detail === fallback
+          ? fallback
+          : adkT("common.fallbackWithDetail", { fallback, detail }),
+      );
+    }
+    const profile = profileNotFound
+      ? {}
+      : ((await statusRes.json()) as Partial<MpaProfileStatus>);
+    const profileRevision = Number(profile.profileRevision ?? 0);
+    const res = await apiFetch(
+      "/api/v1/sessions",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mpaInstanceId,
+          profileRevision,
+        }),
+      },
+      ep,
+    );
+    if (!res.ok) {
+      const fallback = adkT("client.createSessionFailedWithStatus", {
+        status: res.status,
+      });
+      const detail = await httpErrorMessage(res, adkT("client.createSessionFailed"));
+      throw new Error(
+        detail === fallback
+          ? fallback
+          : adkT("common.fallbackWithDetail", { fallback, detail }),
+      );
+    }
+    const session = await res.json();
+    return String(session.sessionId ?? session.id ?? "");
+  }
   const res = await apiFetch(
     `/apps/${app}/users/${encodeURIComponent(userId)}/sessions`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
     ep,
   );
   if (!res.ok) {
-    const fallback = `创建会话失败 (${res.status})`;
-    const detail = await httpErrorMessage(res, "创建会话失败");
-    throw new Error(detail === fallback ? fallback : `${fallback}：${detail}`);
+    const fallback = adkT("client.createSessionFailedWithStatus", { status: res.status });
+    const detail = await httpErrorMessage(res, adkT("client.createSessionFailed"));
+    throw new Error(detail === fallback ? fallback : adkT("common.fallbackWithDetail", { fallback, detail }));
   }
   const session = await res.json();
   return session.id;
+}
+
+async function resolveMpaRuntimeInstanceId(ep: AdkEndpoint): Promise<string> {
+  const existing = ep.mpaInstanceId?.trim();
+  if (existing) return existing;
+  const runtimeId = ep.runtimeId?.trim() ?? "";
+  if (!runtimeId) return "";
+  try {
+    const detail = await getRuntimeDetail(runtimeId, ep.region ?? "cn-beijing");
+    const fromDetail = detail.mpaInstanceId?.trim();
+    if (fromDetail) return fromDetail;
+    const fromEnv = detail.envs.find((item) => item.key === "MPA_AGENT_ID")
+      ?.value.trim();
+    if (fromEnv) return fromEnv;
+  } catch {
+    /* Preserve the legacy fallback for runtimes without visible metadata. */
+  }
+  return runtimeId;
 }
 
 export async function listSessions(
@@ -749,8 +982,16 @@ export async function listSessions(
   userId: string,
 ): Promise<AdkSession[]> {
   const { app, ep } = resolve(appName);
+  if (isMpaEndpoint(app, ep)) {
+    const res = await apiFetch("/api/v1/sessions", { cache: "no-store" }, ep);
+    if (!res.ok) throw new Error(await mpaRuntimeSessionListError(res));
+    const payload = (await res.json()) as { sessions?: AdkSession[] } | AdkSession[];
+    return Array.isArray(payload) ? payload : payload.sessions ?? [];
+  }
   const res = await apiFetch(`/apps/${app}/users/${encodeURIComponent(userId)}/sessions`, {}, ep);
-  if (!res.ok) throw new Error(`list sessions failed: ${res.status}`);
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.listSessionsFailed")));
+  }
   return res.json();
 }
 
@@ -760,14 +1001,41 @@ export async function getSession(
   sessionId: string,
 ): Promise<AdkSession> {
   const { app, ep } = resolve(appName);
+  if (isMpaEndpoint(app, ep)) {
+    const res = await apiFetch(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+      { cache: "no-store" },
+      ep,
+    );
+    if (!res.ok) {
+      const detail = await httpErrorMessage(res, adkT("client.getSessionFailed"));
+      throw new Error(adkT("client.getSessionFailedWithDetail", { status: res.status, detail }));
+    }
+    const session = (await res.json()) as AdkSession;
+    const eventsRes = await apiFetch(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/events`,
+      { cache: "no-store" },
+      ep,
+    );
+    if (!eventsRes.ok) {
+      const detail = await httpErrorMessage(eventsRes, adkT("client.getSessionFailed"));
+      throw new Error(adkT("client.getSessionFailedWithDetail", {
+        status: eventsRes.status,
+        detail,
+      }));
+    }
+    const eventsPayload = (await eventsRes.json()) as { events?: AdkEvent[] };
+    session.events = Array.isArray(eventsPayload.events) ? eventsPayload.events : [];
+    return session;
+  }
   const res = await apiFetch(
     `/apps/${app}/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}`,
     {},
     ep,
   );
   if (!res.ok) {
-    const detail = await httpErrorMessage(res, "读取会话失败");
-    throw new Error(`get session failed: ${res.status}：${detail}`);
+    const detail = await httpErrorMessage(res, adkT("client.getSessionFailed"));
+    throw new Error(adkT("client.getSessionFailedWithDetail", { status: res.status, detail }));
   }
   const session = (await res.json()) as AdkSession;
   if (ep.runtimeId) {
@@ -790,9 +1058,9 @@ export async function submitMessageFeedback(args: {
 }): Promise<MessageFeedbackState> {
   const { app, ep } = resolve(args.appName);
   if (!ep.runtimeId) {
-    throw new Error("只有连接到 AgentKit Runtime 的会话支持反馈回流");
+    throw new Error(adkT("client.feedbackRuntimeOnly"));
   }
-  if (!ep.region) throw new Error("Runtime 缺少地域信息，无法提交反馈");
+  if (!ep.region) throw new Error(adkT("client.feedbackRegionMissing"));
   const res = await apiFetch(
     "/web/evaluation/feedback",
     {
@@ -813,7 +1081,7 @@ export async function submitMessageFeedback(args: {
     TRANSFER_REQUEST_TIMEOUT_MS,
   );
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "提交反馈失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.submitFeedbackFailed")));
   }
   const feedback = (await res.json()) as MessageFeedbackState;
   const scope = feedbackCacheScope(
@@ -848,7 +1116,7 @@ export async function getAgentFeedbackCases(args: {
   if (!options.force && existing?.promise) return existing.promise;
   let lastError: Error | null = null;
   const promise = (async () => {
-    for (const region of runtimeRegionCandidates(args.region)) {
+    for (const region of selectedRuntimeRegionCandidates(args.region)) {
       const query = new URLSearchParams({
         runtimeId: args.runtimeId,
         region,
@@ -863,9 +1131,9 @@ export async function getAgentFeedbackCases(args: {
           await res.json() as AgentFeedbackCasesResponse,
         );
       }
-      lastError = new Error(await httpErrorMessage(res, "读取评测集失败"));
+      lastError = new Error(await httpErrorMessage(res, adkT("client.loadEvaluationSetsFailed")));
     }
-    throw lastError ?? new Error("读取评测集失败");
+    throw lastError ?? new Error(adkT("client.loadEvaluationSetsFailed"));
   })();
   feedbackCasesCache.set(key, {
     ...existing,
@@ -892,7 +1160,7 @@ export async function getAutomaticEvaluationStatuses(args: {
   userId: string;
 }): Promise<AutomaticEvaluationStatusesResponse> {
   let lastError: Error | null = null;
-  for (const region of runtimeRegionCandidates(args.region)) {
+  for (const region of selectedRuntimeRegionCandidates(args.region)) {
     const query = new URLSearchParams({
       runtimeId: args.runtimeId,
       region,
@@ -903,9 +1171,9 @@ export async function getAutomaticEvaluationStatuses(args: {
     if (res.ok) {
       return res.json() as Promise<AutomaticEvaluationStatusesResponse>;
     }
-    lastError = new Error(await httpErrorMessage(res, "读取自动评测状态失败"));
+    lastError = new Error(await httpErrorMessage(res, adkT("client.loadAutoEvaluationStatusFailed")));
   }
-  throw lastError ?? new Error("读取自动评测状态失败");
+  throw lastError ?? new Error(adkT("client.loadAutoEvaluationStatusFailed"));
 }
 
 export async function getAgentOptimizations(args: {
@@ -914,7 +1182,7 @@ export async function getAgentOptimizations(args: {
   appName: string;
 }): Promise<AgentOptimizationsResponse> {
   let lastError: Error | null = null;
-  for (const region of runtimeRegionCandidates(args.region)) {
+  for (const region of selectedRuntimeRegionCandidates(args.region)) {
     const query = new URLSearchParams({
       runtimeId: args.runtimeId,
       region,
@@ -922,9 +1190,9 @@ export async function getAgentOptimizations(args: {
     });
     const res = await apiFetch(`/web/evaluation/optimizations?${query.toString()}`);
     if (res.ok) return res.json() as Promise<AgentOptimizationsResponse>;
-    lastError = new Error(await httpErrorMessage(res, "读取优化项失败"));
+    lastError = new Error(await httpErrorMessage(res, adkT("client.loadOptimizationsFailed")));
   }
-  throw lastError ?? new Error("读取优化项失败");
+  throw lastError ?? new Error(adkT("client.loadOptimizationsFailed"));
 }
 
 export function getCachedAgentFeedbackCases(args: {
@@ -1052,7 +1320,7 @@ export async function deleteAgentFeedbackCases(args: {
   itemIds: string[];
 }): Promise<{ deletedCount: number }> {
   let lastError: Error | null = null;
-  for (const region of runtimeRegionCandidates(args.region)) {
+  for (const region of selectedRuntimeRegionCandidates(args.region)) {
     const res = await apiFetch(
       "/web/evaluation/feedback-cases/delete",
       {
@@ -1090,9 +1358,9 @@ export async function deleteAgentFeedbackCases(args: {
       }
       return response;
     }
-    lastError = new Error(await httpErrorMessage(res, "删除评测案例失败"));
+    lastError = new Error(await httpErrorMessage(res, adkT("client.deleteEvaluationCaseFailed")));
   }
-  throw lastError ?? new Error("删除评测案例失败");
+  throw lastError ?? new Error(adkT("client.deleteEvaluationCaseFailed"));
 }
 
 export async function deleteSession(
@@ -1101,6 +1369,15 @@ export async function deleteSession(
   sessionId: string,
 ): Promise<void> {
   const { app, ep } = resolve(appName);
+  if (isMpaEndpoint(app, ep)) {
+    const res = await apiFetch(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "DELETE" },
+      ep,
+    );
+    if (!res.ok && res.status !== 404) throw new Error(`delete session failed: ${res.status}`);
+    return;
+  }
   const res = await apiFetch(
     `/apps/${app}/users/${encodeURIComponent(userId)}/sessions/${sessionId}`,
     { method: "DELETE" },
@@ -1118,6 +1395,19 @@ function decodeArtifactData(value: string): Uint8Array {
     bytes[index] = binary.charCodeAt(index);
   }
   return bytes;
+}
+
+export async function fetchSessionFile(
+  appName: string,
+  sessionId: string,
+  path: string,
+  signal: AbortSignal,
+): Promise<Blob> {
+  const { ep } = resolve(appName);
+  const url = `/api/v1/sessions/${encodeURIComponent(sessionId)}/files/download?path=${encodeURIComponent(path)}`;
+  const response = await apiFetch(url, { signal }, ep, TRANSFER_REQUEST_TIMEOUT_MS);
+  if (!response.ok) throw new Error(`SESSION_FILE_HTTP_${response.status}`);
+  return response.blob();
 }
 
 export async function downloadArtifact(
@@ -1155,10 +1445,10 @@ async function fetchArtifactBlob(
   const params = version == null ? "" : `?version=${encodeURIComponent(version)}`;
   const path = `/apps/${encodeURIComponent(app)}/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(filename)}${params}`;
   const res = await apiFetch(path, {}, ep, TRANSFER_REQUEST_TIMEOUT_MS);
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "下载文件失败"));
+  if (!res.ok) throw new Error(await httpErrorMessage(res, adkT("client.downloadFileFailed")));
   const part = (await res.json()) as AdkPart;
   const inline = part.inlineData ?? part.inline_data;
-  if (!inline?.data) throw new Error("文件内容不可用");
+  if (!inline?.data) throw new Error(adkT("client.fileUnavailable"));
   const bytes = decodeArtifactData(inline.data);
   const buffer = bytes.buffer.slice(
     bytes.byteOffset,
@@ -1221,7 +1511,7 @@ export async function uploadMedia(
     {},
     TRANSFER_REQUEST_TIMEOUT_MS,
   );
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "文件上传失败"));
+  if (!res.ok) throw new Error(await httpErrorMessage(res, adkT("client.uploadFileFailed")));
   const media = (await res.json()) as {
     id: string;
     uri: string;
@@ -1299,7 +1589,7 @@ export async function getSessionTrace(
     if (endTimeMs) params.set("endTimeMs", String(Math.round(endTimeMs)));
     res = await apiFetch(`/web/runtime-trace?${params.toString()}`);
     if (res.status === 404) {
-      throw new Error("该 Agent 暂未开启链路观测，请到控制台打开后使用。");
+      throw new Error(adkT("client.traceDisabled"));
     }
   } else {
     res = await apiFetch(
@@ -1309,17 +1599,17 @@ export async function getSessionTrace(
     );
   }
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "加载调用链路失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.loadTraceFailed")));
   }
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
-    const responseType = contentType.split(";", 1)[0] || "Content-Type 缺失";
+    const responseType = contentType.split(";", 1)[0] || adkT("client.contentTypeMissing");
     throw new Error(
-      `trace failed: 服务端返回了非 JSON 响应（${responseType}），请检查 Studio API 代理配置`,
+      adkT("client.traceNonJson", { contentType: responseType }),
     );
   }
   const spans = (await res.json()) as unknown;
-  if (!Array.isArray(spans)) throw new Error("trace failed: 返回格式无效");
+  if (!Array.isArray(spans)) throw new Error(adkT("client.invalidTraceFormat"));
   return spans as TraceSpan[];
 }
 
@@ -1332,11 +1622,11 @@ export async function submitIssueFeedback(
     body: JSON.stringify(report),
   });
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "问题反馈上报失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.submitIssueFeedbackFailed")));
   }
   const result = (await res.json()) as { submitted?: unknown };
   if (result.submitted !== true) {
-    throw new Error("问题反馈上报失败：服务端未确认提交结果");
+    throw new Error(adkT("client.issueFeedbackNotConfirmed"));
   }
   return { submitted: true };
 }
@@ -1383,18 +1673,37 @@ export interface AgentTarget {
 }
 
 export interface FrontendInvocation {
-  skills: AgentSkill[];
+  skills: SessionSkillSelection[];
   targetAgent?: AgentTarget;
+}
+
+export interface SessionSkillSelection extends AgentSkill {
+  skillSpaceId?: string;
+  skillId?: string;
+  version?: string;
+}
+
+export type MpaReadStatus = "ready" | "unsupported" | "forbidden" | "error";
+export interface MpaAgentMetadata {
+  agentsMd: string | null;
+  agentsMdStatus: MpaReadStatus;
+  skillSpacesStatus: MpaReadStatus;
+  skillSpaces: Array<{ id: string; region: string }>;
 }
 
 /** Introspected metadata for an agent app, served locally or by Agent Server. */
 export interface AgentInfo {
+  agentCategory?: "general" | "mpa";
+  mpa?: MpaAgentMetadata;
   /** Real ADK app id used in runtime proxy paths; display names may differ. */
   appName?: string;
   name: string;
   description: string;
   type?: AgentNodeType;
   model: string;
+  selectableModels?: string[];
+  turnLifecycleControl?: TurnLifecycleCapability;
+  resourceTopology?: ResourceTopology;
   tools: string[];
   skills: AgentSkill[];
   /** False when an older Agent Server omits Skill introspection entirely. */
@@ -1410,210 +1719,13 @@ export interface AgentInfo {
   draft?: AgentDraft;
 }
 
-export interface SessionCapabilityItem {
-  id: string;
-  kind: "tool" | "skill";
-  name: string;
-  custom: boolean;
-  description?: string;
-  skillSourceId?: string;
-  version?: string;
-}
-
-export interface SessionCapabilities {
-  schemaVersion: number;
-  revision: number;
-  tools: SessionCapabilityItem[];
-  skills: SessionCapabilityItem[];
-}
-
-export interface AddSessionCapability {
-  kind: "tool" | "skill";
-  name: string;
-  skillSourceId?: string;
-  description?: string;
-  version?: string;
-}
-
-export interface SessionSkillSpace {
-  id: string;
-  name: string;
-  description: string;
-  status: string;
-  region?: string;
-  projectName?: string;
-  skillCount?: number;
-}
-
-export interface SessionSkillCatalogItem {
-  skillId: string;
-  skillName: string;
-  skillDescription: string;
-  version: string;
-  skillStatus: string;
-}
-
-export interface SessionPublicSkill {
-  slug: string;
-  name: string;
-  description: string;
-  sourceType: string;
-  sourceRepo: string;
-  downloadCount: number;
-  evaluationScore: number;
-  version: string;
-  updatedAt: string;
-}
-
-export interface SessionPublicSkillSearchResult {
-  items: SessionPublicSkill[];
-  totalCount: number;
-}
-
-function normalizeSessionCapabilities(payload: Record<string, unknown>): SessionCapabilities {
-  const normalizeItem = (item: Record<string, unknown>): SessionCapabilityItem => ({
-    id: String(item.id ?? ""),
-    kind: item.kind === "skill" ? "skill" : "tool",
-    name: String(item.name ?? ""),
-    custom: item.custom === true,
-    description: typeof item.description === "string" ? item.description : undefined,
-    skillSourceId: typeof item.skill_source_id === "string" ? item.skill_source_id : undefined,
-    version: typeof item.version === "string" ? item.version : undefined,
-  });
-  return {
-    schemaVersion: Number(payload.schema_version ?? 1),
-    revision: Number(payload.revision ?? 0),
-    tools: Array.isArray(payload.tools)
-      ? payload.tools.map((item) => normalizeItem(item as Record<string, unknown>))
-      : [],
-    skills: Array.isArray(payload.skills)
-      ? payload.skills.map((item) => normalizeItem(item as Record<string, unknown>))
-      : [],
-  };
-}
-
-function sessionCapabilitiesPath(
-  app: string,
-  userId: string,
-  sessionId: string,
-): string {
-  return `/harness/apps/${encodeURIComponent(app)}/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/capabilities`;
-}
-
-export async function getSessionCapabilities(
-  appName: string,
-  userId: string,
-  sessionId: string,
-): Promise<SessionCapabilities> {
-  const { app, ep } = resolve(appName);
-  const res = await apiFetch(sessionCapabilitiesPath(app, userId, sessionId), {}, ep);
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "读取会话能力失败"));
-  return normalizeSessionCapabilities(await res.json());
-}
-
-export async function listSessionBuiltinTools(appName: string): Promise<string[]> {
-  const { ep } = resolve(appName);
-  const res = await apiFetch("/harness/capabilities/tools", {}, ep);
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "读取内置工具失败"));
-  const payload = (await res.json()) as { tools?: { name?: string }[] };
-  return (payload.tools ?? [])
-    .map((tool) => tool.name?.trim() ?? "")
-    .filter(Boolean);
-}
-
-export async function listSessionSkillSpaces(
-  appName: string,
-): Promise<SessionSkillSpace[]> {
-  const { ep } = resolve(appName);
-  const res = await apiFetch("/harness/skills/spaces?region=all", {}, ep);
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "读取 Skill Space 失败"));
-  const payload = (await res.json()) as { items?: SessionSkillSpace[] };
-  return payload.items ?? [];
-}
-
-export async function listSessionSkillsInSpace(
-  appName: string,
-  spaceId: string,
-  region?: string,
-): Promise<SessionSkillCatalogItem[]> {
-  const { ep } = resolve(appName);
-  const params = new URLSearchParams({ region: region || "cn-beijing" });
-  const path = `/harness/skills/spaces/${encodeURIComponent(spaceId)}/skills?${params.toString()}`;
-  const res = await apiFetch(path, {}, ep);
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "读取 Skill 列表失败"));
-  const payload = (await res.json()) as { items?: SessionSkillCatalogItem[] };
-  return payload.items ?? [];
-}
-
-export async function searchSessionPublicSkills(
-  appName: string,
-  query: string,
-  pageNumber = 1,
-  pageSize = 20,
-): Promise<SessionPublicSkillSearchResult> {
-  const { ep } = resolve(appName);
-  const params = new URLSearchParams({
-    query,
-    page_number: String(pageNumber),
-    page_size: String(pageSize),
-  });
-  const res = await apiFetch(`/harness/skills/findskill?${params.toString()}`, {}, ep);
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "搜索 Skill Hub 失败"));
-  const payload = (await res.json()) as Partial<SessionPublicSkillSearchResult>;
-  return {
-    items: payload.items ?? [],
-    totalCount: Number(payload.totalCount ?? 0),
-  };
-}
-
-export async function addSessionCapability(
-  appName: string,
-  userId: string,
-  sessionId: string,
-  capability: AddSessionCapability,
-  expectedRevision: number,
-): Promise<SessionCapabilities> {
-  const { app, ep } = resolve(appName);
-  const res = await apiFetch(
-    sessionCapabilitiesPath(app, userId, sessionId),
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        kind: capability.kind,
-        name: capability.name,
-        skill_source_id: capability.skillSourceId,
-        description: capability.description,
-        version: capability.version,
-        expected_revision: expectedRevision,
-      }),
-    },
-    ep,
-  );
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "添加会话能力失败"));
-  return normalizeSessionCapabilities(await res.json());
-}
-
-export async function removeSessionCapability(
-  appName: string,
-  userId: string,
-  sessionId: string,
-  capabilityId: string,
-  expectedRevision: number,
-): Promise<SessionCapabilities> {
-  const { app, ep } = resolve(appName);
-  const path = `${sessionCapabilitiesPath(app, userId, sessionId)}/${encodeURIComponent(capabilityId)}?expected_revision=${expectedRevision}`;
-  const res = await apiFetch(path, { method: "DELETE" }, ep);
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "移除会话能力失败"));
-  return normalizeSessionCapabilities(await res.json());
-}
-
 async function fetchAgentInfo(
   app: string,
   ep: AdkEndpoint,
   loadDraft = true,
+  signal?: AbortSignal,
 ): Promise<AgentInfo> {
-  const res = await apiFetch(`/web/agent-info/${app}`, {}, ep);
+  const res = await apiFetch(`/web/agent-info/${app}`, { signal }, ep);
   if (!res.ok) throw new Error(`agent-info failed: ${res.status}`);
   const info = (await res.json()) as Partial<AgentInfo>;
   if (loadDraft && !info.draft) {
@@ -1629,10 +1741,15 @@ async function fetchAgentInfo(
   }
   return {
     appName: app,
+    agentCategory: info.agentCategory,
+    mpa: info.mpa,
     name: info.name ?? app,
     description: info.description ?? "",
     type: info.type,
     model: info.model ?? "",
+    selectableModels: info.selectableModels ?? [],
+    turnLifecycleControl: info.turnLifecycleControl,
+    resourceTopology: info.resourceTopology,
     tools: info.tools ?? [],
     skillsPreviewSupported: Array.isArray(info.skills),
     skills: info.skills ?? [],
@@ -1644,9 +1761,277 @@ async function fetchAgentInfo(
   };
 }
 
-export async function getAgentInfo(appName: string): Promise<AgentInfo> {
+function isAgentInfoNotFound(error: unknown): boolean {
+  return /agent-info failed:\s*404\b/i.test(String(error));
+}
+
+async function fetchAgentInfoWithA2aFallback(
+  app: string,
+  ep: AdkEndpoint,
+  loadDraft = true,
+  signal?: AbortSignal,
+): Promise<AgentInfo> {
+  try {
+    return await fetchAgentInfo(app, ep, loadDraft, signal);
+  } catch (error) {
+    if (app === "a2a-default" || !isAgentInfoNotFound(error)) throw error;
+    return fetchAgentInfo("a2a-default", ep, loadDraft, signal);
+  }
+}
+
+export type TurnControlAction = "pause" | "resume";
+
+export interface TurnLifecycleCapability {
+  actions: TurnControlAction[];
+  pauseMode: "cooperative-safe-point" | string;
+  processReplacementResume: boolean;
+}
+
+export interface ResourceTopology {
+  nodes: Array<{ id: string; kind: string; name: string; status: string; resourceId?: string }>;
+  edges: Array<{ source: string; target: string; relation: string }>;
+}
+
+export interface TurnControlState {
+  taskId: string;
+  state: string;
+  generation: number;
+  desiredState?: string | null;
+  safePoint?: string | null;
+  checkpoint?: Record<string, unknown> | null;
+  allowedActions: TurnControlAction[];
+  idempotentReplay: boolean;
+  pausedAt?: string | null;
+  resumableUntil?: string | null;
+  resumeDisposition?: "same_turn" | "new_turn_required";
+  continuationPrompt?: string | null;
+}
+
+export interface TurnContinueResult {
+  taskId: string;
+  sessionId: string;
+  invocationId: string;
+  turnId: string;
+  operationId: string;
+  executionConfigRevision: number;
+  continuationOf: string;
+  idempotentReplay: boolean;
+}
+
+export interface ContinueTurnSseArgs {
+  appName: string;
+  sessionId: string;
+  taskId: string;
+  expectedGeneration: number;
+  idempotencyKey: string;
+  lastEventId?: string;
+  signal?: AbortSignal;
+  onRuntimeContext?: (context: RuntimeLogTarget) => void;
+}
+
+export class TurnControlConflictError extends Error {
+  constructor(readonly authoritativeState: TurnControlState) {
+    super("Turn state changed before the control request completed");
+    this.name = "TurnControlConflictError";
+  }
+}
+
+export async function getTurnControl(
+  appName: string,
+  sessionId: string,
+): Promise<TurnControlState> {
+  const { ep } = resolve(appName);
+  const res = await apiFetch(
+    `/api/v1/a2a/tasks/by-session/${encodeURIComponent(sessionId)}/control`,
+    { cache: "no-store" },
+    ep,
+  );
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "turn control failed"));
+  return res.json();
+}
+
+export async function controlTurn(
+  appName: string,
+  sessionId: string,
+  action: TurnControlAction,
+  expectedGeneration: number,
+): Promise<TurnControlState> {
+  const { ep } = resolve(appName);
+  const res = await apiFetch(
+    `/api/v1/a2a/tasks/by-session/${encodeURIComponent(sessionId)}/control/${action}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({ expectedGeneration }),
+    },
+    ep,
+  );
+  if (res.status === 409) {
+    const body = await res.json().catch(() => null) as { detail?: TurnControlState } | null;
+    if (body?.detail?.taskId) throw new TurnControlConflictError(body.detail);
+  }
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "turn control failed"));
+  return res.json();
+}
+
+export async function continueTurn(
+  appName: string,
+  sessionId: string,
+  taskId: string,
+  expectedGeneration: number,
+  idempotencyKey: string,
+): Promise<TurnContinueResult> {
+  const { ep } = resolve(appName);
+  const res = await apiFetch(
+    `/api/v1/a2a/tasks/${encodeURIComponent(taskId)}/continue`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotencyKey,
+      },
+      body: JSON.stringify({ expectedGeneration }),
+    },
+    ep,
+  );
+  if (res.status === 409) {
+    const body = await res.json().catch(() => null) as { detail?: TurnControlState } | null;
+    if (body?.detail?.taskId) throw new TurnControlConflictError(body.detail);
+  }
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "turn continue failed"));
+  const result = await res.json() as TurnContinueResult;
+  if (result.sessionId !== sessionId) {
+    throw new Error("turn continue returned a different session");
+  }
+  return result;
+}
+
+export async function* continueTurnSSE({
+  appName,
+  sessionId,
+  taskId,
+  expectedGeneration,
+  idempotencyKey,
+  lastEventId,
+  signal,
+  onRuntimeContext,
+}: ContinueTurnSseArgs): AsyncGenerator<AdkEvent, void, unknown> {
+  const { ep } = resolve(appName);
+  const normalizedLastEventId = lastEventId?.trim() ?? "";
+  const firstEventDeadline = runSseFirstEventDeadline(signal);
+  let res: Response;
+  try {
+    const acceptedRes = await apiFetch(
+      `/api/v1/a2a/tasks/${encodeURIComponent(taskId)}/continue`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey,
+        },
+        body: JSON.stringify({ expectedGeneration }),
+        signal: firstEventDeadline.signal,
+      },
+      ep,
+      0,
+    );
+    const runtimeContext = runtimeContextFromResponse(
+      acceptedRes,
+      ep.runtimeId ?? "",
+      ep.region ?? "",
+    );
+    if (runtimeContext) onRuntimeContext?.(runtimeContext);
+    if (!acceptedRes.ok) {
+      firstEventDeadline.cleanup();
+      const detail = await httpErrorMessage(acceptedRes, "turn continue failed");
+      throw new Error(
+        formatRunSseError(adkT("client.runSseFailedWithDetail", {
+          status: acceptedRes.status,
+          detail,
+        })),
+      );
+    }
+    const accepted = (await acceptedRes.json()) as TurnContinueResult;
+    if (accepted.sessionId !== sessionId) {
+      firstEventDeadline.cleanup();
+      throw new Error(formatRunSseError("turn continue returned a different session"));
+    }
+    res = await apiFetch(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/sse`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          invocationId: accepted.invocationId,
+          ...(normalizedLastEventId ? { lastEventId: normalizedLastEventId } : {}),
+        }),
+        signal: firstEventDeadline.signal,
+      },
+      ep,
+      0,
+    );
+  } catch (error) {
+    firstEventDeadline.cleanup();
+    if (firstEventDeadline.timedOut()) throw new Error(runSseFirstEventTimeoutError());
+    if (signal?.aborted || (error as Error)?.name === "AbortError") throw error;
+    throw new Error(formatRunSseError(error));
+  }
+  const runtimeContext = runtimeContextFromResponse(
+    res,
+    ep.runtimeId ?? "",
+    ep.region ?? "",
+  );
+  if (runtimeContext) onRuntimeContext?.(runtimeContext);
+  if (!res.ok) {
+    firstEventDeadline.cleanup();
+    const detail = await httpErrorMessage(res, adkT("client.runSessionFailed"));
+    throw new Error(
+      formatRunSseError(adkT("client.runSseFailedWithDetail", {
+        status: res.status,
+        detail,
+      })),
+    );
+  }
+  let receivedEvent = false;
+  try {
+    for await (const evt of parseSSE(res)) {
+      if (
+        evt &&
+        typeof evt === "object" &&
+        (evt as Record<string, unknown>)[SSE_EVENT_NAME] === "done"
+      ) {
+        firstEventDeadline.clearDeadline();
+        break;
+      }
+      receivedEvent = true;
+      firstEventDeadline.clearDeadline();
+      const event = { ...(evt as AdkEvent) };
+      delete (event as Record<string, unknown>)[SSE_EVENT_NAME];
+      if (typeof event.error === "string") event.error = formatRunSseError(event.error);
+      if (typeof event.errorMessage === "string") {
+        event.errorMessage = formatRunSseError(event.errorMessage);
+      }
+      if (typeof event.error_message === "string") {
+        event.error_message = formatRunSseError(event.error_message);
+      }
+      yield event;
+    }
+  } catch (error) {
+    if (firstEventDeadline.timedOut()) throw new Error(runSseFirstEventTimeoutError());
+    if (signal?.aborted || (error as Error)?.name === "AbortError") throw error;
+    throw new Error(formatRunSseError(error));
+  } finally {
+    firstEventDeadline.cleanup();
+  }
+  if (!receivedEvent) throw new Error(runSseEmptyResponseError());
+}
+
+export async function getAgentInfo(appName: string, signal?: AbortSignal): Promise<AgentInfo> {
   const { app, ep } = resolve(appName);
-  return fetchAgentInfo(app, ep, false);
+  return fetchAgentInfoWithA2aFallback(app, ep, false, signal);
 }
 
 /** Read Agent metadata for a Runtime without connecting or persisting it. */
@@ -1669,8 +2054,8 @@ async function fetchRuntimeAgentInfo(
         knownApp ||
         freshCached?.apps[0] ||
         (await fetchRemoteApps("", "", ep))[0];
-      if (!app) throw new Error("该 Runtime 未提供可预览的 Agent。");
-      return fetchAgentInfo(app, ep);
+      if (!app) throw new Error(adkT("client.noPreviewableAgent"));
+      return fetchAgentInfoWithA2aFallback(app, ep);
     } catch (error) {
       if (
         error instanceof RuntimeAccessDeniedError ||
@@ -1681,7 +2066,7 @@ async function fetchRuntimeAgentInfo(
       lastError = error instanceof Error ? error : new Error(String(error));
     }
   }
-  throw lastError ?? new Error("该 Runtime 未提供可预览的 Agent。");
+  throw lastError ?? new Error(adkT("client.noPreviewableAgent"));
 }
 
 /** Read Agent metadata for a Runtime without connecting or persisting it. */
@@ -1747,6 +2132,18 @@ export function prefetchRuntimeAgentInfo(
   void getRuntimeAgentInfo(runtimeId, region, knownApp).catch(() => {});
 }
 
+export function isMpaRuntimeApp(appName: string): boolean {
+  const { app, ep } = resolve(appName);
+  return isMpaEndpoint(app, ep);
+}
+
+/** Product-scoped A2A presentation; general A2A apps must keep their defaults. */
+export function isMpaA2aRuntimeApp(appName: string): boolean {
+  const { app, ep } = resolve(appName);
+  return app === "a2a-default" &&
+    Boolean(ep.runtimeId && (ep.agentCategory === "mpa" || ep.mpaInstanceId));
+}
+
 /** One web-search hit (Volcengine WebSearch WebItem, trimmed for the UI). */
 export interface WebHit {
   title: string;
@@ -1788,7 +2185,7 @@ export async function componentSearch(
   });
   const res = await apiFetch(`/web/search?${params.toString()}`, {}, ep);
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "Agent 检索失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.agentSearchFailed")));
   }
   return res.json();
 }
@@ -1813,15 +2210,88 @@ export interface RunArgs {
   userId: string;
   sessionId: string;
   text: string;
+  modelId?: string;
+  idempotencyKey?: string;
+  executionConfigVersion?: number;
+  lastEventId?: string;
   attachments?: Attachment[];
   invocation?: FrontendInvocation;
+  /** Complete set of local BFF tool IDs selected for this run. */
+  platformTools?: readonly string[];
+  /** Studio-only immutable environment selections for this session. */
+  environmentMounts?: readonly SessionEnvironmentMountSelection[];
+  /** @deprecated Compatibility with older Studio BFF versions. */
+  environmentMount?: SessionEnvironmentMountSelection;
   /** Function responses to send instead of/alongside text — used to resume a
    *  long-running call (e.g. answering ADK's `adk_request_credential`). */
   functionResponses?: { id: string; name: string; response: unknown }[];
   /** Abort the stream (e.g. when the user switches to another session). */
   signal?: AbortSignal;
-  /** Use the session-aware harness runner when the server exposes it. */
-  sessionCapabilities?: boolean;
+  /** Receives trusted instance metadata exposed by the same-origin Studio BFF. */
+  onRuntimeContext?: (context: RuntimeLogTarget) => void;
+}
+
+export function runSseEmptyResponseError(): string {
+  return formatRunSseError(adkT("client.emptySseBody"));
+}
+
+export function runSseIncompleteResponseError(): string {
+  return formatRunSseError(adkT("client.noDisplayableSseReply"));
+}
+
+const RUN_SSE_FIRST_EVENT_TIMEOUT_MS = 60_000;
+export function runSseFirstEventTimeoutError(): string {
+  return adkT("client.firstSseEventTimeout");
+}
+
+interface RunSseFirstEventDeadline {
+  signal?: AbortSignal;
+  clearDeadline: () => void;
+  cleanup: () => void;
+  timedOut: () => boolean;
+}
+
+function runSseFirstEventDeadline(
+  signal: AbortSignal | undefined,
+): RunSseFirstEventDeadline {
+  if (signal?.aborted) {
+    return {
+      signal,
+      clearDeadline: () => {},
+      cleanup: () => {},
+      timedOut: () => false,
+    };
+  }
+
+  const controller = new AbortController();
+  let didTimeout = false;
+  let deadlineCleared = false;
+  const clearDeadline = () => {
+    if (deadlineCleared) return;
+    deadlineCleared = true;
+    clearTimeout(timer);
+  };
+  const onAbort = () => {
+    if (controller.signal.aborted) return;
+    controller.abort(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+  };
+  const timer = setTimeout(() => {
+    if (deadlineCleared || controller.signal.aborted) return;
+    didTimeout = true;
+    deadlineCleared = true;
+    controller.abort(new Error(runSseFirstEventTimeoutError()));
+  }, RUN_SSE_FIRST_EVENT_TIMEOUT_MS);
+  signal?.addEventListener("abort", onAbort, { once: true });
+
+  return {
+    signal: controller.signal,
+    clearDeadline,
+    cleanup: () => {
+      clearDeadline();
+      signal?.removeEventListener("abort", onAbort);
+    },
+    timedOut: () => didTimeout,
+  };
 }
 
 /** Stream agent events for one user turn. */
@@ -1830,11 +2300,18 @@ export async function* runSSE({
   userId,
   sessionId,
   text,
+  modelId,
+  idempotencyKey,
+  executionConfigVersion,
+  lastEventId,
   attachments = [],
   invocation,
+  platformTools,
+  environmentMounts,
+  environmentMount,
   functionResponses = [],
   signal,
-  sessionCapabilities = false,
+  onRuntimeContext,
 }: RunArgs): AsyncGenerator<AdkEvent, void, unknown> {
   const { app, ep } = resolve(appName);
   const attachmentParts = attachments.flatMap<Record<string, unknown>>((a) => {
@@ -1879,43 +2356,190 @@ export async function* runSSE({
       },
     };
   }
-  const res = await apiFetch(
-    sessionCapabilities ? `/harness/run_sse` : `/run_sse`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        app_name: app,
-        user_id: userId,
-        session_id: sessionId,
-        new_message: { role: "user", parts },
-        streaming: true,
-        custom_metadata: invocationMetadata
-          ? { veadkInvocation: invocationMetadata }
-          : undefined,
-      }),
-      signal,
-    },
-    ep,
-    0,
+  const normalizedIdempotencyKey = idempotencyKey?.trim() ?? "";
+  const normalizedLastEventId = lastEventId?.trim() ?? "";
+  const hasExecutionConfigVersion = typeof executionConfigVersion === "number";
+  const executionMetadata = hasExecutionConfigVersion || normalizedIdempotencyKey
+    ? {
+        veadkExecution: {
+          ...(hasExecutionConfigVersion ? { executionConfigVersion } : {}),
+          ...(normalizedIdempotencyKey
+            ? { idempotencyKey: normalizedIdempotencyKey }
+            : {}),
+        },
+      }
+    : undefined;
+  const customMetadata =
+    invocationMetadata || executionMetadata
+      ? {
+          ...(invocationMetadata ? { veadkInvocation: invocationMetadata } : {}),
+          ...(executionMetadata ?? {}),
+        }
+      : undefined;
+  const isMpa = isMpaEndpoint(app, ep);
+  if (isMpa && ep.runtimeId) {
+    const region = ep.region ? `?region=${encodeURIComponent(ep.region)}` : "";
+    try {
+      const prewarm = await studioFetch(
+        `/web/mpa/identity-prewarm/${encodeURIComponent(ep.runtimeId)}${region}`,
+        {
+          method: "POST",
+          headers: { "X-Requested-With": "XMLHttpRequest" },
+          signal,
+        },
+        10_000,
+      );
+      if (!prewarm.ok) {
+        console.warn("[mpa] identity prewarm unavailable", prewarm.status);
+      }
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      console.warn("[mpa] identity prewarm unavailable");
+    }
+  }
+  let res: Response;
+  const firstEventDeadline = runSseFirstEventDeadline(signal);
+  try {
+    if (isMpa) {
+      const runRes = await apiFetch(
+        `/api/v1/sessions/${encodeURIComponent(sessionId)}/run`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(normalizedIdempotencyKey
+              ? { "Idempotency-Key": normalizedIdempotencyKey }
+              : {}),
+          },
+          body: JSON.stringify({
+            content: text,
+            ...(hasExecutionConfigVersion ? { executionConfigVersion } : {}),
+          }),
+          signal: firstEventDeadline.signal,
+        },
+        ep,
+        0,
+      );
+      const runtimeContext = runtimeContextFromResponse(
+        runRes,
+        ep.runtimeId ?? "",
+        ep.region ?? "",
+      );
+      if (runtimeContext) onRuntimeContext?.(runtimeContext);
+      if (!runRes.ok) {
+        firstEventDeadline.cleanup();
+        const detail = await httpErrorMessage(runRes, adkT("client.runSessionFailed"));
+        throw new Error(
+          formatRunSseError(adkT("client.runSseFailedWithDetail", {
+            status: runRes.status,
+            detail,
+          })),
+        );
+      }
+      const accepted = (await runRes.json()) as {
+        invocationId?: string;
+      };
+      res = await apiFetch(
+        `/api/v1/sessions/${encodeURIComponent(sessionId)}/sse`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            invocationId: accepted.invocationId,
+            ...(normalizedLastEventId ? { lastEventId: normalizedLastEventId } : {}),
+          }),
+          signal: firstEventDeadline.signal,
+        },
+        ep,
+        0,
+      );
+    } else {
+      res = await apiFetch(
+        "/run_sse",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(normalizedIdempotencyKey
+              ? { "Idempotency-Key": normalizedIdempotencyKey }
+              : {}),
+          },
+          body: JSON.stringify({
+            app_name: app,
+            user_id: userId,
+            session_id: sessionId,
+            new_message: { role: "user", parts },
+            streaming: true,
+            ...(normalizedLastEventId ? { lastEventId: normalizedLastEventId } : {}),
+            ...(hasExecutionConfigVersion ? { executionConfigVersion } : {}),
+            ...(modelId?.trim() ? { model_id: modelId.trim() } : {}),
+            ...(platformTools !== undefined
+              ? { platform_tools: [...platformTools] }
+              : {}),
+            ...(environmentMounts !== undefined
+              ? { environment_mounts: [...environmentMounts] }
+              : environmentMount
+                ? { environment_mount: environmentMount }
+                : {}),
+            custom_metadata: customMetadata,
+          }),
+          signal: firstEventDeadline.signal,
+        },
+        ep,
+        0,
+      );
+    }
+  } catch (error) {
+    firstEventDeadline.cleanup();
+    if (firstEventDeadline.timedOut()) throw new Error(runSseFirstEventTimeoutError());
+    if (signal?.aborted || (error as Error)?.name === "AbortError") throw error;
+    throw new Error(formatRunSseError(error));
+  }
+  const runtimeContext = runtimeContextFromResponse(
+    res,
+    ep.runtimeId ?? "",
+    ep.region ?? "",
   );
+  if (runtimeContext) onRuntimeContext?.(runtimeContext);
   if (!res.ok) {
-    const detail = await httpErrorMessage(res, "运行会话失败");
+    firstEventDeadline.cleanup();
+    const detail = await httpErrorMessage(res, adkT("client.runSessionFailed"));
     throw new Error(
-      formatRunSseError(`run_sse failed: ${res.status}：${detail}`),
+      formatRunSseError(adkT("client.runSseFailedWithDetail", { status: res.status, detail })),
     );
   }
-  for await (const evt of parseSSE(res)) {
-    const event = evt as AdkEvent;
-    if (typeof event.error === "string") event.error = formatRunSseError(event.error);
-    if (typeof event.errorMessage === "string") {
-      event.errorMessage = formatRunSseError(event.errorMessage);
+  let receivedEvent = false;
+  try {
+    for await (const evt of parseSSE(res)) {
+      if (
+        evt &&
+        typeof evt === "object" &&
+        (evt as Record<string, unknown>)[SSE_EVENT_NAME] === "done"
+      ) {
+        firstEventDeadline.clearDeadline();
+        break;
+      }
+      receivedEvent = true;
+      firstEventDeadline.clearDeadline();
+      const event = { ...(evt as AdkEvent) };
+      delete (event as Record<string, unknown>)[SSE_EVENT_NAME];
+      if (typeof event.error === "string") event.error = formatRunSseError(event.error);
+      if (typeof event.errorMessage === "string") {
+        event.errorMessage = formatRunSseError(event.errorMessage);
+      }
+      if (typeof event.error_message === "string") {
+        event.error_message = formatRunSseError(event.error_message);
+      }
+      yield event;
     }
-    if (typeof event.error_message === "string") {
-      event.error_message = formatRunSseError(event.error_message);
-    }
-    yield event;
+  } catch (error) {
+    if (firstEventDeadline.timedOut()) throw new Error(runSseFirstEventTimeoutError());
+    if (signal?.aborted || (error as Error)?.name === "AbortError") throw error;
+    throw new Error(formatRunSseError(error));
+  } finally {
+    firstEventDeadline.cleanup();
   }
+  if (!receivedEvent) throw new Error(runSseEmptyResponseError());
 }
 
 export interface DeployAgentkitResult {
@@ -1924,6 +2548,7 @@ export interface DeployAgentkitResult {
   agentName: string;
   runtimeName: string;
   runtimeId?: string;
+  mpaInstanceId?: string;
   consoleUrl?: string;
   region?: string;
   version?: number | null;
@@ -1933,6 +2558,630 @@ export interface DeployAgentkitResult {
     transport: string;
     runtimeId?: string;
   };
+  mpaOperation?: MpaAgentOperation;
+}
+
+export interface MpaProfilePayload {
+  name: string;
+  description: string;
+  system: string;
+  model: Record<string, unknown>;
+  tools: Array<Record<string, unknown>>;
+  skills: Array<Record<string, unknown>>;
+  mcpServers: Array<Record<string, unknown>>;
+  multiagent?: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+}
+
+export interface MpaAgentOperation {
+  operationId: string;
+  operationKind: "create" | "update";
+  ownerId: string;
+  targetKey: string;
+  stage: string;
+  status: "active" | "succeeded" | "failed_retryable" | "failed_terminal" | "cancelled";
+  mpaInstanceId?: string;
+  runtimeId?: string;
+  runtimeRegion?: string;
+  runtimeRevision?: string;
+  profileRevision?: number | null;
+  profileDigest?: string;
+  profileOperationId?: string;
+  safeErrorCode?: string;
+  retryCount?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface MpaProfileStatus {
+  operationId: string;
+  status: string;
+  profileRevision: number;
+  runtimeRevision: string;
+  etag: string;
+}
+
+export type MpaAgentBindingStatus =
+  | "runtime_missing"
+  | "bound"
+  | "binding_ambiguous"
+  | "orphan_runtime";
+
+export interface MpaAgentView {
+  mpaInstanceId: string;
+  bindingStatus: MpaAgentBindingStatus;
+  runtime: (Partial<CloudRuntime> & {
+    runtimeId: string;
+    region: string;
+    readinessPhase?: string;
+  }) | null;
+  profile: MpaProfileStatus | null;
+  activeOperation: MpaAgentOperation | null;
+  bindings: Array<Partial<CloudRuntime> & { runtimeId: string; region: string }>;
+  capabilities: {
+    canRead: boolean;
+    canWrite: boolean;
+    canDebug: boolean;
+  };
+  safeError?: { code: string; message: string } | null;
+}
+
+export interface MpaAgentDeletePreview {
+  mpaInstanceId: string;
+  bindingStatus: MpaAgentBindingStatus;
+  runtime: (Partial<CloudRuntime> & { runtimeId: string; region: string }) | null;
+  profile: Partial<MpaProfileStatus> | null;
+  activeOperation: MpaAgentOperation | null;
+  bindings: Array<Partial<CloudRuntime> & { runtimeId: string; region: string }>;
+  canDelete: boolean;
+  blockers: string[];
+  sessionCounts: {
+    total: number;
+    active: number;
+    idle: number;
+    debug: number;
+  };
+  activeSessions: Array<{
+    sessionId: string;
+    status: string;
+    appName?: string;
+  }>;
+  cleanupPlan: Array<{
+    stage: string;
+    description: string;
+    count: number;
+    resourceId?: string;
+  }>;
+  retainedResources?: Array<{ stage: string; resourceId: string; reason: string }>;
+}
+
+export interface MpaRuntimeConsoleRun {
+  invocationId: string;
+  userId: string;
+  status: string;
+  startedAt: string;
+  endedAt?: string | null;
+  durationMs?: number | null;
+  wallDurationMs?: number | null;
+  stepCount: number;
+  queueDurationMs?: number | null;
+  firstContentMs?: number | null;
+  firstModelContentMs?: number | null;
+  firstVisibleAnswerMs?: number | null;
+  modelRequestCount: number;
+  toolCount: number;
+  failedToolCount: number;
+  fileChangeCount: number;
+  fileChangeEventCount: number;
+  uniqueFileCount: number;
+  retryCount: number;
+  usage: Record<string, number>;
+  slowestStep?: Record<string, unknown> | null;
+  metricCoverage: Record<string, string>;
+}
+
+export interface MpaRuntimeConsoleRunsResponse {
+  sessionId: string;
+  runs: MpaRuntimeConsoleRun[];
+}
+
+export interface MpaRuntimeTraceStep {
+  stepId: string;
+  parentStepId?: string | null;
+  sequence: number;
+  kind: string;
+  title: string;
+  status: string;
+  startedAt: string;
+  endedAt?: string | null;
+  durationMs?: number | null;
+  sourceEventId?: string | null;
+  category: string;
+  timing: Record<string, unknown>;
+  correlation: Record<string, unknown>;
+  details: Record<string, unknown>;
+}
+
+export interface MpaRuntimeTraceResponse {
+  traceVersion: string;
+  sessionId: string;
+  invocationId: string;
+  correlation: Record<string, unknown>;
+  run: Record<string, unknown>;
+  coverage: Record<string, unknown>;
+  steps: MpaRuntimeTraceStep[];
+}
+
+export type MpaExecutionConfigMode = "replace" | "clear" | "inherit";
+
+export interface MpaExecutionConfigChange {
+  category: string;
+  mode: MpaExecutionConfigMode;
+  value?: unknown;
+}
+
+export interface MpaSessionExecutionConfig {
+  appName: string;
+  sessionId: string;
+  revision: number;
+  etag: string;
+  mpaInstanceId: string;
+  profileRevision: number;
+  profileDefaultRevision: number;
+  overrides: Record<string, unknown>;
+  effectiveRefs: Record<string, unknown>;
+  invalidRefs: Array<Record<string, unknown>>;
+  updatedBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export class MpaExecutionConfigRequestError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly currentState?: MpaSessionExecutionConfig;
+
+  constructor(
+    message: string,
+    {
+      status,
+      code,
+      currentState,
+    }: {
+      status: number;
+      code: string;
+      currentState?: MpaSessionExecutionConfig;
+    },
+  ) {
+    super(message);
+    this.name = "MpaExecutionConfigRequestError";
+    this.status = status;
+    this.code = code;
+    this.currentState = currentState;
+  }
+}
+
+async function mpaExecutionConfigError(
+  res: Response,
+): Promise<MpaExecutionConfigRequestError> {
+  const fallback = adkT("client.mpaExecutionConfigFailed");
+  const text = await res.text().catch(() => "");
+  if (!text) {
+    return new MpaExecutionConfigRequestError(
+      adkT("common.fallbackWithHttpStatus", { fallback, status: res.status }),
+      { status: res.status, code: "" },
+    );
+  }
+  try {
+    const data = JSON.parse(text) as {
+      detail?: unknown;
+      error?: unknown;
+      currentState?: MpaSessionExecutionConfig;
+    };
+    const envelope = (
+      data.error && typeof data.error === "object"
+        ? data.error
+        : data.detail && typeof data.detail === "object"
+          ? data.detail
+          : null
+    ) as { code?: unknown; currentState?: MpaSessionExecutionConfig } | null;
+    const detail = formatErrorDetail(data.detail ?? data.error);
+    const message = detail
+      ? adkT("client.errorWithDetailAndRawResponse", {
+          context: adkT("common.fallbackWithHttpStatus", {
+            fallback,
+            status: res.status,
+          }),
+          detail,
+          response: text,
+        })
+      : adkT("client.errorWithRawResponse", {
+          context: adkT("common.fallbackWithHttpStatus", {
+            fallback,
+            status: res.status,
+          }),
+          response: text,
+        });
+    return new MpaExecutionConfigRequestError(message, {
+      status: res.status,
+      code: String(envelope?.code ?? ""),
+      currentState: envelope?.currentState ?? data.currentState,
+    });
+  } catch {
+    return new MpaExecutionConfigRequestError(
+      adkT("client.errorWithRawResponse", {
+        context: adkT("common.fallbackWithHttpStatus", {
+          fallback,
+          status: res.status,
+        }),
+        response: text,
+      }),
+      { status: res.status, code: "" },
+    );
+  }
+}
+
+export function mpaProfileFromAgentDraft(draft: AgentDraft): MpaProfilePayload {
+  const selectedSkillProfiles = (draft.selectedSkills ?? []).map((skill) => ({
+    source: skill.source,
+    folder: skill.folder,
+    name: skill.name,
+    skillSpaceId: skill.skillSpaceId,
+    skillSpaceName: skill.skillSpaceName,
+    skillSpaceRegion: skill.skillSpaceRegion,
+    skillId: skill.skillId,
+    version: skill.version,
+  }));
+  const legacySkills = (draft.skills ?? []).map((name) => ({ name }));
+  const mcpServers = (draft.mcpTools ?? []).map((tool) => ({
+    name: tool.name,
+    transport: tool.transport,
+    url: tool.url,
+  }));
+  return {
+    name: draft.name?.trim() || "mpa-agent",
+    description: draft.description ?? "",
+    system: draft.instruction?.trim() || "You are a helpful assistant.",
+    model: {
+      id: draft.modelName || draft.model || "",
+      source: draft.modelSource ?? "ark",
+      provider: draft.modelProvider ?? "",
+      apiBase: draft.modelApiBase ?? "",
+    },
+    tools: [
+      ...(draft.builtinTools ?? []).map((id) => ({ id, source: "builtin" })),
+      ...(draft.tools ?? []).map((name) => ({ name, source: "legacy" })),
+      ...(draft.customTools ?? []).map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        source: "custom",
+      })),
+    ],
+    skills: [...selectedSkillProfiles, ...legacySkills],
+    mcpServers,
+    ...(draft.subAgents?.length
+      ? { multiagent: { type: draft.agentType ?? "llm", subAgents: draft.subAgents.map(mpaProfileFromAgentDraft) } }
+      : {}),
+    metadata: {
+      "veadk:agent-type": "mpa",
+      "veadk:source": "studio-agent-draft",
+      agentType: draft.agentType ?? "llm",
+    },
+  };
+}
+
+export async function startMpaAgentOperation(params: {
+  operationKind: "create" | "update";
+  runtimeId: string;
+  region: string;
+  mpaInstanceId: string;
+  sourceProfileId: string;
+  draft: AgentDraft;
+  targetKey?: string;
+  runtimeRevision?: string;
+  idempotencyKey: string;
+}): Promise<MpaAgentOperation> {
+  const body = {
+    operationKind: params.operationKind,
+    runtimeId: params.runtimeId,
+    region: params.region,
+    mpaInstanceId: params.mpaInstanceId,
+    sourceProfileId: params.sourceProfileId,
+    targetKey: params.targetKey,
+    runtimeRevision: params.runtimeRevision,
+    profile: mpaProfileFromAgentDraft(params.draft),
+  };
+  const path =
+    params.operationKind === "update"
+      ? `/web/mpa/agents/${encodeURIComponent(params.mpaInstanceId)}`
+      : "/web/mpa/agents";
+  const res = await apiFetch(path, {
+    method: params.operationKind === "update" ? "PATCH" : "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": params.idempotencyKey,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.mpaOperationFailed")));
+  }
+  return (await res.json()) as MpaAgentOperation;
+}
+
+export async function applyMpaProfileAfterDeployment(params: {
+  draft: AgentDraft;
+  taskId: string;
+  agentName: string;
+  runtimeId: string;
+  region: string;
+  operationKind: "create" | "update";
+  mpaInstanceId?: string;
+  runtimeName?: string;
+  sourceDraftId?: string;
+  runtimeRevision?: string;
+}): Promise<MpaAgentOperation> {
+  const normalizedRuntimeId = params.runtimeId.trim();
+  const normalizedMpaInstanceId =
+    params.mpaInstanceId?.trim() || normalizedRuntimeId;
+  const sourceProfileId = params.sourceDraftId?.trim()
+    ? `studio-draft:${params.sourceDraftId.trim()}`
+    : `studio-agent:${params.agentName}:${params.taskId}`;
+  return startMpaAgentOperation({
+    operationKind: params.operationKind,
+    runtimeId: normalizedRuntimeId,
+    region: params.region,
+    mpaInstanceId: normalizedMpaInstanceId,
+    sourceProfileId,
+    draft: params.draft,
+    targetKey:
+      params.operationKind === "update"
+        ? normalizedMpaInstanceId
+        : `runtime:${params.region}:${params.runtimeName?.trim() || normalizedMpaInstanceId}`,
+    runtimeRevision: params.runtimeRevision?.trim() || undefined,
+    idempotencyKey: `${params.taskId}:mpa-profile`,
+  });
+}
+
+export async function listActiveMpaAgentOperations(): Promise<MpaAgentOperation[]> {
+  const res = await apiFetch("/web/mpa/agent-operations?status=active", {
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.mpaOperationLoadFailed")));
+  }
+  const payload = (await res.json()) as { operations?: MpaAgentOperation[] };
+  return payload.operations ?? [];
+}
+
+export async function getMpaAgentOperation(
+  operationId: string,
+  signal?: AbortSignal,
+): Promise<MpaAgentOperation> {
+  const res = await apiFetch(
+    `/web/mpa/agent-operations/${encodeURIComponent(operationId)}`,
+    { cache: "no-store", signal },
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.mpaOperationLoadFailed")));
+  }
+  return (await res.json()) as MpaAgentOperation;
+}
+
+export async function getMpaProfileStatus(params: {
+  runtimeId: string;
+  region: string;
+  mpaInstanceId: string;
+  signal?: AbortSignal;
+}): Promise<MpaProfileStatus> {
+  const query = new URLSearchParams({
+    runtimeId: params.runtimeId,
+    region: params.region,
+  });
+  const res = await apiFetch(
+    `/web/mpa/agents/${encodeURIComponent(params.mpaInstanceId)}/profile-status?${query.toString()}`,
+    { cache: "no-store", signal: params.signal },
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.mpaOperationLoadFailed")));
+  }
+  const payload = (await res.json()) as Partial<MpaProfileStatus>;
+  return {
+    operationId: String(payload.operationId ?? ""),
+    status: String(payload.status ?? ""),
+    profileRevision: Number(payload.profileRevision ?? 0),
+    runtimeRevision: String(payload.runtimeRevision ?? ""),
+    etag: String(payload.etag ?? res.headers.get("ETag") ?? ""),
+  };
+}
+
+export async function getMpaAgentView(params: {
+  mpaInstanceId: string;
+  runtimeId?: string;
+  region?: string;
+  signal?: AbortSignal;
+}): Promise<MpaAgentView> {
+  const query = new URLSearchParams({ region: params.region ?? "all" });
+  if (params.runtimeId) query.set("runtimeId", params.runtimeId);
+  const res = await apiFetch(
+    `/web/mpa/agents/${encodeURIComponent(params.mpaInstanceId)}/view?${query.toString()}`,
+    { cache: "no-store", signal: params.signal },
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.mpaOperationLoadFailed")));
+  }
+  return (await res.json()) as MpaAgentView;
+}
+
+export async function getMpaAgentDeletePreview(params: {
+  mpaInstanceId: string;
+  runtimeId: string;
+  region: string;
+  signal?: AbortSignal;
+}): Promise<MpaAgentDeletePreview> {
+  const query = new URLSearchParams({
+    runtimeId: params.runtimeId,
+    region: params.region,
+  });
+  const res = await apiFetch(
+    `/web/mpa/agents/${encodeURIComponent(params.mpaInstanceId)}/delete-preview?${query.toString()}`,
+    { cache: "no-store", signal: params.signal },
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.mpaDeletePreviewFailed")));
+  }
+  return (await res.json()) as MpaAgentDeletePreview;
+}
+
+export async function getMpaRuntimeConsoleRuns(params: {
+  runtimeId: string;
+  region: string;
+  sessionId: string;
+  signal?: AbortSignal;
+}): Promise<MpaRuntimeConsoleRunsResponse> {
+  const ep: AdkEndpoint = {
+    runtimeId: params.runtimeId,
+    region: params.region,
+    agentCategory: "mpa",
+  };
+  const res = await apiFetch(
+    `/api/v1/runtime-console/admin/sessions/${encodeURIComponent(params.sessionId)}/runs`,
+    { cache: "no-store", signal: params.signal },
+    ep,
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.loadMpaDiagnosticsFailed")));
+  }
+  return (await res.json()) as MpaRuntimeConsoleRunsResponse;
+}
+
+export async function getMpaRuntimeConsoleTrace(params: {
+  runtimeId: string;
+  region: string;
+  sessionId: string;
+  invocationId: string;
+  signal?: AbortSignal;
+}): Promise<MpaRuntimeTraceResponse> {
+  const ep: AdkEndpoint = {
+    runtimeId: params.runtimeId,
+    region: params.region,
+    agentCategory: "mpa",
+  };
+  const query = new URLSearchParams({ sessionId: params.sessionId });
+  const res = await apiFetch(
+    `/api/v1/runtime-console/admin/runs/${encodeURIComponent(params.invocationId)}/trace?${query.toString()}`,
+    { cache: "no-store", signal: params.signal },
+    ep,
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.loadMpaDiagnosticsFailed")));
+  }
+  return (await res.json()) as MpaRuntimeTraceResponse;
+}
+
+export async function retryMpaAgentOperation(
+  operationId: string,
+  params: Omit<Parameters<typeof startMpaAgentOperation>[0], "idempotencyKey">,
+): Promise<MpaAgentOperation> {
+  const res = await apiFetch(
+    `/web/mpa/agent-operations/${encodeURIComponent(operationId)}/retry`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operationKind: params.operationKind,
+        runtimeId: params.runtimeId,
+        region: params.region,
+        mpaInstanceId: params.mpaInstanceId,
+        sourceProfileId: params.sourceProfileId,
+        targetKey: params.targetKey,
+        runtimeRevision: params.runtimeRevision,
+        profile: mpaProfileFromAgentDraft(params.draft),
+      }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.mpaOperationFailed")));
+  }
+  return (await res.json()) as MpaAgentOperation;
+}
+
+export async function getMpaSessionExecutionConfig(params: {
+  runtimeId: string;
+  region: string;
+  sessionId: string;
+  signal?: AbortSignal;
+}): Promise<MpaSessionExecutionConfig> {
+  const query = new URLSearchParams({
+    runtimeId: params.runtimeId,
+    region: params.region,
+  });
+  const res = await apiFetch(
+    `/web/mpa/sessions/${encodeURIComponent(params.sessionId)}/execution-config?${query.toString()}`,
+    { cache: "no-store", signal: params.signal },
+  );
+  if (!res.ok) {
+    throw await mpaExecutionConfigError(res);
+  }
+  return (await res.json()) as MpaSessionExecutionConfig;
+}
+
+export async function patchMpaSessionExecutionConfig(params: {
+  runtimeId: string;
+  region: string;
+  sessionId: string;
+  etag: string;
+  changes: MpaExecutionConfigChange[];
+}): Promise<MpaSessionExecutionConfig> {
+  const res = await apiFetch(
+    `/web/mpa/sessions/${encodeURIComponent(params.sessionId)}/execution-config`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": params.etag,
+      },
+      body: JSON.stringify({
+        runtimeId: params.runtimeId,
+        region: params.region,
+        changes: params.changes,
+      }),
+    },
+  );
+  if (!res.ok) {
+    throw await mpaExecutionConfigError(res);
+  }
+  return (await res.json()) as MpaSessionExecutionConfig;
+}
+
+export async function upgradeMpaSessionProfile(params: {
+  runtimeId: string;
+  region: string;
+  sessionId: string;
+  etag: string;
+  idempotencyKey: string;
+  targetProfileRevision: number;
+}): Promise<MpaSessionExecutionConfig> {
+  const res = await apiFetch(
+    `/web/mpa/sessions/${encodeURIComponent(params.sessionId)}/profile-upgrade`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": params.etag,
+        "Idempotency-Key": params.idempotencyKey,
+      },
+      body: JSON.stringify({
+        runtimeId: params.runtimeId,
+        region: params.region,
+        targetProfileRevision: params.targetProfileRevision,
+      }),
+    },
+  );
+  if (!res.ok) {
+    throw await mpaExecutionConfigError(res);
+  }
+  return (await res.json()) as MpaSessionExecutionConfig;
 }
 
 export async function checkRuntimeNameAvailability(
@@ -1944,14 +3193,29 @@ export async function checkRuntimeNameAvailability(
     cache: "no-store",
   });
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "检查 Runtime 名称失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.checkRuntimeNameFailed")));
   }
   const value = (await res.json()) as { available?: unknown };
   if (typeof value.available !== "boolean") {
-    throw new Error("检查 Runtime 名称失败：服务返回格式错误");
+    throw new Error(adkT("client.invalidRuntimeNameCheck"));
   }
   return { available: value.available };
 }
+
+export interface IntelligentDevelopmentDeploymentSource {
+  kind: "intelligentDevelopment";
+  sessionId: string;
+  projectId?: string;
+  versionId?: string;
+  artifactSha256: string;
+  validationReportSha256: string;
+  acknowledgeUnverified?: true;
+}
+
+export type DeploymentSource =
+  | { kind: "inlineFiles" }
+  | { kind: "migration"; migrationId: string }
+  | IntelligentDevelopmentDeploymentSource;
 
 export type DeployAuthentication =
   | { type: "api_key" }
@@ -2002,6 +3266,7 @@ export interface DeploymentResourceQuery {
   namespace?: string;
   workspaceId?: string;
   search?: string;
+  namePrefix?: string;
   pageNumber?: number;
   pageSize?: number;
 }
@@ -2022,6 +3287,7 @@ export async function listDeploymentResources(
   if (query.namespace) params.set("namespace", query.namespace);
   if (query.workspaceId) params.set("workspaceId", query.workspaceId);
   if (query.search) params.set("search", query.search);
+  if (query.namePrefix) params.set("namePrefix", query.namePrefix);
   if (query.pageNumber) params.set("pageNumber", String(query.pageNumber));
   if (query.pageSize) params.set("pageSize", String(query.pageSize));
   const response = await apiFetch(
@@ -2029,7 +3295,7 @@ export async function listDeploymentResources(
     { signal },
   );
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "加载云资源失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.loadCloudResourcesFailed")));
   }
   const payload = (await response.json()) as {
     serviceRegion?: unknown;
@@ -2047,7 +3313,7 @@ export async function listDeploymentResources(
     typeof payload.totalCount !== "number" ||
     typeof payload.hasMore !== "boolean"
   ) {
-    throw new Error("云资源列表响应格式无效");
+    throw new Error(adkT("client.invalidCloudResources"));
   }
   const items = payload.items.map((item) => {
     if (
@@ -2058,7 +3324,7 @@ export async function listDeploymentResources(
       typeof (item as DeploymentResource).region !== "string" ||
       typeof (item as DeploymentResource).status !== "string"
     ) {
-      throw new Error("云资源列表响应格式无效");
+      throw new Error(adkT("client.invalidCloudResources"));
     }
     return item as DeploymentResource;
   });
@@ -2075,17 +3341,28 @@ export async function listDeploymentResources(
 export type SandboxToolKind =
   | "codex"
   | "codex_snapshot"
+  | "deepseek_harness"
+  | "deepseek_harness_snapshot"
   | "openclaw"
   | "openclaw_snapshot"
   | "hermes"
   | "hermes_snapshot"
+  | "studio_workspace"
   | "dev";
+export type CodexSandboxToolKind = Extract<
+  SandboxToolKind,
+  "codex" | "codex_snapshot"
+>;
 
 export interface SandboxToolInfo {
   kind: SandboxToolKind;
   label: string;
   toolId: string;
   snapshot: boolean;
+  needsModelEnvUpdate: boolean;
+  canUpdateModelEnv: boolean;
+  modelEnvError: string;
+  modelEnvErrorCode: string;
 }
 
 export interface SystemInfoResponse {
@@ -2095,12 +3372,350 @@ export interface SystemInfoResponse {
   sandboxTools: SandboxToolInfo[];
 }
 
+export type EnvironmentOperatingSystem = "ubuntu-22.04" | "ubuntu-24.04";
+export type EnvironmentBaseEnvironment = "ubuntu" | "aio-sandbox" | "codex-sandbox";
+export type EnvironmentLanguage = "python-3.10" | "python-3.12";
+export interface SessionEnvironmentMountSelection {
+  environment_id: string;
+  environment_version_id: string;
+  /** Identifies one continuous attachment; absent for legacy Studio clients. */
+  mount_instance_id?: string;
+}
+
+export interface PreparedSessionEnvironmentMount {
+  environment_id: string;
+  environment_version_id: string;
+  mount_instance_id: string;
+  sandbox_session_id: string;
+}
+
+export function parsePreparedSessionEnvironmentMounts(
+  value: unknown,
+  expectedMounts: readonly SessionEnvironmentMountSelection[],
+): PreparedSessionEnvironmentMount[] {
+  const payload = value as { mounts?: unknown };
+  if (!payload || typeof payload !== "object" || !Array.isArray(payload.mounts)) {
+    throw new Error(adkT("client.invalidEnvironmentMount"));
+  }
+  if (payload.mounts.length !== expectedMounts.length) {
+    throw new Error(adkT("client.environmentMountMismatch"));
+  }
+  return payload.mounts.map((item, index) => {
+    const expected = expectedMounts[index];
+    if (
+      !item ||
+      typeof item !== "object" ||
+      typeof item.environment_id !== "string" ||
+      typeof item.environment_version_id !== "string" ||
+      typeof item.mount_instance_id !== "string" ||
+      typeof item.sandbox_session_id !== "string" ||
+      !item.environment_id ||
+      !item.environment_version_id ||
+      !item.mount_instance_id ||
+      !item.sandbox_session_id
+    ) {
+      throw new Error(adkT("client.invalidEnvironmentMount"));
+    }
+    if (
+      item.environment_id !== expected.environment_id ||
+      item.environment_version_id !== expected.environment_version_id ||
+      (expected.mount_instance_id !== undefined &&
+        item.mount_instance_id !== expected.mount_instance_id)
+    ) {
+      throw new Error(adkT("client.environmentMountMismatch"));
+    }
+    return item as PreparedSessionEnvironmentMount;
+  });
+}
+
+export async function prepareSessionEnvironmentMounts({
+  runtimeId,
+  appName,
+  userId,
+  sessionId,
+  environmentMounts,
+}: {
+  runtimeId: string;
+  appName: string;
+  userId: string;
+  sessionId: string;
+  environmentMounts: readonly SessionEnvironmentMountSelection[];
+}): Promise<PreparedSessionEnvironmentMount[]> {
+  const { app } = resolve(appName);
+  let response: Response;
+  try {
+    response = await apiFetch("/web/v3/session-environment-mounts/prepare", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtime_id: runtimeId,
+        app_name: app,
+        user_id: userId,
+        session_id: sessionId,
+        environment_mounts: [...environmentMounts],
+      }),
+    });
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error(adkT("client.environmentMountNetworkFailed"));
+    }
+    throw error;
+  }
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.environmentMountFailed")));
+  }
+  return parsePreparedSessionEnvironmentMounts(
+    await response.json(),
+    environmentMounts,
+  );
+}
+export type EnvironmentBuildStatus =
+  | "preparing"
+  | "queued"
+  | "building"
+  | "scanning"
+  | "available"
+  | "failed";
+export type EnvironmentSandboxToolStatus = "" | "creating" | "ready" | "failed";
+
+export interface EnvironmentBuildResource {
+  source: "provided" | "managed";
+  workspaceId?: string;
+  workspaceName?: string;
+  pipelineId?: string;
+  pipelineName?: string;
+  registry?: string;
+  namespace?: string;
+  repository?: string;
+  region?: string;
+  imageRepository?: string;
+  consoleUrl: string;
+}
+
+export type EnvironmentBuildStepStatus =
+  | "pending"
+  | "running"
+  | "succeeded"
+  | "failed";
+
+export interface EnvironmentBuildStep {
+  key: string;
+  label: string;
+  status: EnvironmentBuildStepStatus;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface EnvironmentBuildVersion {
+  versionId: string;
+  status: EnvironmentBuildStatus;
+  image: string;
+  toolId: string;
+  toolStatus: EnvironmentSandboxToolStatus;
+  sourceCommitSha: string;
+  error: string;
+  runId: string;
+  currentStep: string;
+  steps: EnvironmentBuildStep[];
+  progressError: string;
+  logTail: string;
+  logTruncated: boolean;
+  logUpdatedAt: string | null;
+  logError: string;
+  createdAt: string;
+  updatedAt: string;
+  resources: {
+    codePipeline?: EnvironmentBuildResource;
+    containerRegistry?: EnvironmentBuildResource;
+  } | null;
+}
+
+export interface EnvironmentManifestSkill {
+  name: string;
+  folder: string;
+  source: "skillhub" | "local" | "skillspace";
+  version: string;
+  digest: string;
+}
+
+export interface EnvironmentManifest {
+  apiVersion: "agentkit.studio/v3" | "agentkit.studio/v1alpha1";
+  kind: "Environment";
+  metadata: {
+    id: string;
+    name: string;
+    version: string;
+    description: string;
+  };
+  spec: {
+    image: string;
+    baseEnvironment: EnvironmentBaseEnvironment;
+    baseImage: string;
+    operatingSystem: EnvironmentOperatingSystem;
+    language: EnvironmentLanguage;
+    executionRuntime: "veadk";
+    packages: string[];
+    capabilities: string[];
+    skills: EnvironmentManifestSkill[];
+  };
+  status: {
+    phase: EnvironmentBuildStatus;
+    toolId: string;
+    toolStatus: EnvironmentSandboxToolStatus;
+    createdAt: string;
+    updatedAt: string;
+  };
+}
+
+export interface StudioEnvironment {
+  id: string;
+  name: string;
+  description: string;
+  baseEnvironment: EnvironmentBaseEnvironment;
+  operatingSystem: EnvironmentOperatingSystem;
+  language: EnvironmentLanguage;
+  optionIds: string[];
+  selectedSkills: SelectedSkill[];
+  dockerfile: string;
+  gitSource?: EnvironmentGitSource | null;
+  containerRepository?: EnvironmentContainerRepository | null;
+  imageSource?: EnvironmentImageSource | null;
+  createdAt: string;
+  updatedAt: string;
+  latestVersion: EnvironmentBuildVersion | null;
+}
+
+export interface StudioWorkspace {
+  id: string;
+  name: string;
+  description: string;
+  environmentIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkspaceInput {
+  name: string;
+  description: string;
+  environmentIds: string[];
+}
+
+export interface EnvironmentInput {
+  name: string;
+  description: string;
+  baseEnvironment: EnvironmentBaseEnvironment;
+  operatingSystem: EnvironmentOperatingSystem;
+  language: EnvironmentLanguage;
+  optionIds: string[];
+  selectedSkills: SelectedSkill[];
+  dockerfile: string;
+  gitSource?: EnvironmentGitSource | null;
+  containerRepository?: EnvironmentContainerRepository | null;
+  imageSource?: EnvironmentImageSource | null;
+}
+
+export interface EnvironmentGitSource {
+  repositoryUrl: string;
+  ref?: string;
+  dockerfilePath: string;
+}
+
+export interface EnvironmentContainerRepository {
+  region: string;
+  registry: string;
+  namespace: string;
+  repository: string;
+}
+
+export interface EnvironmentImageSource extends EnvironmentContainerRepository {
+  reference: string;
+}
+
+export interface EnvironmentRepositoryInspection {
+  repositoryUrl: string;
+  ref: string;
+  commitSha: string;
+  dockerfiles: string[];
+}
+
+export interface EnvironmentShareCodeExport {
+  shareCode: string;
+  name: string;
+}
+
+export interface EnvironmentShareCodeInspection {
+  index: number;
+  status: "valid" | "invalid";
+  name: string;
+  error: string;
+}
+
+export interface EnvironmentShareCodeImportItem {
+  index: number;
+  status: "created" | "duplicate" | "failed";
+  name: string;
+  environment?: StudioEnvironment;
+  error: string;
+}
+
+export function parseEnvironmentShareCodes(value: string): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value.split(/[,，\n\r]+/)) {
+    const code = item.trim();
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    result.push(code);
+  }
+  return result;
+}
+
+export async function writeEnvironmentShareCode(
+  shareCode: string,
+  clipboard: Pick<Clipboard, "writeText"> | undefined =
+    typeof navigator === "undefined" ? undefined : navigator.clipboard,
+): Promise<void> {
+  if (!clipboard?.writeText) {
+    throw new Error(adkT("client.clipboardUnsupported"));
+  }
+  try {
+    await clipboard.writeText(shareCode);
+  } catch {
+    throw new Error(adkT("client.clipboardWriteFailed"));
+  }
+}
+
+export interface EnvironmentResourcesResponse {
+  provider: CloudProvider;
+  region: string;
+  codePipeline: EnvironmentBuildResource;
+  containerRegistry: EnvironmentBuildResource;
+}
+
+export interface SandboxToolModelEnvUpdateResponse {
+  kind: CodexSandboxToolKind;
+  toolId: string;
+  updated: boolean;
+}
+
+const SANDBOX_TOOL_DISPLAY_ORDER: Record<string, number> = {
+  codex: 0,
+  codex_snapshot: 1,
+  deepseek_harness: 2,
+  deepseek_harness_snapshot: 3,
+  openclaw: 4,
+  openclaw_snapshot: 5,
+  hermes: 6,
+  hermes_snapshot: 7,
+  dev: 8,
+};
+
 export async function getSystemInfo(
   signal?: AbortSignal,
 ): Promise<SystemInfoResponse> {
   const response = await apiFetch("/web/system-info", { signal });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "加载系统信息失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.loadSystemInfoFailed")));
   }
   const payload = (await response.json()) as {
     storage?: { tosAddress?: unknown };
@@ -2110,25 +3725,621 @@ export async function getSystemInfo(
     typeof payload.storage?.tosAddress !== "string" ||
     !Array.isArray(payload.sandboxTools)
   ) {
-    throw new Error("系统信息响应格式无效");
+    throw new Error(adkT("client.invalidSystemInfo"));
   }
-  const sandboxTools = payload.sandboxTools.map((item) => {
-    if (
-      !item ||
-      typeof item !== "object" ||
-      typeof (item as SandboxToolInfo).kind !== "string" ||
-      typeof (item as SandboxToolInfo).label !== "string" ||
-      typeof (item as SandboxToolInfo).toolId !== "string" ||
-      typeof (item as SandboxToolInfo).snapshot !== "boolean"
-    ) {
-      throw new Error("系统信息响应格式无效");
-    }
-    return item as SandboxToolInfo;
-  });
+  const sandboxTools = payload.sandboxTools
+    .map((item) => {
+      if (
+        !item ||
+        typeof item !== "object" ||
+        typeof (item as SandboxToolInfo).kind !== "string" ||
+        typeof (item as SandboxToolInfo).label !== "string" ||
+        typeof (item as SandboxToolInfo).toolId !== "string" ||
+        typeof (item as SandboxToolInfo).snapshot !== "boolean" ||
+        typeof (item as SandboxToolInfo).needsModelEnvUpdate !== "boolean" ||
+        typeof (item as SandboxToolInfo).canUpdateModelEnv !== "boolean" ||
+        typeof (item as SandboxToolInfo).modelEnvError !== "string" ||
+        typeof (item as SandboxToolInfo).modelEnvErrorCode !== "string"
+      ) {
+        throw new Error(adkT("client.invalidSystemInfo"));
+      }
+      return item as SandboxToolInfo;
+    })
+    .sort((left, right) => (
+      (SANDBOX_TOOL_DISPLAY_ORDER[left.kind] ?? Number.MAX_SAFE_INTEGER) -
+      (SANDBOX_TOOL_DISPLAY_ORDER[right.kind] ?? Number.MAX_SAFE_INTEGER)
+    ));
   return {
     storage: { tosAddress: payload.storage.tosAddress },
     sandboxTools,
   };
+}
+
+const ENVIRONMENT_BUILD_STATUSES = new Set<EnvironmentBuildStatus>([
+  "preparing",
+  "queued",
+  "building",
+  "scanning",
+  "available",
+  "failed",
+]);
+
+function environmentBuildVersion(value: unknown): EnvironmentBuildVersion | null {
+  if (value === null) return null;
+  if (!value || typeof value !== "object") {
+    throw new Error(adkT("client.invalidEnvironmentBuild"));
+  }
+  const candidate = value as EnvironmentBuildVersion;
+  if (
+    typeof candidate.versionId !== "string" ||
+    !ENVIRONMENT_BUILD_STATUSES.has(candidate.status) ||
+    typeof candidate.image !== "string" ||
+    typeof candidate.error !== "string" ||
+    typeof candidate.createdAt !== "string" ||
+    typeof candidate.updatedAt !== "string" ||
+    (candidate.resources !== null && typeof candidate.resources !== "object")
+  ) {
+    throw new Error(adkT("client.invalidEnvironmentBuild"));
+  }
+  const steps = Array.isArray(candidate.steps)
+    ? candidate.steps.map((step) => {
+      if (
+        !step ||
+        typeof step !== "object" ||
+        typeof step.key !== "string" ||
+        typeof step.label !== "string" ||
+        !["pending", "running", "succeeded", "failed"].includes(step.status) ||
+        (step.startedAt !== null && typeof step.startedAt !== "string") ||
+        (step.finishedAt !== null && typeof step.finishedAt !== "string")
+      ) {
+        throw new Error(adkT("client.invalidEnvironmentBuildStep"));
+      }
+      return step;
+    })
+    : [];
+  return {
+    ...candidate,
+    toolId: typeof candidate.toolId === "string" ? candidate.toolId : "",
+    toolStatus: ["creating", "ready", "failed"].includes(candidate.toolStatus)
+      ? candidate.toolStatus
+      : "",
+    runId: typeof candidate.runId === "string" ? candidate.runId : "",
+    currentStep: typeof candidate.currentStep === "string" ? candidate.currentStep : "",
+    sourceCommitSha: typeof candidate.sourceCommitSha === "string" ? candidate.sourceCommitSha : "",
+    steps,
+    progressError: typeof candidate.progressError === "string" ? candidate.progressError : "",
+    logTail: typeof candidate.logTail === "string" ? candidate.logTail : "",
+    logTruncated: candidate.logTruncated === true,
+    logUpdatedAt: typeof candidate.logUpdatedAt === "string" ? candidate.logUpdatedAt : null,
+    logError: typeof candidate.logError === "string" ? candidate.logError : "",
+  };
+}
+
+export function parseEnvironmentManifest(value: unknown): EnvironmentManifest {
+  if (!value || typeof value !== "object") {
+    throw new Error(adkT("client.invalidEnvironmentManifest"));
+  }
+  const candidate = value as EnvironmentManifest;
+  if (
+    !["agentkit.studio/v3", "agentkit.studio/v1alpha1"].includes(
+      candidate.apiVersion,
+    ) ||
+    candidate.kind !== "Environment" ||
+    !candidate.metadata ||
+    typeof candidate.metadata.id !== "string" ||
+    typeof candidate.metadata.name !== "string" ||
+    typeof candidate.metadata.version !== "string" ||
+    typeof candidate.metadata.description !== "string" ||
+    !candidate.spec ||
+    typeof candidate.spec.image !== "string" ||
+    !["ubuntu", "aio-sandbox", "codex-sandbox"].includes(
+      candidate.spec.baseEnvironment,
+    ) ||
+    typeof candidate.spec.baseImage !== "string" ||
+    !["ubuntu-22.04", "ubuntu-24.04"].includes(candidate.spec.operatingSystem) ||
+    !["python-3.10", "python-3.12"].includes(candidate.spec.language) ||
+    candidate.spec.executionRuntime !== "veadk" ||
+    !Array.isArray(candidate.spec.packages) ||
+    !candidate.spec.packages.every((item) => typeof item === "string") ||
+    !Array.isArray(candidate.spec.capabilities) ||
+    !candidate.spec.capabilities.every((item) => typeof item === "string") ||
+    !Array.isArray(candidate.spec.skills) ||
+    !candidate.status ||
+    !ENVIRONMENT_BUILD_STATUSES.has(candidate.status.phase) ||
+    typeof candidate.status.createdAt !== "string" ||
+    typeof candidate.status.updatedAt !== "string"
+  ) {
+    throw new Error(adkT("client.invalidEnvironmentManifest"));
+  }
+  return candidate;
+}
+
+function environmentContainerRepository(
+  value: unknown,
+): EnvironmentContainerRepository | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!value || typeof value !== "object") {
+    throw new Error(adkT("client.invalidImageRepository"));
+  }
+  const candidate = value as Partial<EnvironmentContainerRepository>;
+  if (
+    typeof candidate.region !== "string" ||
+    typeof candidate.registry !== "string" ||
+    typeof candidate.namespace !== "string" ||
+    typeof candidate.repository !== "string"
+  ) {
+    throw new Error(adkT("client.invalidImageRepository"));
+  }
+  return candidate as EnvironmentContainerRepository;
+}
+
+function environmentGitSource(value: unknown): EnvironmentGitSource | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!value || typeof value !== "object") {
+    throw new Error(adkT("client.invalidCodeRepository"));
+  }
+  const candidate = value as Partial<EnvironmentGitSource>;
+  if (
+    typeof candidate.repositoryUrl !== "string" ||
+    (candidate.ref !== undefined && typeof candidate.ref !== "string") ||
+    typeof candidate.dockerfilePath !== "string"
+  ) {
+    throw new Error(adkT("client.invalidCodeRepository"));
+  }
+  return candidate as EnvironmentGitSource;
+}
+
+function environmentImageSource(value: unknown): EnvironmentImageSource | undefined {
+  const repository = environmentContainerRepository(value);
+  if (!repository) return undefined;
+  const candidate = value as Partial<EnvironmentImageSource>;
+  if (typeof candidate.reference !== "string") {
+    throw new Error(adkT("client.invalidImageSource"));
+  }
+  return { ...repository, reference: candidate.reference };
+}
+
+function studioEnvironment(value: unknown): StudioEnvironment {
+  if (!value || typeof value !== "object") {
+    throw new Error(adkT("client.invalidEnvironment"));
+  }
+  const candidate = value as StudioEnvironment & { baseEnvironment?: unknown };
+  if (
+    typeof candidate.id !== "string" ||
+    typeof candidate.name !== "string" ||
+    typeof candidate.description !== "string" ||
+    (candidate.baseEnvironment !== undefined &&
+      candidate.baseEnvironment !== "ubuntu" &&
+      candidate.baseEnvironment !== "aio-sandbox" &&
+      candidate.baseEnvironment !== "codex-sandbox") ||
+    (candidate.operatingSystem !== "ubuntu-22.04" &&
+      candidate.operatingSystem !== "ubuntu-24.04") ||
+    (candidate.language !== "python-3.10" && candidate.language !== "python-3.12") ||
+    !Array.isArray(candidate.optionIds) ||
+    !candidate.optionIds.every((item) => typeof item === "string") ||
+    (candidate.selectedSkills !== undefined && !Array.isArray(candidate.selectedSkills)) ||
+    typeof candidate.dockerfile !== "string" ||
+    typeof candidate.createdAt !== "string" ||
+    typeof candidate.updatedAt !== "string"
+  ) {
+    throw new Error(adkT("client.invalidEnvironment"));
+  }
+  return {
+    ...candidate,
+    baseEnvironment: candidate.baseEnvironment === "aio-sandbox"
+      ? "aio-sandbox"
+      : candidate.baseEnvironment === "codex-sandbox"
+        ? "codex-sandbox"
+        : "ubuntu",
+    selectedSkills: candidate.selectedSkills ?? [],
+    gitSource: environmentGitSource(candidate.gitSource),
+    containerRepository: environmentContainerRepository(candidate.containerRepository),
+    imageSource: environmentImageSource(candidate.imageSource),
+    latestVersion: environmentBuildVersion(candidate.latestVersion),
+  };
+}
+
+function studioWorkspace(value: unknown): StudioWorkspace {
+  if (!value || typeof value !== "object") {
+    throw new Error(adkT("client.invalidWorkspace"));
+  }
+  const candidate = value as StudioWorkspace;
+  if (
+    typeof candidate.id !== "string" ||
+    typeof candidate.name !== "string" ||
+    typeof candidate.description !== "string" ||
+    !Array.isArray(candidate.environmentIds) ||
+    !candidate.environmentIds.every((item) => typeof item === "string") ||
+    typeof candidate.createdAt !== "string" ||
+    typeof candidate.updatedAt !== "string"
+  ) {
+    throw new Error(adkT("client.invalidWorkspace"));
+  }
+  return candidate;
+}
+
+export async function listWorkspaces(signal?: AbortSignal): Promise<StudioWorkspace[]> {
+  const response = await apiFetch("/web/workspaces", { signal });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.loadWorkspacesFailed")));
+  }
+  const payload = (await response.json()) as { items?: unknown };
+  if (!Array.isArray(payload.items)) throw new Error(adkT("client.invalidWorkspaceList"));
+  return payload.items.map(studioWorkspace);
+}
+
+async function writeWorkspace(
+  path: string,
+  method: "POST" | "PATCH",
+  input: WorkspaceInput,
+  signal?: AbortSignal,
+): Promise<StudioWorkspace> {
+  const response = await apiFetch(path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.saveWorkspaceFailed")));
+  }
+  return studioWorkspace(await response.json());
+}
+
+export function createWorkspace(
+  input: WorkspaceInput,
+  signal?: AbortSignal,
+): Promise<StudioWorkspace> {
+  return writeWorkspace("/web/workspaces", "POST", input, signal);
+}
+
+export function updateWorkspace(
+  workspaceId: string,
+  input: WorkspaceInput,
+  signal?: AbortSignal,
+): Promise<StudioWorkspace> {
+  return writeWorkspace(
+    `/web/workspaces/${encodeURIComponent(workspaceId)}`,
+    "PATCH",
+    input,
+    signal,
+  );
+}
+
+export async function deleteWorkspace(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await apiFetch(
+    `/web/workspaces/${encodeURIComponent(workspaceId)}`,
+    { method: "DELETE", signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.deleteWorkspaceFailed")));
+  }
+}
+
+export async function listEnvironments(signal?: AbortSignal): Promise<StudioEnvironment[]> {
+  const response = await apiFetch("/web/v3/environments", { signal });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.loadEnvironmentsFailed")));
+  }
+  const payload = (await response.json()) as { items?: unknown };
+  if (!Array.isArray(payload.items)) throw new Error(adkT("client.invalidEnvironmentList"));
+  return payload.items.map(studioEnvironment);
+}
+
+export async function inspectEnvironmentRepository(
+  input: { repositoryUrl: string; ref?: string },
+  signal?: AbortSignal,
+): Promise<EnvironmentRepositoryInspection> {
+  const response = await apiFetch("/web/v3/environment-repositories/inspect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.probeRepositoryFailed")));
+  }
+  const payload = (await response.json()) as Partial<EnvironmentRepositoryInspection>;
+  if (
+    typeof payload.repositoryUrl !== "string" ||
+    typeof payload.ref !== "string" ||
+    typeof payload.commitSha !== "string" ||
+    !Array.isArray(payload.dockerfiles) ||
+    !payload.dockerfiles.every((item) => typeof item === "string")
+  ) {
+    throw new Error(adkT("client.invalidRepositoryProbe"));
+  }
+  return payload as EnvironmentRepositoryInspection;
+}
+
+export async function exportEnvironmentShareCode(
+  environmentId: string,
+  signal?: AbortSignal,
+): Promise<EnvironmentShareCodeExport> {
+  const response = await apiFetch(
+    `/web/v3/environments/${encodeURIComponent(environmentId)}/share-code`,
+    { method: "POST", signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.exportEnvironmentCodeFailed")));
+  }
+  const payload = (await response.json()) as Partial<EnvironmentShareCodeExport>;
+  if (typeof payload.shareCode !== "string" || typeof payload.name !== "string") {
+    throw new Error(adkT("client.invalidEnvironmentCode"));
+  }
+  return payload as EnvironmentShareCodeExport;
+}
+
+export async function inspectEnvironmentShareCodes(
+  shareCodes: string[],
+  signal?: AbortSignal,
+): Promise<EnvironmentShareCodeInspection[]> {
+  const response = await apiFetch("/web/v3/environment-share-codes/inspect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ shareCodes }),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.inspectEnvironmentCodeFailed")));
+  }
+  const payload = (await response.json()) as { items?: unknown };
+  if (!Array.isArray(payload.items)) {
+    throw new Error(adkT("client.invalidEnvironmentCodeInspection"));
+  }
+  return payload.items.map((value) => {
+    if (!value || typeof value !== "object") {
+      throw new Error(adkT("client.invalidEnvironmentCodeInspection"));
+    }
+    const candidate = value as {
+      index?: unknown;
+      status?: unknown;
+      valid?: unknown;
+      name?: unknown;
+      error?: unknown;
+    };
+    const status = candidate.status === "valid" || candidate.valid === true
+      ? "valid"
+      : candidate.status === "invalid" || candidate.valid === false
+        ? "invalid"
+        : null;
+    if (
+      !Number.isInteger(candidate.index) ||
+      status === null ||
+      (candidate.name !== undefined && typeof candidate.name !== "string") ||
+      (candidate.error !== undefined && typeof candidate.error !== "string")
+    ) {
+      throw new Error(adkT("client.invalidEnvironmentCodeInspection"));
+    }
+    return {
+      index: candidate.index as number,
+      status,
+      name: candidate.name ?? "",
+      error: candidate.error ?? "",
+    };
+  });
+}
+
+export async function importEnvironmentShareCodes(
+  shareCodes: string[],
+  signal?: AbortSignal,
+): Promise<EnvironmentShareCodeImportItem[]> {
+  const response = await apiFetch("/web/v3/environment-share-codes/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ shareCodes }),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.importEnvironmentCodeFailed")));
+  }
+  const payload = (await response.json()) as { items?: unknown };
+  if (!Array.isArray(payload.items)) {
+    throw new Error(adkT("client.invalidEnvironmentCodeImport"));
+  }
+  return payload.items.map((value) => {
+    if (!value || typeof value !== "object") {
+      throw new Error(adkT("client.invalidEnvironmentCodeImport"));
+    }
+    const candidate = value as {
+      index?: unknown;
+      status?: unknown;
+      name?: unknown;
+      environment?: unknown;
+      error?: unknown;
+    };
+    if (
+      !Number.isInteger(candidate.index) ||
+      !(candidate.status === "created" || candidate.status === "duplicate" || candidate.status === "failed") ||
+      (candidate.name !== undefined && typeof candidate.name !== "string") ||
+      (candidate.error !== undefined && typeof candidate.error !== "string")
+    ) {
+      throw new Error(adkT("client.invalidEnvironmentCodeImport"));
+    }
+    return {
+      index: candidate.index as number,
+      status: candidate.status,
+      name: candidate.name ?? "",
+      environment: candidate.environment === undefined || candidate.environment === null
+        ? undefined
+        : studioEnvironment(candidate.environment),
+      error: candidate.error ?? "",
+    };
+  });
+}
+
+async function writeEnvironment(
+  path: string,
+  method: "POST" | "PATCH",
+  input: EnvironmentInput,
+  signal?: AbortSignal,
+): Promise<StudioEnvironment> {
+  let response: Response;
+  try {
+    response = await apiFetch(path, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    if (error instanceof TypeError) {
+      throw new Error(adkT("client.studioUnavailable"));
+    }
+    throw error;
+  }
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.saveEnvironmentFailed")));
+  }
+  return studioEnvironment(await response.json());
+}
+
+export function createEnvironment(
+  input: EnvironmentInput,
+  signal?: AbortSignal,
+): Promise<StudioEnvironment> {
+  return writeEnvironment("/web/v3/environments", "POST", input, signal);
+}
+
+export function updateEnvironment(
+  environmentId: string,
+  input: EnvironmentInput,
+  signal?: AbortSignal,
+): Promise<StudioEnvironment> {
+  return writeEnvironment(
+    `/web/v3/environments/${encodeURIComponent(environmentId)}`,
+    "PATCH",
+    input,
+    signal,
+  );
+}
+
+export async function deleteEnvironment(
+  environmentId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await apiFetch(
+    `/web/v3/environments/${encodeURIComponent(environmentId)}`,
+    { method: "DELETE", signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.deleteEnvironmentFailed")));
+  }
+}
+
+export async function buildEnvironment(
+  environmentId: string,
+  signal?: AbortSignal,
+): Promise<EnvironmentBuildVersion> {
+  const response = await apiFetch(
+    `/web/v3/environments/${encodeURIComponent(environmentId)}/build`,
+    { method: "POST", signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.startEnvironmentBuildFailed")));
+  }
+  const result = environmentBuildVersion(await response.json());
+  if (!result) throw new Error(adkT("client.invalidEnvironmentBuild"));
+  return result;
+}
+
+export async function getEnvironmentBuild(
+  environmentId: string,
+  versionId: string,
+  options: { includeLogs?: boolean; signal?: AbortSignal } = {},
+): Promise<EnvironmentBuildVersion> {
+  const query = options.includeLogs ? "?includeLogs=true" : "";
+  const response = await apiFetch(
+    `/web/v3/environments/${encodeURIComponent(environmentId)}/builds/${encodeURIComponent(versionId)}${query}`,
+    { signal: options.signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.loadEnvironmentBuildFailed")));
+  }
+  const result = environmentBuildVersion(await response.json());
+  if (!result) throw new Error(adkT("client.invalidEnvironmentBuild"));
+  return result;
+}
+
+export async function getEnvironmentManifest(
+  environmentId: string,
+  versionId: string,
+  signal?: AbortSignal,
+): Promise<EnvironmentManifest> {
+  const response = await apiFetch(
+    `/web/v3/environments/${encodeURIComponent(environmentId)}/builds/${encodeURIComponent(versionId)}/manifest`,
+    { signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.loadEnvironmentManifestFailed")));
+  }
+  return parseEnvironmentManifest(await response.json());
+}
+
+function environmentBuildResource(value: unknown): EnvironmentBuildResource {
+  if (!value || typeof value !== "object") {
+    throw new Error(adkT("client.invalidEnvironmentResource"));
+  }
+  const candidate = value as EnvironmentBuildResource;
+  if (
+    (candidate.source !== "provided" && candidate.source !== "managed") ||
+    typeof candidate.consoleUrl !== "string"
+  ) {
+    throw new Error(adkT("client.invalidEnvironmentResource"));
+  }
+  return candidate;
+}
+
+export async function getEnvironmentResources(
+  signal?: AbortSignal,
+): Promise<EnvironmentResourcesResponse> {
+  const response = await apiFetch("/web/v3/environment-resources", { signal });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.loadEnvironmentResourcesFailed")));
+  }
+  const payload = (await response.json()) as Partial<EnvironmentResourcesResponse>;
+  if (
+    (payload.provider !== "volcengine" && payload.provider !== "byteplus") ||
+    typeof payload.region !== "string"
+  ) {
+    throw new Error(adkT("client.invalidEnvironmentResource"));
+  }
+  return {
+    provider: payload.provider,
+    region: payload.region,
+    codePipeline: environmentBuildResource(payload.codePipeline),
+    containerRegistry: environmentBuildResource(payload.containerRegistry),
+  };
+}
+
+export async function updateCodexSandboxToolModelEnv(
+  kind: CodexSandboxToolKind,
+  signal?: AbortSignal,
+): Promise<SandboxToolModelEnvUpdateResponse> {
+  const response = await apiFetch(
+    `/web/system-info/sandbox-tools/${encodeURIComponent(kind)}/model-env`,
+    { method: "POST", signal },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.updateCodexSandboxFailed")));
+  }
+  const payload = (await response.json()) as {
+    kind?: unknown;
+    toolId?: unknown;
+    updated?: unknown;
+  };
+  if (
+    (payload.kind !== "codex" && payload.kind !== "codex_snapshot") ||
+    typeof payload.toolId !== "string" ||
+    typeof payload.updated !== "boolean"
+  ) {
+    throw new Error(adkT("client.invalidCodexSandboxUpdate"));
+  }
+  return payload as SandboxToolModelEnvUpdateResponse;
 }
 
 export interface IdentityUserPool {
@@ -2144,11 +4355,11 @@ export async function listIdentityUserPools(
 ): Promise<IdentityUserPool[]> {
   const response = await apiFetch("/web/identity/user-pools", { signal });
   if (!response.ok) {
-    throw new Error(await httpErrorMessage(response, "加载用户池失败"));
+    throw new Error(await httpErrorMessage(response, adkT("client.loadUserPoolsFailed")));
   }
   const payload = (await response.json()) as { items?: unknown };
   if (!Array.isArray(payload.items)) {
-    throw new Error("用户池列表响应格式无效");
+    throw new Error(adkT("client.invalidUserPoolList"));
   }
   return payload.items.map((item) => {
     if (
@@ -2160,14 +4371,81 @@ export async function listIdentityUserPools(
       typeof (item as IdentityUserPool).region !== "string" ||
       typeof (item as IdentityUserPool).isCurrent !== "boolean"
     ) {
-      throw new Error("用户池列表响应格式无效");
+      throw new Error(adkT("client.invalidUserPoolList"));
     }
     return item as IdentityUserPool;
   });
 }
 
+export interface GithubCicdPipelineResult {
+  pipelineId?: string;
+  status?: string;
+  phase?: string;
+  updatedAt?: string;
+  runtimeId?: string;
+  region?: string;
+  cloudProvider?: CloudProvider;
+  github?: {
+    owner?: string;
+    repo?: string;
+    baseBranch?: string;
+    branch?: string;
+    commitSha?: string;
+    pullRequestUrl?: string;
+    pullRequestNumber?: number;
+  };
+  cicd?: {
+    enabled?: boolean;
+    workflowPath?: string;
+    projectPath?: string;
+  };
+}
+
+export interface GithubDeliveryVersion {
+  version: string;
+  createdAt?: string;
+  source?: string;
+  changeType?: "source" | "rollback" | string;
+  description?: string;
+  commitSha?: string;
+  targetCommitSha?: string;
+  rollbackTargetCommitSha?: string;
+  branch?: string;
+  pullRequestUrl?: string;
+  pullRequestNumber?: number;
+  author?: string;
+  status?: string;
+  runtimeStatus?: "published" | "publishing" | "failed" | "unknown" | string;
+  workflowRunUrl?: string;
+}
+
+export interface GithubDeliveryVersionsResult {
+  runtimeId: string;
+  currentCommitSha?: string;
+  runtimeStatus?: string;
+  latestSourceRuntimeStatus?: string;
+  github?: GithubCicdPipelineResult["github"];
+  cicd?: GithubCicdPipelineResult["cicd"];
+  githubSyncError?: string;
+  versions: GithubDeliveryVersion[];
+}
+
+export interface GithubDeliveryRollbackResult {
+  runtimeId: string;
+  status: string;
+  github?: GithubCicdPipelineResult["github"];
+  version?: GithubDeliveryVersion;
+}
+
+export interface GithubCicdPipelineErrorDetail {
+  message: string;
+  phase?: string;
+  runtimeId?: string;
+  logPath?: string;
+}
+
 export interface DeployBuildLogSnapshot {
-  source: "code-pipeline";
+  source: "code-pipeline" | "github-delivery";
   status: "running" | "complete" | "error";
   text: string;
   lineCount: number;
@@ -2189,6 +4467,8 @@ export interface DeployStage {
   level: "info" | "success" | "warning" | "error";
   phase: "build" | "deploy" | "publish" | string;
   message: string;
+  /** Stable server progress code used to localize provider-generated prose. */
+  messageCode?: string;
   pct?: number;
   runtimeName?: string;
   buildLog?: DeployBuildLogSnapshot;
@@ -2201,7 +4481,292 @@ interface DeployFrame extends Partial<DeployAgentkitResult> {
   phase?: string;
 }
 
+class DeploymentRecoveryHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "DeploymentRecoveryHttpError";
+  }
+}
+
 const deploymentControllers = new Map<string, AbortController>();
+
+function parseGithubCicdErrorDetail(detail: unknown): GithubCicdPipelineErrorDetail | null {
+  if (typeof detail === "string") return detail ? { message: detail } : null;
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return null;
+  const record = detail as Record<string, unknown>;
+  const message =
+    typeof record.message === "string"
+      ? record.message
+      : typeof record.error === "string"
+        ? record.error
+        : "";
+  if (!message) return null;
+  return {
+    message,
+    phase: typeof record.phase === "string" ? record.phase : undefined,
+    runtimeId: typeof record.runtimeId === "string" ? record.runtimeId : undefined,
+    logPath: typeof record.logPath === "string" ? record.logPath : undefined,
+  };
+}
+
+export class GithubCicdPipelineError extends Error {
+  constructor(readonly detail: GithubCicdPipelineErrorDetail) {
+    super(detail.message);
+    this.name = "GithubCicdPipelineError";
+  }
+}
+
+async function githubCicdErrorFromResponse(
+  res: Response,
+): Promise<GithubCicdPipelineError> {
+  const text = await res.text().catch(() => "");
+  if (text) {
+    try {
+      const data = JSON.parse(text) as { detail?: unknown; error?: unknown };
+      const detail = parseGithubCicdErrorDetail(data.detail ?? data.error);
+      if (detail) return new GithubCicdPipelineError(detail);
+    } catch {
+      return new GithubCicdPipelineError({ message: text });
+    }
+  }
+  return new GithubCicdPipelineError({ message: adkT("client.syncGithubFailed", { status: res.status }) });
+}
+
+export async function createGithubCicdPipeline(params: {
+  project: { name: string; files: { path: string; content: string }[] };
+  githubUrl: string;
+  githubToken: string;
+  baseBranch: string;
+  region: string;
+  cloudProvider: CloudProvider;
+}): Promise<GithubCicdPipelineResult> {
+  const res = await apiFetch(
+    "/web/github-delivery/source-sync",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: params.project,
+        githubUrl: params.githubUrl,
+        githubToken: params.githubToken,
+        baseBranch: params.baseBranch,
+        region: params.region,
+        cloudProvider: params.cloudProvider,
+      }),
+    },
+    {},
+    0,
+  );
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubCicdPipelineResult>;
+}
+
+export async function createGithubDeliveryCicdPipeline(params: {
+  githubUrl: string;
+  githubToken: string;
+  baseBranch: string;
+  runtimeName: string;
+  runtimeId: string;
+  region: string;
+  agentCategory?: "general" | "mpa";
+  mpaCompatibilityManifest?: Record<string, unknown>;
+  cloudProvider: CloudProvider;
+  projectPath?: string;
+  volcengineAccessKey: string;
+  volcengineSecretKey: string;
+  volcengineSessionToken?: string;
+}): Promise<GithubCicdPipelineResult> {
+  const res = await apiFetch(
+    "/web/github-delivery/cicd-pipeline",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        githubUrl: params.githubUrl,
+        githubToken: params.githubToken,
+        baseBranch: params.baseBranch,
+        runtimeName: params.runtimeName,
+        runtimeId: params.runtimeId,
+        region: params.region,
+        agentCategory: params.agentCategory,
+        mpaCompatibilityManifest: params.mpaCompatibilityManifest,
+        cloudProvider: params.cloudProvider,
+        projectPath: params.projectPath ?? ".",
+        volcengineAccessKey: params.volcengineAccessKey,
+        volcengineSecretKey: params.volcengineSecretKey,
+        volcengineSessionToken: params.volcengineSessionToken ?? "",
+      }),
+    },
+    {},
+    0,
+  );
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubCicdPipelineResult>;
+}
+
+export async function initializeGithubDeliveryMain(params: {
+  project: { name: string; files: { path: string; content: string }[] };
+  githubUrl: string;
+  githubToken: string;
+  baseBranch: string;
+  runtimeName: string;
+  runtimeId: string;
+  region: string;
+  agentCategory?: "general" | "mpa";
+  mpaCompatibilityManifest?: Record<string, unknown>;
+  cloudProvider: CloudProvider;
+  projectPath?: string;
+  volcengineAccessKey: string;
+  volcengineSecretKey: string;
+  volcengineSessionToken?: string;
+}): Promise<GithubCicdPipelineResult> {
+  const res = await apiFetch(
+    "/web/github-delivery/init-main",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project: params.project,
+        githubUrl: params.githubUrl,
+        githubToken: params.githubToken,
+        baseBranch: params.baseBranch,
+        runtimeName: params.runtimeName,
+        runtimeId: params.runtimeId,
+        region: params.region,
+        agentCategory: params.agentCategory,
+        mpaCompatibilityManifest: params.mpaCompatibilityManifest,
+        cloudProvider: params.cloudProvider,
+        projectPath: params.projectPath ?? ".",
+        volcengineAccessKey: params.volcengineAccessKey,
+        volcengineSecretKey: params.volcengineSecretKey,
+        volcengineSessionToken: params.volcengineSessionToken ?? "",
+      }),
+    },
+    {},
+    0,
+  );
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubCicdPipelineResult>;
+}
+
+export async function attachGithubDeliveryCicdToSourceSync(params: {
+  pipelineId: string;
+  runtimeName: string;
+  runtimeId: string;
+  region: string;
+  agentCategory?: "general" | "mpa";
+  mpaCompatibilityManifest?: Record<string, unknown>;
+  cloudProvider: CloudProvider;
+  projectPath?: string;
+  volcengineAccessKey: string;
+  volcengineSecretKey: string;
+  volcengineSessionToken?: string;
+}): Promise<GithubCicdPipelineResult> {
+  const res = await apiFetch(
+    "/web/github-delivery/source-sync/cicd",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pipelineId: params.pipelineId,
+        runtimeName: params.runtimeName,
+        runtimeId: params.runtimeId,
+        region: params.region,
+        agentCategory: params.agentCategory,
+        mpaCompatibilityManifest: params.mpaCompatibilityManifest,
+        cloudProvider: params.cloudProvider,
+        projectPath: params.projectPath ?? ".",
+        volcengineAccessKey: params.volcengineAccessKey,
+        volcengineSecretKey: params.volcengineSecretKey,
+        volcengineSessionToken: params.volcengineSessionToken ?? "",
+      }),
+    },
+    {},
+    0,
+  );
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubCicdPipelineResult>;
+}
+
+export async function getGithubCicdRuntimeBinding(
+  runtimeId: string,
+): Promise<GithubCicdPipelineResult | null> {
+  const res = await apiFetch(
+    `/web/github-cicd/runtime-binding?runtimeId=${encodeURIComponent(runtimeId)}`,
+  );
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  const data = (await res.json()) as GithubCicdPipelineResult;
+  return data.pipelineId ? data : null;
+}
+
+export async function getGithubDeliveryVersions(
+  runtimeId: string,
+): Promise<GithubDeliveryVersionsResult> {
+  const res = await apiFetch(
+    `/web/github-delivery/versions?runtimeId=${encodeURIComponent(runtimeId)}`,
+  );
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubDeliveryVersionsResult>;
+}
+
+export async function createGithubDeliveryRollbackPr(params: {
+  runtimeId: string;
+  targetCommitSha: string;
+  region?: string;
+  agentCategory?: "general" | "mpa";
+  mpaCompatibilityManifest?: Record<string, unknown>;
+}): Promise<GithubDeliveryRollbackResult> {
+  const res = await apiFetch("/web/github-delivery/rollback-pr", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubDeliveryRollbackResult>;
+}
+
+export async function bindGithubCicdRuntime(params: {
+  pipelineId: string;
+  runtimeId: string;
+  region: string;
+  cloudProvider: CloudProvider;
+}): Promise<GithubCicdPipelineResult> {
+  const res = await apiFetch("/web/github-cicd/runtime-binding", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubCicdPipelineResult>;
+}
+
+export async function syncGithubCicdRuntime(params: {
+  runtimeId: string;
+  project: { name: string; files: { path: string; content: string }[] };
+  agentCategory?: "general" | "mpa";
+  mpaCompatibilityManifest?: Record<string, unknown>;
+}): Promise<GithubCicdPipelineResult> {
+  const res = await apiFetch(
+    "/web/github-cicd/runtime-sync",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtimeId: params.runtimeId,
+        project: params.project,
+        agentCategory: params.agentCategory,
+        mpaCompatibilityManifest: params.mpaCompatibilityManifest,
+      }),
+    },
+    {},
+    0,
+  );
+  if (!res.ok) throw await githubCicdErrorFromResponse(res);
+  return res.json() as Promise<GithubCicdPipelineResult>;
+}
 
 /** Deploy to AgentKit, consuming the server's SSE progress stream. `onStage`
  *  is called for each build/deploy/publish step; resolves with the connection
@@ -2225,6 +4790,25 @@ export async function deployAgentkitProject(
     runtimeId?: string;
     runtimeName?: string;
     appName?: string;
+    agentCategory?: "general" | "mpa";
+    mpaCompatibilityManifest?: Record<string, unknown>;
+    editMode?: "source-preserving" | "regenerate";
+    draft?: AgentDraft;
+    updateEtag?: string;
+    baseRuntimeVersion?: number | null;
+    removeRuntimeEnvKeys?: string[];
+    mcpSecretValues?: Array<{
+      agentName: string;
+      name: string;
+      url: string;
+      value: string;
+    }>;
+    mcpCredentialReuses?: Array<{
+      agentName: string;
+      name: string;
+      url: string;
+      sourceAuthTokenEnv: string;
+    }>;
     sessionStorage?: "in-memory" | "persistent";
     minInstance?: number;
     maxInstance?: number;
@@ -2239,6 +4823,12 @@ export async function deployAgentkitProject(
     };
     envs?: { key: string; value: string }[];
     resources?: DeployResources;
+    source?: DeploymentSource;
+    harnessSidecar?: AgentDraft["harnessSidecar"];
+    environment?: {
+      environmentId: string;
+      environmentVersionId: string;
+    };
   },
 ): Promise<DeployAgentkitResult> {
   const taskId = opts?.taskId;
@@ -2249,14 +4839,66 @@ export async function deployAgentkitProject(
       deploymentControllers.delete(taskId);
     }
   };
+  const recoverFinal = async (cause?: unknown): Promise<DeployFrame> => {
+    if (isDeploymentAbortError(cause)) throw cause;
+    if (
+      !taskId ||
+      !opts?.runtimeId ||
+      typeof opts.baseRuntimeVersion !== "number"
+    ) {
+      throw new DeploymentStatusUnconfirmedError({ taskId, cause });
+    }
+    const recovered = await pollDeploymentRecovery<DeployFrame>({
+      signal: controller?.signal,
+      shouldRetry: (error) =>
+        !(error instanceof DeploymentRecoveryHttpError) ||
+        error.status === 404 ||
+        error.status === 408 ||
+        error.status === 429 ||
+        error.status >= 500,
+      load: async (signal) => {
+        const statusResponse = await apiFetch(
+          "/web/deploy-agentkit/status",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal,
+            body: JSON.stringify({
+              taskId,
+              runtimeId: opts.runtimeId,
+              runtimeName: opts.runtimeName,
+              appName: opts.appName ?? name,
+              region: config.region,
+              projectName: config.projectName,
+              baseRuntimeVersion: opts.baseRuntimeVersion,
+            }),
+          },
+          {},
+          30_000,
+        );
+        if (!statusResponse.ok) {
+          throw new DeploymentRecoveryHttpError(
+            statusResponse.status,
+            await httpErrorMessage(statusResponse, adkT("client.deploymentFailed")),
+          );
+        }
+        return statusResponse.json() as Promise<DeployFrame>;
+      },
+    });
+    if (!recovered) {
+      throw new DeploymentStatusUnconfirmedError({ taskId, cause });
+    }
+    return recovered;
+  };
 
-  let res: Response;
+  let res: Response | null = null;
+  let final: DeployFrame | null = null;
   try {
     const migrationSource = Boolean(opts?.migrationTaskId);
     opts?.onStage?.({
       level: "info",
       phase: "upload",
-      message: migrationSource ? "正在校验迁移产物" : "正在上传代码包",
+      message: migrationSource ? adkT("client.validatingMigrationArtifact") : adkT("client.uploadingCodePackage"),
       pct: 0,
     });
     res = await apiFetch(
@@ -2274,6 +4916,15 @@ export async function deployAgentkitProject(
           runtimeId: opts?.runtimeId,
           runtimeName: opts?.runtimeName,
           appName: opts?.appName,
+          agentCategory: opts?.agentCategory,
+          mpaCompatibilityManifest: opts?.mpaCompatibilityManifest,
+          editMode: opts?.editMode,
+          draft: opts?.draft,
+          updateEtag: opts?.updateEtag,
+          baseRuntimeVersion: opts?.baseRuntimeVersion,
+          removeRuntimeEnvKeys: opts?.removeRuntimeEnvKeys,
+          mcpSecretValues: opts?.mcpSecretValues,
+          mcpCredentialReuses: opts?.mcpCredentialReuses,
           sessionStorage: opts?.sessionStorage,
           minInstance: opts?.minInstance,
           maxInstance: opts?.maxInstance,
@@ -2283,6 +4934,13 @@ export async function deployAgentkitProject(
           im: opts?.im,
           envs: opts?.envs,
           resources: opts?.resources,
+          source: opts?.source ?? (
+            opts?.migrationTaskId
+              ? { kind: "migration", migrationId: opts.migrationTaskId }
+              : { kind: "inlineFiles" }
+          ),
+          harnessSidecar: opts?.harnessSidecar,
+          environment: opts?.environment,
         }),
       },
       {},
@@ -2291,42 +4949,61 @@ export async function deployAgentkitProject(
     opts?.onStage?.({
       level: "success",
       phase: "upload",
-      message: migrationSource ? "迁移产物校验完成" : "代码包上传完成",
+      message: migrationSource ? adkT("client.migrationArtifactValidated") : adkT("client.codePackageUploaded"),
       pct: 100,
     });
   } catch (error) {
-    clearController();
-    throw error;
+    try {
+      final = await recoverFinal(error);
+    } finally {
+      clearController();
+    }
   }
-  if (!res.ok) {
-    const detail = await httpErrorMessage(res, "部署失败");
+  if (res && !res.ok) {
+    const detail = await httpErrorMessage(res, adkT("client.deploymentFailed"));
     clearController();
     throw new Error(detail);
   }
 
-  let final: DeployFrame | null = null;
-  try {
-    for await (const raw of parseSSE(res)) {
-      const ev = raw as DeployFrame & DeployStage;
-      if (ev && ev.done) {
-        final = ev;
-        break;
+  if (res) {
+    try {
+      for await (const raw of parseSSE(res)) {
+        const ev = raw as DeployFrame & DeployStage;
+        if (ev && ev.done) {
+          final = ev;
+          break;
+        }
+        if (ev && ev.message) opts?.onStage?.(ev);
       }
-      if (ev && ev.message) opts?.onStage?.(ev);
+    } catch (error) {
+      try {
+        final = await recoverFinal(error);
+      } finally {
+        clearController();
+      }
     }
-  } catch (error) {
+  }
+  if (!final) {
+    try {
+      final = await recoverFinal();
+    } finally {
+      clearController();
+    }
+  } else {
     clearController();
+  }
+  if (!final.success) {
+    const error = new Error(final.error || adkT("client.deploymentFailed"));
+    if (isDeploymentStatusUnconfirmedError(error)) {
+      throw new DeploymentStatusUnconfirmedError({ taskId, cause: error });
+    }
     throw error;
   }
-  clearController();
-
-  if (!final) throw new Error("部署失败：连接中断");
-  if (!final.success) throw new Error(final.error || "部署失败");
   if (!final.agentName) {
-    throw new Error("部署失败：返回缺少 Agent 名称");
+    throw new Error(adkT("client.deploymentMissingAgentName"));
   }
   if (!final.runtimeId && !final.url) {
-    throw new Error("部署失败：返回缺少 AgentKit 连接信息");
+    throw new Error(adkT("client.deploymentMissingConnection"));
   }
   // Older Studio servers returned the platform Runtime resource name in
   // `agentName` and did not send `runtimeName`. The request name is the stable
@@ -2342,6 +5019,7 @@ export async function deployAgentkitProject(
     agentName: deployedAgentName,
     runtimeName: deployedRuntimeName,
     runtimeId: final.runtimeId,
+    mpaInstanceId: final.mpaInstanceId?.trim() || undefined,
     consoleUrl: final.consoleUrl,
     region: final.region,
     version: final.version,
@@ -2359,7 +5037,7 @@ export async function cancelAgentkitDeployment(taskId: string): Promise<void> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(text || `取消部署失败 (${res.status})`);
+    throw new Error(text || adkT("client.cancelDeploymentFailed", { status: res.status }));
   }
   deploymentControllers.get(taskId)?.abort();
   deploymentControllers.delete(taskId);
@@ -2381,7 +5059,7 @@ export async function getMyRuntimes(
   region = VOLCENGINE_DEFAULT_REGION,
 ): Promise<ManagedRuntime[]> {
   const res = await apiFetch(`/web/my-runtimes?region=${encodeURIComponent(region)}`);
-  if (!res.ok) throw new Error(`加载失败 (${res.status})`);
+  if (!res.ok) throw new Error(adkT("client.loadFailed", { status: res.status }));
   const d = (await res.json()) as { runtimes?: ManagedRuntime[] };
   return d.runtimes ?? [];
 }
@@ -2415,6 +5093,7 @@ export interface StudioTelemetryContext {
   project: string;
   version: string;
   accountId?: string;
+  accountIdResolutionError?: string;
 }
 
 export interface StudioTelemetryConfig {
@@ -2493,6 +5172,10 @@ function normalizeStudioTelemetryConfig(value: unknown): StudioTelemetryConfig {
       project: typeof studio.project === "string" ? studio.project : "",
       version: typeof studio.version === "string" ? studio.version : "",
       accountId: typeof studio.accountId === "string" ? studio.accountId : "",
+      accountIdResolutionError:
+        typeof studio.accountIdResolutionError === "string"
+          ? studio.accountIdResolutionError
+          : "",
     },
   };
 }
@@ -2530,7 +5213,7 @@ export async function getUiConfig(): Promise<UiConfig> {
   }
 }
 
-export type StudioRole = "admin" | "developer" | "user";
+export type StudioRole = "super_admin" | "admin" | "developer" | "user";
 export type RuntimeScope = "all" | "mine";
 
 export interface StudioAccess {
@@ -2541,8 +5224,10 @@ export interface StudioAccess {
   };
   capabilities: {
     createAgents: boolean;
+    createPersonalAgents: boolean;
     manageAgents: boolean;
     runtimeScope: RuntimeScope;
+    manageUsers?: boolean;
   };
 }
 
@@ -2555,28 +5240,32 @@ export const DEFAULT_STUDIO_ACCESS: StudioAccess = {
   },
   capabilities: {
     createAgents: false,
+    createPersonalAgents: false,
     manageAgents: false,
     runtimeScope: "mine",
+    manageUsers: false,
   },
 };
 
 /** Resolve the signed-in user's Studio role and capabilities. */
 export async function getStudioAccess(): Promise<StudioAccess> {
   const res = await apiFetch("/web/access");
-  if (!res.ok) throw new Error(`加载权限失败 (${res.status})`);
+  if (!res.ok) throw new Error(adkT("client.loadPermissionsFailed", { status: res.status }));
   const access = (await res.json()) as StudioAccess;
   if (
-    !["admin", "developer", "user"].includes(access.role) ||
+    !["super_admin", "admin", "developer", "user"].includes(access.role) ||
     typeof access.telemetry?.userId !== "string" ||
     (
       access.telemetry.accountId !== undefined &&
       typeof access.telemetry.accountId !== "string"
     ) ||
     typeof access.capabilities?.createAgents !== "boolean" ||
+    typeof access.capabilities?.createPersonalAgents !== "boolean" ||
     typeof access.capabilities?.manageAgents !== "boolean" ||
+    (access.capabilities?.manageUsers !== undefined && typeof access.capabilities.manageUsers !== "boolean") ||
     !["all", "mine"].includes(access.capabilities?.runtimeScope)
   ) {
-    throw new Error("权限服务返回了无法解析的响应");
+    throw new Error(adkT("client.invalidPermissionResponse"));
   }
   return access;
 }
@@ -2588,6 +5277,19 @@ export interface StudioReleaseOption {
   changelog: string[];
 }
 
+export type StudioUpdateProgressStage =
+  | "idle"
+  | "permissions"
+  | "resolving"
+  | "downloading"
+  | "preparing"
+  | "provisioning"
+  | "scheduler"
+  | "submitting"
+  | "publishing"
+  | "complete"
+  | "error";
+
 export interface StudioUpdateStatus {
   enabled: boolean;
   currentVersion: string;
@@ -2597,15 +5299,7 @@ export interface StudioUpdateStatus {
   available: boolean;
   state: "disabled" | "idle" | "updating" | "error";
   message: string;
-  progressStage:
-    | "idle"
-    | "resolving"
-    | "downloading"
-    | "preparing"
-    | "submitting"
-    | "publishing"
-    | "complete"
-    | "error";
+  progressStage: StudioUpdateProgressStage;
   progressMessage: string;
   targetVersion: string;
   startedAt: number;
@@ -2615,6 +5309,16 @@ export interface StudioUpdateStatus {
   updateLogs: string[];
   updateLogsVisible: boolean;
   consoleUrl: string;
+  permissionConsoleUrl: string;
+}
+
+export interface StudioUpdatePermissionStatus {
+  ready: boolean;
+  missingActions: string[];
+  policyName: string;
+  authorizationUrl: string;
+  iamConsoleUrl: string;
+  principalName: string;
 }
 
 /** Check the configured immutable Studio main release channel. */
@@ -2627,8 +5331,24 @@ export async function getStudioUpdateStatus(
   if (startedAt) params.set("startedAt", String(startedAt));
   const query = params.size ? `?${params.toString()}` : "";
   const res = await apiFetch(`/web/studio-update${query}`);
-  if (!res.ok) throw new Error(`检查 Studio 更新失败 (${res.status})`);
+  if (!res.ok) throw new Error(adkT("client.checkStudioUpdateFailed", { status: res.status }));
   return (await res.json()) as StudioUpdateStatus;
+}
+
+/** Verify every IAM Action needed by OTA before starting any cloud mutation. */
+export async function getStudioUpdatePermissions(): Promise<StudioUpdatePermissionStatus> {
+  const res = await apiFetch("/web/studio-update/permissions");
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const payload = (await res.json()) as { detail?: unknown };
+      detail = typeof payload.detail === "string" ? payload.detail : "";
+    } catch {
+      detail = "";
+    }
+    throw new Error(detail || adkT("client.studioUpdatePreflightFailed", { status: res.status }));
+  }
+  return (await res.json()) as StudioUpdatePermissionStatus;
 }
 
 /** Stage the latest full Studio bundle and submit a VeFaaS release. */
@@ -2651,7 +5371,7 @@ export async function startStudioUpdate(
     } catch {
       detail = "";
     }
-    throw new Error(detail || `提交 Studio 更新失败 (${res.status})`);
+    throw new Error(detail || adkT("client.submitStudioUpdateFailed", { status: res.status }));
   }
   return (await res.json()) as { version: string };
 }
@@ -2701,25 +5421,25 @@ export async function getAgentUsage({
   });
   const res = await apiFetch(`/web/agent-usage?${params.toString()}`, { signal });
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "加载 Agent 用量失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.loadAgentUsageFailed")));
   }
-  const contentType = res.headers.get("content-type") || "未提供";
+  const contentType = res.headers.get("content-type") || adkT("client.notProvided");
   const normalizedContentType = contentType.toLowerCase();
   if (
     !normalizedContentType.includes("application/json") &&
     !normalizedContentType.includes("+json")
   ) {
     throw new Error(
-      `加载 Agent 用量失败：服务端返回非 JSON 响应（HTTP ${res.status}，Content-Type: ${contentType}）。` +
-      "请确认当前服务以 Studio 模式启动，并检查代理或网关配置。",
+      adkT("client.agentUsageNonJson", { status: res.status, contentType }) +
+      adkT("client.checkStudioGateway"),
     );
   }
   try {
     return (await res.json()) as AgentUsageResponse;
   } catch {
     throw new Error(
-      `加载 Agent 用量失败：服务端返回了无法解析的 JSON（HTTP ${res.status}，Content-Type: ${contentType}）。` +
-      "请稍后重试；若问题持续，请检查代理或网关配置。",
+      adkT("client.agentUsageInvalidJson", { status: res.status, contentType }) +
+      adkT("client.retryCheckGateway"),
     );
   }
 }
@@ -2728,6 +5448,7 @@ export async function getAgentUsage({
 export interface CloudRuntime {
   name: string;
   runtimeId: string;
+  mpaInstanceId?: string;
   status: string;
   region: string;
   author: string;
@@ -2736,10 +5457,199 @@ export interface CloudRuntime {
   memoryMb?: number | null;
   createdAt?: string;
   currentVersion?: number | null;
+  /** Product family used by the new-chat picker. */
+  agentCategory?: "general" | "mpa";
   /** True when this runtime was deployed by the current user (veadk:author). */
   isMine: boolean;
   /** Server-authorized deletion capability for this managed Runtime. */
   canDelete: boolean;
+  canManage?: boolean;
+  canPublish?: boolean;
+  visibility?: "private" | "enterprise";
+  reviewStatus?: "pending" | "approved" | "returned" | "withdrawn" | "";
+}
+
+export type CronJobScheduleType = "once" | "daily" | "weekly" | "cron";
+
+export interface CronJobSchedule {
+  type: CronJobScheduleType;
+  timezone: string;
+  /** ISO local date-time for a one-time schedule. */
+  onceAt?: string;
+  /** HH:mm for daily and weekly schedules. */
+  time?: string;
+  /** 0 (Sunday) through 6 (Saturday), for weekly schedules. */
+  weekday?: number;
+  /** Five-field cron expression for custom schedules. */
+  cron?: string;
+}
+
+export type CronJobRunStatus =
+  | "queued"
+  | "pending"
+  | "running"
+  | "retrying"
+  | "success"
+  | "failed"
+  | "cancelled"
+  | "skipped";
+
+export interface CronJobRun {
+  runId: string;
+  jobId: string;
+  status: CronJobRunStatus;
+  scheduledAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  cancellationRequestedAt?: string;
+  sessionId?: string;
+  runtimeVersion?: string;
+  output?: string;
+  error?: string;
+  attempt?: number;
+}
+
+export interface CronJob {
+  jobId: string;
+  name: string;
+  runtimeId: string;
+  runtimeName: string;
+  agentName: string;
+  region: string;
+  prompt: string;
+  schedule: CronJobSchedule;
+  enabled: boolean;
+  nextRunAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  latestRun?: CronJobRun;
+}
+
+export interface CronJobInput {
+  name: string;
+  runtimeId: string;
+  runtimeName: string;
+  agentName: string;
+  region: string;
+  prompt: string;
+  schedule: CronJobSchedule;
+  enabled: boolean;
+}
+
+export interface CronJobListResponse {
+  items: CronJob[];
+}
+
+export interface CronJobRunListResponse {
+  items: CronJobRun[];
+}
+
+function cronJobPath(jobId = ""): string {
+  return `/web/cronjobs${jobId ? `/${encodeURIComponent(jobId)}` : ""}`;
+}
+
+export async function listCronJobs(signal?: AbortSignal): Promise<CronJob[]> {
+  const response = await apiFetch(cronJobPath(), { signal });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.loadCronJobsFailed")));
+  }
+  const data = (await response.json()) as CronJobListResponse | CronJob[];
+  return Array.isArray(data) ? data : data.items ?? [];
+}
+
+export async function getCronJob(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<CronJob> {
+  const response = await apiFetch(cronJobPath(jobId), { signal });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.loadCronJobFailed")));
+  }
+  return (await response.json()) as CronJob;
+}
+
+export async function createCronJob(input: CronJobInput): Promise<CronJob> {
+  const response = await apiFetch(cronJobPath(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.createCronJobFailed")));
+  }
+  return (await response.json()) as CronJob;
+}
+
+export async function updateCronJob(
+  jobId: string,
+  input: CronJobInput,
+): Promise<CronJob> {
+  const response = await apiFetch(`${cronJobPath(jobId)}/update`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.updateCronJobFailed")));
+  }
+  return (await response.json()) as CronJob;
+}
+
+export async function setCronJobEnabled(
+  jobId: string,
+  enabled: boolean,
+): Promise<CronJob> {
+  const action = enabled ? "enable" : "disable";
+  const response = await apiFetch(`${cronJobPath(jobId)}/${action}`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(
+      await httpErrorMessage(response, enabled ? adkT("client.enableCronJobFailed") : adkT("client.pauseCronJobFailed")),
+    );
+  }
+  return (await response.json()) as CronJob;
+}
+
+export async function runCronJobNow(jobId: string): Promise<CronJobRun> {
+  const response = await apiFetch(`${cronJobPath(jobId)}/run`, { method: "POST" });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.runCronJobFailed")));
+  }
+  return (await response.json()) as CronJobRun;
+}
+
+export async function listCronJobRuns(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<CronJobRun[]> {
+  const response = await apiFetch(`${cronJobPath(jobId)}/runs`, { signal });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.loadCronHistoryFailed")));
+  }
+  const data = (await response.json()) as CronJobRunListResponse | CronJobRun[];
+  return Array.isArray(data) ? data : data.items ?? [];
+}
+
+export async function cancelCronJobRun(
+  jobId: string,
+  runId: string,
+): Promise<CronJobRun> {
+  const response = await apiFetch(
+    `${cronJobPath(jobId)}/runs/${encodeURIComponent(runId)}/cancel`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.stopCronRunFailed")));
+  }
+  return (await response.json()) as CronJobRun;
+}
+
+export async function deleteCronJob(jobId: string): Promise<void> {
+  const response = await apiFetch(cronJobPath(jobId), { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(await httpErrorMessage(response, adkT("client.deleteCronJobFailed")));
+  }
 }
 
 /** One page of cloud runtimes plus the token to fetch the next page. */
@@ -2748,14 +5658,26 @@ export interface RuntimePage {
   nextToken: string;
 }
 
+export class RuntimeListError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "RuntimeListError";
+  }
+}
+
 /** List one authorized page of AgentKit runtimes. `nextToken` from a prior
  *  page continues pagination; the server derives ownership from identity. */
 export async function getRuntimes(
   opts: {
+    agentCategory?: "general" | "mpa";
     nextToken?: string;
     pageSize?: number;
     region?: string;
     scope?: "all" | "mine";
+    signal?: AbortSignal;
   } = {},
 ): Promise<RuntimePage> {
   const p = new URLSearchParams({
@@ -2763,11 +5685,14 @@ export async function getRuntimes(
     page_size: String(opts.pageSize ?? 30),
     region: opts.region ?? "all",
   });
+  if (opts.agentCategory) p.set("agentCategory", opts.agentCategory);
   if (opts.nextToken) p.set("next_token", opts.nextToken);
-  const res = await apiFetch(`/web/runtimes?${p.toString()}`);
+  const res = await apiFetch(`/web/runtimes?${p.toString()}`, {
+    signal: opts.signal,
+  });
   if (!res.ok) {
-    const detail = await httpErrorMessage(res, "加载 Runtime 失败");
-    throw new Error(detail);
+    const detail = await httpErrorMessage(res, adkT("client.loadRuntimeFailed"));
+    throw new RuntimeListError(detail, res.status);
   }
   const d = (await res.json()) as Partial<RuntimePage>;
   return { runtimes: d.runtimes ?? [], nextToken: d.nextToken ?? "" };
@@ -2779,12 +5704,34 @@ export async function getRuntimes(
 export async function probeRuntimeApps(
   runtimeId: string,
   region: string,
-  options: { retryProbe?: boolean } = {},
+  options: {
+    retryProbe?: boolean;
+    signal?: AbortSignal;
+    preferCached?: boolean;
+    timeoutMs?: number;
+    currentVersion?: number | null;
+  } = {},
 ): Promise<string[] | null> {
+  if (options.preferCached) {
+    const key = runtimeAppsCacheKey(runtimeId, region, options.currentVersion);
+    const cached = runtimeAppsCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) return [...cached.apps];
+    if (cached) runtimeAppsCache.delete(key);
+  }
   try {
-    const endpoint: AdkEndpoint = { runtimeId, region };
+    const endpoint: AdkEndpoint = {
+      runtimeId,
+      region,
+      runtimeVersion: options.currentVersion,
+    };
     if (options.retryProbe) endpoint.retryProbe = true;
-    const res = await fetchRemoteApps("", "", endpoint);
+    const res = await fetchRemoteApps(
+      "",
+      "",
+      endpoint,
+      options.signal,
+      options.timeoutMs,
+    );
     return res;
   } catch (error) {
     if (
@@ -2793,8 +5740,69 @@ export async function probeRuntimeApps(
     ) {
       throw error;
     }
+    if (error instanceof Error) throw error;
     return null;
   }
+}
+
+export interface RuntimeRouteChannelStatus {
+  enabled: boolean;
+  supported: boolean;
+  connected: boolean;
+  catalogRevision: string | null;
+}
+
+export interface StudioBffTool {
+  id: string;
+  name: string;
+  description: string;
+  riskLevel: string;
+}
+
+export interface RuntimeStudioToolCapabilities {
+  enabled: boolean;
+  supported: boolean;
+  tools: StudioBffTool[];
+}
+
+/** List BFF-local tools without exposing their schemas or local executors. */
+export async function getRuntimeStudioToolCapabilities(
+  runtimeId: string,
+  region: string,
+): Promise<RuntimeStudioToolCapabilities> {
+  const params = new URLSearchParams({ region });
+  const res = await apiFetch(
+    `/web/runtime-tool-channel/${encodeURIComponent(runtimeId)}/capabilities?${params.toString()}`,
+  );
+  if (!res.ok) {
+    throw new RuntimeProbeError(
+      await httpErrorMessage(res, adkT("client.loadLocalToolsFailed")),
+      false,
+      true,
+    );
+  }
+  return (await res.json()) as RuntimeStudioToolCapabilities;
+}
+
+/** Ask the local Studio BFF to keep a persistent reverse-route channel to the
+ *  Runtime. A Runtime without the generic route host is a supported no-op. */
+export async function ensureRuntimeRouteChannel(
+  runtimeId: string,
+  region: string,
+): Promise<RuntimeRouteChannelStatus> {
+  const params = new URLSearchParams({ region });
+  const res = await apiFetch(
+    `/web/runtime-route-channel/${encodeURIComponent(runtimeId)}/connect?${params.toString()}`,
+    { method: "POST" },
+  );
+  if (!res.ok) {
+    throw new RuntimeProbeError(
+      await httpErrorMessage(res, adkT("client.connectDynamicRouteFailed")),
+      false,
+      true,
+    );
+  }
+  return (await res.json()) as RuntimeRouteChannelStatus;
 }
 
 export interface RuntimeA2aIntegration {
@@ -2817,23 +5825,23 @@ export async function probeRuntimeA2a(
     throw new RuntimeAccessDeniedError();
   }
   if (runtimeErrorCode === "runtime_private_endpoint_unreachable") {
-    throw new RuntimeProbeError(PRIVATE_RUNTIME_UNREACHABLE_MESSAGE);
+    throw new RuntimeProbeError(privateRuntimeUnreachableMessage());
   }
   if (
     ["runtime_proxy_connect_error", "runtime_proxy_timeout"].includes(
       runtimeErrorCode,
     )
   ) {
-    throw new RuntimeProbeError(RUNTIME_ENDPOINT_UNREACHABLE_MESSAGE);
+    throw new RuntimeProbeError(runtimeEndpointUnreachableMessage());
   }
   if (res.status === 404) return null;
   if (res.status === 401 || res.status === 403) {
     throw new RuntimeProbeError(
-      "Runtime 服务拒绝了 A2A 探测请求，请检查 Runtime 的鉴权配置。",
+      adkT("client.a2aProbeDenied"),
     );
   }
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "读取 A2A Agent Card 失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.loadA2aCardFailed")));
   }
   const payload = (await res.json().catch(() => null)) as Record<
     string,
@@ -2861,11 +5869,11 @@ export async function revealRuntimeApiKey(
     { method: "POST", cache: "no-store" },
   );
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "读取 Runtime API Key 失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.loadRuntimeApiKeyFailed")));
   }
   const payload = (await res.json()) as { apiKey?: unknown };
   if (typeof payload.apiKey !== "string" || !payload.apiKey) {
-    throw new Error("Runtime 未返回可用的 API Key");
+    throw new Error(adkT("client.runtimeApiKeyMissing"));
   }
   return payload.apiKey;
 }
@@ -2874,77 +5882,370 @@ export async function revealRuntimeApiKey(
 export async function deleteRuntime(
   runtimeId: string,
   region: string,
+  opts: { agentCategory?: "general" | "mpa"; mpaInstanceId?: string } = {},
 ): Promise<void> {
-  const res = await apiFetch("/web/delete-runtime", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ runtimeId, region }),
-  });
+  const isMpa = opts.agentCategory === "mpa";
+  let res: Response;
+  try {
+    res = await apiFetch(
+      "/web/delete-runtime",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          runtimeId,
+          region,
+          agentCategory: opts.agentCategory,
+          mpaInstanceId: opts.mpaInstanceId,
+        }),
+      },
+      {},
+      isMpa ? 180_000 : DEFAULT_REQUEST_TIMEOUT_MS,
+    );
+  } catch (error) {
+    if (!isMpa || !(error instanceof Error) || error.name !== "TimeoutError")
+      throw error;
+    try {
+      const params = new URLSearchParams({ runtimeId, region });
+      const status = await apiFetch(
+        `/web/mpa-runtime-deletion-status?${params.toString()}`,
+        { cache: "no-store" },
+      );
+      if (status.ok) {
+        const result: { deleted?: unknown } | null = await status.json();
+        if (result?.deleted === true) return;
+      }
+    } catch {
+      // An unavailable confirmation must not imply successful deletion.
+    }
+    throw new Error(adkT("client.mpaDeleteUnconfirmed"));
+  }
   if (!res.ok) {
     const t = await res.text().catch(() => "");
-    throw new Error(t || `删除失败 (${res.status})`);
+    throw new Error(t || adkT("client.deleteFailed", { status: res.status }));
   }
 }
+
+/** Server-authorized recovery state for one concrete Runtime app. */
+export type RuntimeUpdateRecoveryStatus =
+  | "preparing"
+  | "complete"
+  | "draft-only"
+  | "introspection-only"
+  | "missing-source"
+  | "incompatible";
 
 /** Server-authorized update compatibility for one concrete Runtime app. */
 export interface RuntimeUpdateCapability {
   canUpdate: boolean;
   reason: string;
   reasonCode?: string;
+  recoveryStatus: RuntimeUpdateRecoveryStatus;
+  editMode: "source-preserving" | "regenerate" | "blocked";
+  recoverySource:
+    | "editable-spec"
+    | "agent-info"
+    | "agent-draft"
+    | "legacy-runtime"
+    | "none";
+  warnings: string[];
+  etag: string;
   runtime: {
     runtimeId: string;
+    mpaInstanceId?: string;
     name: string;
     region: string;
     currentVersion?: number | null;
+    environment?: {
+      environmentId: string;
+      environmentVersionId: string;
+    };
     envs: { key: string; value: string }[];
+    configuredEnvKeys: string[];
     network: NetworkConfig;
   };
   agent?: {
     appName: string;
     name?: string;
     description?: string;
+    instruction?: string;
+    type?: AgentNodeType;
+    model?: string;
+    tools?: string[];
+    skills?: AgentSkill[];
+    graph?: AgentNode;
     draft?: AgentDraft;
+    sourceImage?: string;
   } | null;
 }
 
-export async function getRuntimeUpdateCapability({
+/** Fetch the exact MCP credentials for one authorized update snapshot. */
+export async function getRuntimeMcpCredentials({
   runtimeId,
   region,
   appName,
+  etag,
   signal,
 }: {
   runtimeId: string;
   region: string;
-  appName?: string;
+  appName: string;
+  etag: string;
   signal?: AbortSignal;
-}): Promise<RuntimeUpdateCapability> {
+}): Promise<McpCredentialValue[]> {
+  const res = await apiFetch("/web/runtime-mcp-credentials", {
+    method: "POST",
+    cache: "no-store",
+    signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runtimeId, region, appName, etag }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      await httpErrorMessage(res, adkT("client.loadMcpCredentialsFailed")),
+    );
+  }
+  const payload = (await res.json().catch(() => null)) as {
+    credentials?: unknown;
+  } | null;
+  if (!Array.isArray(payload?.credentials)) {
+    throw new Error(adkT("client.invalidMcpCredentials"));
+  }
+  return payload.credentials.map((item) => {
+    if (!item || typeof item !== "object") {
+      throw new Error(adkT("client.invalidMcpCredentials"));
+    }
+    const raw = item as Record<string, unknown>;
+    const credential = {
+      agentName: raw.agentName,
+      name: raw.name,
+      url: raw.url,
+      authTokenEnv: raw.authTokenEnv,
+      value: raw.value,
+    };
+    if (Object.values(credential).some((value) => typeof value !== "string")) {
+      throw new Error(adkT("client.invalidMcpCredentials"));
+    }
+    return credential as McpCredentialValue;
+  });
+}
+
+interface RuntimeUpdateCapabilityRequest {
+  runtimeId: string;
+  region: string;
+  appName?: string;
+  currentVersion?: number | null;
+  signal?: AbortSignal;
+  force?: boolean;
+}
+
+function runtimeUpdateCapabilityCacheKey({
+  runtimeId,
+  region,
+  appName,
+  currentVersion,
+}: Omit<RuntimeUpdateCapabilityRequest, "signal" | "force">): string {
+  return cacheKey(
+    activeCloudProvider,
+    region,
+    runtimeId,
+    currentVersion ?? "",
+    appName?.trim() ?? "",
+  );
+}
+
+async function fetchRuntimeUpdateCapability({
+  runtimeId,
+  region,
+  appName,
+  currentVersion,
+  force = false,
+}: Omit<RuntimeUpdateCapabilityRequest, "signal">): Promise<RuntimeUpdateCapability> {
   const params = new URLSearchParams({ runtimeId, region });
   if (appName) params.set("appName", appName);
-  const res = await apiFetch(
-    `/web/runtime-update-capability?${params.toString()}`,
-    { signal },
-  );
+  if (currentVersion != null) params.set("currentVersion", String(currentVersion));
+  if (force) params.set("refresh", "true");
+  const res = await apiFetch(`/web/runtime-update-capability?${params.toString()}`);
   if (!res.ok) {
     throw new Error(await runtimeUpdateCapabilityErrorMessage(res));
   }
   return (await res.json()) as RuntimeUpdateCapability;
 }
 
+export function getRuntimeUpdateCapability({
+  runtimeId,
+  region,
+  appName,
+  currentVersion,
+  signal,
+  force = false,
+}: RuntimeUpdateCapabilityRequest): Promise<RuntimeUpdateCapability> {
+  const request = { runtimeId, region, appName, currentVersion };
+  const key = runtimeUpdateCapabilityCacheKey(request);
+  if (force) runtimeUpdateCapabilityCache.delete(key);
+  if (!force) {
+    const cached = freshCacheValue(
+      runtimeUpdateCapabilityCache,
+      key,
+      RUNTIME_METADATA_CACHE_TTL_MS,
+    );
+    if (cached) return waitForSharedRequest(Promise.resolve(cached), signal);
+    const inFlight = runtimeUpdateCapabilityCache.get(key)?.promise;
+    if (inFlight) return waitForSharedRequest(inFlight, signal);
+    if (appName) {
+      const baseKey = runtimeUpdateCapabilityCacheKey({
+        ...request,
+        appName: "",
+      });
+      const baseInFlight = runtimeUpdateCapabilityCache.get(baseKey)?.promise;
+      if (baseInFlight) {
+        let aliasPromise: Promise<RuntimeUpdateCapability>;
+        aliasPromise = baseInFlight.then(
+          (value) => {
+            if (value.recoveryStatus === "preparing") {
+              if (runtimeUpdateCapabilityCache.get(key)?.promise === aliasPromise) {
+                runtimeUpdateCapabilityCache.delete(key);
+              }
+              return value;
+            }
+            const resolvedAppName = value.agent?.appName?.trim() ?? "";
+            if (resolvedAppName && resolvedAppName !== appName.trim()) {
+              if (runtimeUpdateCapabilityCache.get(key)?.promise === aliasPromise) {
+                runtimeUpdateCapabilityCache.delete(key);
+              }
+              return getRuntimeUpdateCapability(request);
+            }
+            if (runtimeUpdateCapabilityCache.get(key)?.promise === aliasPromise) {
+              runtimeUpdateCapabilityCache.set(key, {
+                value,
+                updatedAt: Date.now(),
+              });
+            }
+            return value;
+          },
+          (error: unknown) => {
+            if (runtimeUpdateCapabilityCache.get(key)?.promise === aliasPromise) {
+              runtimeUpdateCapabilityCache.delete(key);
+            }
+            throw error;
+          },
+        );
+        runtimeUpdateCapabilityCache.set(key, {
+          promise: aliasPromise,
+          updatedAt: 0,
+        });
+        return waitForSharedRequest(aliasPromise, signal);
+      }
+    }
+  }
+
+  let promise: Promise<RuntimeUpdateCapability>;
+  promise = fetchRuntimeUpdateCapability({ ...request, force }).then(
+    (value) => {
+      if (value.recoveryStatus === "preparing") {
+        if (runtimeUpdateCapabilityCache.get(key)?.promise === promise) {
+          runtimeUpdateCapabilityCache.delete(key);
+        }
+        return value;
+      }
+      if (runtimeUpdateCapabilityCache.get(key)?.promise === promise) {
+        runtimeUpdateCapabilityCache.set(key, {
+          value,
+          updatedAt: Date.now(),
+        });
+        const aliasNames = new Set(["", value.agent?.appName?.trim() ?? ""]);
+        for (const aliasName of aliasNames) {
+          const aliasKey = runtimeUpdateCapabilityCacheKey({
+            ...request,
+            appName: aliasName,
+          });
+          if (
+            aliasKey !== key &&
+            !runtimeUpdateCapabilityCache.get(aliasKey)?.promise
+          ) {
+            runtimeUpdateCapabilityCache.set(aliasKey, {
+              value,
+              updatedAt: Date.now(),
+            });
+          }
+        }
+      }
+      return value;
+    },
+    (error: unknown) => {
+      if (runtimeUpdateCapabilityCache.get(key)?.promise === promise) {
+        runtimeUpdateCapabilityCache.delete(key);
+      }
+      throw error;
+    },
+  );
+  runtimeUpdateCapabilityCache.set(key, { promise, updatedAt: 0 });
+  return waitForSharedRequest(promise, signal);
+}
+
+export function getCachedRuntimeUpdateCapability({
+  runtimeId,
+  region,
+  appName,
+  currentVersion,
+}: Omit<RuntimeUpdateCapabilityRequest, "signal" | "force">): RuntimeUpdateCapability | null {
+  return freshCacheValue(
+    runtimeUpdateCapabilityCache,
+    runtimeUpdateCapabilityCacheKey({
+      runtimeId,
+      region,
+      appName,
+      currentVersion,
+    }),
+    RUNTIME_METADATA_CACHE_TTL_MS,
+  );
+}
+
+export function prefetchRuntimeUpdateCapability(
+  request: Omit<RuntimeUpdateCapabilityRequest, "signal" | "force">,
+): Promise<void> {
+  return getRuntimeUpdateCapability(request).then(
+    () => undefined,
+    () => undefined,
+  );
+}
+
+export function invalidateRuntimeUpdateCapabilityCache(
+  runtimeId?: string,
+  region?: string,
+): void {
+  if (!runtimeId) {
+    runtimeUpdateCapabilityCache.clear();
+    return;
+  }
+  for (const key of runtimeUpdateCapabilityCache.keys()) {
+    const [provider, keyRegion, keyRuntimeId] = key.split("\u0001");
+    if (
+      provider === activeCloudProvider &&
+      keyRuntimeId === runtimeId &&
+      (!region || keyRegion === region)
+    ) {
+      runtimeUpdateCapabilityCache.delete(key);
+    }
+  }
+}
+
 async function runtimeUpdateCapabilityErrorMessage(res: Response): Promise<string> {
   const payload = await res.json().catch(() => null) as { detail?: unknown } | null;
   const detail = typeof payload?.detail === "string" ? payload.detail : "";
-  if (res.status === 403) return "当前账号没有管理该 Runtime 的权限。";
+  if (res.status === 403) return adkT("client.runtimeManageForbidden");
   if (res.status === 404) {
     return detail === "runtime_not_found"
-      ? "该 Runtime 不存在或已被删除。"
-      : "当前账号无法访问该 Runtime。";
+      ? adkT("client.runtimeNotFound")
+      : adkT("client.runtimeUnavailable");
   }
-  return `检查 Runtime 更新能力失败（HTTP ${res.status}），请稍后重试。`;
+  return adkT("client.checkRuntimeUpdateFailed", { status: res.status });
 }
 
 /** Control-plane detail for a runtime (GetRuntime), for the 管理 Agent view. */
 export interface RuntimeDetail {
   runtimeId: string;
+  mpaInstanceId?: string;
   name: string;
   description: string;
   status: string;
@@ -2962,13 +6263,14 @@ export interface RuntimeDetail {
     maxInstance?: number | null;
     maxConcurrency?: number | null;
   };
-  envs: { key: string; value: string }[];
+  envs: { key: string; value: string; sensitive?: boolean; configured?: boolean }[];
   memoryId: string;
   toolId: string;
   knowledgeId: string;
   mcpToolsetId: string;
   artifactUrl: string;
   artifactType: string;
+  agentCategory?: "general" | "mpa";
   networkTypes: string[];
   endpoint: string;
   authType: "none" | "key_auth" | "custom_jwt" | "unknown";
@@ -2985,9 +6287,9 @@ async function fetchRuntimeDetail(
       `/web/runtime-detail?runtimeId=${encodeURIComponent(runtimeId)}&region=${encodeURIComponent(candidate)}`,
     );
     if (res.ok) return res.json();
-    lastError = new Error(await httpErrorMessage(res, "加载 Runtime 详情失败"));
+    lastError = new Error(await httpErrorMessage(res, adkT("client.loadRuntimeDetailFailed")));
   }
-  throw lastError ?? new Error("加载 Runtime 详情失败");
+  throw lastError ?? new Error(adkT("client.loadRuntimeDetailFailed"));
 }
 
 /** Fetch a runtime's control-plane detail (config/status/envs). */
@@ -3026,6 +6328,21 @@ export async function getRuntimeDetail(
   }
 }
 
+export async function copyRuntimeEnvironmentSecret(
+  runtimeId: string,
+  region: string,
+  key: string,
+): Promise<void> {
+  const params = new URLSearchParams({ runtimeId, region, key });
+  const response = await apiFetch(`/web/runtime-env/copy?${params.toString()}`, { method: "POST" });
+  if (!response.ok) throw new Error(await httpErrorMessage(response, adkT("client.copySecretFailed")));
+  const payload = await response.json() as { value?: unknown };
+  if (typeof payload.value !== "string" || !payload.value) {
+    throw new Error(adkT("client.copySecretFailed"));
+  }
+  await navigator.clipboard.writeText(payload.value);
+}
+
 export function getCachedRuntimeDetail(
   runtimeId: string,
   region = "cn-beijing",
@@ -3048,6 +6365,7 @@ export interface GeneratedAgentTestRun {
   runId: string;
   appName: string;
   expiresAt: number;
+  planHash?: string;
 }
 
 export async function generateAgentProject(
@@ -3059,7 +6377,7 @@ export async function generateAgentProject(
     body: JSON.stringify({ draft }),
   });
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "生成项目失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.generateProjectFailed")));
   }
   return res.json();
 }
@@ -3071,6 +6389,7 @@ export interface GeneratedAgentDraftResult {
 }
 
 const GENERATED_AGENT_DRAFT_TIMEOUT_MS = 190_000;
+const GENERATED_AGENT_TEST_RUN_TIMEOUT_MS = 120_000;
 
 export async function generateAgentDraftFromRequirement(
   requirement: string,
@@ -3086,28 +6405,43 @@ export async function generateAgentDraftFromRequirement(
     GENERATED_AGENT_DRAFT_TIMEOUT_MS,
   );
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "生成 Agent 配置失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.generateAgentConfigFailed")));
   }
-  return parseJsonResponse<GeneratedAgentDraftResult>(res, "生成 Agent 配置失败");
+  return parseJsonResponse<GeneratedAgentDraftResult>(res, adkT("client.generateAgentConfigFailed"));
 }
 
 export async function createGeneratedAgentTestRun(
   draft: AgentDraft,
-  runtime?: { runtimeId: string; region: string },
+  runtime?: {
+    runtimeId: string;
+    region: string;
+    mcpCredentialReuses?: Array<{
+      agentName: string;
+      name: string;
+      url: string;
+      sourceAuthTokenEnv: string;
+    }>;
+  },
 ): Promise<GeneratedAgentTestRun> {
-  const res = await apiFetch("/web/generated-agent-test-runs", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      draft,
-      runtimeId: runtime?.runtimeId,
-      runtimeRegion: runtime?.region,
-    }),
-  });
+  const res = await apiFetch(
+    "/web/generated-agent-test-runs",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        draft,
+        runtimeId: runtime?.runtimeId,
+        runtimeRegion: runtime?.region,
+        mcpCredentialReuses: runtime?.mcpCredentialReuses,
+      }),
+    },
+    {},
+    GENERATED_AGENT_TEST_RUN_TIMEOUT_MS,
+  );
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "创建调试运行失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.createDebugRunFailed")));
   }
-  return parseJsonResponse<GeneratedAgentTestRun>(res, "创建调试运行失败");
+  return parseJsonResponse<GeneratedAgentTestRun>(res, adkT("client.createDebugRunFailed"));
 }
 
 export async function createGeneratedAgentTestSession(
@@ -3120,9 +6454,9 @@ export async function createGeneratedAgentTestSession(
     body: JSON.stringify({ userId }),
   });
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "创建调试会话失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.createDebugSessionFailed")));
   }
-  const session = await parseJsonResponse<{ id: string }>(res, "创建调试会话失败");
+  const session = await parseJsonResponse<{ id: string }>(res, adkT("client.createDebugSessionFailed"));
   return session.id;
 }
 
@@ -3134,10 +6468,10 @@ export async function getGeneratedAgentTestTrace(
     `/web/generated-agent-test-runs/${encodeURIComponent(runId)}/trace/session/${encodeURIComponent(sessionId)}`,
   );
   if (!res.ok) {
-    throw new Error(await httpErrorMessage(res, "加载调试调用链路失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.loadDebugTraceFailed")));
   }
-  const spans = await parseJsonResponse<unknown>(res, "加载调试调用链路失败");
-  if (!Array.isArray(spans)) throw new Error("加载调试调用链路失败：返回格式无效");
+  const spans = await parseJsonResponse<unknown>(res, adkT("client.loadDebugTraceFailed"));
+  if (!Array.isArray(spans)) throw new Error(adkT("client.invalidDebugTrace"));
   return spans as TraceSpan[];
 }
 
@@ -3155,25 +6489,44 @@ export async function* runGeneratedAgentTestSSE({
   signal?: AbortSignal;
 }): AsyncGenerator<AdkEvent, void, unknown> {
   const parts: Record<string, unknown>[] = text.trim() ? [{ text }] : [];
-  const res = await apiFetch(
-    `/web/generated-agent-test-runs/${runId}/run_sse`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        user_id: userId,
-        session_id: sessionId,
-        new_message: { role: "user", parts },
-        streaming: true,
-      }),
-      signal,
-    },
-    {},
-    0,
-  );
-  if (!res.ok) throw new Error(await httpErrorMessage(res, "调试运行失败"));
-  for await (const evt of parseSSE(res)) {
-    yield evt as AdkEvent;
+  const firstEventDeadline = runSseFirstEventDeadline(signal);
+  let res: Response;
+  try {
+    res = await apiFetch(
+      `/web/generated-agent-test-runs/${runId}/run_sse`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: userId,
+          session_id: sessionId,
+          new_message: { role: "user", parts },
+          streaming: true,
+        }),
+        signal: firstEventDeadline.signal,
+      },
+      {},
+      0,
+    );
+  } catch (error) {
+    firstEventDeadline.cleanup();
+    if (firstEventDeadline.timedOut()) throw new Error(runSseFirstEventTimeoutError());
+    throw error;
+  }
+  if (!res.ok) {
+    firstEventDeadline.cleanup();
+    throw new Error(await httpErrorMessage(res, adkT("client.debugRunFailed")));
+  }
+  try {
+    for await (const evt of parseSSE(res)) {
+      firstEventDeadline.clearDeadline();
+      yield evt as AdkEvent;
+    }
+  } catch (error) {
+    if (firstEventDeadline.timedOut()) throw new Error(runSseFirstEventTimeoutError());
+    throw error;
+  } finally {
+    firstEventDeadline.cleanup();
   }
 }
 
@@ -3182,6 +6535,95 @@ export async function deleteGeneratedAgentTestRun(runId: string): Promise<void> 
     method: "DELETE",
   });
   if (!res.ok && res.status !== 404) {
-    throw new Error(await httpErrorMessage(res, "清理调试运行失败"));
+    throw new Error(await httpErrorMessage(res, adkT("client.cleanupDebugRunFailed")));
   }
 }
+
+export interface SandboxImageState {
+  toolId: string;
+  error: string;
+  provider?: CloudProvider;
+  region?: string;
+  toolType?: string;
+  status?: string;
+  currentImage?: string;
+  latestImage?: string;
+  needsImageUpdate?: boolean;
+  needsModelEnvUpdate?: boolean;
+  canUpdateModelEnv?: boolean;
+  modelEnvError?: string;
+  canUpdate?: boolean;
+}
+
+function sandboxImageState(value: unknown): SandboxImageState {
+  if (!value || typeof value !== "object") throw new Error(adkT("client.invalidSandboxVersion"));
+  const row = value as SandboxImageState;
+  if (typeof row.toolId !== "string" || typeof row.error !== "string") {
+    throw new Error(adkT("client.invalidSandboxVersion"));
+  }
+  if (!row.error && (
+    (row.provider !== "volcengine" && row.provider !== "byteplus") ||
+    typeof row.region !== "string" || typeof row.status !== "string" ||
+    typeof row.currentImage !== "string" || typeof row.latestImage !== "string" ||
+    typeof row.needsImageUpdate !== "boolean" || typeof row.canUpdate !== "boolean" ||
+    typeof row.needsModelEnvUpdate !== "boolean" ||
+    typeof row.canUpdateModelEnv !== "boolean" || typeof row.modelEnvError !== "string"
+  )) throw new Error(adkT("client.invalidSandboxVersion"));
+  return row;
+}
+
+export async function getSandboxImageUpdates(signal?: AbortSignal): Promise<SandboxImageState[]> {
+  const response = await apiFetch("/web/system-info/sandbox-tools/updates", { signal });
+  if (!response.ok) throw new Error(await httpErrorMessage(response, adkT("client.loadSandboxVersionsFailed")));
+  const payload = await response.json() as { tools?: unknown };
+  if (!Array.isArray(payload.tools)) throw new Error(adkT("client.invalidSandboxVersion"));
+  return payload.tools.map(sandboxImageState);
+}
+
+export async function updateSandboxTool(kind: SandboxToolKind): Promise<{
+  updated: boolean;
+  state: SandboxImageState;
+}> {
+  const response = await apiFetch(
+    `/web/system-info/sandbox-tools/${encodeURIComponent(kind)}/update`,
+    { method: "POST" }, {}, 330_000,
+  );
+  if (!response.ok) throw new Error(await httpErrorMessage(response, adkT("client.updateSandboxFailed")));
+  const payload = await response.json() as { updated?: unknown; state?: unknown };
+  if (typeof payload.updated !== "boolean") throw new Error(adkT("client.invalidSandboxUpdate"));
+  return { updated: payload.updated, state: sandboxImageState(payload.state) };
+}
+
+
+export type ChannelScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
+export type BotBindingType = "shared" | "private";
+export interface ChannelCapabilities { botBindingTypes?: BotBindingType[]; feishuDomains?: string[]; channels?: string[]; credentialBindingChannels?: string[]; serverSideBinding: boolean; bindingReady: boolean; bindingError?: string | null; multiBotChannels?: string[]; accountScopedPermissions?: boolean; }
+export interface FeishuBinding {
+  id: string;
+  status: "PENDING" | "SCANNED" | "AUTHORIZED" | "REGISTERING" | "BOUND" | "FAILED" | "EXPIRED";
+  loginUrl: string; qrCodeImage: string; expiresAt: string; pollAfterSeconds: number;
+  appId?: string | null; lastErrorCode?: string | null; lastErrorMessage?: string | null;
+}
+export interface ChannelDiagnostics {
+  configured: boolean; enabled?: boolean; appId?: string | null; appName?: string | null;
+  gatewayConfigured: boolean; routeConfigured: boolean; missingConfiguration: string[];
+  deliveryHealth: string; lastInboundAt?: number | null; lastDeliveryAt?: number | null;
+}
+export interface ChannelPermission { appId?: string; channel: string; chatId: string; chatName?: string; groupSessionScope?: ChannelScope | null; }
+export class ChannelApiError extends Error {
+  constructor(public status: number) { super(`Channel request failed (${status})`); }
+}
+export async function channelRequest<T>(ep: AdkEndpoint, path: string, init: RequestInit = {}): Promise<T> {
+  const response = await apiFetch(`/api/v1/channels${path}`, {
+    ...init, headers: { "Content-Type": "application/json", ...init.headers },
+  }, ep);
+  // Do not surface arbitrary upstream error bodies: they may contain secrets.
+  if (!response.ok) throw new ChannelApiError(response.status);
+  return response.json() as Promise<T>;
+}
+export function listMpaCronTasks(runtime: MpaRuntime, offset: number, query: string, signal?: AbortSignal) {
+  return fetchMpaCronTasks(apiFetch, runtime, offset, query, signal);
+}
+
+export function requestMpaTask(runtime: MpaRuntime, method: string, suffix: string, payload?: unknown, signal?: AbortSignal) { return manageMpaTask(apiFetch, runtime, method, suffix, payload, signal); }
+export function listMpaRuns(runtime: MpaRuntime, taskId: string, offset: number, signal?: AbortSignal) { return fetchMpaRuns(apiFetch, runtime, taskId, offset, signal); }

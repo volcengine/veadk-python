@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+
 from veadk.cloud.harness_app.env_mapping import to_runtime_env
 
 
@@ -43,3 +45,31 @@ def test_harness_enhance_config_flattens_to_runtime_env():
     assert env["HARNESS_MAX_CONTEXT_CHARS"] == "12000"
     assert env["HARNESS_MAX_TOOL_RESULT_CHARS"] == "3000"
     assert env["HARNESS_VERIFIER_MODE"] == "observe"
+
+
+def test_structured_skills_and_mcp_map_to_json_runtime_env():
+    env = to_runtime_env(
+        {
+            "selected_skills": [
+                {"source": "skillhub", "slug": "team/reporting"},
+            ],
+            "mcp": [
+                {
+                    "name": "db",
+                    "server_url": "http://db.test/mcp",
+                    "bear_token": "secret",
+                },
+            ],
+        }
+    )
+
+    assert json.loads(env["SELECTED_SKILLS_JSON"]) == [
+        {"source": "skillhub", "slug": "team/reporting"}
+    ]
+    assert json.loads(env["MCP_SERVERS_JSON"]) == [
+        {
+            "name": "db",
+            "server_url": "http://db.test/mcp",
+            "bear_token": "secret",
+        }
+    ]

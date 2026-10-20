@@ -1,19 +1,42 @@
 import type { AgentDraft } from "./types";
-import { prepareMcpAuth } from "./mcpAuth";
+import { createT } from "./i18n";
+import { prepareMcpAuth, referencedMcpEnvKeys } from "./mcpAuth";
+import { defaultModelApiBase } from "../adk/cloudProvider";
+import {
+  customModelCredentialRequirements,
+  referencedModelFallbackApiKeyEnvKeys,
+} from "./customModelCredentials";
 
 const WORKSPACE_DRAFT_STORAGE_VERSION = 1;
 const SERVER_MANAGED_MODEL_API_KEY = "MODEL_AGENT_API_KEY";
+const WORKSPACE_DRAFT_ERROR_NAME = "WorkspaceDraftError";
+
+function workspaceDraftError(key: string): Error {
+  const error = new Error(createT(key));
+  error.name = WORKSPACE_DRAFT_ERROR_NAME;
+  return error;
+}
+
+export type WorkspaceAgentCreationMode = "quick" | "traditional";
 
 export interface WorkspaceAgentDraft {
   id: string;
   draft: AgentDraft;
   updatedAt: number;
+  creationMode?: WorkspaceAgentCreationMode;
   deploymentTarget?: {
     runtimeId: string;
+    agentCategory?: "general" | "mpa";
+    mpaInstanceId?: string;
     name: string;
     region: string;
     appName?: string;
     currentVersion?: number | null;
+    etag?: string;
+    editMode?: "source-preserving" | "regenerate";
+    mpaProfileOnly?: boolean;
+    configuredMcpEnvKeys?: string[];
+    configuredRuntimeEnvKeys?: string[];
   };
 }
 
@@ -36,20 +59,38 @@ function isWorkspaceAgentDraft(value: unknown): value is WorkspaceAgentDraft {
     isRecord(value) &&
     typeof value.id === "string" &&
     typeof value.updatedAt === "number" &&
+    (value.creationMode === undefined ||
+      value.creationMode === "quick" ||
+      value.creationMode === "traditional") &&
     isRecord(value.draft)
   );
+}
+
+/** Only explicit deployment intent enables the MPA lifecycle. */
+export function deploymentAgentCategory(
+  target?: { agentCategory?: "general" | "mpa"; mpaProfileOnly?: boolean },
+): "general" | "mpa" {
+  return target?.agentCategory ?? (target?.mpaProfileOnly === true ? "mpa" : "general");
+}
+
+export function workspaceAgentCreationMode(
+  item: WorkspaceAgentDraft,
+): WorkspaceAgentCreationMode {
+  if (item.creationMode) return item.creationMode;
+  return item.draft.dynamicAgentDelegation === true ? "quick" : "traditional";
 }
 
 export function workspaceDraftsKey(userId: string): string {
   return `veadk.agentDrafts.${encodeURIComponent(userId)}`;
 }
 
-/**
- * Ark key values are resolved by the Studio server. Keep only the non-secret
- * key ID/name in drafts so a legacy value cannot be copied back to browser
- * storage through a Root Agent, nested sub-agent, or workflow node.
- */
-function stripServerManagedModelApiKey(draft: AgentDraft): AgentDraft {
+/** Remove values that must remain ephemeral from every nested deployment. */
+function stripBrowserStorageSecrets(
+  draft: AgentDraft,
+  protectedMcpKeys: ReadonlySet<string>,
+  transientMcpKeys: ReadonlySet<string>,
+  protectedModelKeys: ReadonlySet<string>,
+): AgentDraft {
   const deployment = draft.deployment;
   const envValues = deployment?.envValues;
   const safeDeployment = deployment
@@ -59,7 +100,10 @@ function stripServerManagedModelApiKey(draft: AgentDraft): AgentDraft {
           ? {
               envValues: Object.fromEntries(
                 Object.entries(envValues).filter(
-                  ([key]) => key !== SERVER_MANAGED_MODEL_API_KEY,
+                  ([key]) =>
+                    key !== SERVER_MANAGED_MODEL_API_KEY &&
+                    !protectedMcpKeys.has(key) &&
+                    !protectedModelKeys.has(key),
                 ),
               ),
             }
@@ -68,15 +112,79 @@ function stripServerManagedModelApiKey(draft: AgentDraft): AgentDraft {
     : undefined;
   return {
     ...draft,
+    ...(draft.mcpTools
+      ? {
+          mcpTools: draft.mcpTools.map((tool) => {
+            if (
+              !tool.authTokenEnv ||
+              !transientMcpKeys.has(tool.authTokenEnv)
+            ) {
+              return tool;
+            }
+            const safeTool = { ...tool };
+            delete safeTool.authTokenEnv;
+            return safeTool;
+          }),
+        }
+      : {}),
     ...(safeDeployment ? { deployment: safeDeployment } : {}),
-    subAgents: draft.subAgents.map(stripServerManagedModelApiKey),
+    subAgents: draft.subAgents.map((child) =>
+      stripBrowserStorageSecrets(
+        child,
+        protectedMcpKeys,
+        transientMcpKeys,
+        protectedModelKeys,
+      ),
+    ),
     ...(draft.workflow
       ? {
           workflow: {
             ...draft.workflow,
             nodes: draft.workflow.nodes.map((node) => ({
               ...node,
-              agent: stripServerManagedModelApiKey(node.agent),
+              agent: stripBrowserStorageSecrets(
+                node.agent,
+                protectedMcpKeys,
+                transientMcpKeys,
+                protectedModelKeys,
+              ),
+            })),
+          },
+        }
+      : {}),
+  };
+}
+
+/** Restore only the configured marker after stripping transient token values. */
+function preserveConfiguredMcpState(
+  prepared: AgentDraft,
+  source: AgentDraft,
+): AgentDraft {
+  return {
+    ...prepared,
+    ...(prepared.mcpTools
+      ? {
+          mcpTools: prepared.mcpTools.map((tool, index) => ({
+            ...tool,
+            ...(source.mcpTools?.[index]?.credentialConfigured === true
+              ? { credentialConfigured: true }
+              : {}),
+          })),
+        }
+      : {}),
+    subAgents: prepared.subAgents.map((child, index) =>
+      preserveConfiguredMcpState(child, source.subAgents[index] ?? child),
+    ),
+    ...(prepared.workflow
+      ? {
+          workflow: {
+            ...prepared.workflow,
+            nodes: prepared.workflow.nodes.map((node, index) => ({
+              ...node,
+              agent: preserveConfiguredMcpState(
+                node.agent,
+                source.workflow?.nodes[index]?.agent ?? node.agent,
+              ),
             })),
           },
         }
@@ -86,20 +194,23 @@ function stripServerManagedModelApiKey(draft: AgentDraft): AgentDraft {
 
 export function sanitizeAgentDraftForStorage(draft: AgentDraft): AgentDraft {
   const prepared = prepareMcpAuth(draft);
-  const envValues = {
-    ...(prepared.draft.deployment?.envValues ?? {}),
-    ...prepared.envValues,
-  };
-  if (!prepared.draft.deployment && Object.keys(envValues).length === 0) {
-    return stripServerManagedModelApiKey(prepared.draft);
-  }
-  return stripServerManagedModelApiKey({
-    ...prepared.draft,
-    deployment: {
-      ...(prepared.draft.deployment ?? { feishuEnabled: false }),
-      envValues,
-    },
-  });
+  const storageDraft = preserveConfiguredMcpState(prepared.draft, draft);
+  const protectedModelKeys = new Set(
+    [
+      ...customModelCredentialRequirements(
+        prepared.draft,
+        defaultModelApiBase(prepared.draft.cloudProvider ?? "volcengine"),
+      ).map((item) => item.key),
+      ...referencedModelFallbackApiKeyEnvKeys(prepared.draft),
+      ...referencedModelFallbackApiKeyEnvKeys(draft),
+    ],
+  );
+  return stripBrowserStorageSecrets(
+    storageDraft,
+    new Set(referencedMcpEnvKeys(prepared.draft)),
+    new Set(Object.keys(prepared.envValues)),
+    protectedModelKeys,
+  );
 }
 
 function sanitizeWorkspaceDraft(item: WorkspaceAgentDraft): WorkspaceAgentDraft {
@@ -117,9 +228,9 @@ function parseWorkspaceDrafts(value: unknown): WorkspaceAgentDraft[] {
       : undefined;
   if (!Array.isArray(drafts) || !drafts.every(isWorkspaceAgentDraft)) {
     if (isRecord(value) && typeof value.version === "number") {
-      throw new Error("本机草稿版本暂不受支持，请升级 Studio 后重试。");
+      throw workspaceDraftError("helpers.drafts.unsupportedVersion");
     }
-    throw new Error("本机草稿数据格式无效。");
+    throw workspaceDraftError("helpers.drafts.invalidFormat");
   }
   return drafts.map(sanitizeWorkspaceDraft);
 }
@@ -134,10 +245,10 @@ export function loadWorkspaceDrafts(
   try {
     return parseWorkspaceDrafts(JSON.parse(raw));
   } catch (cause) {
-    if (cause instanceof Error && cause.message.startsWith("本机草稿")) {
+    if (cause instanceof Error && cause.name === WORKSPACE_DRAFT_ERROR_NAME) {
       throw cause;
     }
-    throw new Error("无法读取本机草稿，浏览器中的草稿数据可能已损坏。");
+    throw workspaceDraftError("helpers.drafts.readFailed");
   }
 }
 
@@ -159,9 +270,9 @@ export function writeWorkspaceDrafts(
       (cause.name === "QuotaExceededError" || cause.name === "NS_ERROR_DOM_QUOTA_REACHED")
     ) {
       throw new Error(
-        "浏览器存储空间不足，草稿未保存。请删除不需要的草稿或清理此站点的浏览器存储后重试。",
+        createT("helpers.drafts.quotaExceeded"),
       );
     }
-    throw new Error("浏览器拒绝保存草稿，请检查站点存储权限后重试。");
+    throw new Error(createT("helpers.drafts.writeRejected"));
   }
 }

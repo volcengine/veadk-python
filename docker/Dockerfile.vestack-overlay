@@ -1,0 +1,11 @@
+# Incremental VeStack image used when a previously validated Studio base image
+# already contains all runtime dependencies.  Only runtime modules changed by
+# the VeStack endpoint adaptation are replaced.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+# Keep every current VeADK module and Studio BFF module on one source revision.
+# A narrow two-file overlay can import symbols absent from an older validated
+# base image even when its third-party dependency layer is still compatible.
+COPY veadk /usr/local/lib/python3.12/site-packages/veadk
+COPY frontend/server /usr/local/lib/python3.12/site-packages/frontend/server

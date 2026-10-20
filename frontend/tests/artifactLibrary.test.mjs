@@ -14,6 +14,14 @@ const pageStyles = readFileSync(
   new URL("../src/ui/ArtifactLibrary.css", import.meta.url),
   "utf8",
 );
+const resourceStyles = readFileSync(
+  new URL("../src/ui/ResourceCollection.css", import.meta.url),
+  "utf8",
+);
+const resourceSource = readFileSync(
+  new URL("../src/ui/ResourceCollection.tsx", import.meta.url),
+  "utf8",
+);
 const iconSource = readFileSync(
   new URL("../src/ui/icons/LibraryIcons.tsx", import.meta.url),
   "utf8",
@@ -30,7 +38,7 @@ const editDialogSource = readFileSync(
 test("collects real chat artifact deltas without mock records", () => {
   assert.match(modelSource, /event\.actions\?\.artifactDelta \?\? event\.actions\?\.artifact_delta/);
   assert.match(modelSource, /collectArtifactLibraryItems/);
-  assert.match(modelSource, /sessionTitle\(session\.events\)/);
+  assert.match(modelSource, /sessionTitle\(session\.events, sessionTitleFallback\)/);
   assert.match(modelSource, /if \(\/\\\.preview\\\.webp\$\/i\.test\(record\.filename\)\) continue/);
   assert.doesNotMatch(pageSource, /MOCK_ARTIFACTS|MOCK_SESSIONS|downloadMockArtifact/);
 });
@@ -55,20 +63,20 @@ test("uses the existing ADK preview and download endpoints", () => {
 test("keeps one type-filtered view with search, preview and download", () => {
   assert.doesNotMatch(pageSource, /LibraryView|ViewTabs|按会话|按类型/);
   assert.doesNotMatch(pageSource, /role="tablist"|role="tabpanel"/);
-  assert.match(pageSource, /placeholder="搜索产物或会话"/);
+  assert.match(pageSource, /placeholder=\{t\("artifactLibrary\.searchPlaceholder"\)\}/);
   assert.match(pageSource, /artifact-library-toolbar library-resource-toolbar/);
-  assert.match(pageSource, /artifact-library-toolbar library-resource-toolbar"[\s\S]*?<nav className="artifact-type-pills"[\s\S]*?<label className="artifact-library-search"/);
+  assert.match(pageSource, /<ResourceToolbar className="artifact-library-toolbar library-resource-toolbar">[\s\S]*?<ResourceFilterSelect[\s\S]*?id="artifact-type-filter"[\s\S]*?\{toolbarFilters\}[\s\S]*?<ResourceSearch/);
   assert.doesNotMatch(pageSource, /artifact-library-toolbar__main/);
   assert.doesNotMatch(pageSource, /artifact-library-heading/);
-  assert.doesNotMatch(pageSource, /label: "全部"/);
-  for (const label of ["文档", "图片", "视频"]) {
-    assert.match(pageSource, new RegExp(`label: "${label}"`));
+  for (const key of ["all", "document", "image", "video"]) {
+    assert.match(pageSource, new RegExp(`label: t\\("artifactLibrary\\.types\\.${key}"\\)`));
   }
-  assert.match(pageSource, /setActiveType\(\(current\) => current === type\.id \? null : type\.id\)/);
+  assert.match(pageSource, /onChange=\{setActiveType\}/);
+  assert.doesNotMatch(pageSource, /artifact-type-pills|artifact-type-pill/);
   assert.doesNotMatch(pageSource, /artifact-type-badge/);
   assert.match(pageSource, /<table className="artifact-library-table">/);
-  for (const heading of ["名称", "来源", "修改时间", "操作"]) {
-    assert.match(pageSource, new RegExp(`>${heading}<`));
+  for (const key of ["name", "source", "updatedAt", "actions"]) {
+    assert.match(pageSource, new RegExp(`t\\("artifactLibrary\\.columns\\.${key}"\\)`));
   }
   assert.doesNotMatch(pageSource, /<th[^>]*>大小<\/th>/);
   assert.doesNotMatch(pageSource, /artifact-library-table__size-column/);
@@ -77,9 +85,9 @@ test("keeps one type-filtered view with search, preview and download", () => {
   assert.match(pageSource, /className="library-artifact-preview-trigger"/);
   assert.match(pageSource, /onClick=\{\(\) => onPreview\(artifact\)\}/);
   assert.match(pageSource, /className="library-artifact-row-size"/);
-  assert.match(pageSource, /label: downloadPending \? "下载中" : "下载"/);
-  assert.match(pageSource, /label: "编辑信息"/);
-  assert.match(pageSource, /label: "删除产物"/);
+  assert.match(pageSource, /downloadPending[\s\S]*?t\("artifactLibrary\.downloading"\)[\s\S]*?: t\("artifactLibrary\.download"\)/);
+  assert.match(pageSource, /label: t\("artifactLibrary\.edit"\)/);
+  assert.match(pageSource, /label: t\("artifactLibrary\.delete"\)/);
   assert.doesNotMatch(pageSource, /className="library-artifact-action"/);
   assert.match(pageSource, /<img src=\{previewUrl\}/);
   assert.match(pageSource, /<video src=\{previewUrl\} controls/);
@@ -92,9 +100,9 @@ test("supports managed artifacts and preserves their source provenance", () => {
   assert.match(pageSource, /onOpenSource\?:/);
   assert.match(pageSource, /<StudioConfirmDialog/);
   assert.match(pageSource, /<ArtifactEditDialog/);
-  assert.match(pageSource, /<dt>Agent<\/dt>/);
-  assert.match(pageSource, /<dt>会话<\/dt>/);
-  assert.match(pageSource, /<dt>生成工具<\/dt>/);
+  assert.match(pageSource, /<dt>\{t\("artifactLibrary\.preview\.agent"\)\}<\/dt>/);
+  assert.match(pageSource, /<dt>\{t\("artifactLibrary\.preview\.session"\)\}<\/dt>/);
+  assert.match(pageSource, /<dt>\{t\("artifactLibrary\.preview\.tool"\)\}<\/dt>/);
   assert.match(modelSource, /agentId\?: string/);
   assert.match(modelSource, /runtimeId\?: string/);
   assert.match(modelSource, /eventId\?: string/);
@@ -102,22 +110,22 @@ test("supports managed artifacts and preserves their source provenance", () => {
 });
 
 test("shared artifact controls are keyboard accessible", () => {
-  assert.match(actionMenuSource, /aria-haspopup="menu"/);
-  assert.match(actionMenuSource, /role="menuitem"/);
-  assert.match(actionMenuSource, /\["ArrowDown", "ArrowUp", "Home", "End"\]/);
-  assert.match(actionMenuSource, /window\.addEventListener\("pointerdown", closeOnPointerDown\)/);
-  assert.match(actionMenuSource, /event\.key !== "Escape"/);
+  assert.match(actionMenuSource, /from "@openai\/apps-sdk-ui\/components\/Menu"/);
+  assert.match(actionMenuSource, /<Menu\.Trigger>/);
+  assert.match(actionMenuSource, /<Menu\.Item/);
+  assert.match(actionMenuSource, /aria-label=\{label\}/);
   assert.match(editDialogSource, /event\.key !== "Tab"/);
   assert.match(pageSource, /event\.key !== "Tab"/);
   assert.match(pageSource, /document\.body\.style\.overflow = "hidden"/);
 });
 
 test("covers loading, failure, retry, empty and unavailable-preview states", () => {
-  assert.match(pageSource, /正在加载产物/);
-  assert.match(pageSource, /产物加载失败/);
-  assert.match(pageSource, /重新加载/);
-  assert.match(pageSource, /您还没有任何产物/);
-  assert.match(pageSource, /当前格式暂不支持在线预览，请下载查看/);
+  assert.match(pageSource, /<ResourceLoadingState \/>/);
+  assert.match(resourceSource, /ResourceLoadingState/);
+  assert.match(pageSource, /t\("artifactLibrary\.loadFailed"\)/);
+  assert.match(pageSource, /t\("artifactLibrary\.reload"\)/);
+  assert.match(pageSource, /t\("artifactLibrary\.noArtifacts"\)/);
+  assert.match(pageSource, /t\("artifactLibrary\.preview\.unsupported"\)/);
   assert.match(pageSource, /role="alert"/);
 });
 
@@ -128,15 +136,16 @@ test("batches large artifact collections and loads more inside the results scrol
   assert.match(pageSource, /rootMargin: "240px 0px"/);
   assert.match(pageSource, /onScroll=\{handleResultsScroll\}/);
   assert.match(pageSource, /activationRevision/);
-  assert.match(pageSource, /正在加载更多产物/);
+  assert.match(pageSource, /t\("artifactLibrary\.loadingMore"\)/);
 });
 
 test("uses repository icons and responsive reduced-motion styles", () => {
   assert.doesNotMatch(iconSource, /SessionViewIcon|TypeViewIcon/);
   assert.match(iconSource, /export function PreviewArtifactIcon/);
   assert.doesNotMatch(iconSource, /lucide-react/);
-  assert.match(pageStyles, /\.artifact-library-results\s*\{[\s\S]*?overflow-y: auto/);
-  assert.match(pageStyles, /\.artifact-library-toolbar\.library-resource-toolbar\s*\{[^}]*align-items:\s*center;[^}]*justify-content:\s*space-between;/);
+  assert.match(pageSource, /<ResourceResults[\s\S]*?className="artifact-library-results"/);
+  assert.match(resourceStyles, /\.resource-results\s*\{[\s\S]*?overflow-y: auto/);
+  assert.doesNotMatch(pageStyles, /\.artifact-library-toolbar\.library-resource-toolbar\s*\{[^}]*justify-content:/);
   assert.doesNotMatch(pageStyles, /artifact-view-tabs|artifact-session-/);
   assert.match(pageStyles, /@media \(max-width: 720px\)/);
   assert.match(pageStyles, /@media \(prefers-reduced-motion: reduce\)/);

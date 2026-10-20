@@ -1,0 +1,259 @@
+.website-widget {
+  --background: 0 0% 100%;
+  --foreground: 240 10% 3.9%;
+  --card: 0 0% 100%;
+  --primary: 240 5.9% 10%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 240 4.8% 95.9%;
+  --secondary-foreground: 240 5.9% 10%;
+  --muted: 240 4.8% 95.9%;
+  --muted-foreground: 240 3.8% 46.1%;
+  --accent: 240 4.8% 95.9%;
+  --destructive: 0 72% 51%;
+  --border: 240 5.9% 90%;
+  --ring: 240 5.9% 10%;
+  --canvas: 240 5% 97.3%;
+  --panel: 0 0% 100%;
+
+  color: hsl(var(--foreground));
+  color-scheme: light;
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 16px;
+  line-height: normal;
+  text-align: left;
+  -webkit-font-smoothing: antialiased;
+}
+
+.website-widget *,
+.website-widget *::before,
+.website-widget *::after {
+  box-sizing: border-box;
+}
+
+.website-widget img,
+.website-widget svg {
+  display: block;
+}
+
+/* The widget is delivered as one script, so keep critical transcript geometry
+ * local as a final guard even if a future build extracts component CSS. */
+.website-widget__transcript .builtin-tool-icon > svg {
+  width: 18px;
+  height: 18px;
+}
+
+.website-widget__transcript .builtin-tool-chevron {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+}
+
+.website-widget__launcher {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 2147483000;
+  display: grid;
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid hsl(var(--foreground));
+  border-radius: 50%;
+  background: hsl(var(--primary));
+  box-shadow: 0 12px 32px hsl(var(--foreground) / 0.24);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  transition: box-shadow 160ms ease, transform 160ms ease;
+}
+
+.website-widget__launcher:hover {
+  box-shadow: 0 16px 38px hsl(var(--foreground) / 0.3);
+  transform: translateY(-1px);
+}
+
+.website-widget__launcher:active { transform: scale(0.96); }
+
+.website-widget__launcher.is-dragging {
+  cursor: grabbing;
+  transform: none;
+  transition: box-shadow 120ms ease;
+}
+
+.website-widget__launcher:focus-visible,
+.website-widget__close:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 3px;
+}
+
+.website-widget__launcher-logo {
+  width: 30px;
+  height: 30px;
+  filter: brightness(0) invert(1);
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.website-widget__panel {
+  position: fixed;
+  right: 24px;
+  bottom: 96px;
+  z-index: 2147482999;
+  display: grid;
+  width: min(420px, calc(100vw - 32px));
+  height: min(640px, calc(100dvh - 128px));
+  grid-template-rows: 58px minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 16px;
+  background: hsl(var(--panel));
+  box-shadow: 0 24px 70px hsl(var(--foreground) / 0.18);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(10px) scale(0.985);
+  transform-origin: right bottom;
+  transition: opacity 180ms ease-out, transform 180ms ease-out;
+}
+
+.website-widget__panel.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+
+.website-widget__header {
+  display: flex;
+  min-width: 0;
+  padding: 0 12px 0 14px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+}
+
+.website-widget__identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.website-widget__identity-logo {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  border: 1px solid hsl(var(--border));
+  border-radius: 9px;
+  background: hsl(var(--background));
+}
+
+.website-widget__identity-logo img {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
+.website-widget__identity-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.website-widget__identity-copy strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 620;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.website-widget__identity-copy > span {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.website-widget__close {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+
+.website-widget__close:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+.website-widget__close svg { width: 17px; height: 17px; }
+
+.website-widget__transcript.transcript {
+  min-height: 0;
+  padding: 20px 18px 10px;
+  overscroll-behavior: contain;
+  background: hsl(var(--background));
+}
+
+.website-widget__transcript .turn {
+  width: 100%;
+  margin-bottom: 18px;
+}
+
+.website-widget__transcript .turn--user .bubble { max-width: 88%; }
+
+.website-widget__error {
+  width: 100%;
+  margin: 8px auto 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: hsl(var(--destructive) / 0.08);
+  color: hsl(var(--destructive));
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.website-widget__composer-slot {
+  padding: 10px 14px 14px;
+  border-top: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+}
+
+.website-widget .compact-composer.composer { padding: 0; }
+.website-widget .compact-composer .composer-box { align-items: flex-end; }
+.website-widget .compact-composer .comp-input {
+  min-height: 36px;
+  padding: 7px 6px;
+  font-size: 14px;
+}
+
+@media (max-width: 480px) {
+  .website-widget__launcher { right: 14px; bottom: 14px; }
+  .website-widget__panel {
+    right: 12px;
+    bottom: 82px;
+    width: calc(100vw - 24px);
+    height: min(620px, calc(100dvh - 96px));
+    border-radius: 14px;
+  }
+  .website-widget__transcript.transcript { padding: 18px 14px 8px; }
+  .website-widget__composer-slot { padding: 9px 10px 11px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .website-widget__launcher,
+  .website-widget__panel {
+    transition: none;
+  }
+}

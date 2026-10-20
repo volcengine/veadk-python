@@ -14,12 +14,14 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from veadk.cli.frontend_apmplus_trace import (
+    APMPlusTracePermissionError,
     load_apmplus_trace,
     normalize_apmplus_trace,
 )
@@ -54,9 +56,9 @@ def test_apmplus_trace_uses_provider_endpoint_and_filters_spans(
                 "trace_id": "trace-1",
                 "span_id": "span-1",
                 "tags": {
-                    "gen_ai.session.id": "session-1",
+                    "a2a.context_id": "session-1",
                     "cozeloop_agent_runtime_id": "runtime-1",
-                    "gen_ai.invocation.id": "invocation-1",
+                    "a2a.invocation_id": "invocation-1",
                 },
             }
         ),
@@ -85,6 +87,11 @@ def test_apmplus_trace_uses_provider_endpoint_and_filters_spans(
 
         def list_span(self, request: Any) -> SimpleNamespace:
             requests.append(request)
+            if request.filters[0].key in (
+                "tags.mpa.session.id",
+                "tags.gen_ai.session.id",
+            ):
+                return SimpleNamespace(span_list=[])
             return SimpleNamespace(span_list=rows)
 
     monkeypatch.setattr(
@@ -109,9 +116,9 @@ def test_apmplus_trace_uses_provider_endpoint_and_filters_spans(
     assert hosts == [expected_host]
     assert requests[0].project_name == "default"
     assert requests[0].order_by == "start_time"
-    assert requests[0].filters[0].key == "operation_name"
+    assert requests[2].filters[0].key == "operation_name"
     assert requests[0].filters[0].op == "in"
-    assert requests[1].filters[0].key == "trace_id"
+    assert requests[3].filters[0].key == "trace_id"
 
 
 def test_normalize_apmplus_trace_converts_span_shape_for_frontend() -> None:
@@ -148,3 +155,254 @@ def test_normalize_apmplus_trace_converts_span_shape_for_frontend() -> None:
             },
         }
     ]
+
+
+def test_normalize_apmplus_trace_compacts_sparse_stream_output() -> None:
+    sparse_output = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "parts": [{"type": "text", "text": "有"}],
+                }
+            },
+            {
+                "message": {
+                    "role": "assistant",
+                    "parts": [None, {"type": "text", "text": "的"}],
+                }
+            },
+            {
+                "message": {
+                    "role": "assistant",
+                    "parts": [None, None, {"type": "text", "text": "。"}],
+                }
+            },
+        ]
+    }
+
+    spans = normalize_apmplus_trace(
+        [
+            {
+                "operation_name": "invoke_agent demo",
+                "span_id": "span-1",
+                "trace_id": "trace-1",
+                "gen_ai_output": json.dumps(sparse_output),
+            }
+        ]
+    )
+
+    output = spans[0]["attributes"]["gen_ai.output"]
+    assert json.loads(output) == {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "parts": [{"type": "text", "text": "有"}],
+                }
+            },
+            {
+                "message": {
+                    "role": "assistant",
+                    "parts": [{"type": "text", "text": "的"}],
+                }
+            },
+            {
+                "message": {
+                    "role": "assistant",
+                    "parts": [{"type": "text", "text": "。"}],
+                }
+            },
+        ]
+    }
+    assert "null" not in output
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "plain text",
+        "{not json",
+        "null",
+        '{ "choices": [{"message": {"parts": [{"text": "ok"}]}}] }',
+    ],
+)
+def test_normalize_apmplus_trace_preserves_non_sparse_output(output: str) -> None:
+    spans = normalize_apmplus_trace(
+        [
+            {
+                "operation_name": "invoke_agent demo",
+                "span_id": "span-1",
+                "trace_id": "trace-1",
+                "gen_ai_output": output,
+            }
+        ]
+    )
+
+    assert spans[0]["attributes"]["gen_ai.output"] == output
+
+
+def test_apmplus_trace_falls_back_when_run_sse_candidate_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[Any] = []
+    rows = [
+        _Span(
+            {
+                "trace_id": "trace-older",
+                "span_id": "span-older-root",
+                "start_time_millisecond": 1_799_999_800_000,
+                "tags": {
+                    "gen_ai.session.id": "session-1",
+                    "agentkit.runtime.id": "runtime-1",
+                },
+            }
+        ),
+        _Span(
+            {
+                "trace_id": "trace-nearest",
+                "span_id": "span-nearest-root",
+                "start_time_millisecond": 1_799_999_999_000,
+                "tags": {
+                    "gen_ai.session.id": "session-1",
+                    "agentkit.runtime.id": "runtime-1",
+                },
+            }
+        ),
+        _Span(
+            {
+                "trace_id": "trace-nearest",
+                "span_id": "span-nearest-child",
+                "start_time_millisecond": 1_799_999_999_500,
+                "tags": {
+                    "gen_ai.session.id": "session-1",
+                    "agentkit.runtime.id": "runtime-1",
+                },
+            }
+        ),
+    ]
+
+    class _FakeApi:
+        def __init__(self, _client: Any) -> None:
+            pass
+
+        def list_span(self, request: Any) -> SimpleNamespace:
+            requests.append(request)
+            if request.filters:
+                return SimpleNamespace(span_list=[])
+            return SimpleNamespace(span_list=rows)
+
+    monkeypatch.setattr(
+        "veadk.cli.frontend_apmplus_trace.APMPLUSSERVERApi",
+        _FakeApi,
+    )
+
+    trace = load_apmplus_trace(
+        access_key="ak",
+        secret_key="sk",
+        session_token="",
+        provider="volcengine",
+        region="cn-beijing",
+        project_name="default",
+        runtime_id="runtime-1",
+        session_id="session-1",
+        now_ms=1_800_000_000_000,
+        retry_delays=(),
+    )
+
+    assert [span["span_id"] for span in trace] == [
+        "span-nearest-root",
+        "span-nearest-child",
+    ]
+    assert requests[2].filters[0].values == ["POST /run_sse"]
+    assert requests[3].filters[0].key == "tags.a2a.context_id"
+    assert requests[4].filters is None
+
+
+def test_apmplus_trace_retries_while_spans_are_being_collected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+    attempts = 0
+
+    class _FakeApi:
+        def __init__(self, _client: Any) -> None:
+            pass
+
+        def list_span(self, request: Any) -> SimpleNamespace:
+            nonlocal attempts
+            if request.filters:
+                return SimpleNamespace(span_list=[])
+            if request.offset:
+                return SimpleNamespace(span_list=[])
+            attempts += 1
+            if attempts == 1:
+                return SimpleNamespace(span_list=[])
+            return SimpleNamespace(
+                span_list=[
+                    _Span(
+                        {
+                            "trace_id": "trace-late",
+                            "span_id": "span-late",
+                            "tags": {"gen_ai.session.id": "session-late"},
+                        }
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "veadk.cli.frontend_apmplus_trace.APMPLUSSERVERApi",
+        _FakeApi,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.frontend_apmplus_trace.time.sleep",
+        sleeps.append,
+    )
+
+    trace = load_apmplus_trace(
+        access_key="ak",
+        secret_key="sk",
+        session_token="",
+        provider="volcengine",
+        region="cn-beijing",
+        project_name="default",
+        runtime_id="runtime-1",
+        session_id="session-late",
+        now_ms=1_800_000_000_000,
+        retry_delays=(0.25,),
+    )
+
+    assert [span["span_id"] for span in trace] == ["span-late"]
+    assert sleeps == [0.25]
+
+
+def test_apmplus_trace_classifies_permission_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ForbiddenError(RuntimeError):
+        status = 403
+
+    class _FakeApi:
+        def __init__(self, _client: Any) -> None:
+            pass
+
+        def list_span(self, _request: Any) -> SimpleNamespace:
+            raise _ForbiddenError("credential detail must not reach the browser")
+
+    monkeypatch.setattr(
+        "veadk.cli.frontend_apmplus_trace.APMPLUSSERVERApi",
+        _FakeApi,
+    )
+
+    with pytest.raises(APMPlusTracePermissionError):
+        load_apmplus_trace(
+            access_key="ak",
+            secret_key="sk",
+            session_token="",
+            provider="volcengine",
+            region="cn-beijing",
+            project_name="default",
+            runtime_id="runtime-1",
+            session_id="session-1",
+            retry_delays=(),
+        )

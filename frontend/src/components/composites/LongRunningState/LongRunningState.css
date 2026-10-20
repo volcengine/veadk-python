@@ -1,0 +1,94 @@
+.studio-long-running-state {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--studio-space-4, 12px);
+  width: 100%;
+  min-width: 0;
+  color: var(--studio-text-primary, #dbdee7);
+  font: inherit;
+  font-size: var(--studio-font-size-md, 14px);
+  line-height: var(--studio-line-height-md, 22px);
+  text-align: left;
+}
+
+.studio-long-running-state__title {
+  min-width: 0;
+  height: var(--studio-line-height-md, 22px);
+  overflow: hidden;
+  font-size: inherit;
+  font-weight: 400;
+}
+
+.studio-long-running-state__title-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-long-running-state__bar {
+  height: 3px;
+  overflow: hidden;
+  border-radius: var(--studio-radius-pill, 999px);
+  background: var(--studio-border-subtle);
+}
+
+.studio-long-running-state__bar-indicator {
+  display: block;
+  width: 32%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--studio-text-primary);
+  opacity: 0;
+}
+
+.studio-long-running-state[data-state="running"] .studio-long-running-state__bar-indicator {
+  opacity: 1;
+  animation: studio-progress-slide 1.1s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+.studio-long-running-state[data-state="complete"] .studio-long-running-state__bar-indicator {
+  width: 100%;
+  opacity: 1;
+  background: var(--studio-success);
+}
+
+.studio-long-running-state__details {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--studio-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.studio-long-running-state__details-content { min-width: 0; }
+
+.studio-long-running-state__details .studio-code-block {
+  width: 100%;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-family: inherit;
+}
+.studio-long-running-state__details .studio-code-block__header h3 { color: var(--studio-text-secondary); font-size: inherit; }
+.studio-long-running-state__details .studio-code-block__viewport { height: auto; overflow: visible; }
+.studio-long-running-state__details .studio-code-block pre { font-size: inherit; line-height: inherit; }
+.studio-long-running-state__details .studio-code-block__line { height: auto; min-height: var(--studio-line-height-md, 22px); }
+
+@keyframes studio-progress-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(312.5%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-long-running-state[data-state="running"] .studio-long-running-state__bar-indicator {
+    animation: none;
+    transform: none;
+  }
+}

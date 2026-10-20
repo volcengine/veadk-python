@@ -16,19 +16,26 @@ name: Unit Tests
 
 on:
   push:
+    branches:
+      - main
     paths:
       - '**.py'
       - 'pyproject.toml'
       - 'requirements*.txt'
+      - 'uv.lock'
+      - '.github/workflows/unit-tests.yaml'
   pull_request:
     paths:
         - '**.py'
         - 'pyproject.toml'
         - 'requirements*.txt'
+        - 'uv.lock'
+        - '.github/workflows/unit-tests.yaml'
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       matrix:
         python-version: ["3.10", "3.12"]
@@ -55,4 +62,154 @@ jobs:
     - name: Run unit tests with pytest
       run: |
         source .venv/bin/activate
-        pytest -n 16
+        # `codex_smoke` is excluded here rather than relying on its
+        # CODEX_RUN_SMOKE opt-in alone: it spawns a real Codex subprocess and
+        # binds two real loopback ports, which must never run under `-n 16`.
+        pytest -n 16 -m "not codex_smoke"
+
+  # Real Codex binary + real OS sandbox + real shim socket, against a stubbed
+  # model backend (no credentials, no network egress). Kept out of the matrix
+  # job above because it is serial and process-spawning.
+  #
+  # Every selected case must run and pass, including database-backed resume.
+  codex-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: veadk_test
+          MYSQL_DATABASE: veadk_test
+          MYSQL_USER: veadk_test
+          MYSQL_PASSWORD: veadk_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: veadk_test
+          POSTGRES_PASSWORD: veadk_test
+          POSTGRES_DB: veadk_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U veadk_test -d veadk_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Allow sandbox user namespaces on the runner
+      # Ubuntu's AppArmor restriction removes capabilities inside unprivileged
+      # user namespaces, preventing bubblewrap from configuring its loopback.
+      # Relax that host restriction only on this disposable runner; the tests
+      # still use the real read-only OS sandbox with network access disabled.
+      run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install the latest version of uv
+      uses: astral-sh/setup-uv@v6
+
+    - name: Install dependencies
+      run: |
+        uv venv .venv
+        source .venv/bin/activate
+        uv sync --all-extras
+        uv pip install -e .
+
+    - name: Run the Codex end-to-end smoke test
+      env:
+        CODEX_RUN_SMOKE: "1"
+        VEADK_TEST_MYSQL_URL: mysql+aiomysql://veadk_test:veadk_test@127.0.0.1:3306/veadk_test
+        VEADK_TEST_POSTGRES_URL: postgresql+asyncpg://veadk_test:veadk_test@127.0.0.1:5432/veadk_test
+      run: |
+        source .venv/bin/activate
+        # -p no:xdist: this test must not be distributed across workers.
+        # -rs: print skip reasons, so a silently skipped smoke test (missing
+        # SDK, missing binary, unsupported platform) is visible in the log.
+        # --junitxml: machine-readable outcome for the assertion step below;
+        # pytest's own exit code cannot distinguish "passed" from "skipped".
+        pytest tests/runtime/codex -m codex_smoke -p no:xdist -rs --junitxml=codex-smoke.xml
+
+    - name: Assert the smoke test actually ran
+      if: ${{ !cancelled() }}
+      # Pytest exits successfully for skipped tests, so check its report too.
+      run: |
+        python3 - <<'PY'
+        import sys
+        import xml.etree.ElementTree as ET
+        from pathlib import Path
+
+        report = Path("codex-smoke.xml")
+        if not report.exists():
+            sys.exit(
+                "codex smoke: pytest wrote no JUnit report, so it never got as "
+                "far as running tests (crash, bad invocation, or a broken venv)."
+            )
+
+        entries = list(ET.parse(report).getroot().iter("testcase"))
+
+        def _detail(case, tag):
+            node = case.find(tag)
+            if node is None:
+                return None
+            name = f"{case.get('classname', '')}::{case.get('name', '')}"
+            return f"  {name}: {node.get('message') or (node.text or '').strip()}"
+
+        # pytest also emits a classname-less entry per module skipped during
+        # collection -- including modules `-m codex_smoke` deselected entirely
+        # (any `pytest.importorskip` at module scope elsewhere in the tree).
+        # Those are not this job's business; only real test cases are.
+        cases = [entry for entry in entries if entry.get("classname")]
+        if not cases:
+            collection = [d for d in (_detail(e, "skipped") for e in entries) if d]
+            sys.exit(
+                "codex smoke: no test ran under `-m codex_smoke`. Either the "
+                "smoke test was renamed/moved/lost its marker, or its whole "
+                "module was skipped at collection -- either way this job is "
+                "asserting nothing."
+                + ("\nmodules skipped at collection:\n" + "\n".join(collection)
+                   if collection else "")
+            )
+
+        skipped = [d for d in (_detail(c, "skipped") for c in cases) if d]
+        if skipped:
+            sys.exit(
+                "codex smoke: the smoke test SKIPPED, so nothing was verified. "
+                "CODEX_RUN_SMOKE=1 is set by this job, so the cause is the "
+                "environment (openai-codex SDK missing, no runnable Codex "
+                "binary, or the platform check tripping) and must be fixed "
+                "rather than tolerated:\n" + "\n".join(skipped)
+            )
+
+        errored = [d for d in (_detail(c, "error") for c in cases) if d]
+        if errored:
+            sys.exit(
+                "codex smoke: the test errored in setup/teardown rather than "
+                "running to a verdict:\n" + "\n".join(errored)
+            )
+
+        failed = [d for d in (_detail(c, "failure") for c in cases) if d]
+        if failed:
+            sys.exit(
+                f"codex smoke: {len(cases)} test(s) ran, {len(failed)} FAILED "
+                "-- this is the signal this job exists to collect; read the "
+                "pytest output above:\n" + "\n".join(failed)
+            )
+        else:
+            print(f"codex smoke: {len(cases)} test(s) ran and passed.")
+        PY

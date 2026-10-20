@@ -56,6 +56,30 @@ Once enabled, the IDs of the related tracing data are printed in the logs:
 
 For the full integration steps per platform, see [Observe on Volcengine](/en/docs/framework/ve-tracing).
 
+## Limit local retention
+
+The following settings ship with this fix and are unavailable in the published 1.1.14 release and earlier versions
+
+`OpentelemetryTracer` retains up to 1024 recent spans with an estimated data budget of 16 MiB by default. It evicts the oldest spans when either limit is reached. A span exceeding the byte limit is skipped locally and still passed to cloud exporters according to the existing configuration
+
+Set these environment variables before starting the application to adjust local retention:
+
+| Environment variable | Type | Default | Description |
+| --- | --- | --- | --- |
+| `OBSERVABILITY_OPENTELEMETRY_INMEMORY_ENABLED` | Boolean | `true` | Whether to retain local span history |
+| `OBSERVABILITY_OPENTELEMETRY_INMEMORY_MAX_SPANS` | Nonnegative integer | `1024` | Maximum retained span count; `0` disables retention |
+| `OBSERVABILITY_OPENTELEMETRY_INMEMORY_MAX_BYTES` | Nonnegative integer | `16777216` | Estimated data budget in bytes; `0` disables retention |
+
+For applications that only need cloud observability, set this variable in the terminal used to start the application:
+
+```bash
+export OBSERVABILITY_OPENTELEMETRY_INMEMORY_ENABLED=false
+```
+
+Disabling local retention preserves span annotations, trace IDs in logs, and configured cloud exports; `tracer.dump()` writes an empty array. With retention enabled, dumps contain only retained session history. If a span used to associate a trace with a session is evicted, that trace may also disappear from local dumps. Query your cloud observability platform for complete history
+
+Tracers using the same TracerProvider share these limits. Configuration takes effect when the cache is first created; restart the application or create a new provider after changing it. The byte budget estimates cached data and does not limit total process memory
+
 ## Why Tracing
 
 With tracing in place, you can:

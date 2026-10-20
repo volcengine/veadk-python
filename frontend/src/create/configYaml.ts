@@ -3,27 +3,41 @@
 // can be imported back into the custom-mode wizard.
 
 import { parse, stringify } from "yaml";
-import { A2A_REGISTRY_DEFAULTS } from "./veadkCatalog";
+import { a2aRegistryDefaults } from "./veadkCatalog";
 import { normalizeDraft } from "./normalizeDraft";
 import { prepareMcpAuth } from "./mcpAuth";
+import { normalizeModelFallbacks } from "./modelFallbacks";
 import type { AgentDraft } from "./types";
 
+interface ConfigYamlLabels {
+  heading: string;
+  importHint: string;
+}
+
+const DEFAULT_CONFIG_YAML_LABELS: ConfigYamlLabels = {
+  heading: "VeADK Agent 结构配置",
+  importHint: "可在「创建 Agent」页通过「导入 YAML」重新载入。",
+};
+
 /** Build a clean, minimal config object (omit empty/false fields). */
-function toConfig(draft: AgentDraft): Record<string, unknown> {
+function toConfig(draft: AgentDraft, root = true): Record<string, unknown> {
   const o: Record<string, unknown> = {
     agentType: draft.agentType ?? "llm",
   };
   if (draft.agentType === "a2a") {
     if (draft.a2aRegistry?.enabled) {
+      const defaults = a2aRegistryDefaults(
+        draft.cloudProvider ?? "volcengine",
+      );
       const registry: Record<string, unknown> = { enabled: true };
       if (draft.a2aRegistry.registrySpaceId?.trim())
         registry.registrySpaceId = draft.a2aRegistry.registrySpaceId.trim();
       registry.registryTopK =
-        draft.a2aRegistry.registryTopK?.trim() || A2A_REGISTRY_DEFAULTS.topK;
+        draft.a2aRegistry.registryTopK?.trim() || defaults.topK;
       registry.registryRegion =
-        draft.a2aRegistry.registryRegion?.trim() || A2A_REGISTRY_DEFAULTS.region;
+        draft.a2aRegistry.registryRegion?.trim() || defaults.region;
       registry.registryEndpoint =
-        draft.a2aRegistry.registryEndpoint?.trim() || A2A_REGISTRY_DEFAULTS.endpoint;
+        draft.a2aRegistry.registryEndpoint?.trim() || defaults.endpoint;
       o.a2aRegistry = registry;
     }
     return o;
@@ -32,7 +46,15 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
   o.description = draft.description;
   o.instruction = draft.instruction;
   if (draft.agentType === "loop") o.maxIterations = draft.maxIterations ?? 3;
-  if (draft.modelName?.trim()) o.modelName = draft.modelName.trim();
+  const primaryModelName = draft.modelName?.trim() ?? "";
+  const modelFallbacks = normalizeModelFallbacks(
+    primaryModelName,
+    draft.modelFallbacks,
+  );
+  if (primaryModelName) {
+    o.modelName = primaryModelName;
+    if (modelFallbacks.length) o.modelFallbacks = modelFallbacks;
+  }
   if (draft.modelSource) o.modelSource = draft.modelSource;
   if (draft.modelSource !== "ark") {
     if (draft.modelProvider?.trim()) o.modelProvider = draft.modelProvider.trim();
@@ -65,6 +87,9 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
       o.shortTermBackend = draft.shortTermBackend || "local";
     if (draft.memory.longTerm) {
       o.longTermBackend = draft.longTermBackend || "local";
+      if (draft.longTermMemoryIndex?.trim()) {
+        o.longTermMemoryIndex = draft.longTermMemoryIndex.trim();
+      }
       o.autoSaveSession = !!draft.autoSaveSession;
     }
   }
@@ -79,12 +104,25 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
     o.tracing = true;
     o.tracingExporters = [...draft.tracingExporters];
   }
+  if (root && draft.harnessSidecar?.enabled) {
+    o.harnessSidecar = {
+      enabled: true,
+      profile: draft.harnessSidecar.profile,
+      componentOverrides: { ...draft.harnessSidecar.componentOverrides },
+    };
+  }
   if (
-    draft.cloudEnvironment?.cliTools.length ||
+    draft.cloudEnvironment?.environmentId ||
+    draft.cloudEnvironment?.environmentVersionId ||
+    draft.cloudEnvironment?.cliTools?.length ||
     draft.cloudEnvironment?.dockerfile !== undefined
   ) {
     o.cloudEnvironment = {
-      cliTools: [...draft.cloudEnvironment.cliTools],
+      environmentId: draft.cloudEnvironment.environmentId,
+      environmentVersionId: draft.cloudEnvironment.environmentVersionId,
+      ...(draft.cloudEnvironment.cliTools?.length
+        ? { cliTools: [...draft.cloudEnvironment.cliTools] }
+        : {}),
       ...(draft.cloudEnvironment.dockerfile !== undefined
         ? { dockerfile: draft.cloudEnvironment.dockerfile }
         : {}),
@@ -131,7 +169,7 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
         base.namespace = s.namespace ?? "public";
       } else if (s.source === "local") {
         base.localFiles = s.localFiles ?? [];
-      } else {
+      } else if (s.source === "skillspace") {
         base.skillSpaceId = s.skillSpaceId;
         base.skillSpaceName = s.skillSpaceName;
         base.skillId = s.skillId;
@@ -139,11 +177,16 @@ function toConfig(draft: AgentDraft): Record<string, unknown> {
       }
       return base;
     });
-  if (draft.subAgents?.length) o.subAgents = draft.subAgents.map(toConfig);
+  if (draft.subAgents?.length) {
+    o.subAgents = draft.subAgents.map((child) => toConfig(child, false));
+  }
   return o;
 }
 
-export function draftToYaml(draft: AgentDraft): string {
+export function draftToYaml(
+  draft: AgentDraft,
+  labels: ConfigYamlLabels = DEFAULT_CONFIG_YAML_LABELS,
+): string {
   const prepared = prepareMcpAuth(draft);
   const envValues = {
     ...(prepared.draft.deployment?.envValues ?? {}),
@@ -157,8 +200,8 @@ export function draftToYaml(draft: AgentDraft): string {
     },
   };
   return (
-    "# VeADK Agent 结构配置\n" +
-    "# 可在「创建 Agent」页通过「导入 YAML」重新载入。\n" +
+    `# ${labels.heading}\n` +
+    `# ${labels.importHint}\n` +
     stringify(toConfig(exportDraft))
   );
 }

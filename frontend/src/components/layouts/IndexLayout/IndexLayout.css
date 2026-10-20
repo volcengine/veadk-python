@@ -1,0 +1,98 @@
+@import "../../tokens/didact-gothic.css";
+
+/* Figma 602:43991: the 1200 × 900 content region after removing the 240px sidebar */
+.studio-index-layout {
+  position: relative;
+  isolation: isolate;
+  container-type: inline-size;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 900px;
+  overflow: clip;
+  border-radius: var(--studio-radius-xl, 16px);
+  background: #020203;
+  color: var(--studio-text-primary, #dbdee7);
+  font-family: "Studio Didact Gothic", sans-serif;
+  font-synthesis: none;
+}
+
+/* The source is a decorative image layer, cropped to 543px in Figma */
+.studio-index-layout__spotlight {
+  position: absolute;
+  z-index: -1;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 543px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.studio-index-layout__spotlight > img {
+  position: absolute;
+  left: calc(50% - 606px);
+  display: block;
+  width: 1206px;
+  height: 718px;
+  max-width: none;
+}
+
+.studio-index-layout__tabs {
+  position: absolute;
+  /* Keep pointer events above the following content section's top padding */
+  z-index: 1;
+  top: 23px;
+  left: 50%;
+  width: max-content;
+  max-width: calc(100% - 48px);
+  transform: translateX(-50%);
+}
+
+.studio-index-layout__content {
+  position: relative;
+  box-sizing: border-box;
+  width: min(720px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 190px 0 64px;
+}
+.studio-index-layout__welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 19px;
+}
+.studio-index-layout__logo {
+  display: grid;
+  place-items: center;
+  width: 60px;
+  height: 60px;
+}
+.studio-index-layout__logo > img { display: block; width: 60px; height: 60px; }
+.studio-index-layout__heading {
+  margin: 0;
+  color: var(--studio-text-strong, #fff);
+  font: 400 42px/1.2 "Studio Didact Gothic", sans-serif;
+  letter-spacing: 0;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.studio-index-layout__prompt { margin-top: 76.6px; }
+.studio-index-layout .studio-index-layout__prompt > * { width: 100%; max-width: 100%; }
+.studio-index-layout__shortcuts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 28px;
+}
+.studio-index-layout .studio-index-layout__shortcuts > * { width: 100%; min-width: 0; }
+
+[data-theme="light"] .studio-index-layout { background: var(--studio-bg-canvas, #f8f9fb); }
+[data-theme="light"] .studio-index-layout__spotlight { filter: invert(1); mix-blend-mode: multiply; opacity: .16; }
+[data-theme="light"] .studio-index-layout__logo > img { filter: invert(1); }
+
+@container (max-width: 720px) {
+  .studio-index-layout__content { padding-top: 142px; }
+  .studio-index-layout__heading { font-size: clamp(28px, 5.4cqw, 38px); }
+  .studio-index-layout__prompt { margin-top: 48px; }
+  .studio-index-layout__shortcuts { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+}

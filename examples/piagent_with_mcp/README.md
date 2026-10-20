@@ -34,7 +34,7 @@ piagent_with_mcp/
 ├── app.py                           # deployable FastAPI app on :8000
 ├── Dockerfile                       # AgentKit cloud build image
 ├── requirements.txt
-├── piagent-mcp-agentkit.yaml        # veadk agentkit launch config
+├── piagent-mcp-agentkit.yaml        # local-only veadk agentkit launch config
 ├── vendor/
 │   └── veadk_python-*.whl           # local VeADK build installed by Dockerfile
 └── agents/
@@ -124,9 +124,19 @@ Then launch from this example directory:
 
 ```bash
 cd examples/piagent_with_mcp
+veadk agentkit config \
+  --agent_name piagent_with_mcp --entry_point app.py \
+  --language Python --language_version 3.12 \
+  --launch_type cloud --region cn-beijing \
+  --tos_bucket Auto \
+  --runtime_name piagent_with_mcp --runtime_apikey_name Auto
 veadk agentkit launch --config-file piagent-mcp-agentkit.yaml --platform linux/amd64
 veadk agentkit status --config-file piagent-mcp-agentkit.yaml
 ```
+
+Move the generated `agentkit.yaml` to `piagent-mcp-agentkit.yaml` if you want
+to follow the commands below. Keep that file local: it can contain runtime IDs,
+account-specific endpoints, and API keys after launch.
 
 Invoke after the runtime is ready:
 

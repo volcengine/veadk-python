@@ -1,0 +1,56 @@
+# syntax is intentionally omitted: VeStack BuildKit may not reach Docker Hub.
+ARG PYTHON_IMAGE=python:3.12-slim
+FROM ${PYTHON_IMAGE}
+ARG VEADK_INSTALL_DEPENDENCIES=1
+
+WORKDIR /app
+COPY . /src/veadk-python
+RUN if [ "${VEADK_INSTALL_DEPENDENCIES}" = "1" ]; then \
+      python -m pip install --no-cache-dir \
+        --find-links=/src/veadk-python/docker/vendor \
+        /src/veadk-python; \
+    else \
+      python -m pip install --no-cache-dir \
+        --find-links=/src/veadk-python/docker/vendor \
+        "agentkit-sdk-python>=0.8.0" \
+        "google-adk==2.2.0" \
+        "mcp==1.26.0" \
+        "aiomysql==0.3.2" \
+        "asyncpg>=0.29.0" \
+        "deprecated==1.2.18" \
+        "pydantic-settings==2.10.1" \
+        "pymysql==1.1.1" \
+        "pypdfium2>=4.30.0" \
+        "python-frontmatter==1.1.0" \
+        "trafilatura>=2.0,<2.1" \
+        "trustedmcp==0.0.5" \
+        "vikingdb-python-sdk>=0.1.3" \
+        "volcengine-python-sdk>=5.0.36" \
+        "wrapt==1.17.2" \
+      && python -m pip install --no-cache-dir --no-deps \
+        "litellm==1.83.14" \
+      && python -m pip install --no-cache-dir --no-deps \
+        /src/veadk-python/docker/vendor/fastmcp_slim-*.whl \
+        /src/veadk-python/docker/vendor/fastmcp-*.whl \
+      && python -m pip install --no-cache-dir --no-deps \
+        /src/veadk-python/docker/vendor/openviking_sdk-*.whl \
+        /src/veadk-python; \
+    fi \
+    && rm -rf /src/veadk-python
+
+COPY docker/vestack-entrypoint.sh /app/run.sh
+RUN chmod 0755 /app/run.sh
+
+ENV PYTHONUNBUFFERED=1 \
+    CLOUD_PROVIDER=volcengine \
+    AGENTKIT_CLOUD_PROVIDER=volcengine \
+    VOLCENGINE_AGENTKIT_HOST=top.vestack.cloud \
+    VOLCENGINE_AGENTKIT_SCHEME=http \
+    VOLCENGINE_AGENTKIT_REGION=cn-bj \
+    VOLCENGINE_AGENTKIT_SERVICE=agentkit
+
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ping', timeout=3)" || exit 1
+
+ENTRYPOINT ["/app/run.sh"]

@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import base64
 import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import ANY
+from unittest.mock import ANY, Mock
 
 import httpx
 import pytest
@@ -36,6 +37,84 @@ from veadk.cli.studio_update import (
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
 _PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+
+
+@pytest.fixture(autouse=True)
+def _clear_provider_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.package_supports_identity_roles",
+        lambda path: True,
+    )
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.prepare_identity_roles",
+        lambda **kwargs: {
+            "VEADK_STUDIO_IDENTITY_ROLES": "1",
+            "VEADK_STUDIO_ADMINS": "",
+            "VEADK_STUDIO_DEVELOPERS": "",
+            "VEADK_STUDIO_SUPER_ADMIN": "",
+        },
+    )
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("REGION", raising=False)
+    monkeypatch.delenv("BYTEPLUS_REGION", raising=False)
+    monkeypatch.delenv("BYTEPLUS_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SESSION_TOKEN", raising=False)
+    monkeypatch.delenv("VOLCENGINE_SESSION_TOKEN", raising=False)
+    monkeypatch.delenv("VOLC_SESSIONTOKEN", raising=False)
+    for key in (
+        "VEADK_GITHUB_APP_ID",
+        "VEADK_GITHUB_APP_SLUG",
+        "VEADK_GITHUB_APP_PRIVATE_KEY",
+        "VEADK_GITHUB_APP_PRIVATE_KEY_B64",
+        "VEADK_GITHUB_APP_PRIVATE_KEY_PATH",
+        "VEADK_GITHUB_APP_WEBHOOK_SECRET",
+        "VEADK_GITHUB_APP_REVIEW_OWNER_ID",
+        "VEADK_GITHUB_APP_REVIEW_CREATOR",
+        "VEADK_GITLAB_BASE_URL",
+        "VEADK_GITLAB_WEBHOOK_SECRET",
+        "VEADK_GITLAB_OAUTH_CLIENT_ID",
+        "VEADK_GITLAB_OAUTH_CLIENT_SECRET",
+        "VEADK_GITLAB_OAUTH_REDIRECT_URI",
+        "VEADK_GITLAB_GROUP_ID_OR_PATH",
+        "VEADK_GITLAB_REVIEW_OWNER_ID",
+        "VEADK_GITLAB_REVIEW_CREATOR",
+        "VEADK_STUDIO_PUBLIC_BASE_URL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture
+def scheduler_deploy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[dict[str, object]]:
+    calls: list[dict[str, object]] = []
+
+    def _deploy(service: object, **kwargs: object) -> tuple[str, str, str, str, str]:
+        environment_overrides = kwargs.get("environment_overrides")
+        calls.append(
+            {
+                "service": service,
+                **kwargs,
+                "environment_overrides": dict(
+                    cast(dict[str, object], environment_overrides)
+                ),
+            }
+        )
+        return (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+            "studio-app",
+        )
+
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.deploy_scheduler_for_studio_update",
+        _deploy,
+    )
+    return calls
 
 
 def _target(
@@ -62,6 +141,7 @@ def test_build_frontend_assets_runs_clean_install_and_production_build(
     frontend_root = source_root / "frontend"
     frontend_root.mkdir(parents=True)
     (source_root / "pyproject.toml").write_text("", encoding="utf-8")
+    (source_root / "uv.lock").write_text("", encoding="utf-8")
     (source_root / "README.md").write_text("", encoding="utf-8")
     (source_root / "LICENSE").write_text("", encoding="utf-8")
     (frontend_root / "package.json").write_text("{}", encoding="utf-8")
@@ -97,6 +177,10 @@ def test_stage_wheel_source_includes_studio_python_backend(tmp_path: Path) -> No
     source_root = tmp_path / "source"
     (source_root / "veadk").mkdir(parents=True)
     (source_root / "veadk" / "__init__.py").write_text("", encoding="utf-8")
+    (source_root / "veadk" / "future_runtime").mkdir()
+    (source_root / "veadk" / "future_runtime" / "handler.py").write_text(
+        "HANDLER = True\n", encoding="utf-8"
+    )
     (source_root / "frontend" / "server").mkdir(parents=True)
     (source_root / "frontend" / "__init__.py").write_text("", encoding="utf-8")
     (source_root / "frontend" / "server" / "__init__.py").write_text(
@@ -104,6 +188,26 @@ def test_stage_wheel_source_includes_studio_python_backend(tmp_path: Path) -> No
     )
     (source_root / "frontend" / "server" / "routes.py").write_text(
         "ROUTES = []\n", encoding="utf-8"
+    )
+    (source_root / "frontend" / "future_runtime").mkdir(parents=True)
+    (source_root / "frontend" / "future_runtime" / "__init__.py").write_text(
+        "", encoding="utf-8"
+    )
+    (source_root / "frontend" / "future_runtime" / "handler.py").write_text(
+        "HANDLER = True\n", encoding="utf-8"
+    )
+    (source_root / "frontend" / "service" / "studio_scheduler").mkdir(parents=True)
+    (source_root / "frontend" / "service" / "__init__.py").write_text(
+        "", encoding="utf-8"
+    )
+    release_server = source_root / "frontend" / "service" / "studio_release_server"
+    release_server.mkdir()
+    (release_server / "__init__.py").write_text("", encoding="utf-8")
+    (
+        source_root / "frontend" / "service" / "studio_scheduler" / "__init__.py"
+    ).write_text("", encoding="utf-8")
+    (source_root / "frontend" / "service" / "studio_scheduler" / "app.py").write_text(
+        "HANDLER = True\n", encoding="utf-8"
     )
     for filename in ("pyproject.toml", "README.md", "LICENSE"):
         (source_root / filename).write_text("", encoding="utf-8")
@@ -118,6 +222,17 @@ def test_stage_wheel_source_includes_studio_python_backend(tmp_path: Path) -> No
     assert (wheel_source / "frontend" / "server" / "routes.py").read_text() == (
         "ROUTES = []\n"
     )
+    assert (
+        wheel_source / "frontend" / "service" / "studio_scheduler" / "app.py"
+    ).read_text() == "HANDLER = True\n"
+    assert (
+        wheel_source / "frontend" / "future_runtime" / "handler.py"
+    ).read_text() == "HANDLER = True\n"
+    assert not (wheel_source / "frontend" / "src").exists()
+    assert (wheel_source / "frontend" / "service" / "studio_release_server").is_dir()
+    assert (
+        wheel_source / "veadk" / "future_runtime" / "handler.py"
+    ).read_text() == "HANDLER = True\n"
 
 
 def test_find_studio_deployments_searches_regions_and_filters_project(
@@ -345,6 +460,7 @@ def test_load_deployed_site_logo_retries_timeout_and_suggests_override(
 def test_studio_update_preserves_branding_and_updates_existing_ids(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
 ) -> None:
     target = _target()
     logo = SiteLogo(content=_PNG, media_type="image/png", extension="png")
@@ -367,9 +483,11 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
         *,
         frontend_assets: Path,
         provider: str,
+        offline_runtime: bool,
     ) -> str:
         captured["frontend"] = (frontend_assets / "index.html").read_text()
         captured["requirements_provider"] = provider
+        captured["offline_runtime"] = offline_runtime
         return "./veadk.whl\n"
 
     def _write_package(
@@ -378,11 +496,13 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
         requirements: str,
         site_logo: SiteLogo | None,
         provider: str = "volcengine",
+        bundle_agentkit_cli: bool = True,
     ) -> None:
         package_dir.mkdir(parents=True, exist_ok=True)
         (package_dir / "run.sh").write_text("run", encoding="utf-8")
         captured["requirements"] = requirements
         captured["logo"] = site_logo
+        captured["bundle_agentkit_cli"] = bundle_agentkit_cli
 
     monkeypatch.setattr(
         "veadk.cli.studio_package.build_frontend_assets", _build_frontend
@@ -412,6 +532,10 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
             "studio-app",
             "--path",
             str(tmp_path),
+            "--harness-sidecar-base-image",
+            "registry.example.com/agentkit/base@sha256:" + "a" * 64,
+            "--harness-sidecar-regions",
+            "cn-beijing",
             "--volcengine-access-key",
             "ak",
             "--volcengine-secret-key",
@@ -422,8 +546,10 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
     assert result.exit_code == 0, result.output
     assert captured["frontend"] == "built"
     assert captured["requirements_provider"] == "volcengine"
+    assert captured["offline_runtime"] is False
     assert captured["requirements"] == "./veadk.whl\n"
     assert captured["logo"] == logo
+    assert captured["bundle_agentkit_cli"] is False
     assert captured["scope"] == {
         "access_key": "ak",
         "secret_key": "sk",
@@ -436,15 +562,370 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
     assert isinstance(update, dict)
     assert update["application_id"] == "app-id"
     assert update["function_id"] == "function-app-id"
+    assert update["disable_gateway_cors"] is True
+    assert update["normalize_studio_entrypoint"] is True
     assert update["environment_overrides"] == {
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
+        "AGENTKIT_SANDBOX_REGION": "cn-beijing",
+        "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
+        "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
+        "VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE": (
+            "registry.example.com/agentkit/base@sha256:" + "a" * 64
+        ),
+    }
+    assert len(scheduler_deploy) == 1
+    scheduler_call = scheduler_deploy[0]
+    assert scheduler_call["service"].__class__ is _FakeVeFaaS
+    assert scheduler_call["studio_function_id"] == "function-app-id"
+    assert scheduler_call["package_root"] == Path(str(update["path"]))
+    assert scheduler_call["provider"] == "volcengine"
+    assert scheduler_call["project"] == "default"
+    assert scheduler_call["environment_overrides"] == {
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
+        "VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE": (
+            "registry.example.com/agentkit/base@sha256:" + "a" * 64
+        ),
     }
+
+
+def test_studio_update_propagates_git_review_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
+) -> None:
+    target = _target()
+    private_key = "-----BEGIN PRIVATE KEY-----\ntest-key\n-----END PRIVATE KEY-----\n"
+    private_key_path = tmp_path / "github-app.pem"
+    private_key_path.write_text(private_key, encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY_PATH", str(private_key_path))
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "github-secret")
+    monkeypatch.setenv("VEADK_GITHUB_APP_REVIEW_OWNER_ID", "github-owner")
+    monkeypatch.setenv("VEADK_GITHUB_APP_REVIEW_CREATOR", "GitHub App")
+    monkeypatch.setenv("VEADK_GITLAB_BASE_URL", "https://gitlab.com")
+    monkeypatch.setenv("VEADK_GITLAB_WEBHOOK_SECRET", "gitlab-secret")
+    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_ID", "gitlab-client-id")
+    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_SECRET", "gitlab-client-secret")
+    monkeypatch.setenv(
+        "VEADK_GITLAB_OAUTH_REDIRECT_URI",
+        "https://studio.example.com/web/gitlab/oauth/callback",
+    )
+    monkeypatch.setenv("VEADK_GITLAB_GROUP_ID_OR_PATH", "example-group")
+    monkeypatch.setenv("VEADK_STUDIO_PUBLIC_BASE_URL", "https://studio.example.com")
+
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.find_studio_deployments", lambda **_: [target]
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.load_deployed_site_logo", lambda _: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_frontend_assets", lambda *_: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_local_studio_requirements",
+        lambda *_a, **_k: "./veadk.whl\n",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.write_studio_package", lambda *_a, **_k: None
+    )
+
+    class _FakeVeFaaS:
+        def __init__(self, **_: str) -> None:
+            pass
+
+        def update_application_code_bundle(self, **kwargs: object) -> str:
+            captured["update"] = kwargs
+            return target.url
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _FakeVeFaaS)
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "update",
+            "--vefaas-app-name",
+            "studio-app",
+            "--path",
+            str(tmp_path),
+            "--volcengine-access-key",
+            "ak",
+            "--volcengine-secret-key",
+            "sk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    update = cast(dict[str, object], captured["update"])
+    overrides = cast(dict[str, str], update["environment_overrides"])
+    assert overrides["VEADK_GITHUB_APP_ID"] == "4830047"
+    assert overrides["VEADK_GITHUB_APP_SLUG"] == "agentkit-veadk-studio"
+    assert overrides["VEADK_GITHUB_APP_WEBHOOK_SECRET"] == "github-secret"
+    assert overrides["VEADK_GITHUB_APP_REVIEW_OWNER_ID"] == "github-owner"
+    assert overrides["VEADK_GITHUB_APP_REVIEW_CREATOR"] == "GitHub App"
+    assert overrides["VEADK_GITHUB_APP_PRIVATE_KEY_B64"] == (
+        base64.b64encode(private_key.encode("utf-8")).decode("ascii")
+    )
+    assert "VEADK_GITHUB_APP_PRIVATE_KEY_PATH" not in overrides
+    assert "VEADK_GITHUB_APP_PRIVATE_KEY" not in overrides
+    assert overrides["VEADK_GITLAB_BASE_URL"] == "https://gitlab.com"
+    assert overrides["VEADK_GITLAB_WEBHOOK_SECRET"] == "gitlab-secret"
+    assert overrides["VEADK_GITLAB_OAUTH_CLIENT_ID"] == "gitlab-client-id"
+    assert overrides["VEADK_GITLAB_OAUTH_CLIENT_SECRET"] == "gitlab-client-secret"
+    assert (
+        overrides["VEADK_GITLAB_OAUTH_REDIRECT_URI"]
+        == "https://studio.example.com/web/gitlab/oauth/callback"
+    )
+    assert overrides["VEADK_GITLAB_GROUP_ID_OR_PATH"] == "example-group"
+    assert overrides["VEADK_STUDIO_PUBLIC_BASE_URL"] == "https://studio.example.com"
+
+    scheduler_overrides = cast(
+        dict[str, str], scheduler_deploy[0]["environment_overrides"]
+    )
+    assert scheduler_overrides["VEADK_GITHUB_APP_ID"] == "4830047"
+    assert scheduler_overrides["VEADK_GITLAB_OAUTH_CLIENT_ID"] == "gitlab-client-id"
+
+
+def test_studio_update_can_skip_cronjob_scheduler(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
+) -> None:
+    target = _target()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.find_studio_deployments", lambda **_: [target]
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.load_deployed_site_logo", lambda _: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_frontend_assets", lambda *_: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_local_studio_requirements",
+        lambda *_a, **_k: "./veadk.whl\n",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.write_studio_package", lambda *_a, **_k: None
+    )
+
+    class _FakeVeFaaS:
+        def __init__(self, **_: str) -> None:
+            pass
+
+        def update_application_code_bundle(self, **kwargs: object) -> str:
+            captured["update"] = kwargs
+            return target.url
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _FakeVeFaaS)
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "update",
+            "--vefaas-app-name",
+            "studio-app",
+            "--path",
+            str(tmp_path),
+            "--skip-cronjob-scheduler",
+            "--volcengine-access-key",
+            "ak",
+            "--volcengine-secret-key",
+            "sk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Skipping the Studio cronjob scheduler update." in result.output
+    assert scheduler_deploy == []
+    update = cast(dict[str, object], captured["update"])
+    overrides = cast(dict[str, str], update["environment_overrides"])
+    assert update["application_id"] == "app-id"
+    assert update["function_id"] == "function-app-id"
+    assert "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE" not in overrides
+
+
+def test_studio_update_inherits_sidecar_configuration_before_packaging(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
+) -> None:
+    target = _target(region="cn-shanghai")
+    image = "registry.example.com/agentkit/base@sha256:" + "f" * 64
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.find_studio_deployments", lambda **_: [target]
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.load_deployed_site_logo", lambda _: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_frontend_assets", lambda *_: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_local_studio_requirements",
+        lambda *_a, **_k: "./veadk.whl\n",
+    )
+
+    def _write_package(*_args: object, **_kwargs: object) -> None:
+        captured["write_package_called"] = True
+
+    monkeypatch.setattr("veadk.cli.studio_package.write_studio_package", _write_package)
+    monkeypatch.setattr(
+        "veadk.cli.frontend_deploy_iam.ensure_default_frontend_role_policy",
+        lambda *_a, **_k: False,
+    )
+
+    class _FakeVeFaaS:
+        def __init__(self, **_: str) -> None:
+            self.client = SimpleNamespace(
+                get_function=lambda _request: SimpleNamespace(
+                    role="",
+                    envs=[
+                        SimpleNamespace(
+                            key="VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE",
+                            value=image,
+                        ),
+                        SimpleNamespace(
+                            key="VEADK_STUDIO_HARNESS_SIDECAR_REGIONS",
+                            value="cn-shanghai",
+                        ),
+                        SimpleNamespace(
+                            key="SANDBOX_CHAT_CODEX_SNAPSHOT", value="codex-snapshot"
+                        ),
+                        SimpleNamespace(
+                            key="SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
+                            value="openclaw-snapshot",
+                        ),
+                        SimpleNamespace(
+                            key="SANDBOX_CHAT_HERMES_SNAPSHOT",
+                            value="hermes-snapshot",
+                        ),
+                    ],
+                )
+            )
+
+        def update_application_code_bundle(self, **kwargs: object) -> str:
+            captured["update"] = kwargs
+            return target.url
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _FakeVeFaaS)
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "update",
+            "--vefaas-app-name",
+            "studio-app",
+            "--path",
+            str(tmp_path),
+            "--volcengine-access-key",
+            "ak",
+            "--volcengine-secret-key",
+            "sk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["write_package_called"] is True
+    update = cast(dict[str, object], captured["update"])
+    overrides = cast(dict[str, str], update["environment_overrides"])
+    assert overrides["VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE"] == image
+    assert "VEADK_STUDIO_HARNESS_SIDECAR_REGIONS" not in overrides
+    assert len(scheduler_deploy) == 1
+
+
+def test_studio_update_ignores_legacy_region_without_image_override(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
+) -> None:
+    target = _target(region="cn-shanghai")
+    built: list[bool] = []
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.find_studio_deployments", lambda **_: [target]
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_frontend_assets",
+        lambda *_: built.append(True),
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_local_studio_requirements",
+        lambda *_a, **_k: "./veadk.whl\n",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.write_studio_package", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_update.load_deployed_site_logo", lambda _: None
+    )
+    monkeypatch.setattr(
+        "veadk.cli.frontend_deploy_iam.ensure_default_frontend_role_policy",
+        lambda *_a, **_k: False,
+    )
+
+    class _FakeVeFaaS:
+        def __init__(self, **_: str) -> None:
+            self.client = SimpleNamespace(
+                get_function=lambda _request: SimpleNamespace(
+                    role="",
+                    envs=[
+                        SimpleNamespace(
+                            key="VEADK_STUDIO_HARNESS_SIDECAR_REGIONS",
+                            value="cn-shanghai",
+                        ),
+                        SimpleNamespace(
+                            key="SANDBOX_CHAT_CODEX_SNAPSHOT",
+                            value="codex-snapshot",
+                        ),
+                        SimpleNamespace(
+                            key="SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
+                            value="openclaw-snapshot",
+                        ),
+                        SimpleNamespace(
+                            key="SANDBOX_CHAT_HERMES_SNAPSHOT",
+                            value="hermes-snapshot",
+                        ),
+                    ],
+                )
+            )
+
+        def update_application_code_bundle(self, **_: object) -> str:
+            return target.url
+
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _FakeVeFaaS)
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "update",
+            "--vefaas-app-name",
+            "studio-app",
+            "--path",
+            str(tmp_path),
+            "--volcengine-access-key",
+            "ak",
+            "--volcengine-secret-key",
+            "sk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert built == [True]
+    assert len(scheduler_deploy) == 1
 
 
 def test_studio_update_supports_byteplus_provider(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
 ) -> None:
     target = _target(region="ap-southeast-1")
     captured: dict[str, object] = {}
@@ -469,8 +950,10 @@ def test_studio_update_supports_byteplus_provider(
         *,
         frontend_assets: Path,
         provider: str,
+        offline_runtime: bool,
     ) -> str:
         captured["requirements_provider"] = provider
+        captured["offline_runtime"] = offline_runtime
         package_dir.mkdir(parents=True, exist_ok=True)
         return "./veadk.whl\n./pydantic.whl\n"
 
@@ -485,13 +968,18 @@ def test_studio_update_supports_byteplus_provider(
         requirements: str,
         site_logo: SiteLogo | None,
         provider: str,
+        bundle_agentkit_cli: bool,
     ) -> None:
         from veadk.cli.studio_package import studio_run_script
 
         captured["package_requirements"] = requirements
         captured["package_logo"] = site_logo
         captured["package_provider"] = provider
-        run_script = studio_run_script(provider=provider)  # type: ignore[arg-type]
+        captured["bundle_agentkit_cli"] = bundle_agentkit_cli
+        run_script = studio_run_script(
+            provider=provider,  # type: ignore[arg-type]
+            bundle_agentkit_cli=bundle_agentkit_cli,
+        )
         captured["run_script"] = run_script
         package_dir.mkdir(parents=True, exist_ok=True)
         (package_dir / "run.sh").write_text(run_script, encoding="utf-8")
@@ -529,8 +1017,12 @@ def test_studio_update_supports_byteplus_provider(
 
     assert result.exit_code == 0, result.output
     assert captured["requirements_provider"] == "byteplus"
+    assert captured["offline_runtime"] is False
     assert captured["package_provider"] == "byteplus"
-    assert captured["package_requirements"] == "./veadk.whl\n./pydantic.whl\n"
+    assert captured["bundle_agentkit_cli"] is False
+    assert captured["package_requirements"] == (
+        "--extra-index-url https://pypi.org/simple\n./veadk.whl\n./pydantic.whl\n"
+    )
     update = captured["update"]
     assert isinstance(update, dict)
     run_script = str(captured["run_script"])
@@ -554,13 +1046,16 @@ def test_studio_update_supports_byteplus_provider(
         "provider": "byteplus",
     }
     assert update["environment_overrides"] == {
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "ap-southeast-1",
         "CLOUD_PROVIDER": "byteplus",
         "AGENTKIT_CLOUD_PROVIDER": "byteplus",
         "BYTEPLUS_REGION": "ap-southeast-1",
         "DATABASE_VIKING_REGION": "cn-hongkong",
+        "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
     }
+    assert len(scheduler_deploy) == 1
 
 
 def test_studio_update_rejects_ambiguous_name_before_build(
@@ -665,6 +1160,7 @@ def test_studio_update_surfaces_compact_discovery_error(
 def test_studio_update_explicit_branding_overrides_cloud_values(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
 ) -> None:
     target = _target()
     logo_path = tmp_path / "logo.png"
@@ -697,6 +1193,7 @@ def test_studio_update_explicit_branding_overrides_cloud_values(
         requirements: str,
         site_logo: SiteLogo | None,
         provider: str = "volcengine",
+        bundle_agentkit_cli: bool = True,
     ) -> None:
         package_dir.mkdir(parents=True, exist_ok=True)
         captured["logo"] = site_logo
@@ -747,15 +1244,19 @@ def test_studio_update_explicit_branding_overrides_cloud_values(
     update = captured["update"]
     assert isinstance(update, dict)
     assert update["environment_overrides"] == {
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_SITE_TITLE": "新标题",
+        "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
     }
+    assert len(scheduler_deploy) == 1
 
 
 def test_studio_update_only_overrides_explicit_sandbox_tool_id(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
 ) -> None:
     target = _target()
     captured: dict[str, object] = {}
@@ -813,19 +1314,23 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
 
     assert result.exit_code == 0, result.output
     assert captured["environment_overrides"] == {
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "SANDBOX_CHAT_CODEX": "chat-tool-new",
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "chat-snapshot-tool-new",
         "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool-new",
         "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool-new",
         "SANDBOX_DEV": "dev-tool-new",
+        "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
     }
+    assert len(scheduler_deploy) == 1
 
 
 def test_volcengine_studio_update_repairs_missing_snapshot_tools_and_oauth_callback(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    scheduler_deploy: list[dict[str, object]],
 ) -> None:
     target = _target()
     captured: dict[str, object] = {}
@@ -878,8 +1383,9 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools_and_oauth_callb
     )
     monkeypatch.setattr(
         "veadk.cli.frontend_deploy_iam.ensure_default_frontend_role_policy",
-        lambda role, **kwargs: role_policy_syncs.append({"role": role, **kwargs})
-        or True,
+        lambda role, **kwargs: (
+            role_policy_syncs.append({"role": role, **kwargs}) or True
+        ),
     )
 
     class _FakeIdentityClient:
@@ -964,7 +1470,15 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools_and_oauth_callb
             "web_origin": "https://studio.example.com",
             "dismiss_login_page_enabled": False,
             "skip_consent_enabled": True,
-        }
+        },
+        {
+            "user_pool_uid": "legacy-user-pool",
+            "client_uid": "legacy-user-pool-client",
+            "callback_url": "https://studio.example.com/oauth/callback",
+            "web_origin": "https://studio.example.com",
+            "dismiss_login_page_enabled": False,
+            "skip_consent_enabled": True,
+        },
     ]
     assert len(code_tools) == 1
     assert code_tools[0]["enable_snapshot"] is True
@@ -978,6 +1492,11 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools_and_oauth_callb
     assert {str(call["provider"]) for call in agent_credentials} == {"volcengine"}
     overrides = captured["environment_overrides"]
     assert overrides == {
+        "VEADK_STUDIO_IDENTITY_ROLES": "1",
+        "VEADK_STUDIO_SUPER_ADMIN": "",
+        "VEADK_STUDIO_ADMINS": "",
+        "VEADK_STUDIO_DEVELOPERS": "",
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_STUDIO_DEPLOY_ID": "stddep_update",
         "VEADK_STUDIO_USER_POOL_ID": "legacy-user-pool",
@@ -986,12 +1505,15 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools_and_oauth_callb
         "VEADK_STUDIO_DEPLOY_REGION": "cn-beijing",
         "VEADK_STUDIO_PROJECT": "default",
         "VEADK_STUDIO_ACCOUNT_ID": "123",
+        "VEADK_STUDIO_ACCOUNT_ID_RESOLUTION_ERROR": "",
         "OAUTH2_REDIRECT_URI": "https://studio.example.com/oauth2/callback",
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",
         "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool",
         "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool",
+        "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
     }
+    assert len(scheduler_deploy) == 1
 
 
 @pytest.mark.parametrize("dev_tool_id", [None, "replacement-dev-tool"])
@@ -999,6 +1521,7 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     dev_tool_id: str | None,
+    scheduler_deploy: list[dict[str, object]],
 ) -> None:
     target = _target(region="ap-southeast-1")
     captured: dict[str, object] = {}
@@ -1053,8 +1576,9 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     )
     monkeypatch.setattr(
         "veadk.cli.frontend_deploy_iam.ensure_default_frontend_role_policy",
-        lambda role, **kwargs: role_policy_syncs.append({"role": role, **kwargs})
-        or True,
+        lambda role, **kwargs: (
+            role_policy_syncs.append({"role": role, **kwargs}) or True
+        ),
     )
 
     class _FakeVeFaaS:
@@ -1135,6 +1659,8 @@ def test_byteplus_studio_update_repairs_missing_sandbox_tools(
     assert overrides["SANDBOX_DEV"] == expected_dev_tool_id
     assert overrides["CLOUD_PROVIDER"] == "byteplus"
     assert overrides["VEADK_STUDIO_ACCOUNT_ID"] == "3001037806"
+    assert overrides["VEADK_STUDIO_CRONJOB_SCHEDULER_BASE"] == "studio-app"
+    assert len(scheduler_deploy) == 1
 
 
 def test_update_application_code_bundle_merges_only_explicit_environment(
@@ -1142,25 +1668,32 @@ def test_update_application_code_bundle_merges_only_explicit_environment(
     tmp_path: Path,
 ) -> None:
     updated_requests: list[Any] = []
+    resource_requests: list[Any] = []
     service = object.__new__(VeFaaS)
     service.session_token = ""
     cast(Any, service).client = SimpleNamespace(
         get_function=lambda _: SimpleNamespace(
+            command="./run.sh",
             envs=[
                 SimpleNamespace(key="EXISTING", value="kept"),
                 SimpleNamespace(key="VEADK_SITE_TITLE", value="old"),
-            ]
+            ],
         ),
         update_function=updated_requests.append,
+        update_function_resource=resource_requests.append,
     )
     monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
     monkeypatch.setattr(service, "_release_application", lambda _: "https://same")
+    ensure_route = Mock()
+    monkeypatch.setattr(service, "ensure_application_route_methods", ensure_route)
 
     url = service.update_application_code_bundle(
         application_id="app-id",
         function_id="function-id",
         path=str(tmp_path),
         environment_overrides={"VEADK_SITE_TITLE": "新标题"},
+        disable_gateway_cors=True,
+        normalize_studio_entrypoint=True,
     )
 
     assert url == "https://same"
@@ -1170,6 +1703,97 @@ def test_update_application_code_bundle_merges_only_explicit_environment(
         "EXISTING": "kept",
         "VEADK_SITE_TITLE": "新标题",
     }
+    assert request.command == "bash ./run.sh"
+    resource_request = resource_requests[0]
+    assert resource_request.function_id == "function-id"
+    assert resource_request.min_instance == 1
+    assert resource_request.max_instance is None
+    assert resource_request.reserved_frozen_instance is None
+    ensure_route.assert_called_once_with("app-id", disable_cors=True)
+
+
+def test_submit_application_code_bundle_sets_only_minimum_instance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    updated_requests: list[Any] = []
+    resource_requests: list[Any] = []
+    releases: list[str] = []
+    service = object.__new__(VeFaaS)
+    cast(Any, service).client = SimpleNamespace(
+        update_function=updated_requests.append,
+        update_function_resource=resource_requests.append,
+    )
+    monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
+    monkeypatch.setattr(service, "_start_application_release", releases.append)
+
+    service.submit_application_code_bundle_update(
+        application_id="app-id",
+        function_id="function-id",
+        path=str(tmp_path),
+    )
+
+    assert updated_requests[0].id == "function-id"
+    resource_request = resource_requests[0]
+    assert resource_request.function_id == "function-id"
+    assert resource_request.min_instance == 1
+    assert resource_request.max_instance is None
+    assert resource_request.reserved_frozen_instance is None
+    assert releases == ["app-id"]
+
+
+def test_submit_application_code_bundle_stops_without_resource_permission(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    releases: list[str] = []
+    service = object.__new__(VeFaaS)
+
+    def _permission_denied(_: Any) -> None:
+        raise RuntimeError("AccessDenied: vefaas:UpdateFunctionResource")
+
+    cast(Any, service).client = SimpleNamespace(
+        update_function=lambda _: None,
+        update_function_resource=_permission_denied,
+    )
+    monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
+    monkeypatch.setattr(service, "_start_application_release", releases.append)
+
+    with pytest.raises(RuntimeError, match="UpdateFunctionResource"):
+        service.submit_application_code_bundle_update(
+            application_id="app-id",
+            function_id="function-id",
+            path=str(tmp_path),
+        )
+
+    assert releases == []
+
+
+def test_submit_application_code_bundle_stops_on_other_resource_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    releases: list[str] = []
+    service = object.__new__(VeFaaS)
+
+    def _invalid_operation(_: Any) -> None:
+        raise RuntimeError("InvalidOperation")
+
+    cast(Any, service).client = SimpleNamespace(
+        update_function=lambda _: None,
+        update_function_resource=_invalid_operation,
+    )
+    monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
+    monkeypatch.setattr(service, "_start_application_release", releases.append)
+
+    with pytest.raises(RuntimeError, match="InvalidOperation"):
+        service.submit_application_code_bundle_update(
+            application_id="app-id",
+            function_id="function-id",
+            path=str(tmp_path),
+        )
+
+    assert releases == []
 
 
 def test_application_operations_use_deployment_region(
@@ -1430,11 +2054,135 @@ def test_release_failure_includes_status_when_logs_are_empty(
         service._release_application("application-id")
 
     message = str(exc.value)
-    assert "No application revision logs were returned" in message
-    assert "Application status response" in message
+    assert "控制面日志" in message
+    assert "未返回控制面日志。" in message
+    assert "FaaS 数据面日志" in message
+    assert "未发现可下载的 FaaS 数据面日志链接。" in message
+    assert "最终 VeFaaS 状态" in message
     assert "runtime start failed" in message
     assert "sensitive-token-value" not in message
     assert "******" in message
+
+
+def test_release_failure_downloads_linked_log_before_redaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = object.__new__(VeFaaS)
+    raw_url = (
+        "https://cp-v2.tos-cn-beijing.volces.com/v2/log/step-c4183.log"
+        "?X-Tos-Credential=TEST_CREDENTIAL"
+        "&X-Tos-Signature=be37d28bd7cf12e90dbb886729bd3a698d58996ec686745321dd"
+    )
+    downloaded_urls: list[str] = []
+
+    monkeypatch.setattr(
+        service,
+        "_start_application_release",
+        lambda _app_id: {"Result": {"RevisionNumber": 9}},
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_application_status",
+        lambda _app_id: (
+            "deploy_fail",
+            {
+                "Result": {
+                    "Status": "deploy_fail",
+                    "NewRevisionNumber": 9,
+                    "ApiKey": "sensitive-token-value",
+                }
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_application_logs",
+        lambda **_kwargs: [
+            "[function][mldo3uis][install][Error] 在线依赖安装失败",
+            f"[function][mldo3uis][install][Extra] {raw_url}",
+        ],
+    )
+
+    def _download(url: str) -> str:
+        downloaded_urls.append(url)
+        return "pip install failed: token=raw-token-secret\nmissing distribution"
+
+    monkeypatch.setattr(
+        "veadk.integrations.ve_faas.ve_faas._download_release_log_url",
+        _download,
+    )
+
+    with pytest.raises(Exception) as exc:
+        service._release_application("application-id")
+
+    message = str(exc.value)
+    assert downloaded_urls == [raw_url]
+    assert "控制面日志" in message
+    assert "FaaS 数据面日志" in message
+    assert "[1] FaaS 数据面日志" in message
+    assert "来源:" in message
+    assert "内容:" in message
+    assert "pip install failed" in message
+    assert "missing distribution" in message
+    assert "step-c4183.log" in message
+    assert raw_url not in message
+    assert "raw-token-secret" not in message
+    assert "sensitive-token-value" not in message
+    assert "be37d28bd7cf12e90" not in message
+
+
+def test_release_failure_uses_byteplus_labels_for_linked_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = object.__new__(VeFaaS)
+    cast(Any, service).provider = "byteplus"
+    raw_url = (
+        "https://cp-v2.tos-cn-beijing.volces.com/v2/log/step-c4183.log"
+        "?X-Tos-Credential=TEST_CREDENTIAL"
+        "&X-Tos-Signature=be37d28bd7cf12e90dbb886729bd3a698d58996ec686745321dd"
+    )
+
+    monkeypatch.setattr(
+        service,
+        "_start_application_release",
+        lambda _app_id: {"Result": {"RevisionNumber": 9}},
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_application_status",
+        lambda _app_id: (
+            "deploy_fail",
+            {
+                "Result": {
+                    "Status": "deploy_fail",
+                    "NewRevisionNumber": 9,
+                    "ApiKey": "sensitive-token-value",
+                }
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_application_logs",
+        lambda **_kwargs: [f"[function][mldo3uis][install][Extra] {raw_url}"],
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_faas.ve_faas._download_release_log_url",
+        lambda _url: "pip install failed: token=raw-token-secret",
+    )
+
+    with pytest.raises(Exception) as exc:
+        service._release_application("application-id")
+
+    message = str(exc.value)
+    assert "Release application failed. Details:" in message
+    assert "Control Plane Logs" in message
+    assert "FaaS Data Plane Logs" in message
+    assert "Final VeFaaS Status" in message
+    assert "step-c4183.log" in message
+    assert raw_url not in message
+    assert "raw-token-secret" not in message
+    assert "sensitive-token-value" not in message
 
 
 def test_update_application_code_bundle_preserves_unspecified_sandbox_tool(
@@ -1452,6 +2200,7 @@ def test_update_application_code_bundle_preserves_unspecified_sandbox_tool(
             ]
         ),
         update_function=updated_requests.append,
+        update_function_resource=lambda _: None,
     )
     monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
     monkeypatch.setattr(service, "_release_application", lambda _: "https://same")
@@ -1480,6 +2229,7 @@ def test_update_application_code_bundle_does_not_read_or_replace_environment(
     cast(Any, service).client = SimpleNamespace(
         get_function=lambda _: pytest.fail("environment should not be read"),
         update_function=updated_requests.append,
+        update_function_resource=lambda _: None,
     )
     monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
     monkeypatch.setattr(service, "_release_application", lambda _: "https://same")
@@ -1494,3 +2244,61 @@ def test_update_application_code_bundle_does_not_read_or_replace_environment(
     assert request.id == "function-id"
     assert request.envs is None
     assert request.request_timeout is None
+
+
+def test_studio_update_preserves_custom_function_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    updated_requests: list[Any] = []
+    service = object.__new__(VeFaaS)
+    service.session_token = ""
+    cast(Any, service).client = SimpleNamespace(
+        get_function=lambda _: SimpleNamespace(
+            command="python3 custom_server.py",
+            envs=[],
+        ),
+        update_function=updated_requests.append,
+        update_function_resource=lambda _: None,
+    )
+    monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
+    monkeypatch.setattr(service, "_release_application", lambda _: "https://same")
+
+    service.update_application_code_bundle(
+        application_id="app-id",
+        function_id="function-id",
+        path=str(tmp_path),
+        environment_overrides={"VEADK_STUDIO_RELEASE_VERSION": "next"},
+        normalize_studio_entrypoint=True,
+    )
+
+    request = updated_requests[0]
+    assert request.command is None
+
+
+def test_native_python_function_uses_mode_independent_bundle_entrypoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    requests: list[Any] = []
+    service = object.__new__(VeFaaS)
+    service.project_name = "default"
+    cast(Any, service).client = SimpleNamespace(
+        create_function=lambda request: (
+            requests.append(request)
+            or SimpleNamespace(id="function-id", project_name="default")
+        )
+    )
+    monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
+
+    service._create_function("studio-fn", str(tmp_path))
+
+    assert requests[0].command == "bash ./run.sh"
+
+
+@pytest.fixture(autouse=True)
+def _workspace_tool_provisioning(monkeypatch):
+    monkeypatch.setattr(
+        "frontend.server.workspace_tool.provision_workspace_tool",
+        lambda **kwargs: "studio-workspace-tool",
+    )

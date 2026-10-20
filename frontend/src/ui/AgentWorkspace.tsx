@@ -6,6 +6,7 @@ import {
   type DragEvent,
   type ReactNode,
 } from "react";
+import type { TFunction } from "i18next";
 import {
   ArrowRight,
   Check,
@@ -20,23 +21,38 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
+import { Alert } from "@openai/apps-sdk-ui/components/Alert";
+import { Button } from "@openai/apps-sdk-ui/components/Button";
+import { useTranslation } from "react-i18next";
 import {
   deleteAgentFeedbackCases,
+  createGithubDeliveryRollbackPr,
   getCachedAgentFeedbackCases,
   getCachedRuntimeAgentInfo,
   getCachedRuntimeDetail,
+  getCachedRuntimeUpdateCapability,
   getAgentUsage,
   getAgentFeedbackCases,
   getAgentOptimizations,
+  getGithubDeliveryVersions,
+  getMpaAgentDeletePreview,
+  getMpaAgentView,
+  getMpaProfileStatus,
+  getMpaRuntimeConsoleRuns,
+  getMpaRuntimeConsoleTrace,
+  getMpaSessionExecutionConfig,
   getRuntimeAgentInfo,
   getRuntimeDetail,
   getRuntimeUpdateCapability,
+  mpaProfileFromAgentDraft,
+  patchMpaSessionExecutionConfig,
   probeRuntimeA2a,
   probeRuntimeApps,
-  prefetchAgentFeedbackCases,
   prefetchRuntimeAgentInfo,
   prefetchRuntimeDetail,
   revealRuntimeApiKey,
+  startMpaAgentOperation,
+  upgradeMpaSessionProfile,
   type AgentFeedbackCasesResponse,
   type AgentFeedbackCase,
   type AgentFeedbackSource,
@@ -47,24 +63,48 @@ import {
   type AgentOptimizationModule,
   type AgentOptimizationPriority,
   type AgentUsageResponse,
+  type GithubDeliveryVersionsResult,
+  type GithubDeliveryVersion,
+  MpaExecutionConfigRequestError,
+  type MpaAgentDeletePreview,
+  type MpaAgentView,
+  type MpaExecutionConfigMode,
+  type MpaProfilePayload,
+  type MpaProfileStatus,
+  type MpaRuntimeConsoleRun,
+  type MpaRuntimeTraceResponse,
+  type MpaSessionExecutionConfig,
   type RuntimeA2aIntegration,
   RuntimeProbeError,
   type RuntimeDetail,
   type RuntimeUpdateCapability,
 } from "../adk/client";
 import type { AgentEntry } from "../adk/connections";
+import { localizeDeployStageMessage } from "../adk/deploymentI18n";
 import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
-import { emptyDraft, type AgentDraft } from "../create/types";
+import {
+  modelNameFromRuntime,
+  runtimeAgentDraftFromCloud,
+} from "../create/runtimeModelName";
+import {
+  HARNESS_SIDECAR_OPTION_IDS,
+  harnessIntentFromRuntimeEnvs,
+  harnessSidecarOptionLabel,
+  harnessSidecarProfileLabel,
+} from "../create/harnessSidecarOptions";
+import type { AgentDraft } from "../create/types";
 import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
+import { localeCompatibleBackendText } from "../i18n/locales";
 import type { DeploymentTaskUpdate } from "./ProjectPreview";
 import { Markdown } from "./Markdown";
+import { ResourceDetailLayout } from "./ResourceCollection";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import "./AgentWorkspace.css";
 
 type WorkspaceView = "library" | "evaluation";
-type AgentSection = "basic" | "usage" | "evaluations" | "optimizations" | "integrations";
+type AgentSection = "basic" | "profileConfig" | "sessionConfig" | "usage" | "diagnostics" | "evaluations" | "optimizations" | "integrations" | "versions";
 type IntegrationProtocol = "api-server" | "a2a";
 type EvaluationSection = "config" | "history";
 type CaseKind = "good" | "bad";
@@ -73,27 +113,33 @@ type OptimizationModule = AgentOptimizationModule;
 
 type AgentCase = AgentFeedbackCase & { tag?: string };
 type OptimizationGroup = AgentOptimizationGroup;
+type AgentCategory = "general" | "mpa";
 type DeleteConfirmTarget =
   | {
       kind: "selection";
       title: string;
-      description: string;
+      description: ReactNode;
       confirmLabel: string;
+      canConfirm?: boolean;
       agents: AgentEntry[];
       drafts: WorkspaceAgentDraft[];
     }
   | {
       kind: "agent";
       title: string;
-      description: string;
+      description: ReactNode;
       confirmLabel: string;
+      canConfirm?: boolean;
       agent: AgentEntry;
+      previewLoading?: boolean;
+      previewFailed?: boolean;
     }
   | {
       kind: "draft";
       title: string;
-      description: string;
+      description: ReactNode;
       confirmLabel: string;
+      canConfirm?: boolean;
       draft: WorkspaceAgentDraft;
     };
 
@@ -115,96 +161,98 @@ interface EvaluationGroup {
   history: EvaluationRun[];
 }
 
-const DEFAULT_CASES: AgentCase[] = [
-  {
-    id: "case-1",
-    itemKey: "case-1",
-    kind: "good",
-    input: "总结本周客户反馈，并按优先级归类。",
-    output: "覆盖主要问题，给出清晰的优先级与下一步动作。",
-    referenceOutput: "覆盖主要问题，给出清晰的优先级与下一步动作。",
-    comment: "",
-    agentName: "示例 Agent",
-    sessionId: "",
-    messageId: "",
-    runtimeId: "",
-    invocationId: "",
-    userId: "",
-    createdAt: "2026-08-05T09:12:00+08:00",
-    evaluationSetId: "",
-    evaluationSetName: "示例 good case",
-    workspaceId: "",
-    tag: "总结",
-    source: "auto",
-    score: 0.92,
-    reason: "任务完整覆盖了用户目标，输出结构清晰，并给出了可执行的下一步动作。",
-  },
-  {
-    id: "case-2",
-    itemKey: "case-2",
-    kind: "good",
-    input: "查询最新公开资料并附上来源。",
-    output: "调用搜索工具，结论与引用一一对应。",
-    referenceOutput: "调用搜索工具，结论与引用一一对应。",
-    comment: "",
-    agentName: "示例 Agent",
-    sessionId: "",
-    messageId: "",
-    runtimeId: "",
-    invocationId: "",
-    userId: "",
-    createdAt: "2026-08-05T08:47:00+08:00",
-    evaluationSetId: "",
-    evaluationSetName: "示例 good case",
-    workspaceId: "",
-    tag: "工具调用",
-    source: "user",
-  },
-  {
-    id: "case-3",
-    itemKey: "case-3",
-    kind: "bad",
-    input: "在信息不足时直接给出确定结论。",
-    output: "应明确说明未知，并主动询问缺失信息。",
-    referenceOutput: "",
-    comment: "",
-    agentName: "示例 Agent",
-    sessionId: "",
-    messageId: "",
-    runtimeId: "",
-    invocationId: "",
-    userId: "",
-    createdAt: "2026-08-05T07:35:00+08:00",
-    evaluationSetId: "",
-    evaluationSetName: "示例 bad case",
-    workspaceId: "",
-    tag: "幻觉",
-    source: "auto",
-    score: 0.28,
-    reason: "信息不足时仍给出了确定结论，缺少必要的澄清步骤与不确定性说明。",
-  },
-  {
-    id: "case-4",
-    itemKey: "case-4",
-    kind: "bad",
-    input: "连续重复调用相同工具获取同一结果。",
-    output: "复用已有结果，避免无意义的重复调用。",
-    referenceOutput: "",
-    comment: "",
-    agentName: "示例 Agent",
-    sessionId: "",
-    messageId: "",
-    runtimeId: "",
-    invocationId: "",
-    userId: "",
-    createdAt: "2026-08-05T06:58:00+08:00",
-    evaluationSetId: "",
-    evaluationSetName: "示例 bad case",
-    workspaceId: "",
-    tag: "效率",
-    source: "user",
-  },
-];
+function buildDefaultCases(t: TFunction): AgentCase[] {
+  return [
+    {
+      id: "case-1",
+      itemKey: "case-1",
+      kind: "good",
+      input: t("agentWorkspace.defaultCases.weeklyFeedback.input"),
+      output: t("agentWorkspace.defaultCases.weeklyFeedback.output"),
+      referenceOutput: t("agentWorkspace.defaultCases.weeklyFeedback.output"),
+      comment: "",
+      agentName: t("agentWorkspace.defaultCases.agentName"),
+      sessionId: "",
+      messageId: "",
+      runtimeId: "",
+      invocationId: "",
+      userId: "",
+      createdAt: "2026-08-05T09:12:00+08:00",
+      evaluationSetId: "",
+      evaluationSetName: t("agentWorkspace.defaultCases.goodSetName"),
+      workspaceId: "",
+      tag: t("agentWorkspace.defaultCases.weeklyFeedback.tag"),
+      source: "auto",
+      score: 0.92,
+      reason: t("agentWorkspace.defaultCases.weeklyFeedback.reason"),
+    },
+    {
+      id: "case-2",
+      itemKey: "case-2",
+      kind: "good",
+      input: t("agentWorkspace.defaultCases.research.input"),
+      output: t("agentWorkspace.defaultCases.research.output"),
+      referenceOutput: t("agentWorkspace.defaultCases.research.output"),
+      comment: "",
+      agentName: t("agentWorkspace.defaultCases.agentName"),
+      sessionId: "",
+      messageId: "",
+      runtimeId: "",
+      invocationId: "",
+      userId: "",
+      createdAt: "2026-08-05T08:47:00+08:00",
+      evaluationSetId: "",
+      evaluationSetName: t("agentWorkspace.defaultCases.goodSetName"),
+      workspaceId: "",
+      tag: t("agentWorkspace.defaultCases.research.tag"),
+      source: "user",
+    },
+    {
+      id: "case-3",
+      itemKey: "case-3",
+      kind: "bad",
+      input: t("agentWorkspace.defaultCases.uncertainConclusion.input"),
+      output: t("agentWorkspace.defaultCases.uncertainConclusion.output"),
+      referenceOutput: "",
+      comment: "",
+      agentName: t("agentWorkspace.defaultCases.agentName"),
+      sessionId: "",
+      messageId: "",
+      runtimeId: "",
+      invocationId: "",
+      userId: "",
+      createdAt: "2026-08-05T07:35:00+08:00",
+      evaluationSetId: "",
+      evaluationSetName: t("agentWorkspace.defaultCases.badSetName"),
+      workspaceId: "",
+      tag: t("agentWorkspace.defaultCases.uncertainConclusion.tag"),
+      source: "auto",
+      score: 0.28,
+      reason: t("agentWorkspace.defaultCases.uncertainConclusion.reason"),
+    },
+    {
+      id: "case-4",
+      itemKey: "case-4",
+      kind: "bad",
+      input: t("agentWorkspace.defaultCases.repeatedTool.input"),
+      output: t("agentWorkspace.defaultCases.repeatedTool.output"),
+      referenceOutput: "",
+      comment: "",
+      agentName: t("agentWorkspace.defaultCases.agentName"),
+      sessionId: "",
+      messageId: "",
+      runtimeId: "",
+      invocationId: "",
+      userId: "",
+      createdAt: "2026-08-05T06:58:00+08:00",
+      evaluationSetId: "",
+      evaluationSetName: t("agentWorkspace.defaultCases.badSetName"),
+      workspaceId: "",
+      tag: t("agentWorkspace.defaultCases.repeatedTool.tag"),
+      source: "user",
+    },
+  ];
+}
 
 const DEFAULT_EVALUATION_GROUPS: EvaluationGroup[] = [
   {
@@ -234,29 +282,55 @@ const DEFAULT_EVALUATION_GROUPS: EvaluationGroup[] = [
   },
 ];
 
-const AGENT_SECTIONS: Array<{ id: AgentSection; label: string }> = [
-  { id: "basic", label: "基本信息" },
-  { id: "usage", label: "用量统计" },
-  { id: "evaluations", label: "评测集" },
-  { id: "optimizations", label: "优化项" },
-  { id: "integrations", label: "接入方法" },
+const EVALUATION_TEXT_KEYS: Record<string, string> = {
+  "核心能力回归": "agentWorkspace.evaluationDefaults.coreRegression",
+  "安全与幻觉检查": "agentWorkspace.evaluationDefaults.safetyCheck",
+  "核心回归集": "agentWorkspace.evaluationDefaults.coreSet",
+  "安全边界集": "agentWorkspace.evaluationDefaults.safetySet",
+  "工具调用集": "agentWorkspace.evaluationDefaults.toolSet",
+  "综合质量评估器": "agentWorkspace.evaluationDefaults.qualityEvaluator",
+  "事实一致性评估器": "agentWorkspace.evaluationDefaults.factualEvaluator",
+  "工具调用评估器": "agentWorkspace.evaluationDefaults.toolEvaluator",
+  "回答质量": "agentWorkspace.evaluationDefaults.responseQuality",
+  "事实准确性": "agentWorkspace.evaluationDefaults.factualAccuracy",
+  "工具调用": "agentWorkspace.evaluationDefaults.toolUse",
+  "响应效率": "agentWorkspace.evaluationDefaults.responseEfficiency",
+  "今天 10:32": "agentWorkspace.evaluationDefaults.todayTime",
+  "昨天 16:08": "agentWorkspace.evaluationDefaults.yesterdayTime",
+  "7 月 25 日 14:20": "agentWorkspace.evaluationDefaults.julyTime",
+  "刚刚": "agentWorkspace.evaluationDefaults.justNow",
+};
+
+function evaluationText(value: string, t: TFunction): string {
+  const key = EVALUATION_TEXT_KEYS[value];
+  return key ? t(key) : value;
+}
+
+const AGENT_SECTIONS: AgentSection[] = [
+  "basic",
+  "profileConfig",
+  "sessionConfig",
+  "usage",
+  "diagnostics",
+  "evaluations",
+  "optimizations",
+  "integrations",
+  "versions",
 ];
 
 const AGENT_USAGE_PAGE_SIZE = 20;
-const AGENT_USAGE_DATE_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: false,
-});
-
-function formatAgentUsageTime(value: string): string {
+function formatAgentUsageTime(value: string, locale: string, t: TFunction): string {
   const timestamp = Date.parse(value);
   return Number.isNaN(timestamp)
-    ? "暂未提供"
-    : AGENT_USAGE_DATE_FORMATTER.format(timestamp);
+    ? t("agentWorkspace.notProvided")
+    : new Intl.DateTimeFormat(locale, {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).format(timestamp);
 }
 
 const INTEGRATION_PROTOCOLS: Array<{
@@ -276,6 +350,196 @@ interface IntegrationProbeResult {
 interface RevealedApiKey {
   requestKey: string;
   value: string;
+}
+
+interface SessionExecutionConfigState {
+  requestKey: string;
+  value: MpaSessionExecutionConfig;
+}
+
+interface MpaProfileStatusState {
+  requestKey: string;
+  value: MpaProfileStatus;
+}
+
+interface MpaProfileApplyState {
+  saving: boolean;
+  error: string;
+  notice: string;
+}
+
+interface MpaAgentViewState {
+  requestKey: string;
+  value: MpaAgentView;
+}
+
+interface MpaDiagnosticsState {
+  requestKey: string;
+  runs: MpaRuntimeConsoleRun[];
+  trace: MpaRuntimeTraceResponse | null;
+}
+
+export interface MpaProfileEditTarget {
+  draft: AgentDraft;
+  runtimeId: string;
+  mpaInstanceId: string;
+  name: string;
+  region: string;
+  appName?: string;
+  currentVersion?: number | null;
+  runtimeRevision?: string;
+}
+
+function recordId(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  const id = (value as { id?: unknown }).id;
+  return typeof id === "string" ? id : "";
+}
+
+function effectiveModelId(config: MpaSessionExecutionConfig | null): string {
+  return recordId(config?.effectiveRefs?.model);
+}
+
+function executionOverrideMode(
+  config: MpaSessionExecutionConfig | null,
+  category: string,
+): MpaExecutionConfigMode | "" {
+  const value = config?.overrides?.[category];
+  if (!value || typeof value !== "object") return "";
+  const mode = (value as { mode?: unknown }).mode;
+  return mode === "replace" || mode === "clear" || mode === "inherit" ? mode : "";
+}
+
+function executionMcpIds(config: MpaSessionExecutionConfig | null): string[] {
+  const values = config?.effectiveRefs?.mcpServers;
+  if (!Array.isArray(values)) return [];
+  return values.map(recordId).filter(Boolean);
+}
+
+function mpaDeleteBlockerLabel(code: string, t: TFunction<"ui">): string {
+  switch (code) {
+    case "active_operation":
+      return t("agentWorkspace.mpaDeleteBlockerActiveOperation");
+    case "active_sessions":
+      return t("agentWorkspace.mpaDeleteBlockerActiveSessions");
+    case "binding_ambiguous":
+      return t("agentWorkspace.mpaDeleteBlockerBindingAmbiguous");
+    case "runtime_missing":
+      return t("agentWorkspace.mpaDeleteBlockerRuntimeMissing");
+    case "orphan_runtime":
+      return t("agentWorkspace.mpaDeleteBlockerOrphanRuntime");
+    default:
+      return code;
+  }
+}
+
+function mpaSafeErrorMessage(code: string | undefined, t: TFunction<"ui">): string {
+  switch (code) {
+    case "runtime_legacy_auth_unsupported":
+      return t("agentWorkspace.mpaRuntimeLegacyAuthUnsupported");
+    case "profile_not_found":
+      return t("agentWorkspace.mpaRuntimeOrphan");
+    case "binding_ambiguous":
+      return t("agentWorkspace.mpaRuntimeBindingAmbiguous");
+    case "runtime_missing":
+      return t("agentWorkspace.mpaRuntimeMissing");
+    default:
+      return code ?? "";
+  }
+}
+
+function MpaDeletePreviewDetails({
+  preview,
+  t,
+}: {
+  preview: MpaAgentDeletePreview;
+  t: TFunction<"ui">;
+}) {
+  const blockers = preview.blockers.map((code) => mpaDeleteBlockerLabel(code, t));
+  return (
+    <div className="aw-mpa-delete-preview">
+      <p>{t("agentWorkspace.mpaDeletePreviewSummary")}</p>
+      <dl className="aw-mpa-delete-preview__stats">
+        <div>
+          <dt>{t("agentWorkspace.mpaDeletePreviewSessions")}</dt>
+          <dd>{preview.sessionCounts.total}</dd>
+        </div>
+        <div>
+          <dt>{t("agentWorkspace.mpaDeletePreviewActiveSessions")}</dt>
+          <dd>{preview.sessionCounts.active}</dd>
+        </div>
+        <div>
+          <dt>{t("agentWorkspace.mpaDeletePreviewIdleSessions")}</dt>
+          <dd>{preview.sessionCounts.idle}</dd>
+        </div>
+      </dl>
+      {blockers.length > 0 ? (
+        <div className="aw-mpa-delete-preview__blockers" role="status">
+          <strong>{t("agentWorkspace.mpaDeleteBlocked")}</strong>
+          <ul>
+            {blockers.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <ol className="aw-mpa-delete-preview__plan">
+          {preview.cleanupPlan.map((stage) => (
+            <li key={stage.stage}>
+              {t(`agentWorkspace.mpaDeleteStage.${stage.stage}`, {
+                count: stage.count,
+              })}
+              {stage.resourceId && <span> ({stage.resourceId})</span>}
+            </li>
+          ))}
+        </ol>
+      )}
+      {Boolean(preview.retainedResources?.length) && (
+        <div>
+          <strong>{t("agentWorkspace.mpaDeleteRetained")}</strong>
+          <ul>{preview.retainedResources?.map((item) => (
+            <li key={`${item.stage}:${item.resourceId}`}>
+              {item.resourceId} — {t(`agentWorkspace.mpaDeleteRetainedReason.${item.reason}`, { defaultValue: item.reason })}
+            </li>
+          ))}</ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function executionConfigErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof MpaExecutionConfigRequestError && error.status === 412) {
+    return fallback;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+function mcpServerCount(config: MpaSessionExecutionConfig | null): number {
+  return executionMcpIds(config).length;
+}
+
+function formatMcpServerIds(
+  config: MpaSessionExecutionConfig | null,
+  t: TFunction,
+): string {
+  const ids = executionMcpIds(config);
+  return ids.length ? ids.join(", ") : t("agentWorkspace.none");
+}
+
+function isCategoryOverridden(
+  config: MpaSessionExecutionConfig | null,
+  category: string,
+): boolean {
+  return Boolean(config?.overrides?.[category]);
+}
+
+function profileUpgradeIdempotencyKey(
+  runtimeId: string,
+  sessionId: string,
+  targetProfileRevision: number,
+): string {
+  return `mpa-session-profile-upgrade:${runtimeId}:${sessionId}:${targetProfileRevision}`;
 }
 
 function endpointPath(endpoint: string, path: string): string {
@@ -302,11 +566,27 @@ function normalizeRuntimeA2aEndpoint(
   }
 }
 
-function authTypeLabel(authType?: RuntimeDetail["authType"]): string {
+function authTypeLabel(
+  authType: RuntimeDetail["authType"] | undefined,
+  t: TFunction,
+): string {
   if (authType === "key_auth") return "API Key";
   if (authType === "custom_jwt") return "OAuth / JWT";
-  if (authType === "none") return "无需鉴权";
-  return "暂无";
+  if (authType === "none") return t("agentWorkspace.noAuthentication");
+  return t("agentWorkspace.notAvailable");
+}
+
+function githubRuntimeStatusLabel(status: string | undefined, t: TFunction): string {
+  if (status === "published") return t("agentWorkspace.githubStatus.published");
+  if (status === "publishing") return t("agentWorkspace.githubStatus.publishing");
+  if (status === "failed") return t("agentWorkspace.githubStatus.failed");
+  if (status === "pending") return t("agentWorkspace.githubStatus.pending");
+  return t("agentWorkspace.githubStatus.unknown");
+}
+
+function githubVersionTitle(version: GithubDeliveryVersion, t: TFunction): string {
+  if (version.changeType === "rollback") return t("agentWorkspace.rollbackEvent");
+  return version.version;
 }
 
 function pythonString(value: string): string {
@@ -441,10 +721,11 @@ function IntegrationApiKey({
   error: string;
   onToggle: () => void;
 }) {
-  if (!available) return "暂无";
-  if (authType === "none") return "无需 API Key";
-  if (authType === "custom_jwt") return "使用 OAuth / JWT";
-  if (authType !== "key_auth") return "暂无";
+  const { t } = useTranslation("ui");
+  if (!available) return t("agentWorkspace.notAvailable");
+  if (authType === "none") return t("agentWorkspace.noApiKeyRequired");
+  if (authType === "custom_jwt") return t("agentWorkspace.usesOauthJwt");
+  if (authType !== "key_auth") return t("agentWorkspace.notAvailable");
   return (
     <span className="aw-integration-secret">
       <span className="aw-integration-secret-value" aria-live="polite">
@@ -453,8 +734,8 @@ function IntegrationApiKey({
       <button
         type="button"
         className="aw-integration-secret-toggle"
-        aria-label={visible ? "隐藏 API Key" : "显示 API Key"}
-        title={visible ? "隐藏 API Key" : "显示 API Key"}
+        aria-label={visible ? t("agentWorkspace.hideApiKey") : t("agentWorkspace.showApiKey")}
+        title={visible ? t("agentWorkspace.hideApiKey") : t("agentWorkspace.showApiKey")}
         disabled={loading}
         onClick={onToggle}
       >
@@ -482,6 +763,7 @@ function IntegrationPanel({
   fields: Array<{ label: string; value: ReactNode }>;
   example: string;
 }) {
+  const { t } = useTranslation("ui");
   return (
     <section
       className={`aw-integration-panel${available && example ? " has-example" : ""}`}
@@ -496,13 +778,13 @@ function IntegrationPanel({
         {fields.map((field) => (
           <div key={field.label}>
             <dt>{field.label}</dt>
-            <dd>{field.value || "暂无"}</dd>
+            <dd>{field.value || t("agentWorkspace.notAvailable")}</dd>
           </div>
         ))}
       </dl>
       {available && example && (
         <section className="aw-integration-example">
-          <h4>Python 示例</h4>
+          <h4>{t("agentWorkspace.pythonExample")}</h4>
           <Markdown
             text={example}
             className="aw-integration-example-code"
@@ -514,40 +796,566 @@ function IntegrationPanel({
   );
 }
 
-function graphNodeToDraft(node: AgentNode): AgentDraft {
-  const runtimeTools = node.tools ?? [];
-  const builtinTools = BUILTIN_TOOLS.filter((tool) =>
-    tool.toolNames.some((name) => runtimeTools.includes(name)),
-  );
-  const builtinToolNames = new Set(builtinTools.flatMap((tool) => tool.toolNames));
-  return {
-    ...emptyDraft(),
-    modelSource: undefined,
-    name: node.name,
-    description: node.description,
-    instruction: node.instruction || emptyDraft().instruction,
-    agentType: node.type,
-    modelName: node.model,
-    tools: runtimeTools.filter((name) => !builtinToolNames.has(name)),
-    builtinTools: builtinTools.map((tool) => tool.id),
-    skills: (node.skills ?? []).map((skill) => skill.name),
-    subAgents: (node.children ?? []).map(graphNodeToDraft),
-  };
+function summarizeProfileList(
+  items: Array<Record<string, unknown>> | undefined,
+  fallback: string,
+): string {
+  const values = (items ?? []).flatMap((item) => {
+    const value = item.name ?? item.id ?? item.skillId ?? item.source;
+    return typeof value === "string" && value.trim() ? [value.trim()] : [];
+  });
+  return values.length ? values.join(", ") : fallback;
 }
 
-function infoToDraft(info: AgentInfo | null, fallbackName: string): AgentDraft {
-  if (info?.draft) return info.draft;
-  if (info?.graph) return graphNodeToDraft(info.graph);
-  return {
-    ...emptyDraft(),
-    modelSource: undefined,
-    name: info?.name || fallbackName,
-    description: info?.description || "暂无描述",
-    agentType: info?.type ?? "llm",
-    modelName: info?.model,
-    tools: info?.tools ?? [],
-    skills: info?.skills?.map((skill) => skill.name) ?? [],
-  };
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const fields = Object.entries(value as Record<string, unknown>)
+      .filter(([, fieldValue]) => fieldValue !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right));
+    return `{${fields.map(([key, fieldValue]) =>
+      `${JSON.stringify(key)}:${canonicalJson(fieldValue)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+async function profileIdempotencyKey(
+  runtimeId: string,
+  operationKind: "create" | "update",
+  profile: MpaProfilePayload,
+): Promise<string> {
+  const bytes = new TextEncoder().encode(canonicalJson(profile));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const hex = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0")).join("");
+  return `mpa-profile:${runtimeId}:${operationKind}:${hex}`;
+}
+
+function MpaProfileConfigPanel({
+  profile,
+  profileStatus,
+  runtimeReady,
+  disabledReason,
+  saving,
+  error,
+  notice,
+  onApply,
+  onEditProfile,
+  onRefresh,
+}: {
+  profile: MpaProfilePayload;
+  profileStatus: MpaProfileStatus | null;
+  runtimeReady: boolean;
+  disabledReason: string;
+  saving: boolean;
+  error: string;
+  notice: string;
+  onApply: () => void;
+  onEditProfile: () => void;
+  onRefresh: () => void;
+}) {
+  const { t } = useTranslation("ui");
+  const applied = profileStatus?.status === "applied";
+  const canApply = runtimeReady && !saving;
+  return (
+    <section className="aw-session-config aw-profile-config" aria-busy={saving}>
+      <div className="aw-integration-intro">
+        <h3>{t("agentWorkspace.profileConfigTitle")}</h3>
+        <p>{t("agentWorkspace.profileConfigDescription")}</p>
+      </div>
+
+      {disabledReason ? (
+        <div className="aw-session-config-state">{disabledReason}</div>
+      ) : (
+        <>
+          {error && (
+            <div className="aw-session-config-state is-error" role="alert">
+              <span>{error}</span>
+              <button type="button" onClick={onRefresh} disabled={saving}>
+                {t("common.retry")}
+              </button>
+            </div>
+          )}
+          {notice && !error && (
+            <div className="aw-session-config-notice" role="status">
+              {notice}
+            </div>
+          )}
+
+          <div className="aw-session-config-actions">
+            <button type="button" onClick={onEditProfile} disabled={saving}>
+              {t("agentWorkspace.editProfile")}
+            </button>
+            <button type="button" onClick={onRefresh} disabled={saving}>
+              {t("common.refresh")}
+            </button>
+          </div>
+
+          <dl className="aw-session-config-grid">
+            <div>
+              <dt>{t("agentWorkspace.profileStatus")}</dt>
+              <dd>{applied ? t("agentWorkspace.profileApplied") : t("agentWorkspace.profileNotApplied")}</dd>
+            </div>
+            <div>
+              <dt>{t("agentWorkspace.latestProfileRevision")}</dt>
+              <dd>{profileStatus?.profileRevision ?? t("agentWorkspace.notAvailable")}</dd>
+            </div>
+            <div>
+              <dt>{t("agentWorkspace.modelId")}</dt>
+              <dd>{String(profile.model?.id || t("agentWorkspace.notAvailable"))}</dd>
+            </div>
+            <div>
+              <dt>ETag</dt>
+              <dd>{profileStatus?.etag || t("agentWorkspace.notAvailable")}</dd>
+            </div>
+          </dl>
+
+          {!applied && (
+            <div className="aw-session-config-upgrade" role="status">
+              <span>{t("agentWorkspace.profileNotAppliedDescription")}</span>
+              <button type="button" onClick={onApply} disabled={!canApply}>
+                {saving
+                  ? t("agentWorkspace.profileApplying")
+                  : t("agentWorkspace.applyProfile")}
+              </button>
+            </div>
+          )}
+
+          {applied && (
+            <div className="aw-session-config-actions">
+              <button type="button" onClick={onApply} disabled={!canApply}>
+                {saving
+                  ? t("agentWorkspace.profileApplying")
+                  : t("agentWorkspace.reapplyProfile")}
+              </button>
+            </div>
+          )}
+
+          <div className="aw-session-config-card">
+            <div>
+              <h4>{t("agentWorkspace.profilePrompt")}</h4>
+              <p>{profile.system || t("agentWorkspace.notAvailable")}</p>
+            </div>
+          </div>
+
+          <div className="aw-session-config-card">
+            <div>
+              <h4>{t("agentWorkspace.profileResources")}</h4>
+              <p>
+                {t("agentWorkspace.profileResourceSummary", {
+                  tools: profile.tools.length,
+                  skills: profile.skills.length,
+                  mcp: profile.mcpServers.length,
+                })}
+              </p>
+            </div>
+            <div className="aw-profile-config-list">
+              <span title={summarizeProfileList(profile.tools, t("agentWorkspace.notAvailable"))}>
+                {t("agentSelector.tools")}: {summarizeProfileList(profile.tools, t("agentWorkspace.notAvailable"))}
+              </span>
+              <span title={summarizeProfileList(profile.skills, t("agentWorkspace.notAvailable"))}>
+                {t("agentSelector.skills")}: {summarizeProfileList(profile.skills, t("agentWorkspace.notAvailable"))}
+              </span>
+              <span title={summarizeProfileList(profile.mcpServers, t("agentWorkspace.notAvailable"))}>
+                MCP: {summarizeProfileList(profile.mcpServers, t("agentWorkspace.notAvailable"))}
+              </span>
+            </div>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function SessionExecutionConfigPanel({
+  config,
+  profileStatus,
+  loadable,
+  disabledReason,
+  loading,
+  saving,
+  upgrading,
+  error,
+  notice,
+  modelValue,
+  modelDirty,
+  profileUpgradeAvailable,
+  onModelChange,
+  onSaveModel,
+  onInheritModel,
+  onClearMcp,
+  onInheritMcp,
+  onUpgradeProfile,
+  onRefresh,
+}: {
+  config: MpaSessionExecutionConfig | null;
+  profileStatus: MpaProfileStatus | null;
+  loadable: boolean;
+  disabledReason: string;
+  loading: boolean;
+  saving: boolean;
+  upgrading: boolean;
+  error: string;
+  notice: string;
+  modelValue: string;
+  modelDirty: boolean;
+  profileUpgradeAvailable: boolean;
+  onModelChange: (value: string) => void;
+  onSaveModel: () => void;
+  onInheritModel: () => void;
+  onClearMcp: () => void;
+  onInheritMcp: () => void;
+  onUpgradeProfile: () => void;
+  onRefresh: () => void;
+}) {
+  const { t } = useTranslation("ui");
+  const busy = loading || saving || upgrading;
+  const modelMode = executionOverrideMode(config, "model");
+  const mcpMode = executionOverrideMode(config, "mcpServers");
+  const currentModel = effectiveModelId(config);
+  const latestRevision = profileStatus?.status === "applied"
+    ? profileStatus.profileRevision
+    : null;
+  return (
+    <section className="aw-session-config" aria-busy={busy}>
+      <div className="aw-integration-intro">
+        <h3>{t("agentWorkspace.sessionConfigTitle")}</h3>
+        <p>{t("agentWorkspace.sessionConfigDescription")}</p>
+      </div>
+
+      {!loadable ? (
+        <div className="aw-session-config-state">{disabledReason}</div>
+      ) : loading && !config ? (
+        <div className="aw-session-config-state" role="status">
+          <span className="loading-gap-spinner" aria-hidden="true" />
+          <span>{t("agentWorkspace.loadingSessionConfig")}</span>
+        </div>
+      ) : (
+        <>
+          {error && (
+            <div className="aw-session-config-state is-error" role="alert">
+              <span>{error}</span>
+              <button type="button" onClick={onRefresh} disabled={busy}>
+                {t("common.retry")}
+              </button>
+            </div>
+          )}
+          {notice && !error && (
+            <div className="aw-session-config-notice" role="status">
+              {notice}
+            </div>
+          )}
+          {config && (
+            <>
+              <dl className="aw-session-config-grid">
+                <div>
+                  <dt>{t("agentWorkspace.sessionConfigRevision")}</dt>
+                  <dd>{config.revision}</dd>
+                </div>
+                <div>
+                  <dt>{t("agentWorkspace.sessionProfileRevision")}</dt>
+                  <dd>{config.profileRevision}</dd>
+                </div>
+                <div>
+                  <dt>{t("agentWorkspace.latestProfileRevision")}</dt>
+                  <dd>{latestRevision ?? t("agentWorkspace.notAvailable")}</dd>
+                </div>
+                <div>
+                  <dt>ETag</dt>
+                  <dd>{config.etag || t("agentWorkspace.notAvailable")}</dd>
+                </div>
+              </dl>
+
+              {profileUpgradeAvailable && latestRevision != null && (
+                <div className="aw-session-config-upgrade" role="status">
+                  <span>
+                    {t("agentWorkspace.sessionProfileUpgradeAvailable", {
+                      current: config.profileRevision,
+                      target: latestRevision,
+                    })}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onUpgradeProfile}
+                    disabled={busy}
+                  >
+                    {upgrading
+                      ? t("agentWorkspace.sessionProfileUpgrading")
+                      : t("agentWorkspace.upgradeSessionProfile")}
+                  </button>
+                </div>
+              )}
+
+              <div className="aw-session-config-card">
+                <div>
+                  <h4>{t("agentWorkspace.sessionModelOverride")}</h4>
+                  <p>
+                    {modelMode
+                      ? t(`agentWorkspace.executionConfigMode.${modelMode}`)
+                      : t("agentWorkspace.executionConfigMode.inherit")}
+                  </p>
+                </div>
+                <label className="aw-session-config-field">
+                  <span>{t("agentWorkspace.modelId")}</span>
+                  <input
+                    type="text"
+                    value={modelValue}
+                    onChange={(event) => onModelChange(event.currentTarget.value)}
+                    placeholder={currentModel || t("agentWorkspace.inheritProfileDefault")}
+                    disabled={busy}
+                  />
+                </label>
+                <div className="aw-session-config-actions">
+                  <button
+                    type="button"
+                    onClick={onSaveModel}
+                    disabled={busy || !modelDirty}
+                  >
+                    {saving ? t("common.saving") : t("common.save")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onInheritModel}
+                    disabled={busy || !isCategoryOverridden(config, "model")}
+                  >
+                    {t("agentWorkspace.inheritProfileDefault")}
+                  </button>
+                </div>
+              </div>
+
+              <div className="aw-session-config-card">
+                <div>
+                  <h4>{t("agentWorkspace.sessionMcpServers")}</h4>
+                  <p>
+                    {mcpMode
+                      ? t(`agentWorkspace.executionConfigMode.${mcpMode}`)
+                      : t("agentWorkspace.executionConfigMode.inherit")}
+                  </p>
+                </div>
+                <div className="aw-session-config-value">
+                  <span>
+                    {t("agentWorkspace.mcpServerCount", {
+                      count: mcpServerCount(config),
+                    })}
+                  </span>
+                  <small title={formatMcpServerIds(config, t)}>
+                    {formatMcpServerIds(config, t)}
+                  </small>
+                </div>
+                <div className="aw-session-config-actions">
+                  <button
+                    type="button"
+                    onClick={onClearMcp}
+                    disabled={busy || mcpMode === "clear"}
+                  >
+                    {t("agentWorkspace.clearSessionMcp")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onInheritMcp}
+                    disabled={busy || !isCategoryOverridden(config, "mcpServers")}
+                  >
+                    {t("agentWorkspace.inheritProfileDefault")}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function correlationValue(
+  correlation: Record<string, unknown> | undefined,
+  key: string,
+): string {
+  const value = correlation?.[key];
+  return value == null || value === "" ? "" : String(value);
+}
+
+function workerCorrelationValue(
+  correlation: Record<string, unknown> | undefined,
+  key: string,
+): string {
+  const worker = correlation?.worker;
+  if (!worker || typeof worker !== "object") return "";
+  const value = (worker as Record<string, unknown>)[key];
+  return value == null || value === "" ? "" : String(value);
+}
+
+function formatDurationMs(value: number | null | undefined, t: TFunction): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return t("agentWorkspace.notAvailable");
+  }
+  return `${Math.round(value)} ms`;
+}
+
+function MpaDiagnosticsPanel({
+  data,
+  loadable,
+  disabledReason,
+  loading,
+  error,
+  onRefresh,
+  locale,
+}: {
+  data: MpaDiagnosticsState | null;
+  loadable: boolean;
+  disabledReason: string;
+  loading: boolean;
+  error: string;
+  onRefresh: () => void;
+  locale: string;
+}) {
+  const { t } = useTranslation("ui");
+  const runs = data?.runs ?? [];
+  const trace = data?.trace ?? null;
+  const latestRun = runs[0];
+  const correlation = trace?.correlation ?? {};
+  const fields = [
+    ["mpaInstanceId", t("agentWorkspace.mpaInstanceId")],
+    ["profileRevision", t("agentWorkspace.sessionProfileRevision")],
+    ["executionConfigRevision", t("agentWorkspace.sessionConfigRevision")],
+    ["turnId", t("agentWorkspace.turnId")],
+    ["taskId", t("agentWorkspace.taskId")],
+    ["runtimeId", "Runtime ID"],
+    ["runtimeVersion", t("systemInfo.currentVersion")],
+  ] as const;
+  const workerFields = [
+    ["kind", t("agentWorkspace.workerKind")],
+    ["sessionId", t("agentWorkspace.workerSession")],
+    ["turnId", t("agentWorkspace.workerTurn")],
+    ["profileId", t("agentWorkspace.workerProfile")],
+    ["profileVersion", t("agentWorkspace.workerProfileVersion")],
+  ] as const;
+  return (
+    <section className="aw-mpa-diagnostics" aria-busy={loading}>
+      <div className="aw-integration-intro">
+        <h3>{t("agentWorkspace.mpaDiagnosticsTitle")}</h3>
+        <p>{t("agentWorkspace.mpaDiagnosticsDescription")}</p>
+      </div>
+      {!loadable ? (
+        <div className="aw-session-config-state">{disabledReason}</div>
+      ) : loading && !data ? (
+        <div className="aw-session-config-state" role="status">
+          <span className="loading-gap-spinner" aria-hidden="true" />
+          <span>{t("agentWorkspace.loadingMpaDiagnostics")}</span>
+        </div>
+      ) : error ? (
+        <div className="aw-session-config-state is-error" role="alert">
+          <span>{error}</span>
+          <button type="button" onClick={onRefresh} disabled={loading}>
+            {t("common.retry")}
+          </button>
+        </div>
+      ) : !latestRun ? (
+        <div className="aw-session-config-state">
+          {t("agentWorkspace.noMpaDiagnostics")}
+        </div>
+      ) : (
+        <>
+          <dl className="aw-session-config-grid">
+            <div>
+              <dt>{t("agentWorkspace.latestRun")}</dt>
+              <dd>{latestRun.invocationId}</dd>
+            </div>
+            <div>
+              <dt>{t("agentSelector.status")}</dt>
+              <dd>{latestRun.status}</dd>
+            </div>
+            <div>
+              <dt>{t("agentWorkspace.lastUsed")}</dt>
+              <dd>{formatAgentUsageTime(latestRun.startedAt, locale, t)}</dd>
+            </div>
+            <div>
+              <dt>{t("agentWorkspace.stepCount")}</dt>
+              <dd>{latestRun.stepCount}</dd>
+            </div>
+          </dl>
+          <section className="aw-session-config-card">
+            <div>
+              <h4>{t("agentWorkspace.traceCorrelation")}</h4>
+              <p>{t("agentWorkspace.traceCorrelationDescription")}</p>
+            </div>
+            <dl className="aw-mpa-correlation">
+              {fields.map(([key, label]) => (
+                <div key={key}>
+                  <dt>{label}</dt>
+                  <dd>{correlationValue(correlation, key) || t("agentWorkspace.notAvailable")}</dd>
+                </div>
+              ))}
+              {workerFields.map(([key, label]) => (
+                <div key={`worker-${key}`}>
+                  <dt>{label}</dt>
+                  <dd>{workerCorrelationValue(correlation, key) || t("agentWorkspace.notAvailable")}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+          <section className="aw-session-config-card">
+            <div>
+              <h4>{t("agentWorkspace.traceSteps")}</h4>
+              <p>{t("agentWorkspace.traceStepsDescription")}</p>
+            </div>
+            {trace?.steps.length ? (
+              <div className="aw-usage-table-wrap">
+                <table className="aw-usage-table aw-mpa-trace-table">
+                  <caption>{t("agentWorkspace.traceSteps")}</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">{t("agentWorkspace.step")}</th>
+                      <th scope="col">{t("agentSelector.status")}</th>
+                      <th scope="col">{t("agentWorkspace.duration")}</th>
+                      <th scope="col">{t("agentWorkspace.turnId")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {trace.steps.slice(0, 20).map((step) => (
+                      <tr key={step.stepId}>
+                        <td><strong>{step.title || step.kind}</strong><small>{step.kind}</small></td>
+                        <td>{step.status}</td>
+                        <td>{formatDurationMs(step.durationMs, t)}</td>
+                        <td>{correlationValue(step.correlation, "turnId") || t("agentWorkspace.notAvailable")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="aw-session-config-value">
+                <span>{t("agentWorkspace.noTraceSteps")}</span>
+              </div>
+            )}
+          </section>
+        </>
+      )}
+    </section>
+  );
+}
+
+function infoToDraft(
+  info: AgentInfo | null,
+  fallbackName: string,
+  cloudProvider: "volcengine" | "byteplus",
+): AgentDraft {
+  return runtimeAgentDraftFromCloud(
+    {
+      appName: info?.appName?.trim() || fallbackName,
+      name: info?.name,
+      description: info?.description,
+      type: info?.type,
+      model: info?.model,
+      tools: info?.tools,
+      skills: info?.skills,
+      graph: info?.graph,
+      draft: info?.draft,
+    },
+    cloudProvider,
+  );
 }
 
 function countNodes(node?: AgentNode): number {
@@ -570,10 +1378,10 @@ function caseTimeValue(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function formatCaseTime(value: string): string {
+function formatCaseTime(value: string, locale: string, t: TFunction): string {
   const time = caseTimeValue(value);
-  if (!time) return "时间未知";
-  return new Intl.DateTimeFormat("zh-CN", {
+  if (!time) return t("agentWorkspace.unknownTime");
+  return new Intl.DateTimeFormat(locale, {
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
@@ -581,31 +1389,31 @@ function formatCaseTime(value: string): string {
   }).format(new Date(time));
 }
 
-function formatCaseScore(item: AgentCase): string {
+function formatCaseScore(item: AgentCase, t: TFunction): string {
   if (typeof item.score !== "number") return "—";
   if (!Number.isFinite(item.score)) return "—";
-  return `${Math.round(item.score * 100)} 分`;
+  return t("agentWorkspace.scoreValue", { score: Math.round(item.score * 100) });
 }
 
-function optimizationPriorityLabel(priority: OptimizationPriority): string {
-  if (priority === "high") return "高";
-  if (priority === "medium") return "中";
-  return "低";
+function optimizationPriorityLabel(priority: OptimizationPriority, t: TFunction): string {
+  return t(`agentWorkspace.priority.${priority}`);
 }
 
-const OPTIMIZATION_MODULE_LABELS: Record<OptimizationModule, string> = {
-  agent_structure: "Agent 结构",
-  prompt: "提示词",
-  tool: "工具",
-  knowledge: "知识库",
-  memory: "记忆",
-  workflow: "工作流",
-  other: "其他",
+const OPTIMIZATION_MODULE_KEYS: Record<OptimizationModule, string> = {
+  agent_structure: "agentWorkspace.modules.agentStructure",
+  prompt: "agentWorkspace.modules.prompt",
+  tool: "agentWorkspace.modules.tool",
+  knowledge: "agentWorkspace.modules.knowledge",
+  memory: "agentWorkspace.modules.memory",
+  workflow: "agentWorkspace.modules.workflow",
+  other: "agentWorkspace.modules.other",
 };
 
-function optimizationModuleLabel(group: OptimizationGroup): string {
-  if (group.module === "other") return group.customModule?.trim() || "其他";
-  return OPTIMIZATION_MODULE_LABELS[group.module];
+function optimizationModuleLabel(group: OptimizationGroup, t: TFunction): string {
+  if (group.module === "other") {
+    return group.customModule?.trim() || t("agentWorkspace.modules.other");
+  }
+  return t(OPTIMIZATION_MODULE_KEYS[group.module]);
 }
 
 function feedbackSetFor(
@@ -617,11 +1425,16 @@ function feedbackSetFor(
 
 function feedbackCasesFromResponse(
   response: AgentFeedbackCasesResponse,
+  t: TFunction,
 ): AgentCase[] {
   return response.items
     .map((item) => ({
       ...item,
-      tag: item.kind === "good" ? "Good case" : "Bad case",
+      tag: t(
+        item.kind === "good"
+          ? "agentWorkspace.goodCase"
+          : "agentWorkspace.badCase",
+      ),
     }))
     .sort((left, right) => (
       caseTimeValue(right.createdAt) - caseTimeValue(left.createdAt)
@@ -645,46 +1458,52 @@ function canvasDraftKey(draft: AgentDraft): string {
   return JSON.stringify(visit(draft));
 }
 
-const DEPLOYMENT_STEPS = [
-  { phase: "prepare", label: "准备部署", description: "校验配置并创建部署任务" },
-  { phase: "build", label: "构建镜像", description: "生成运行环境与智能体代码" },
-  { phase: "deploy", label: "部署服务", description: "创建并启动 AgentKit Runtime" },
-  { phase: "publish", label: "发布服务", description: "等待服务就绪并生成访问地址" },
-  { phase: "complete", label: "部署完成", description: "智能体已可以正常使用" },
-] as const;
-const EVALUATION_SET_STEP = {
-  phase: "evaluation",
-  label: "创建评测集",
-  description: "自动创建 Good Case 和 Bad Case 评测集",
-} as const;
-function instanceUpdateStep(range: { min: number; max: number }) {
+function baseDeploymentSteps(t: TFunction) {
+  return [
+    { phase: "prepare", label: t("agentWorkspace.deploymentSteps.prepare.label"), description: t("agentWorkspace.deploymentSteps.prepare.description") },
+    { phase: "build", label: t("agentWorkspace.deploymentSteps.build.label"), description: t("agentWorkspace.deploymentSteps.build.description") },
+    { phase: "deploy", label: t("agentWorkspace.deploymentSteps.deploy.label"), description: t("agentWorkspace.deploymentSteps.deploy.description") },
+    { phase: "publish", label: t("agentWorkspace.deploymentSteps.publish.label"), description: t("agentWorkspace.deploymentSteps.publish.description") },
+    { phase: "complete", label: t("agentWorkspace.deploymentSteps.complete.label"), description: t("agentWorkspace.deploymentSteps.complete.description") },
+  ];
+}
+function instanceUpdateStep(range: { min: number; max: number }, t: TFunction) {
   return {
     phase: "update",
-    label: "更新实例配置",
-    description: `将 Runtime 实例数调整为 ${range.min}～${range.max}`,
-  } as const;
-}
-const BUILD_STEP_INDEX = DEPLOYMENT_STEPS.findIndex((step) => step.phase === "build");
-
-function deploymentSteps(task: DeploymentTaskUpdate) {
-  const steps = task.instanceRange
-    ? [
-        ...DEPLOYMENT_STEPS.slice(0, -1),
-        instanceUpdateStep(task.instanceRange),
-        DEPLOYMENT_STEPS[DEPLOYMENT_STEPS.length - 1],
-      ]
-    : DEPLOYMENT_STEPS;
-  return task.createEvaluationSets
-    ? [
-        ...steps.slice(0, -1),
-        EVALUATION_SET_STEP,
-        steps[steps.length - 1],
-      ]
-    : steps;
+    label: t("agentWorkspace.deploymentSteps.update.label"),
+    description: t("agentWorkspace.deploymentSteps.update.description", range),
+  };
 }
 
-function deploymentStepIndex(task: DeploymentTaskUpdate): number {
-  const steps = deploymentSteps(task);
+function deploymentSteps(task: DeploymentTaskUpdate, t: TFunction): Array<{
+  phase: string;
+  label: string;
+  description: string;
+}> {
+  const baseSteps = baseDeploymentSteps(t);
+  const steps: Array<{ phase: string; label: string; description: string }> = [
+    ...baseSteps.slice(0, -1),
+  ];
+  if (task.instanceRange) steps.push(instanceUpdateStep(task.instanceRange, t));
+  if (task.createEvaluationSets) {
+    steps.push({ phase: "evaluation", label: t("agentWorkspace.deploymentSteps.evaluation.label"), description: t("agentWorkspace.deploymentSteps.evaluation.description") });
+  }
+  if (task.mpaProfile) {
+    steps.push({ phase: "profile_applying", label: t("agentWorkspace.deploymentSteps.profileApplying.label"), description: t("agentWorkspace.deploymentSteps.profileApplying.description") });
+    if (task.mpaSmoke) {
+      steps.push({ phase: "smoke_running", label: t("agentWorkspace.deploymentSteps.smokeRunning.label"), description: t("agentWorkspace.deploymentSteps.smokeRunning.description") });
+      steps.push({ phase: "runnable", label: t("agentWorkspace.deploymentSteps.runnable.label"), description: t("agentWorkspace.deploymentSteps.runnable.description") });
+    }
+  }
+  if (task.githubDelivery) {
+    steps.push({ phase: "github", label: t("agentWorkspace.deploymentSteps.github.label"), description: t("agentWorkspace.deploymentSteps.github.description") });
+  }
+  steps.push(baseSteps[baseSteps.length - 1]);
+  return steps;
+}
+
+function deploymentStepIndex(task: DeploymentTaskUpdate, t: TFunction): number {
+  const steps = deploymentSteps(task, t);
   if (task.status === "success") return steps.length - 1;
   const phase = task.phase ?? ({
     准备部署: "prepare",
@@ -692,16 +1511,20 @@ function deploymentStepIndex(task: DeploymentTaskUpdate): number {
     部署: "deploy",
     发布: "publish",
     创建评测集: "evaluation",
+    "应用 MPA Profile": "profile_applying",
+    "验证 MPA Runtime": "smoke_running",
+    "MPA Runtime 可运行": "runnable",
+    "挂载 GitHub 持续交付": "github",
     部署完成: "complete",
   } as Record<string, string>)[task.label];
   const index = steps.findIndex((step) => step.phase === phase);
   return index < 0 ? 0 : index;
 }
 
-function formatBuildLogTime(updatedAt: number): string {
+function formatBuildLogTime(updatedAt: number, locale: string): string {
   if (!updatedAt) return "";
   try {
-    return new Intl.DateTimeFormat("zh-CN", {
+    return new Intl.DateTimeFormat(locale, {
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
@@ -712,26 +1535,38 @@ function formatBuildLogTime(updatedAt: number): string {
   }
 }
 
-function DeploymentBuildLog({ task }: { task: DeploymentTaskUpdate }) {
-  const log = task.buildLog;
+type DeploymentLogSnapshot = NonNullable<DeploymentTaskUpdate["buildLog"]>;
+
+function DeploymentStepLog({
+  log,
+  autoExpand,
+  title,
+  ariaLabel,
+  copyLabel,
+  defaultPendingMessage,
+}: {
+  log?: DeploymentLogSnapshot;
+  autoExpand: boolean;
+  title: string;
+  ariaLabel: string;
+  copyLabel: string;
+  defaultPendingMessage: string;
+}) {
+  const { t, i18n } = useTranslation("ui");
   const logTextRef = useRef<HTMLPreElement | null>(null);
-  const shouldAutoExpand = Boolean(
-    log?.status !== "complete"
-    && (task.status === "running" || task.status === "error")
-    && deploymentStepIndex(task) === BUILD_STEP_INDEX,
-  );
+  const shouldAutoExpand = Boolean(log?.status !== "complete" && autoExpand);
   const [expanded, setExpanded] = useState(shouldAutoExpand);
   const [copied, setCopied] = useState(false);
   const hasLogText = Boolean(log?.text || log?.error);
   const text = log?.text || log?.error || "";
   const lines = text.split("\n");
   const visibleText = expanded ? text : lines.slice(-36).join("\n");
-  const pendingMessage = log?.pendingMessage || "正在等待构建日志…";
+  const pendingMessage = log?.pendingMessage || defaultPendingMessage;
 
   useEffect(() => {
     if (!log) return;
     setExpanded(shouldAutoExpand);
-  }, [task.id, log?.status, shouldAutoExpand]);
+  }, [log?.status, shouldAutoExpand]);
 
   useEffect(() => {
     if (!expanded || !hasLogText) return;
@@ -742,22 +1577,22 @@ function DeploymentBuildLog({ task }: { task: DeploymentTaskUpdate }) {
 
   if (!log || (!log.text && log.status !== "error" && !log.pendingMessage)) return null;
 
-  const updatedAt = formatBuildLogTime(log.updatedAt);
+  const updatedAt = formatBuildLogTime(log.updatedAt, i18n.resolvedLanguage ?? i18n.language);
   const statusLabel = log.status === "complete"
-    ? "已同步"
+    ? t("agentWorkspace.logStatus.synced")
     : log.status === "error"
-      ? "读取失败"
-      : "同步中";
+      ? t("agentWorkspace.logStatus.failed")
+      : t("agentWorkspace.logStatus.syncing");
   const truncationLabel = log.omittedEarly
-    ? "已省略早期日志"
+    ? t("agentWorkspace.logStatus.earlyOmitted")
     : log.snapshotTruncated
-      ? "仅显示最近的构建日志"
+      ? t("agentWorkspace.logStatus.recentOnly")
       : log.truncated
-        ? "已省略部分日志"
+        ? t("agentWorkspace.logStatus.partiallyOmitted")
         : "";
   const meta = [
     statusLabel,
-    log.lineCount ? `${log.lineCount} 行` : "",
+    log.lineCount ? t("agentWorkspace.logLines", { count: log.lineCount }) : "",
     truncationLabel,
     updatedAt,
   ].filter(Boolean).join(" · ");
@@ -775,11 +1610,11 @@ function DeploymentBuildLog({ task }: { task: DeploymentTaskUpdate }) {
   return (
     <section
       className={`aw-deploy-log is-${log.status}${expanded ? "" : " is-collapsed"}`}
-      aria-label="构建日志"
+      aria-label={ariaLabel}
     >
       <header>
         <div>
-          <strong>构建日志</strong>
+          <strong>{title}</strong>
           <span>{meta}</span>
         </div>
         <div className="aw-deploy-log-actions">
@@ -788,18 +1623,18 @@ function DeploymentBuildLog({ task }: { task: DeploymentTaskUpdate }) {
               type="button"
               onClick={() => setExpanded((value) => !value)}
             >
-              {expanded ? "收起" : "展开"}
+              {expanded ? t("common.collapse") : t("common.expand")}
             </button>
           )}
           {hasLogText && (
             <button
               type="button"
               onClick={() => void copyLog()}
-              aria-label={copied ? "已复制构建日志" : "复制构建日志"}
-              title={copied ? "已复制" : "复制构建日志"}
+              aria-label={copied ? t("agentWorkspace.copiedLabel", { label: copyLabel }) : t("agentWorkspace.copyLabel", { label: copyLabel })}
+              title={copied ? t("agentWorkspace.copied") : t("agentWorkspace.copyLabel", { label: copyLabel })}
             >
               {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
-              <span>{copied ? "已复制" : "复制"}</span>
+              <span>{copied ? t("agentWorkspace.copied") : t("agentWorkspace.copy")}</span>
             </button>
           )}
         </div>
@@ -813,6 +1648,42 @@ function DeploymentBuildLog({ task }: { task: DeploymentTaskUpdate }) {
   );
 }
 
+function DeploymentBuildLog({ task }: { task: DeploymentTaskUpdate }) {
+  const { t } = useTranslation("ui");
+  return (
+    <DeploymentStepLog
+      log={task.buildLog}
+      autoExpand={Boolean(
+        task.buildLog?.status !== "complete"
+        && (task.status === "running" || task.status === "error")
+        && deploymentStepIndex(task, t) === 1,
+      )}
+      title={t("agentWorkspace.buildLog")}
+      ariaLabel={t("agentWorkspace.buildLog")}
+      copyLabel={t("agentWorkspace.buildLog")}
+      defaultPendingMessage={t("agentWorkspace.waitingBuildLog")}
+    />
+  );
+}
+
+function DeploymentGithubLog({ task }: { task: DeploymentTaskUpdate }) {
+  const { t } = useTranslation("ui");
+  return (
+    <DeploymentStepLog
+      log={task.githubLog}
+      autoExpand={Boolean(
+        task.githubLog?.status !== "complete"
+        && (task.status === "running" || task.status === "error")
+        && task.phase === "github",
+      )}
+      title={t("agentWorkspace.githubMountLog")}
+      ariaLabel={t("agentWorkspace.githubDeliveryMountLog")}
+      copyLabel={t("agentWorkspace.githubMountLog")}
+      defaultPendingMessage={t("agentWorkspace.waitingGithubMountLog")}
+    />
+  );
+}
+
 function DeploymentProgressCard({
   task,
   onReturnToEdit,
@@ -820,18 +1691,29 @@ function DeploymentProgressCard({
   task: DeploymentTaskUpdate;
   onReturnToEdit?: () => void;
 }) {
-  const steps = deploymentSteps(task);
-  const currentIndex = deploymentStepIndex(task);
+  const { t } = useTranslation("ui");
+  const [retrying, setRetrying] = useState(false);
+  const steps = deploymentSteps(task, t);
+  const currentIndex = deploymentStepIndex(task, t);
   const progress = task.status === "success"
     ? 100
     : Math.max(6, Math.min(100, task.pct ?? 6));
-  const title = task.status === "running"
-    ? "正在部署"
-    : task.status === "success"
-      ? "部署完成"
-      : task.status === "error"
-        ? "部署失败"
-        : "部署已取消";
+  const title = task.status === "running" && task.statusUnconfirmed
+    ? t("agentWorkspace.deployStatus.unconfirmed")
+    : task.status === "running"
+      ? t("agentWorkspace.deployStatus.running")
+      : task.status === "success"
+        ? t("agentWorkspace.deployStatus.success")
+        : task.status === "error"
+          ? t("agentWorkspace.deployStatus.error")
+          : t("agentWorkspace.deployStatus.cancelled");
+  const retryOperation = () => {
+    if (retrying || !task.retry) return;
+    setRetrying(true);
+    void task.retry()
+      .catch(() => undefined)
+      .finally(() => setRetrying(false));
+  };
 
   return (
     <section
@@ -841,7 +1723,9 @@ function DeploymentProgressCard({
       <div className="aw-deploy-progress-head">
         <div>
           <span className="aw-deploy-progress-icon" aria-hidden>
-            {task.status === "running" ? (
+            {task.status === "running" && task.statusUnconfirmed ? (
+              <CircleAlert />
+            ) : task.status === "running" ? (
               <Loader2 className="spin" />
             ) : task.status === "success" ? (
               <CircleCheck />
@@ -856,13 +1740,17 @@ function DeploymentProgressCard({
             <p>{task.runtimeName}</p>
           </div>
         </div>
-        <strong>{task.status === "running" ? `${Math.round(progress)}%` : task.label}</strong>
+        <strong>
+          {task.status === "running" && !task.statusUnconfirmed
+            ? `${Math.round(progress)}%`
+            : task.label}
+        </strong>
       </div>
 
       <div
         className="aw-deploy-progress-track"
         role="progressbar"
-        aria-label="部署进度"
+        aria-label={t("agentWorkspace.deploymentProgress")}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(progress)}
@@ -877,14 +1765,16 @@ function DeploymentProgressCard({
             : index === currentIndex
               ? task.status === "running" ? "active" : "failed"
               : "pending";
-          const message = index === currentIndex ? task.message : undefined;
+          const message = index === currentIndex
+            ? localizeDeployStageMessage(task)
+            : undefined;
           return (
             <li key={step.phase} className={`is-${status}`}>
               <span className="aw-deploy-step-marker" aria-hidden>
                 {status === "done" ? (
                   <Check />
                 ) : status === "active" ? (
-                  <Loader2 className="spin" />
+                  task.statusUnconfirmed ? <CircleAlert /> : <Loader2 className="spin" />
                 ) : status === "failed" ? (
                   <CircleX />
                 ) : (
@@ -899,6 +1789,11 @@ function DeploymentProgressCard({
                     <DeploymentBuildLog task={task} />
                   </div>
                 )}
+                {step.phase === "github" && task.githubLog && (
+                  <div className="aw-deploy-step-log">
+                    <DeploymentGithubLog task={task} />
+                  </div>
+                )}
               </div>
             </li>
           );
@@ -906,11 +1801,37 @@ function DeploymentProgressCard({
       </ol>
       {(task.status === "error" || task.status === "cancelled") && onReturnToEdit && (
         <div className="aw-deploy-progress-actions">
+          {task.status === "error" && task.retry && (
+            <button
+              type="button"
+              className="studio-update-action"
+              disabled={retrying}
+              onClick={retryOperation}
+            >
+              {retrying
+                ? t("deploymentError.retrying")
+                : t("agentWorkspace.retryOperation")}
+            </button>
+          )}
           <button
             type="button"
             className="studio-update-action"
             onClick={onReturnToEdit}
-          >返回编辑</button>
+          >{t("agentWorkspace.returnToEdit")}</button>
+        </div>
+      )}
+      {task.status === "error" && task.retry && !onReturnToEdit && (
+        <div className="aw-deploy-progress-actions">
+          <button
+            type="button"
+            className="studio-update-action"
+            disabled={retrying}
+            onClick={retryOperation}
+          >
+            {retrying
+              ? t("deploymentError.retrying")
+              : t("agentWorkspace.retryOperation")}
+          </button>
         </div>
       )}
     </section>
@@ -936,7 +1857,10 @@ export interface AgentWorkspaceProps {
   focusedAgentSection?: AgentSection;
   focusedCaseKind?: CaseKind;
   feedbackCasePreview?: AgentFeedbackCase | null;
+  currentSessionId?: string;
+  currentRuntimeId?: string;
   detailOnly?: boolean;
+  onBack?: () => void;
   onRetryAgents?: () => void;
   onAgentOrderChange?: (agentIds: string[]) => void;
   onDeleteAgents?: (agents: AgentEntry[]) => Promise<void>;
@@ -946,7 +1870,8 @@ export interface AgentWorkspaceProps {
   onOpenFeedbackCase?: (item: AgentFeedbackCase) => void | Promise<void>;
   onFeedbackCasesDeleted?: (items: AgentFeedbackCase[]) => void;
   onCreateAgent: () => void;
-  onUpdateAgent: (draft: AgentDraft, capability: RuntimeUpdateCapability) => void;
+  onUpdateAgent: (capability: RuntimeUpdateCapability) => void;
+  onEditMpaProfile?: (target: MpaProfileEditTarget) => void;
   onEditDraft?: (draft: WorkspaceAgentDraft) => void;
 }
 
@@ -968,7 +1893,10 @@ export function AgentWorkspace({
   focusedAgentSection = "basic",
   focusedCaseKind = "good",
   feedbackCasePreview = null,
+  currentSessionId = "",
+  currentRuntimeId = "",
   detailOnly = false,
+  onBack,
   onRetryAgents,
   onAgentOrderChange,
   onDeleteAgents,
@@ -979,10 +1907,12 @@ export function AgentWorkspace({
   onFeedbackCasesDeleted,
   onCreateAgent,
   onUpdateAgent,
+  onEditMpaProfile,
   onEditDraft,
 }: AgentWorkspaceProps) {
+  const { t, i18n } = useTranslation("ui");
   const [view, setView] = useState<WorkspaceView>("library");
-  const [section, setSection] = useState<AgentSection>("basic");
+  const [requestedSection, setSection] = useState<AgentSection>("basic");
   const [activeAgentId, setActiveAgentId] = useState("");
   const [activeDraftId, setActiveDraftId] = useState("");
   const [runtimeDetail, setRuntimeDetail] = useState<RuntimeDetail | null>(null);
@@ -998,6 +1928,11 @@ export function AgentWorkspace({
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [apiKeyLoading, setApiKeyLoading] = useState(false);
   const [apiKeyError, setApiKeyError] = useState("");
+  const [githubVersions, setGithubVersions] =
+    useState<GithubDeliveryVersionsResult | null>(null);
+  const [githubVersionsLoading, setGithubVersionsLoading] = useState(false);
+  const [githubVersionsError, setGithubVersionsError] = useState("");
+  const [rollbackCommit, setRollbackCommit] = useState("");
   const [updateCapability, setUpdateCapability] = useState<{
     requestKey: string;
     value: RuntimeUpdateCapability;
@@ -1006,6 +1941,10 @@ export function AgentWorkspace({
   const [updateCapabilityError, setUpdateCapabilityError] = useState("");
   const [detailAgentInfo, setDetailAgentInfo] = useState<AgentInfo | null>(null);
   const [detailAgentInfoResolved, setDetailAgentInfoResolved] = useState(false);
+  const [detailAgentInfoError, setDetailAgentInfoError] = useState("");
+  const [detailAgentInfoUnsupported, setDetailAgentInfoUnsupported] = useState(false);
+  const [runtimeDetailError, setRuntimeDetailError] = useState("");
+  const [detailReloadToken, setDetailReloadToken] = useState(0);
   const [query, setQuery] = useState("");
   const [caseFilter, setCaseFilter] = useState<CaseKind>("good");
   const [caseQuery, setCaseQuery] = useState("");
@@ -1019,6 +1958,8 @@ export function AgentWorkspace({
   const [selectedDraftIds, setSelectedDraftIds] = useState<Set<string>>(() => new Set());
   const [deletingAgents, setDeletingAgents] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  const deletePreviewAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => deletePreviewAbortRef.current?.abort(), []);
   const [deleteConfirmTarget, setDeleteConfirmTarget] =
     useState<DeleteConfirmTarget | null>(null);
   const [feedbackCases, setFeedbackCases] = useState<AgentCase[]>([]);
@@ -1039,6 +1980,30 @@ export function AgentWorkspace({
   const [agentUsageLoading, setAgentUsageLoading] = useState(false);
   const [agentUsageError, setAgentUsageError] = useState("");
   const [agentUsageReloadToken, setAgentUsageReloadToken] = useState(0);
+  const [sessionExecutionConfig, setSessionExecutionConfig] =
+    useState<SessionExecutionConfigState | null>(null);
+  const [mpaProfileStatus, setMpaProfileStatus] =
+    useState<MpaProfileStatusState | null>(null);
+  const [mpaAgentView, setMpaAgentView] = useState<MpaAgentViewState | null>(null);
+  const [mpaAgentViewLoading, setMpaAgentViewLoading] = useState(false);
+  const [mpaAgentViewError, setMpaAgentViewError] = useState("");
+  const [mpaDiagnostics, setMpaDiagnostics] =
+    useState<MpaDiagnosticsState | null>(null);
+  const [mpaDiagnosticsLoading, setMpaDiagnosticsLoading] = useState(false);
+  const [mpaDiagnosticsError, setMpaDiagnosticsError] = useState("");
+  const [mpaDiagnosticsReloadToken, setMpaDiagnosticsReloadToken] = useState(0);
+  const [sessionConfigModelInput, setSessionConfigModelInput] = useState("");
+  const [sessionConfigLoading, setSessionConfigLoading] = useState(false);
+  const [sessionConfigSaving, setSessionConfigSaving] = useState(false);
+  const [sessionConfigUpgradeRunning, setSessionConfigUpgradeRunning] = useState(false);
+  const [sessionConfigError, setSessionConfigError] = useState("");
+  const [sessionConfigNotice, setSessionConfigNotice] = useState("");
+  const [sessionConfigReloadToken, setSessionConfigReloadToken] = useState(0);
+  const [mpaProfileApply, setMpaProfileApply] = useState<MpaProfileApplyState>({
+    saving: false,
+    error: "",
+    notice: "",
+  });
   const [caseSelectionMode, setCaseSelectionMode] = useState(false);
   const [selectedCaseIds, setSelectedCaseIds] = useState<Set<string>>(() => new Set());
   const [deletingCases, setDeletingCases] = useState(false);
@@ -1051,6 +2016,7 @@ export function AgentWorkspace({
   const updateCapabilityRequestRef = useRef(0);
   const apiKeyRequestRef = useRef(0);
   const agentUsageRequestRef = useRef(0);
+  const sessionExecutionConfigRequestRef = useRef(0);
   const [evaluationGroups, setEvaluationGroups] = useState(DEFAULT_EVALUATION_GROUPS);
   const [activeEvaluationGroupId, setActiveEvaluationGroupId] = useState("");
 
@@ -1154,9 +2120,32 @@ export function AgentWorkspace({
       : null;
   const selectedAgentAppName =
     selectedAgentInfo?.appName || selectedAgent?.runtimeApp || selectedAgent?.app || "";
-  const visibleAgentSections = canViewUsage && selectedAgent?.runtimeId
-    ? AGENT_SECTIONS
-    : AGENT_SECTIONS.filter((item) => item.id !== "usage");
+  const selectedAgentCategory: AgentCategory =
+    selectedAgent?.agentCategory ?? "general";
+  // MPA details expose only Basic, including restored/external focus.
+  const section = selectedAgentCategory === "mpa" ? "basic" : requestedSection;
+  const runtimeDetailForSelectedAgent = runtimeDetail?.runtimeId === selectedAgent?.runtimeId
+    ? runtimeDetail
+    : null;
+  const runtimeDetailMpaInstanceId =
+    runtimeDetailForSelectedAgent?.mpaInstanceId;
+  const selectedMpaInstanceId =
+    selectedAgent?.mpaInstanceId ??
+    runtimeDetailMpaInstanceId ??
+    selectedAgent?.runtimeId ??
+    "";
+  const visibleAgentSectionIds = AGENT_SECTIONS.filter((item) => {
+    if (selectedAgentCategory === "mpa") return item === "basic";
+    if (item === "profileConfig") return false;
+    if (item === "usage") return canViewUsage && selectedAgent?.runtimeId;
+    if (item === "sessionConfig") return false;
+    if (item === "diagnostics") return false;
+    return true;
+  });
+  const visibleAgentSections = visibleAgentSectionIds.map((id) => ({
+    id,
+    label: t(`agentWorkspace.sections.${id}`),
+  }));
   const agentUsageRequestKey = JSON.stringify([
     selectedAgent?.runtimeId ?? "",
     selectedAgent?.region ?? "cn-beijing",
@@ -1167,6 +2156,23 @@ export function AgentWorkspace({
     ? agentUsage.value
     : null;
   const integrationRequestKey = `${selectedAgent?.region ?? "cn-beijing"}:${selectedAgent?.runtimeId ?? ""}`;
+  const sessionConfigRequestKey = JSON.stringify([
+    selectedAgent?.runtimeId ?? "",
+    selectedMpaInstanceId,
+    selectedAgent?.region ?? "cn-beijing",
+    currentSessionId,
+  ]);
+  const mpaAgentViewRequestKey = JSON.stringify([
+    selectedAgent?.runtimeId ?? "",
+    selectedMpaInstanceId,
+    selectedAgent?.region ?? "cn-beijing",
+  ]);
+  const mpaProfileStatusRequestKey = mpaAgentViewRequestKey;
+  const mpaDiagnosticsRequestKey = JSON.stringify([
+    selectedAgent?.runtimeId ?? "",
+    selectedAgent?.region ?? "cn-beijing",
+    currentSessionId,
+  ]);
   const selectedRevealedApiKey =
     revealedApiKey?.requestKey === integrationRequestKey
       ? revealedApiKey.value
@@ -1175,6 +2181,54 @@ export function AgentWorkspace({
     integrationProbe?.requestKey === integrationRequestKey
       ? integrationProbe
       : null;
+  const selectedSessionExecutionConfig =
+    sessionExecutionConfig?.requestKey === sessionConfigRequestKey && currentSessionId
+      ? sessionExecutionConfig.value
+      : null;
+  const selectedMpaAgentView =
+    mpaAgentView?.requestKey === mpaAgentViewRequestKey
+      ? mpaAgentView.value
+      : null;
+  const selectedMpaProfileStatus =
+    mpaProfileStatus?.requestKey === mpaProfileStatusRequestKey
+      ? mpaProfileStatus.value
+      : selectedMpaAgentView?.profile ?? null;
+  const selectedMpaBindingStatus = selectedMpaAgentView?.bindingStatus ?? "";
+  const selectedMpaSafeError = mpaSafeErrorMessage(
+    selectedMpaAgentView?.safeError?.code,
+    t,
+  );
+  const mpaProfileCanWrite = selectedMpaAgentView?.capabilities.canWrite === true;
+  const selectedMpaDiagnostics =
+    mpaDiagnostics?.requestKey === mpaDiagnosticsRequestKey
+      ? mpaDiagnostics
+      : null;
+  const mpaProfileRuntimeReady = Boolean(
+    selectedAgent?.runtimeId &&
+    selectedAgentCategory === "mpa" &&
+    selectedMpaBindingStatus !== "runtime_missing" &&
+    selectedMpaBindingStatus !== "binding_ambiguous",
+  );
+  const sessionExecutionConfigLoadable = Boolean(
+    selectedAgent?.agentCategory === "mpa" &&
+    selectedAgent?.runtimeId &&
+    selectedAgent?.runtimeId === currentRuntimeId &&
+    selectedMpaBindingStatus === "bound" &&
+    currentSessionId,
+  );
+  const latestProfileRevision =
+    selectedMpaProfileStatus?.status === "applied"
+      ? selectedMpaProfileStatus.profileRevision
+      : null;
+  const profileUpgradeAvailable = Boolean(
+    sessionExecutionConfigLoadable &&
+    selectedSessionExecutionConfig &&
+    latestProfileRevision != null &&
+    latestProfileRevision > selectedSessionExecutionConfig.profileRevision,
+  );
+  const currentModelId = effectiveModelId(selectedSessionExecutionConfig);
+  const modelInputDirty =
+    sessionConfigModelInput.trim() !== currentModelId;
   const apiIntegrationAvailable = Boolean(selectedIntegrationProbe?.apiApps?.length);
   const a2aIntegrationAvailable = Boolean(selectedIntegrationProbe?.a2a);
   const apiIntegrationAppName =
@@ -1184,15 +2238,41 @@ export function AgentWorkspace({
     selectedIntegrationProbe?.a2a?.endpoint ?? "",
     runtimeEndpoint,
   );
+  const capabilityRuntimeAppName = selectedAgent?.runtimeApp || "";
   const updateCapabilityRequestKey = JSON.stringify([
     selectedAgent?.runtimeId ?? "",
     selectedAgent?.region ?? "",
-    selectedAgentAppName,
+    selectedAgent?.currentVersion ?? null,
+    capabilityRuntimeAppName,
   ]);
+  const cachedUpdateCapability = canUpdate &&
+    selectedAgent?.runtimeId &&
+    selectedAgent.region &&
+    detailReloadToken === 0
+    ? getCachedRuntimeUpdateCapability({
+        runtimeId: selectedAgent.runtimeId,
+        region: selectedAgent.region,
+        appName: capabilityRuntimeAppName,
+        currentVersion: selectedAgent.currentVersion,
+      })
+    : null;
   const selectedUpdateCapability =
     updateCapability?.requestKey === updateCapabilityRequestKey
       ? updateCapability.value
-      : null;
+      : cachedUpdateCapability;
+  const updateCapabilityReason = selectedUpdateCapability?.reason
+    ? localeCompatibleBackendText(
+        selectedUpdateCapability.reason,
+        i18n.resolvedLanguage || i18n.language,
+      )
+    : "";
+  const updateCapabilityWarnings = selectedUpdateCapability?.warnings.filter(
+    (warning) => localeCompatibleBackendText(
+      warning,
+      i18n.resolvedLanguage || i18n.language,
+    ),
+  ) ?? [];
+  const shouldLoadUpdateCapability = selectedAgentCategory !== "mpa";
   useEffect(() => {
     const requestId = updateCapabilityRequestRef.current + 1;
     updateCapabilityRequestRef.current = requestId;
@@ -1201,53 +2281,90 @@ export function AgentWorkspace({
 
     const runtimeId = selectedAgent?.runtimeId ?? "";
     const region = selectedAgent?.region ?? "";
-    if (!canUpdate || !runtimeId || !region) {
+    if (!shouldLoadUpdateCapability || !canUpdate || !runtimeId || !region) {
+      setUpdateCapabilityLoading(false);
+      return;
+    }
+
+    const cached = detailReloadToken === 0
+      ? getCachedRuntimeUpdateCapability({
+          runtimeId,
+          region,
+          appName: capabilityRuntimeAppName,
+          currentVersion: selectedAgent?.currentVersion,
+        })
+      : null;
+    if (cached) {
+      setUpdateCapability({ requestKey: updateCapabilityRequestKey, value: cached });
       setUpdateCapabilityLoading(false);
       return;
     }
 
     const controller = new AbortController();
+    let pollTimer: number | undefined;
+    let pollAttempts = 0;
+    const maxPollAttempts = 60;
     setUpdateCapabilityLoading(true);
-    void getRuntimeUpdateCapability({
-      runtimeId,
-      region,
-      appName: selectedAgentAppName,
-      signal: controller.signal,
-    }).then((value) => {
-      if (requestId !== updateCapabilityRequestRef.current) return;
-      if (
-        value.runtime.runtimeId !== runtimeId ||
-        value.runtime.region !== region ||
-        (selectedAgentAppName &&
-          value.agent?.appName !== selectedAgentAppName) ||
-        (value.canUpdate && !value.agent?.appName)
-      ) {
-        setUpdateCapabilityError("Runtime 更新能力响应与当前选择不匹配。");
-        return;
-      }
-      setUpdateCapability({ requestKey: updateCapabilityRequestKey, value });
-    }).catch((error: unknown) => {
-      if (
-        requestId !== updateCapabilityRequestRef.current ||
-        controller.signal.aborted
-      ) return;
-      setUpdateCapabilityError(
-        error instanceof Error ? error.message : "检查 Runtime 更新能力失败。",
-      );
-    }).finally(() => {
-      if (
-        requestId === updateCapabilityRequestRef.current &&
-        !controller.signal.aborted
-      ) {
+    const loadCapability = (initial: boolean) => {
+      void getRuntimeUpdateCapability({
+        runtimeId,
+        region,
+        appName: capabilityRuntimeAppName,
+        currentVersion: selectedAgent?.currentVersion,
+        signal: controller.signal,
+        force: initial && detailReloadToken > 0,
+      }).then((value) => {
+        if (requestId !== updateCapabilityRequestRef.current) return;
+        const preparing = value.recoveryStatus === "preparing";
+        if (
+          value.runtime.runtimeId !== runtimeId ||
+          value.runtime.region !== region ||
+          (!preparing && capabilityRuntimeAppName &&
+            value.agent?.appName !== capabilityRuntimeAppName) ||
+          (value.canUpdate && !value.agent?.appName)
+        ) {
+          setUpdateCapabilityError(t("agentWorkspace.errors.updateCapabilityMismatch"));
+          return;
+        }
+        setUpdateCapability({ requestKey: updateCapabilityRequestKey, value });
         setUpdateCapabilityLoading(false);
-      }
-    });
-    return () => controller.abort();
+        if (!preparing) return;
+        pollAttempts += 1;
+        if (pollAttempts >= maxPollAttempts) {
+          setUpdateCapabilityError(
+            t("agentWorkspace.errors.updateConfigRestoring"),
+          );
+          return;
+        }
+        pollTimer = window.setTimeout(() => loadCapability(false), 1_000);
+      }).catch(() => {
+        if (
+          requestId !== updateCapabilityRequestRef.current ||
+          controller.signal.aborted
+        ) return;
+        setUpdateCapabilityError(t("agentWorkspace.errors.checkUpdateCapability"));
+      }).finally(() => {
+        if (
+          requestId === updateCapabilityRequestRef.current &&
+          !controller.signal.aborted
+        ) {
+          setUpdateCapabilityLoading(false);
+        }
+      });
+    };
+    loadCapability(true);
+    return () => {
+      controller.abort();
+      if (pollTimer != null) window.clearTimeout(pollTimer);
+    };
   }, [
     canUpdate,
+    capabilityRuntimeAppName,
+    detailReloadToken,
+    selectedAgent?.currentVersion,
     selectedAgent?.region,
     selectedAgent?.runtimeId,
-    selectedAgentAppName,
+    shouldLoadUpdateCapability,
     updateCapabilityRequestKey,
   ]);
   const listedAgents = useMemo(() => {
@@ -1277,7 +2394,7 @@ export function AgentWorkspace({
     selectedDraft?.draft.name ||
     selectedPendingTask?.agentName ||
     selectedPendingTask?.agentDraft?.name ||
-    "未选择智能体";
+    t("agentWorkspace.noAgentSelected");
   const selectedEvaluationGroup = evaluationGroups.find(
     (group) => group.id === activeEvaluationGroupId,
   );
@@ -1291,53 +2408,129 @@ export function AgentWorkspace({
   const deletableItemCount = deletableListedAgents.length + filteredDrafts.length;
   const selectedDeleteCount =
     selectedDeletableAgents.length + selectedDeletableDrafts.length;
-  const draft = useMemo(
-    () =>
-      selectedPendingTask?.agentDraft ??
-      selectedDraft?.draft ??
-      selectedAgentUpdateDraft?.draft ??
-      infoToDraft(
-        selectedAgentInfo,
-        selectedAgentAppName || selectedAgent?.label || "agent",
-      ),
+  const draft = useMemo(() => {
+    if (selectedPendingTask?.agentDraft) return selectedPendingTask.agentDraft;
+    if (selectedDraft?.draft) return selectedDraft.draft;
+    const cloudProvider = selectedAgent?.region?.startsWith("ap-")
+      ? "byteplus"
+      : "volcengine";
+    if (
+      selectedUpdateCapability?.agent &&
+      (selectedUpdateCapability.recoveryStatus === "complete" ||
+        selectedUpdateCapability.recoveryStatus === "draft-only")
+    ) {
+      return runtimeAgentDraftFromCloud(
+        selectedUpdateCapability.agent,
+        cloudProvider,
+        selectedUpdateCapability.runtime.configuredEnvKeys,
+      );
+    }
+    return infoToDraft(
+      selectedAgentInfo,
+      selectedAgentAppName || selectedAgent?.label || "agent",
+      cloudProvider,
+    );
+  },
     [
       selectedAgentInfo,
       selectedAgentAppName,
       selectedAgent?.label,
-      selectedAgentUpdateDraft?.draft,
+      selectedAgent?.region,
       selectedDraft?.draft,
       selectedPendingTask?.agentDraft,
+      selectedUpdateCapability,
     ],
   );
+  const publishedHarnessSidecar =
+    selectedAgentInfo?.draft?.harnessSidecar ??
+    harnessIntentFromRuntimeEnvs(runtimeDetail?.envs);
+  const publishedHarnessOptimizations = publishedHarnessSidecar
+    ? HARNESS_SIDECAR_OPTION_IDS.filter(
+        (id) => publishedHarnessSidecar.componentOverrides[id],
+      )
+    : [];
+  const profileDraft = useMemo(() => mpaProfileFromAgentDraft(draft), [draft]);
   const updateBlockedReason = selectedDraft
-    ? canCreate ? "" : "当前账号没有新建 Agent 的权限。"
+    ? canCreate ? "" : t("agentWorkspace.errors.noCreatePermission")
+    : selectedAgentCategory === "mpa"
+      ? ""
     : !canUpdate
-      ? "当前账号没有管理 Agent 的权限。"
+      ? t("agentWorkspace.errors.noManagePermission")
       : !selectedAgent?.runtimeId
-        ? "仅支持更新已部署的云端智能体。"
+        ? t("agentWorkspace.errors.cloudOnlyUpdate")
         : !selectedAgent.region
-          ? "Runtime 缺少地域信息，无法更新。"
+          ? t("agentWorkspace.errors.runtimeRegionMissing")
           : updateCapabilityLoading
-            ? "正在检查 Runtime 更新能力…"
+            ? t("agentWorkspace.errors.checkingUpdateConfig")
             : updateCapabilityError
               ? updateCapabilityError
               : !selectedUpdateCapability
-                ? "尚未完成 Runtime 更新能力检查。"
+                ? t("agentWorkspace.errors.updateCapabilityPending")
+                : selectedUpdateCapability.recoveryStatus !== "complete" &&
+                    selectedUpdateCapability.recoveryStatus !== "draft-only"
+                  ? updateCapabilityReason ||
+                    t("agentWorkspace.errors.originalConfigUnavailable")
                 : !selectedUpdateCapability.canUpdate
-                  ? selectedUpdateCapability.reason || "当前 Runtime 不支持原地更新。"
+                  ? updateCapabilityReason || t("agentWorkspace.errors.updateUnsupported")
                   : selectedUpdateCapability.agent?.appName
                     ? ""
-                    : "Runtime 更新能力响应缺少智能体信息。";
+                    : t("agentWorkspace.errors.agentInfoMissing");
   const updateReasonId = "aw-update-disabled-reason";
-  const selectedUpdateTarget = selectedUpdateCapability?.agent
-    ? {
-        runtimeId: selectedUpdateCapability.runtime.runtimeId,
-        name: selectedUpdateCapability.runtime.name,
-        region: selectedUpdateCapability.runtime.region,
-        appName: selectedUpdateCapability.agent.appName,
-        currentVersion: selectedUpdateCapability.runtime.currentVersion,
-      }
-    : selectedAgentUpdateDraft?.deploymentTarget;
+  const profileConfigDisabledReason = !selectedAgent
+    ? t("agentWorkspace.sessionConfigNoAgent")
+    : selectedAgentCategory !== "mpa"
+      ? t("agentWorkspace.sessionConfigNonMpa")
+      : mpaAgentViewLoading
+        ? t("agentWorkspace.loadingMpaAgentView")
+        : mpaAgentViewError
+          ? mpaAgentViewError
+          : selectedMpaSafeError
+            ? selectedMpaSafeError
+          : selectedMpaBindingStatus === "runtime_missing"
+            ? t("agentWorkspace.mpaRuntimeMissing")
+            : selectedMpaBindingStatus === "binding_ambiguous"
+              ? t("agentWorkspace.mpaRuntimeBindingAmbiguous")
+              : selectedMpaBindingStatus && !mpaProfileRuntimeReady
+                ? t("agentWorkspace.mpaRuntimeMissing")
+                : !mpaProfileCanWrite
+                  ? t("agentWorkspace.errors.noManagePermission")
+              : "";
+  const sessionConfigDisabledReason = !selectedAgent
+    ? t("agentWorkspace.sessionConfigNoAgent")
+    : selectedAgentCategory !== "mpa"
+      ? t("agentWorkspace.sessionConfigNonMpa")
+      : mpaAgentViewLoading
+        ? t("agentWorkspace.loadingMpaAgentView")
+        : mpaAgentViewError
+          ? mpaAgentViewError
+          : selectedMpaSafeError
+            ? selectedMpaSafeError
+          : selectedMpaBindingStatus === "runtime_missing"
+            ? t("agentWorkspace.mpaRuntimeMissing")
+            : selectedMpaBindingStatus === "binding_ambiguous"
+              ? t("agentWorkspace.mpaRuntimeBindingAmbiguous")
+              : selectedMpaBindingStatus === "orphan_runtime"
+                ? t("agentWorkspace.mpaRuntimeOrphan")
+                : !currentSessionId
+                  ? t("agentWorkspace.sessionConfigNoSession")
+                  : selectedAgent.runtimeId !== currentRuntimeId
+                    ? t("agentWorkspace.sessionConfigDifferentRuntime")
+                    : "";
+  const diagnosticsDisabledReason = !selectedAgent
+    ? t("agentWorkspace.sessionConfigNoAgent")
+    : selectedAgentCategory !== "mpa"
+      ? t("agentWorkspace.sessionConfigNonMpa")
+      : mpaAgentViewLoading
+        ? t("agentWorkspace.loadingMpaAgentView")
+        : mpaAgentViewError
+          ? mpaAgentViewError
+          : selectedMpaBindingStatus !== "bound"
+            ? sessionConfigDisabledReason
+            : !currentSessionId
+              ? t("agentWorkspace.sessionConfigNoSession")
+              : selectedAgent.runtimeId !== currentRuntimeId
+                ? t("agentWorkspace.sessionConfigDifferentRuntime")
+                : "";
   const toolNames = useMemo(() => {
     if (selectedAgentInfo) return selectedAgentInfo.tools;
     const builtinNames = (draft.builtinTools ?? []).map(
@@ -1364,6 +2557,10 @@ export function AgentWorkspace({
   const deploymentTask = useMemo(() => {
     if (selectedPendingTask) return selectedPendingTask;
     if (selectedDraft) {
+      const taskForDraftId = deploymentTasks
+        .filter((task) => task.draftId === selectedDraft.id)
+        .sort((left, right) => right.startedAt - left.startedAt)[0];
+      if (taskForDraftId) return taskForDraftId;
       return deploymentTasks
         .filter(
           (task) =>
@@ -1414,8 +2611,84 @@ export function AgentWorkspace({
     ? `runtime:${selectedAgent?.runtimeId ?? selectedAgentInfo.name}:v${runtimeVersionKey}:${draftFlowKey}`
     : `draft:${selectedPendingTask?.id ?? selectedDraft?.id ?? selectedAgent?.id ?? selectedName}:${draftFlowKey}`;
   useEffect(() => {
+    let cancelled = false;
+    const runtimeId = selectedAgent?.runtimeId ?? "";
+    const mpaInstanceId = selectedMpaInstanceId || runtimeId;
+    const region = selectedAgent?.region ?? "cn-beijing";
+    const requestKey = mpaAgentViewRequestKey;
+    setMpaAgentViewError("");
+    if (
+      selectedAgentCategory !== "mpa" || !runtimeId ||
+      (section !== "profileConfig" && section !== "sessionConfig")
+    ) {
+      setMpaAgentView(null);
+      setMpaAgentViewLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setMpaAgentViewLoading(true);
+    void getMpaAgentView({
+      mpaInstanceId,
+      runtimeId,
+      region,
+      signal: controller.signal,
+    })
+      .then((value) => {
+        if (cancelled) return;
+        setMpaAgentView({ requestKey, value });
+        setMpaProfileStatus(
+          value.profile
+            ? { requestKey: mpaProfileStatusRequestKey, value: value.profile }
+            : null,
+        );
+      })
+      .catch((error: unknown) => {
+        if (cancelled || controller.signal.aborted) return;
+        setMpaAgentView(null);
+        setMpaAgentViewError(
+          error instanceof Error ? error.message : t("agentWorkspace.errors.loadMpaAgentView"),
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setMpaAgentViewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [
+    detailReloadToken,
+    mpaAgentViewRequestKey,
+    section,
+    selectedMpaInstanceId,
+    selectedAgent?.region,
+    selectedAgent?.runtimeId,
+    selectedAgentCategory,
+    mpaProfileStatusRequestKey,
+    t,
+  ]);
+
+  useEffect(() => {
     if (section === "usage" && !canViewUsage) setSection("basic");
   }, [canViewUsage, section]);
+
+  useEffect(() => {
+    if (
+      section === "sessionConfig" &&
+      (!selectedAgent?.runtimeId || selectedAgentCategory !== "mpa")
+    ) {
+      setSection("basic");
+    }
+  }, [section, selectedAgent?.runtimeId, selectedAgentCategory]);
+
+  useEffect(() => {
+    if (
+      section === "diagnostics" &&
+      (!selectedAgent?.runtimeId || selectedAgentCategory !== "mpa")
+    ) {
+      setSection("basic");
+    }
+  }, [section, selectedAgent?.runtimeId, selectedAgentCategory]);
 
   useEffect(() => {
     if (!focusedDeploymentTaskId) return;
@@ -1460,34 +2733,8 @@ export function AgentWorkspace({
       const region = agent.region ?? "cn-beijing";
       prefetchRuntimeDetail(agent.runtimeId, region);
       prefetchRuntimeAgentInfo(agent.runtimeId, region, agent.runtimeApp ?? "");
-      void getRuntimeAgentInfo(agent.runtimeId, region, agent.runtimeApp ?? "")
-        .then((info) => {
-          const appName = info.appName || agent.app;
-          if (!appName) return;
-          prefetchAgentFeedbackCases({
-            runtimeId: agent.runtimeId ?? "",
-            region,
-            appName,
-            pageSize: 100,
-          });
-        })
-        .catch(() => {});
     }
   }, [listedAgents]);
-
-  useEffect(() => {
-    if (!selectedAgent?.runtimeId || !selectedAgentAppName) return;
-    prefetchAgentFeedbackCases({
-      runtimeId: selectedAgent.runtimeId,
-      region: selectedAgent.region ?? "cn-beijing",
-      appName: selectedAgentAppName,
-      pageSize: 100,
-    });
-  }, [
-    selectedAgentAppName,
-    selectedAgent?.region,
-    selectedAgent?.runtimeId,
-  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1498,6 +2745,8 @@ export function AgentWorkspace({
       ? getCachedRuntimeAgentInfo(runtimeId, region, knownApp)
       : null;
     setDetailAgentInfo(cached);
+    setDetailAgentInfoError("");
+    setDetailAgentInfoUnsupported(false);
     setDetailAgentInfoResolved(Boolean(cached) || !detailOnly || !runtimeId);
     if (!detailOnly || !runtimeId) return;
     void getRuntimeAgentInfo(
@@ -1509,8 +2758,14 @@ export function AgentWorkspace({
       .then((info) => {
         if (!cancelled) setDetailAgentInfo(info);
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!cancelled && !cached) setDetailAgentInfo(null);
+        if (!cancelled) {
+          setDetailAgentInfoUnsupported(
+            error instanceof RuntimeProbeError && error.unsupported,
+          );
+          setDetailAgentInfoError(t("agentWorkspace.errors.loadAgentInfo"));
+        }
       })
       .finally(() => {
         if (!cancelled) setDetailAgentInfoResolved(true);
@@ -1520,6 +2775,7 @@ export function AgentWorkspace({
     };
   }, [
     detailOnly,
+    detailReloadToken,
     selectedAgent?.currentVersion,
     selectedAgent?.region,
     selectedAgent?.runtimeApp,
@@ -1549,11 +2805,9 @@ export function AgentWorkspace({
       .then((response) => {
         if (!cancelled) setOptimizationGroups(response.groups);
       })
-      .catch((cause: unknown) => {
+      .catch(() => {
         if (!cancelled) {
-          setOptimizationsError(
-            cause instanceof Error ? cause.message : String(cause),
-          );
+          setOptimizationsError(t("agentWorkspace.errors.loadOptimizations"));
         }
       })
       .finally(() => {
@@ -1609,19 +2863,17 @@ export function AgentWorkspace({
           response.appName !== appName ||
           response.page !== agentUsagePage
         ) {
-          setAgentUsageError("用量响应与当前 Agent 不匹配，请重试。");
+          setAgentUsageError(t("agentWorkspace.errors.usageMismatch"));
           return;
         }
         setAgentUsage({ requestKey: agentUsageRequestKey, value: response });
       })
-      .catch((cause: unknown) => {
+      .catch(() => {
         if (
           requestId !== agentUsageRequestRef.current ||
           controller.signal.aborted
         ) return;
-        setAgentUsageError(
-          cause instanceof Error ? cause.message : "加载 Agent 用量失败。",
-        );
+        setAgentUsageError(t("agentWorkspace.errors.loadUsage"));
       })
       .finally(() => {
         if (requestId === agentUsageRequestRef.current) {
@@ -1651,6 +2903,77 @@ export function AgentWorkspace({
     setApiKeyError("");
     setIntegrationProtocol("api-server");
   }, [integrationRequestKey, section]);
+
+  useEffect(() => {
+    const runtimeId = selectedAgent?.runtimeId ?? "";
+    const region = selectedAgent?.region ?? "cn-beijing";
+    const requestKey = mpaDiagnosticsRequestKey;
+    setMpaDiagnosticsError("");
+    if (
+      section !== "diagnostics" ||
+      selectedAgentCategory !== "mpa" ||
+      selectedMpaBindingStatus !== "bound" ||
+      !runtimeId ||
+      !currentSessionId ||
+      runtimeId !== currentRuntimeId
+    ) {
+      setMpaDiagnosticsLoading(false);
+      if (section !== "diagnostics") setMpaDiagnostics(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    let cancelled = false;
+    setMpaDiagnosticsLoading(true);
+    void getMpaRuntimeConsoleRuns({
+      runtimeId,
+      region,
+      sessionId: currentSessionId,
+      signal: controller.signal,
+    })
+      .then(async (runsResult) => {
+        const firstRun = runsResult.runs[0];
+        const trace = firstRun
+          ? await getMpaRuntimeConsoleTrace({
+              runtimeId,
+              region,
+              sessionId: currentSessionId,
+              invocationId: firstRun.invocationId,
+              signal: controller.signal,
+            })
+          : null;
+        return { runs: runsResult.runs, trace };
+      })
+      .then((value) => {
+        if (cancelled) return;
+        setMpaDiagnostics({ requestKey, ...value });
+      })
+      .catch((error: unknown) => {
+        if (cancelled || controller.signal.aborted) return;
+        setMpaDiagnostics(null);
+        setMpaDiagnosticsError(
+          error instanceof Error ? error.message : t("agentWorkspace.errors.loadMpaDiagnostics"),
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setMpaDiagnosticsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [
+    currentRuntimeId,
+    currentSessionId,
+    mpaDiagnosticsReloadToken,
+    mpaDiagnosticsRequestKey,
+    section,
+    selectedAgent?.region,
+    selectedAgent?.runtimeId,
+    selectedAgentCategory,
+    selectedMpaBindingStatus,
+    t,
+  ]);
 
   function clearRevealedApiKey() {
     apiKeyRequestRef.current += 1;
@@ -1688,7 +3011,7 @@ export function AgentWorkspace({
       setRevealedApiKey(null);
       setApiKeyVisible(false);
       setApiKeyError(
-        error instanceof Error ? error.message : "读取 Runtime API Key 失败。",
+        error instanceof Error ? error.message : t("agentWorkspace.errors.loadApiKey"),
       );
     } finally {
       if (requestId === apiKeyRequestRef.current) setApiKeyLoading(false);
@@ -1703,6 +3026,7 @@ export function AgentWorkspace({
       ? getCachedRuntimeDetail(runtimeId, region)
       : null;
     setRuntimeDetail(cached);
+    setRuntimeDetailError("");
     if (!runtimeId) return;
     void getRuntimeDetail(
       runtimeId,
@@ -1714,15 +3038,133 @@ export function AgentWorkspace({
       })
       .catch(() => {
         if (!cancelled && !cached) setRuntimeDetail(null);
+        if (!cancelled) {
+          setRuntimeDetailError(t("agentWorkspace.errors.loadRuntimeDetails"));
+        }
       });
     return () => {
       cancelled = true;
     };
   }, [
+    detailReloadToken,
     selectedAgent?.currentVersion,
     selectedAgent?.region,
     selectedAgent?.runtimeId,
   ]);
+
+  useEffect(() => {
+    const requestId = sessionExecutionConfigRequestRef.current + 1;
+    sessionExecutionConfigRequestRef.current = requestId;
+    setSessionConfigError("");
+    setSessionConfigNotice("");
+    setSessionConfigSaving(false);
+    setSessionConfigUpgradeRunning(false);
+    if (
+      section !== "sessionConfig" ||
+      !sessionExecutionConfigLoadable ||
+      !selectedAgent?.runtimeId
+    ) {
+      setSessionConfigLoading(false);
+      setSessionExecutionConfig(null);
+      setSessionConfigModelInput("");
+      return;
+    }
+
+    const runtimeId = selectedAgent.runtimeId;
+    const mpaInstanceId = selectedMpaInstanceId || runtimeId;
+    const region = selectedAgent.region ?? "cn-beijing";
+    const requestKey = sessionConfigRequestKey;
+    const controller = new AbortController();
+    setSessionConfigLoading(true);
+    void Promise.all([
+      getMpaSessionExecutionConfig({
+        runtimeId,
+        region,
+        sessionId: currentSessionId,
+        signal: controller.signal,
+      }),
+      getMpaProfileStatus({
+        runtimeId,
+        region,
+        mpaInstanceId,
+        signal: controller.signal,
+      }).catch(() => null),
+    ])
+      .then(([config, profileStatus]) => {
+        if (requestId !== sessionExecutionConfigRequestRef.current) return;
+        setSessionExecutionConfig({ requestKey, value: config });
+        setSessionConfigModelInput(effectiveModelId(config));
+        setMpaProfileStatus(
+          profileStatus
+            ? { requestKey: mpaProfileStatusRequestKey, value: profileStatus }
+            : null,
+        );
+      })
+      .catch((error: unknown) => {
+        if (
+          requestId !== sessionExecutionConfigRequestRef.current ||
+          controller.signal.aborted ||
+          (error as Error)?.name === "AbortError"
+        ) return;
+        setSessionExecutionConfig(null);
+        setSessionConfigModelInput("");
+        setSessionConfigError(
+          error instanceof Error
+            ? error.message
+            : t("agentWorkspace.errors.loadSessionConfig"),
+        );
+      })
+      .finally(() => {
+        if (
+          requestId === sessionExecutionConfigRequestRef.current &&
+          !controller.signal.aborted
+        ) {
+          setSessionConfigLoading(false);
+        }
+      });
+    return () => {
+      controller.abort();
+    };
+  }, [
+    currentSessionId,
+    sessionConfigReloadToken,
+    sessionConfigRequestKey,
+    sessionExecutionConfigLoadable,
+    section,
+    mpaProfileStatusRequestKey,
+    selectedMpaInstanceId,
+    selectedAgent?.region,
+    selectedAgent?.runtimeId,
+    t,
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const runtimeId = selectedAgent?.runtimeId ?? "";
+    setGithubVersionsError("");
+    if (section !== "versions" || !runtimeId) {
+      setGithubVersionsLoading(false);
+      if (!runtimeId) setGithubVersions(null);
+      return;
+    }
+    setGithubVersionsLoading(true);
+    void getGithubDeliveryVersions(runtimeId)
+      .then((value) => {
+        if (!cancelled) setGithubVersions(value);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setGithubVersions(null);
+          setGithubVersionsError(t("agentWorkspace.errors.loadGithubVersions"));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setGithubVersionsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [section, selectedAgent?.currentVersion, selectedAgent?.runtimeId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1749,12 +3191,10 @@ export function AgentWorkspace({
       .then(([apiApps, a2a]) => {
         if (!cancelled) setIntegrationProbe({ requestKey, apiApps, a2a });
       })
-      .catch((error: unknown) => {
+      .catch(() => {
         if (!cancelled) {
           setIntegrationProbe(null);
-          setIntegrationError(
-            error instanceof Error ? error.message : "探测集成方式失败。",
-          );
+          setIntegrationError(t("agentWorkspace.errors.probeIntegration"));
         }
       })
       .finally(() => {
@@ -1783,7 +3223,7 @@ export function AgentWorkspace({
           pageSize: 100,
         })
       : null;
-    setFeedbackCases(cached ? feedbackCasesFromResponse(cached) : []);
+    setFeedbackCases(cached ? feedbackCasesFromResponse(cached, t) : []);
     setFeedbackSets(cached?.sets ?? []);
     setFeedbackCasesError("");
     setFeedbackCasesUnsupported(cached?.unsupportedMessage ?? "");
@@ -1805,12 +3245,12 @@ export function AgentWorkspace({
       .then((response) => {
         if (cancelled) return;
         setFeedbackSets(response.sets);
-        setFeedbackCases(feedbackCasesFromResponse(response));
+        setFeedbackCases(feedbackCasesFromResponse(response, t));
         setFeedbackCasesUnsupported(response.unsupportedMessage ?? "");
       })
-      .catch((cause) => {
+      .catch(() => {
         if (!cancelled) {
-          setFeedbackCasesError(cause instanceof Error ? cause.message : String(cause));
+          setFeedbackCasesError(t("agentWorkspace.errors.loadEvaluations"));
           setFeedbackCasesUnsupported("");
         }
       })
@@ -1829,7 +3269,237 @@ export function AgentWorkspace({
     selectedAgentInfo?.appName,
     selectedAgent?.region,
     selectedAgent?.runtimeId,
+    t,
   ]);
+
+  async function createRollbackPr(version: GithubDeliveryVersion) {
+    const runtimeId = selectedAgent?.runtimeId ?? "";
+    const commitSha = version.commitSha ?? "";
+    if (!runtimeId || !commitSha || rollbackCommit) return;
+    setRollbackCommit(commitSha);
+    setGithubVersionsError("");
+    try {
+      await createGithubDeliveryRollbackPr({
+        runtimeId,
+        targetCommitSha: commitSha,
+        region: selectedAgent?.region,
+        agentCategory: selectedAgentCategory,
+      });
+      const refreshed = await getGithubDeliveryVersions(runtimeId);
+      setGithubVersions(refreshed);
+    } catch (error) {
+      setGithubVersionsError(
+        error instanceof Error ? error.message : t("agentWorkspace.errors.rollbackVersion"),
+      );
+    } finally {
+      setRollbackCommit("");
+    }
+  }
+
+  function applySessionConfigConflict(error: unknown, fallback: string): boolean {
+    if (!(error instanceof MpaExecutionConfigRequestError)) return false;
+    if (error.status !== 412 || !error.currentState) return false;
+    setSessionExecutionConfig({
+      requestKey: sessionConfigRequestKey,
+      value: error.currentState,
+    });
+    setSessionConfigModelInput(effectiveModelId(error.currentState));
+    setSessionConfigError(fallback);
+    return true;
+  }
+
+  async function saveSessionModelOverride(mode: MpaExecutionConfigMode = "replace") {
+    if (!selectedAgent?.runtimeId || !selectedSessionExecutionConfig) return;
+    const runtimeId = selectedAgent.runtimeId;
+    const region = selectedAgent.region ?? "cn-beijing";
+    const modelId = sessionConfigModelInput.trim();
+    const change = mode === "inherit"
+      ? { category: "model", mode }
+      : modelId
+        ? { category: "model", mode, value: { id: modelId } }
+        : { category: "model", mode: "inherit" as const };
+    setSessionConfigSaving(true);
+    setSessionConfigError("");
+    setSessionConfigNotice("");
+    try {
+      const next = await patchMpaSessionExecutionConfig({
+        runtimeId,
+        region,
+        sessionId: currentSessionId,
+        etag: selectedSessionExecutionConfig.etag,
+        changes: [change],
+      });
+      setSessionExecutionConfig({ requestKey: sessionConfigRequestKey, value: next });
+      setSessionConfigModelInput(effectiveModelId(next));
+      setSessionConfigNotice(t("agentWorkspace.sessionConfigSaved"));
+    } catch (error) {
+      if (!applySessionConfigConflict(
+        error,
+        t("agentWorkspace.sessionConfigStale"),
+      )) {
+        setSessionConfigError(
+          executionConfigErrorMessage(
+            error,
+            t("agentWorkspace.sessionConfigStale"),
+          ),
+        );
+      }
+    } finally {
+      setSessionConfigSaving(false);
+    }
+  }
+
+  async function updateSessionMcpMode(mode: Extract<MpaExecutionConfigMode, "clear" | "inherit">) {
+    if (!selectedAgent?.runtimeId || !selectedSessionExecutionConfig) return;
+    const runtimeId = selectedAgent.runtimeId;
+    const region = selectedAgent.region ?? "cn-beijing";
+    setSessionConfigSaving(true);
+    setSessionConfigError("");
+    setSessionConfigNotice("");
+    try {
+      const next = await patchMpaSessionExecutionConfig({
+        runtimeId,
+        region,
+        sessionId: currentSessionId,
+        etag: selectedSessionExecutionConfig.etag,
+        changes: [{ category: "mcpServers", mode }],
+      });
+      setSessionExecutionConfig({ requestKey: sessionConfigRequestKey, value: next });
+      setSessionConfigNotice(t("agentWorkspace.sessionConfigSaved"));
+    } catch (error) {
+      if (!applySessionConfigConflict(
+        error,
+        t("agentWorkspace.sessionConfigStale"),
+      )) {
+        setSessionConfigError(
+          executionConfigErrorMessage(
+            error,
+            t("agentWorkspace.sessionConfigStale"),
+          ),
+        );
+      }
+    } finally {
+      setSessionConfigSaving(false);
+    }
+  }
+
+  async function upgradeSessionProfileRevision() {
+    if (!selectedAgent?.runtimeId || !selectedSessionExecutionConfig || !latestProfileRevision) {
+      return;
+    }
+    const runtimeId = selectedAgent.runtimeId;
+    const region = selectedAgent.region ?? "cn-beijing";
+    setSessionConfigUpgradeRunning(true);
+    setSessionConfigError("");
+    setSessionConfigNotice("");
+    try {
+      const next = await upgradeMpaSessionProfile({
+        runtimeId,
+        region,
+        sessionId: currentSessionId,
+        etag: selectedSessionExecutionConfig.etag,
+        idempotencyKey: profileUpgradeIdempotencyKey(
+          runtimeId,
+          currentSessionId,
+          latestProfileRevision,
+        ),
+        targetProfileRevision: latestProfileRevision,
+      });
+      setSessionExecutionConfig({ requestKey: sessionConfigRequestKey, value: next });
+      setSessionConfigModelInput(effectiveModelId(next));
+      setSessionConfigNotice(t("agentWorkspace.sessionProfileUpgraded"));
+    } catch (error) {
+      if (!applySessionConfigConflict(
+        error,
+        t("agentWorkspace.sessionConfigStale"),
+      )) {
+        setSessionConfigError(
+          executionConfigErrorMessage(
+            error,
+            t("agentWorkspace.sessionProfileUpgradeFailed"),
+          ),
+        );
+      }
+    } finally {
+      setSessionConfigUpgradeRunning(false);
+    }
+  }
+
+  async function applyMpaProfileFromStudio() {
+    if (!selectedAgent?.runtimeId) return;
+    const runtimeId = selectedAgent.runtimeId;
+    const region = selectedAgent.region ?? "cn-beijing";
+    const mpaInstanceId = selectedMpaInstanceId || runtimeId;
+    const operationKind = selectedMpaProfileStatus?.status === "applied"
+      ? "update"
+      : "create";
+    const runtimeRevision = selectedMpaProfileStatus?.runtimeRevision ||
+      selectedMpaProfileStatus?.etag ||
+      "";
+    const idempotencyKey = await profileIdempotencyKey(
+      runtimeId,
+      operationKind,
+      profileDraft,
+    );
+    setMpaProfileApply({ saving: true, error: "", notice: "" });
+    try {
+      const operation = await startMpaAgentOperation({
+        operationKind,
+        runtimeId,
+        region,
+        mpaInstanceId,
+        sourceProfileId: `studio-runtime:${runtimeId}:${selectedAgentAppName || "a2a-default"}`,
+        targetKey: operationKind === "update"
+          ? mpaInstanceId
+          : `runtime:${region}:${runtimeId}`,
+        runtimeRevision: operationKind === "update" ? runtimeRevision : undefined,
+        draft,
+        idempotencyKey,
+      });
+      setMpaProfileApply({
+        saving: false,
+        error: operation.status === "succeeded"
+          ? ""
+          : operation.safeErrorCode || t("agentWorkspace.profileApplyIncomplete"),
+        notice: operation.status === "succeeded"
+          ? t("agentWorkspace.profileAppliedNotice", {
+              revision: operation.profileRevision ?? t("agentWorkspace.notAvailable"),
+            })
+          : "",
+      });
+      setDetailReloadToken((value) => value + 1);
+      setSessionConfigReloadToken((value) => value + 1);
+    } catch (error) {
+      setMpaProfileApply({
+        saving: false,
+        error: error instanceof Error
+          ? error.message
+          : t("agentWorkspace.profileApplyFailed"),
+        notice: "",
+      });
+    }
+  }
+
+  function editMpaProfileFromStudio() {
+    if (!selectedAgent?.runtimeId || selectedAgentCategory !== "mpa") return;
+    onEditMpaProfile?.({
+      draft,
+      runtimeId: selectedAgent.runtimeId,
+      mpaInstanceId: selectedMpaInstanceId || selectedAgent.runtimeId,
+      name: selectedName,
+      region: selectedAgent.region ?? "cn-beijing",
+      appName: selectedAgentAppName || "a2a-default",
+      currentVersion: selectedAgent.currentVersion ?? runtimeDetail?.currentVersion,
+      runtimeRevision:
+        selectedMpaProfileStatus?.runtimeRevision ||
+        selectedMpaProfileStatus?.etag ||
+        undefined,
+    });
+  }
+
+  useEffect(() => {
+    setMpaProfileApply({ saving: false, error: "", notice: "" });
+  }, [mpaAgentViewRequestKey]);
 
   useEffect(() => {
     const caseIds = new Set(feedbackCases.map((item) => item.id));
@@ -1882,11 +3552,16 @@ export function AgentWorkspace({
     ) return null;
     return {
       ...feedbackCasePreview,
-      tag: feedbackCasePreview.kind === "good" ? "Good case" : "Bad case",
+      tag: t(
+        feedbackCasePreview.kind === "good"
+          ? "agentWorkspace.goodCase"
+          : "agentWorkspace.badCase",
+      ),
     };
-  }, [feedbackCasePreview, selectedAgent?.runtimeId, selectedAgentAppName]);
+  }, [feedbackCasePreview, selectedAgent?.runtimeId, selectedAgentAppName, t]);
+  const defaultCases = useMemo(() => buildDefaultCases(t), [t]);
   const cases = useMemo(() => {
-    if (!selectedAgent?.runtimeId) return DEFAULT_CASES;
+    if (!selectedAgent?.runtimeId) return defaultCases;
     if (!previewCase) return feedbackCases;
     return [
       previewCase,
@@ -1895,7 +3570,7 @@ export function AgentWorkspace({
         (!item.messageId || item.messageId !== previewCase.messageId)
       ),
     ];
-  }, [feedbackCases, previewCase, selectedAgent?.runtimeId]);
+  }, [defaultCases, feedbackCases, previewCase, selectedAgent?.runtimeId]);
   const visibleCases = cases.filter((item) => {
     if (item.kind !== caseFilter) return false;
     const source: AgentFeedbackSource = item.source === "auto" ? "auto" : "user";
@@ -1979,8 +3654,8 @@ export function AgentWorkspace({
       items.length === 0
     ) return;
     const confirmText = items.length === 1
-      ? "确定删除这条反馈案例？原始聊天记录不会被删除。"
-      : `确定删除选中的 ${items.length} 条反馈案例？原始聊天记录不会被删除。`;
+      ? t("agentWorkspace.deleteOneCaseConfirm")
+      : t("agentWorkspace.deleteCasesConfirm", { count: items.length });
     if (!window.confirm(confirmText)) return;
     const ids = items.map((item) => item.id);
     const idSet = new Set(ids);
@@ -2118,20 +3793,29 @@ export function AgentWorkspace({
     if (selectedDeleteCount === 0 || deletingAgents) return;
     const runtimeCount = selectedDeletableAgents.length;
     const draftCount = selectedDeletableDrafts.length;
+    if (runtimeCount === 1 && draftCount === 0) {
+      void deleteSingleAgent(selectedDeletableAgents[0]);
+      return;
+    }
     setDeleteError("");
     setDeleteConfirmTarget({
       kind: "selection",
       title: runtimeCount === 1 && draftCount === 0
-        ? "删除 Agent？"
+        ? t("agentWorkspace.deleteAgentTitle")
         : runtimeCount === 0 && draftCount === 1
-          ? "删除草稿？"
-          : "删除所选项目？",
+          ? t("myAgents.deleteDraftTitle")
+          : t("agentWorkspace.deleteSelectedTitle"),
       description: runtimeCount === 1 && draftCount === 0
-        ? `"${selectedDeletableAgents[0].label}" 对应的云端 Runtime 将被永久删除，此操作不可撤销。`
+        ? t("agentWorkspace.deleteAgentDescription", { name: selectedDeletableAgents[0].label })
         : runtimeCount === 0 && draftCount === 1
-          ? `"${selectedDeletableDrafts[0].draft.name || "未命名 Agent"}" 将从本地草稿中删除。`
-          : `将删除选中的 ${selectedDeleteCount} 个项目。${runtimeCount > 0 ? `${runtimeCount} 个云端 Runtime 将被永久删除，此操作不可撤销。` : "草稿删除后无法恢复。"}`,
-      confirmLabel: runtimeCount === 0 && draftCount === 1 ? "删除草稿" : "删除所选",
+          ? t("agentWorkspace.deleteDraftDescription", { name: selectedDeletableDrafts[0].draft.name || t("agentSelector.unnamedAgent") })
+          : t("agentWorkspace.deleteSelectionDescription", {
+              count: selectedDeleteCount,
+              warning: runtimeCount > 0
+                ? t("agentWorkspace.runtimeDeletionWarning", { count: runtimeCount })
+                : t("agentWorkspace.draftDeletionWarning"),
+            }),
+      confirmLabel: runtimeCount === 0 && draftCount === 1 ? t("myAgents.deleteDraft") : t("agentWorkspace.deleteSelected"),
       agents: selectedDeletableAgents,
       drafts: selectedDeletableDrafts,
     });
@@ -2139,13 +3823,18 @@ export function AgentWorkspace({
 
   const confirmDeleteTarget = async () => {
     if (!deleteConfirmTarget || deletingAgents) return;
+    if (deleteConfirmTarget.kind === "agent" && deleteConfirmTarget.previewFailed) {
+      await deleteSingleAgent(deleteConfirmTarget.agent);
+      return;
+    }
+    if (deleteConfirmTarget.canConfirm === false) return;
     setDeletingAgents(true);
     setDeleteError("");
     try {
       if (deleteConfirmTarget.kind === "selection") {
         const { agents: agentsToDelete, drafts: draftsToDelete } = deleteConfirmTarget;
         if (agentsToDelete.length > 0) {
-          if (!onDeleteAgents) throw new Error("当前页面不支持删除已部署 Agent。");
+          if (!onDeleteAgents) throw new Error(t("agentWorkspace.errors.deleteDeployedUnsupported"));
           await onDeleteAgents(agentsToDelete);
         }
         if (draftsToDelete.length > 0) {
@@ -2161,11 +3850,11 @@ export function AgentWorkspace({
           setActiveDraftId("");
         }
       } else if (deleteConfirmTarget.kind === "agent") {
-        if (!onDeleteAgents) throw new Error("当前页面不支持删除已部署 Agent。");
+        if (!onDeleteAgents) throw new Error(t("agentWorkspace.errors.deleteDeployedUnsupported"));
         await onDeleteAgents([deleteConfirmTarget.agent]);
         if (activeAgentId === deleteConfirmTarget.agent.id) setActiveAgentId("");
       } else {
-        if (!onDeleteDrafts) throw new Error("当前页面不支持删除草稿。");
+        if (!onDeleteDrafts) throw new Error(t("agentWorkspace.errors.deleteDraftUnsupported"));
         onDeleteDrafts([deleteConfirmTarget.draft]);
         if (activeDraftId === deleteConfirmTarget.draft.id) setActiveDraftId("");
       }
@@ -2177,27 +3866,72 @@ export function AgentWorkspace({
     }
   };
 
-  const deleteSingleAgent = (agent: AgentEntry) => {
+  const deleteSingleAgent = async (agent: AgentEntry) => {
     if (!onDeleteAgents || agent.canDelete !== true || deletingAgents) return;
+    deletePreviewAbortRef.current?.abort();
     setDeleteError("");
+    let preview: MpaAgentDeletePreview | null = null;
+    if (agent.agentCategory === "mpa") {
+      const controller = new AbortController();
+      deletePreviewAbortRef.current = controller;
+      setDeleteConfirmTarget({
+        kind: "agent", agent,
+        title: t("agentWorkspace.deleteAgentTitle"),
+        description: <p role="status">{t("agentWorkspace.mpaDeleteChecking")}</p>,
+        confirmLabel: t("agentWorkspace.mpaDeleteChecking"),
+        canConfirm: false, previewLoading: true,
+      });
+      if (!agent.runtimeId || !agent.region) {
+        setDeleteError(t("agentWorkspace.errors.loadMpaDeletePreview"));
+        setDeleteConfirmTarget((current) => current?.kind === "agent" ? {
+          ...current, previewLoading: false, previewFailed: true, canConfirm: true,
+          confirmLabel: t("agentWorkspace.mpaDeleteRetryPreview"),
+          description: t("agentWorkspace.errors.loadMpaDeletePreview"),
+        } : current);
+        return;
+      }
+      try {
+        preview = await getMpaAgentDeletePreview({
+          mpaInstanceId: agent.mpaInstanceId ?? agent.runtimeId,
+          runtimeId: agent.runtimeId,
+          region: agent.region,
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted || deletePreviewAbortRef.current !== controller) return;
+      } catch (cause) {
+        if (controller.signal.aborted || deletePreviewAbortRef.current !== controller) return;
+        setDeleteError(cause instanceof Error ? cause.message : String(cause));
+        setDeleteConfirmTarget((current) => current?.kind === "agent" ? {
+          ...current, previewLoading: false, previewFailed: true, canConfirm: true,
+          confirmLabel: t("agentWorkspace.mpaDeleteRetryPreview"),
+          description: t("agentWorkspace.mpaDeletePreviewFailed"),
+        } : current);
+        return;
+      }
+    }
     setDeleteConfirmTarget({
       kind: "agent",
-      title: "删除 Agent？",
-      description: `"${agent.label}" 对应的云端 Runtime 将被永久删除，此操作不可撤销。`,
-      confirmLabel: "删除 Agent",
+      title: t("agentWorkspace.deleteAgentTitle"),
+      description: preview ? (
+        <MpaDeletePreviewDetails preview={preview} t={t} />
+      ) : (
+        t("agentWorkspace.deleteAgentDescription", { name: agent.label })
+      ),
+      confirmLabel: t("agentWorkspace.deleteAgent"),
+      canConfirm: preview ? preview.canDelete : true,
       agent,
     });
   };
 
   const deleteSingleDraft = (draftItem: WorkspaceAgentDraft) => {
     if (!onDeleteDrafts || deletingAgents) return;
-    const name = draftItem.draft.name || "未命名 Agent";
+    const name = draftItem.draft.name || t("agentSelector.unnamedAgent");
     setDeleteError("");
     setDeleteConfirmTarget({
       kind: "draft",
-      title: "删除草稿？",
-      description: `"${name}" 将从本地草稿中删除。`,
-      confirmLabel: "删除草稿",
+      title: t("myAgents.deleteDraftTitle"),
+      description: t("agentWorkspace.deleteDraftDescription", { name }),
+      confirmLabel: t("myAgents.deleteDraft"),
       draft: draftItem,
     });
   };
@@ -2206,7 +3940,7 @@ export function AgentWorkspace({
     const id = `eval-${Date.now()}`;
     const nextGroup: EvaluationGroup = {
       id,
-      name: `新评测组 ${evaluationGroups.length + 1}`,
+      name: t("agentWorkspace.newEvaluationGroupName", { count: evaluationGroups.length + 1 }),
       agentIds: [],
       caseSet: "核心回归集",
       evaluator: "综合质量评估器",
@@ -2224,7 +3958,7 @@ export function AgentWorkspace({
       history: [
         {
           id: `run-${Date.now()}`,
-          createdAt: "刚刚",
+          createdAt: t("agentWorkspace.evaluationDefaults.justNow"),
           score: 86 + (group.history.length % 7),
           status: "completed",
         },
@@ -2236,7 +3970,7 @@ export function AgentWorkspace({
   return (
     <>
     <div className={`aw-root${detailOnly ? " is-detail-only" : ""}`}>
-      <nav className="aw-view-tabs" aria-label="智能体工作台">
+      <nav className="aw-view-tabs" aria-label={t("agentWorkspace.workspace")}>
         <button
           type="button"
           className={view === "library" ? "is-active" : ""}
@@ -2246,7 +3980,7 @@ export function AgentWorkspace({
             setQuery("");
           }}
         >
-          智能体库
+          {t("agentWorkspace.library")}
         </button>
         <button
           type="button"
@@ -2257,7 +3991,7 @@ export function AgentWorkspace({
             setQuery("");
           }}
         >
-          评测
+          {t("agentWorkspace.evaluation")}
         </button>
       </nav>
 
@@ -2269,14 +4003,14 @@ export function AgentWorkspace({
             node?.toggleAttribute("inert", view === "evaluation");
           }}
         >
-        <aside className="aw-sidebar" aria-label={view === "library" ? "智能体列表" : "评测组列表"}>
+        <aside className="aw-sidebar" aria-label={view === "library" ? t("agentWorkspace.agentList") : t("agentWorkspace.evaluationGroupList")}>
           <label className="aw-search">
             <Search aria-hidden />
             <input
               value={query}
               onChange={(event) => setQuery(event.currentTarget.value)}
-              placeholder={view === "library" ? "搜索智能体" : "搜索评测组"}
-              aria-label={view === "library" ? "搜索智能体" : "搜索评测组"}
+              placeholder={view === "library" ? t("myAgents.searchAgents") : t("agentWorkspace.searchEvaluationGroups")}
+              aria-label={view === "library" ? t("myAgents.searchAgents") : t("agentWorkspace.searchEvaluationGroups")}
             />
           </label>
           <button
@@ -2286,21 +4020,21 @@ export function AgentWorkspace({
             disabled={view === "library" && !canCreate}
           >
             <Plus aria-hidden />
-            <span>{view === "library" ? "新建 Agent" : "新建评测组"}</span>
+            <span>{view === "library" ? t("agentWorkspace.newAgent") : t("agentWorkspace.newEvaluationGroup")}</span>
           </button>
           {view === "library" && (onDeleteAgents || onDeleteDrafts) && (
             <div className={`aw-selection-toolbar${selectionMode ? " is-active" : ""}`}>
               {selectionMode ? (
                 <>
                   <span className="aw-selection-count">
-                    已选 {selectedDeleteCount} 个
+                    {t("agentWorkspace.selectedCount", { count: selectedDeleteCount })}
                   </span>
                   <button
                     type="button"
                     onClick={selectAllListedAgents}
                     disabled={deletableItemCount === 0 || deletingAgents}
                   >
-                    全选
+                    {t("agentWorkspace.selectAll")}
                   </button>
                   <button
                     type="button"
@@ -2308,14 +4042,14 @@ export function AgentWorkspace({
                     onClick={() => void deleteSelectedItems()}
                     disabled={selectedDeleteCount === 0 || deletingAgents}
                   >
-                    {deletingAgents ? "删除中…" : "删除所选"}
+                    {deletingAgents ? t("common.deleting") : t("agentWorkspace.deleteSelected")}
                   </button>
                   <button
                     type="button"
                     onClick={clearAgentSelection}
                     disabled={deletingAgents}
                   >
-                    取消
+                    {t("common.cancel")}
                   </button>
                 </>
               ) : (
@@ -2327,7 +4061,7 @@ export function AgentWorkspace({
                   }}
                   disabled={deletableItemCount === 0}
                 >
-                  选择
+                  {t("common.select")}
                 </button>
               )}
             </div>
@@ -2338,7 +4072,7 @@ export function AgentWorkspace({
           <div className="aw-agent-list">
             {view === "evaluation" ? (
               filteredEvaluationGroups.length === 0 ? (
-                <div className="aw-list-empty">没有匹配的评测组</div>
+                <div className="aw-list-empty">{t("agentWorkspace.noMatchingEvaluationGroups")}</div>
               ) : (
                 filteredEvaluationGroups.map((group) => (
                   <button
@@ -2348,28 +4082,31 @@ export function AgentWorkspace({
                     onClick={() => setActiveEvaluationGroupId(group.id)}
                   >
                     <span className="aw-agent-copy aw-eval-group-copy">
-                      <strong>{group.name}</strong>
-                      <small>{group.agentIds.length} 个智能体 · {group.history.length} 次运行</small>
+                      <strong>{evaluationText(group.name, t)}</strong>
+                      <small>{t("agentWorkspace.groupStats", { agents: group.agentIds.length, runs: group.history.length })}</small>
                     </span>
                     <ArrowRight aria-hidden />
                   </button>
                 ))
               )
             ) : loadingAgents && listedAgents.length === 0 && filteredDrafts.length === 0 ? (
-              <div className="aw-list-empty">正在读取云端智能体…</div>
+              <div className="aw-list-empty">{t("agentWorkspace.loadingCloudAgents")}</div>
             ) : agentsError && listedAgents.length === 0 && filteredDrafts.length === 0 ? (
               <div className="aw-list-empty aw-list-error">
                 <span>{agentsError}</span>
                 {onRetryAgents && (
-                  <button type="button" onClick={onRetryAgents}>重试</button>
+                  <button type="button" onClick={onRetryAgents}>{t("common.retry")}</button>
                 )}
               </div>
             ) : listedAgents.length === 0 && filteredDrafts.length === 0 ? (
-              <div className="aw-list-empty">没有匹配的智能体</div>
+              <div className="aw-list-empty">{t("myAgents.noMatchingAgents")}</div>
             ) : (
               <>
                 {filteredDrafts.map((item) => {
-                  const task = deploymentTasks
+                  const taskForDraftId = deploymentTasks
+                    .filter((candidate) => candidate.draftId === item.id)
+                    .sort((left, right) => right.startedAt - left.startedAt)[0];
+                  const task = taskForDraftId ?? deploymentTasks
                     .filter(
                       (candidate) =>
                         candidate.agentDraft?.name === item.draft.name ||
@@ -2408,12 +4145,12 @@ export function AgentWorkspace({
                       )}
                       <span className="aw-agent-copy">
                         <span className="aw-agent-name-row">
-                          <strong>{item.draft.name || "未命名 Agent"}</strong>
+                          <strong>{item.draft.name || t("agentSelector.unnamedAgent")}</strong>
                           <span className={`aw-draft-badge${task?.status === "running" ? " is-deploying" : ""}`}>
-                            {task?.status === "running" ? "部署中" : "草稿"}
+                            {task?.status === "running" ? t("myAgents.deploying") : t("myAgents.draft")}
                           </span>
                         </span>
-                        <small>{item.deploymentTarget ? "待更新" : "尚未发布"}</small>
+                        <small>{item.deploymentTarget ? t("agentWorkspace.updatePending") : t("agentWorkspace.notPublished")}</small>
                       </span>
                       <ArrowRight aria-hidden />
                     </button>
@@ -2430,21 +4167,21 @@ export function AgentWorkspace({
                   const canDeleteAgent = agent.canDelete === true;
                   const statusBadge =
                     runtimeTask?.status === "running"
-                      ? { label: "部署中", className: " is-deploying" }
+                      ? { label: t("myAgents.deploying"), className: " is-deploying" }
                     : runtimeTask?.status === "error"
-                      ? { label: "失败", className: " is-error" }
+                      ? { label: t("agentWorkspace.failed"), className: " is-error" }
                       : runtimeTask?.status === "cancelled"
-                        ? { label: "已取消", className: " is-muted" }
+                        ? { label: t("agentWorkspace.cancelled"), className: " is-muted" }
                         : updateDraft
-                          ? { label: "待更新", className: "" }
+                          ? { label: t("agentWorkspace.updatePending"), className: "" }
                           : null;
                 const metaText = runtimeTask?.status === "running"
-                  ? "正在更新部署"
+                  ? t("agentWorkspace.updatingDeployment")
                   : updateDraft
-                    ? "待更新"
+                    ? t("agentWorkspace.updatePending")
                     : agent.remote
-                      ? agent.host || "远程智能体"
-                      : "本地智能体";
+                      ? agent.host || t("agentWorkspace.remoteAgent")
+                      : t("agentWorkspace.localAgent");
                 const agentItemClass = [
                   "aw-agent-item",
                   "aw-agent-item--sortable",
@@ -2563,7 +4300,7 @@ export function AgentWorkspace({
             )}
           </div>
           <div className="aw-list-count">
-            共 {view === "library" ? agents.length + standaloneDraftCount : evaluationGroups.length} 个
+            {t("agentWorkspace.totalCount", { count: view === "library" ? agents.length + standaloneDraftCount : evaluationGroups.length })}
           </div>
         </aside>
 
@@ -2577,21 +4314,21 @@ export function AgentWorkspace({
           />
         ) : view === "evaluation" ? (
           <main className="aw-main aw-empty-selection">
-            <p>未选择评测组</p>
+            <p>{t("agentWorkspace.noEvaluationGroupSelected")}</p>
           </main>
         ) : !selectedAgent && !selectedDraft && !selectedPendingTask ? (
           <main className="aw-main aw-empty-selection">
-            <p>未选择智能体</p>
+            <p>{t("agentWorkspace.noAgentSelected")}</p>
           </main>
         ) : (
-          <main className={`aw-main${deploymentInProgress ? " is-deploying" : ""}`}>
+          <main className={`aw-main${deploymentInProgress ? " is-deploying" : ""}${detailOnly ? " resource-page" : ""}`}>
             {selectedAgent && !selectedAgentInfo && loadingAgentInfo && (
               <div className="aw-detail-loading" role="status" aria-live="polite">
                 <div className="aw-detail-loading-card">
                   <span className="loading-gap-spinner" aria-hidden="true" />
                   <span>
-                    <strong>正在加载智能体</strong>
-                    <small>正在读取配置与运行信息…</small>
+                    <strong>{t("agentWorkspace.loadingAgent")}</strong>
+                    <small>{t("agentWorkspace.loadingAgentDescription")}</small>
                   </span>
                 </div>
               </div>
@@ -2601,61 +4338,76 @@ export function AgentWorkspace({
                 <div className="aw-detail-loading-card">
                   <span className="loading-gap-spinner" aria-hidden="true" />
                   <span>
-                    <strong>正在探测接入方式</strong>
-                    <small>正在确认 API Server 与 A2A…</small>
+                    <strong>{t("agentWorkspace.probingIntegration")}</strong>
+                    <small>{t("agentWorkspace.probingIntegrationDescription")}</small>
                   </span>
                 </div>
               </div>
             )}
-            <div className="aw-agent-head">
-              <div>
-                <div className="aw-agent-title-row">
-                  <h2>{selectedName}</h2>
-                  {displayCurrentVersion != null && (
-                    <span>v{displayCurrentVersion}</span>
-                  )}
-                  {selectedDraft && <span>草稿</span>}
-                  {selectedAgentUpdateDraft && <span>待更新</span>}
+            <ResourceDetailLayout
+              className="aw-agent-detail"
+              title={selectedName}
+              description={draft.description || (loadingAgentInfo || (detailOnly && !detailAgentInfoResolved) ? t("agentWorkspace.loadingAgentInfo") : t("common.noDescription"))}
+              identitySeed={selectedName}
+              backLabel={t("agentWorkspace.backToAgentList")}
+              onBack={detailOnly ? onBack : undefined}
+              meta={(
+                <>
+                  {displayCurrentVersion != null && <span className="aw-agent-meta">v{displayCurrentVersion}</span>}
+                  {selectedDraft && <span className="aw-agent-meta">{t("myAgents.draft")}</span>}
+                  {selectedAgentUpdateDraft && <span className="aw-agent-meta">{t("agentWorkspace.updatePending")}</span>}
                   {!selectedAgent && !selectedDraft && selectedPendingTask && (
-                    <span>{selectedPendingTask.label}</span>
+                    <span className="aw-agent-meta">{selectedPendingTask.label}</span>
                   )}
-                </div>
-                <p>{draft.description || (loadingAgentInfo || (detailOnly && !detailAgentInfoResolved) ? "正在读取智能体信息…" : "暂无描述")}</p>
-              </div>
-              {(selectedDraft || selectedAgentUpdateDraft || selectedAgent?.canDelete) && (
-                <div className="aw-head-actions">
+                </>
+              )}
+              actionsClassName="aw-head-actions"
+              bodyClassName="aw-agent-detail__body"
+              actions={(selectedDraft || selectedAgentUpdateDraft || selectedAgent?.canDelete) ? (
+                <>
                   {(selectedDraft || selectedAgentUpdateDraft) && (
-                    <button
+                    <Button
                       type="button"
-                      className="aw-head-delete aw-head-delete--draft"
+                      color="danger"
+                      variant="soft"
+                      size="lg"
+                      pill={false}
                       onClick={() => {
                         const draftToDelete = selectedDraft ?? selectedAgentUpdateDraft;
                         if (draftToDelete) deleteSingleDraft(draftToDelete);
                       }}
                       disabled={deletingAgents}
-                      aria-label="删除草稿"
-                      title="删除草稿"
+                      aria-label={t("myAgents.deleteDraft")}
+                      title={t("myAgents.deleteDraft")}
                     >
                       <Trash2 aria-hidden />
-                      <span>删除草稿</span>
-                    </button>
+                      <span>{t("myAgents.deleteDraft")}</span>
+                    </Button>
                   )}
                   {selectedAgent?.canDelete && (
-                    <button
+                    <Button
                       type="button"
-                      className="aw-head-delete"
+                      color="danger"
+                      variant="soft"
+                      size="lg"
+                      pill={false}
                       onClick={() => void deleteSingleAgent(selectedAgent)}
                       disabled={deletingAgents}
-                      aria-label="删除 Agent"
-                      title="删除 Agent"
+                      aria-label={t("agentWorkspace.deleteAgent")}
+                      title={t("agentWorkspace.deleteAgent")}
                     >
                       <Trash2 aria-hidden />
-                      <span>{deletingAgents ? "删除中…" : "删除 Agent"}</span>
-                    </button>
+                      <span>{deletingAgents ? t("common.deleting") : t("agentWorkspace.deleteAgent")}</span>
+                    </Button>
                   )}
-                </div>
-              )}
-            </div>
+                </>
+              ) : undefined}
+              sections={visibleAgentSections.map((item) => ({
+                key: item.id,
+                label: item.label,
+                disabled: deploymentInProgress,
+                content: item.id === section ? (
+                  <>
             {deploymentTask && shouldShowDeploymentTask && (
               <div
                 className={`aw-detail-deployment${deploymentInProgress ? " is-running" : ""}`}
@@ -2668,81 +4420,125 @@ export function AgentWorkspace({
                 />
               </div>
             )}
-            <nav
-              className="aw-agent-tabs"
-              aria-label="智能体详情"
-              role="tablist"
-            >
-              {visibleAgentSections.map((item) => (
-                <button
-                  type="button"
-                  key={item.id}
-                  id={`agent-${item.id}-tab`}
-                  className={section === item.id ? "is-active" : ""}
-                  role="tab"
-                  aria-selected={section === item.id}
-                  aria-controls={`agent-${item.id}-panel`}
-                  tabIndex={section === item.id ? 0 : -1}
-                  onClick={() => setSection(item.id)}
-                  onKeyDown={(event) => {
-                    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-                    event.preventDefault();
-                    const currentIndex = visibleAgentSections.findIndex(
-                      (sectionItem) => sectionItem.id === item.id,
-                    );
-                    const nextIndex = event.key === "Home"
-                      ? 0
-                      : event.key === "End"
-                        ? visibleAgentSections.length - 1
-                        : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + visibleAgentSections.length)
-                          % visibleAgentSections.length;
-                    const nextSection = visibleAgentSections[nextIndex];
-                    setSection(nextSection.id);
-                    document.getElementById(`agent-${nextSection.id}-tab`)?.focus();
-                  }}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </nav>
-
-            <div
-              className="aw-content"
-              id={`agent-${section}-panel`}
-              role="tabpanel"
-              aria-labelledby={`agent-${section}-tab`}
-            >
+            <div className="aw-content">
               {section === "basic" && (
                 <div className="aw-basic-stack">
+                  {detailAgentInfoUnsupported && (
+                    <Alert
+                      className="aw-detail-fetch-alert"
+                      color="warning"
+                      variant="soft"
+                      title={t("agentWorkspace.partialInfoUnavailable")}
+                      description={t("agentWorkspace.upgradeRuntimeForDetails")}
+                    />
+                  )}
+                  {((detailAgentInfoError && !detailAgentInfoUnsupported) ||
+                    runtimeDetailError) && (
+                    <Alert
+                      className="aw-detail-fetch-alert"
+                      color="danger"
+                      variant="soft"
+                      title={t("agentWorkspace.detailLoadFailed")}
+                      description={t("agentWorkspace.detailLoadFailedDescription")}
+                      actions={(
+                        <Button
+                          type="button"
+                          color="danger"
+                          variant="soft"
+                          size="sm"
+                          pill={false}
+                          onClick={() => setDetailReloadToken((value) => value + 1)}
+                        >
+                          {t("common.retry")}
+                        </Button>
+                      )}
+                    />
+                  )}
+                  {selectedAgentCategory === "mpa" &&
+                    (mpaAgentViewLoading ||
+                      mpaAgentViewError ||
+                      selectedMpaBindingStatus) && (
+                      <Alert
+                        className="aw-detail-fetch-alert"
+                        color={
+                          selectedMpaBindingStatus === "bound" &&
+                          !mpaAgentViewError
+                            ? "success"
+                            : "warning"
+                        }
+                        variant="soft"
+                        title={t("agentWorkspace.mpaControlPlane")}
+                        description={
+                          mpaAgentViewLoading
+                            ? t("agentWorkspace.loadingMpaAgentView")
+                            : mpaAgentViewError ||
+                              selectedMpaSafeError ||
+                              t(
+                                selectedMpaBindingStatus === "bound"
+                                  ? "agentWorkspace.mpaRuntimeBound"
+                                  : selectedMpaBindingStatus === "binding_ambiguous"
+                                    ? "agentWorkspace.mpaRuntimeBindingAmbiguous"
+                                    : selectedMpaBindingStatus === "orphan_runtime"
+                                      ? "agentWorkspace.mpaRuntimeOrphan"
+                                      : "agentWorkspace.mpaRuntimeMissing",
+                              )
+                        }
+                      />
+                    )}
+                  {selectedAgent &&
+                    selectedAgentCategory !== "mpa" &&
+                    selectedUpdateCapability &&
+                    !selectedUpdateCapability.canUpdate && (
+                      <div
+                        className="aw-update-recovery-notice"
+                        role={
+                          selectedUpdateCapability.recoveryStatus === "preparing"
+                            ? "status"
+                            : "alert"
+                        }
+                      >
+                        <strong>
+                          {selectedUpdateCapability.recoveryStatus === "preparing"
+                            ? t("agentWorkspace.restoringUpdateConfig")
+                            : t("agentWorkspace.updateConfigUnavailable")}
+                        </strong>
+                        {updateCapabilityReason && (
+                          <span>{updateCapabilityReason}</span>
+                        )}
+                        {updateCapabilityWarnings.map((warning) => (
+                          <span key={warning}>{warning}</span>
+                        ))}
+                      </div>
+                    )}
                   <section className="aw-deployment-panel aw-settings-card">
                     <div className="aw-section-head">
-                      <div><h3>部署配置</h3><p>配置目标环境与网络访问方式。</p></div>
+                      <div><h3>{t("agentWorkspace.deploymentConfig")}</h3><p>{t("agentWorkspace.deploymentConfigDescription")}</p></div>
                     </div>
                     <dl className="aw-readonly-config">
                       <div>
-                        <dt>运行状态</dt>
+                        <dt>{t("agentWorkspace.runtimeStatus")}</dt>
                         <dd className={runtimeDetail?.status.toLowerCase() === "ready" ? "is-ready" : undefined}>
                           {runtimeDetail?.status.toLowerCase() === "ready" && <span className="aw-status-dot" />}
-                          {runtimeDetail?.status || "读取中…"}
+                          {runtimeDetail?.status || t("agentWorkspace.loading")}
                         </dd>
                       </div>
                       <div>
-                        <dt>部署区域</dt>
-                        <dd>{runtimeDetail?.region || selectedAgent?.region || deploymentTask?.region || "暂未提供"}</dd>
+                        <dt>{t("agentWorkspace.deploymentRegion")}</dt>
+                        <dd>{runtimeDetail?.region || selectedAgent?.region || deploymentTask?.region || t("agentWorkspace.notAvailable")}</dd>
                       </div>
                       <div>
-                        <dt>网络访问</dt>
+                        <dt>{t("agentWorkspace.networkAccess")}</dt>
                         <dd>
                           {runtimeDetail?.networkTypes.length
                             ? runtimeDetail.networkTypes.join(" / ")
-                            : "暂未提供"}
+                            : t("agentWorkspace.notAvailable")}
                         </dd>
                       </div>
                     </dl>
                   </section>
                   <section className="aw-canvas-card">
                     <div className="aw-card-head">
-                      <strong>执行流程</strong>
+                      <strong>{t("agentWorkspace.executionFlow")}</strong>
                     </div>
                     <div className="aw-canvas">
                       <AgentBuildCanvas
@@ -2761,47 +4557,99 @@ export function AgentWorkspace({
                   </section>
                   <section className="aw-details-card">
                     <div className="aw-card-head">
-                      <strong>详细信息</strong>
+                      <strong>{t("agentWorkspace.details")}</strong>
                     </div>
                     <dl className="aw-facts">
-                      <div><dt>模型</dt><dd>{selectedAgentInfo?.model || draft.modelName || "暂未提供"}</dd></div>
-                      <div><dt>智能体数量</dt><dd>{selectedAgentInfo?.graph ? countNodes(selectedAgentInfo.graph) : countDraftNodes(draft)}</dd></div>
                       <div>
-                        <dt>工具</dt>
+                        <dt>{t("agentSelector.model")}</dt>
+                        <dd>
+                          {modelNameFromRuntime(selectedAgentInfo?.model) ||
+                            draft.modelName ||
+                            t("agentWorkspace.notAvailable")}
+                        </dd>
+                      </div>
+                      <div><dt>{t("agentWorkspace.agentCountLabel")}</dt><dd>{selectedAgentInfo?.graph ? countNodes(selectedAgentInfo.graph) : countDraftNodes(draft)}</dd></div>
+                      <div>
+                        <dt>{t("agentSelector.tools")}</dt>
                         <dd className="aw-fact-badges">
-                          {toolNames.length ? toolNames.map((name) => <span key={name}>{name}</span>) : "暂无"}
+                          {toolNames.length ? toolNames.map((name) => <span key={name}>{name}</span>) : t("agentWorkspace.none")}
                         </dd>
                       </div>
                       <div>
-                        <dt>技能</dt>
+                        <dt>{t("agentSelector.skills")}</dt>
                         <dd className="aw-fact-badges">
                           {skillNames === null
-                            ? "暂不支持预览"
+                            ? t("agentSelector.previewUnsupported")
                             : skillNames.length
                               ? skillNames.map((name) => <span key={name}>{name}</span>)
-                              : "暂无"}
+                              : t("agentWorkspace.none")}
                         </dd>
                       </div>
                       <div>
-                        <dt>当前版本</dt>
+                        <dt>{t("systemInfo.currentVersion")}</dt>
                         <dd>
                           {displayCurrentVersion != null
                             ? `v${displayCurrentVersion}`
-                            : "暂未提供"}
+                            : t("agentWorkspace.notAvailable")}
                         </dd>
                       </div>
                       <div>
-                        <dt>状态</dt>
+                        <dt>{t("agentSelector.status")}</dt>
                         <dd>
                           {selectedDraft
-                            ? "草稿"
+                            ? t("myAgents.draft")
                             : deploymentTask?.status === "error"
-                              ? "部署失败"
+                              ? t("agentWorkspace.deploymentFailed")
                               : deploymentTask?.status === "cancelled"
-                                ? "已取消"
+                                ? t("agentWorkspace.cancelled")
                                 : selectedAgentUpdateDraft
-                                  ? "待更新"
-                                  : <><span className="aw-status-dot" />可用</>}
+                                  ? t("agentWorkspace.updatePending")
+                                  : <><span className="aw-status-dot" />{t("skillCenter.status.available")}</>}
+                        </dd>
+                      </div>
+                    </dl>
+                  </section>
+                  <section
+                    className="aw-sidecar-panel aw-settings-card"
+                    aria-label={t("agentWorkspace.selectedOptimizations")}
+                  >
+                    <div className="aw-section-head">
+                      <div>
+                        <h3>{t("agentWorkspace.selectedOptimizations")}</h3>
+                        <p>{t("agentWorkspace.selectedOptimizationsDescription")}</p>
+                      </div>
+                    </div>
+                    <dl className="aw-readonly-config">
+                      <div>
+                        <dt>{t("agentWorkspace.configurationStatus")}</dt>
+                        <dd className={publishedHarnessSidecar?.enabled ? "is-ready" : undefined}>
+                          {publishedHarnessSidecar
+                            ? publishedHarnessSidecar.enabled
+                              ? <><span className="aw-status-dot" />{t("skillCenter.status.enabled")}</>
+                              : t("skillCenter.status.inactive")
+                            : t("agentWorkspace.notRecorded")}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>{t("agentWorkspace.optimizationProfile")}</dt>
+                        <dd>
+                          {publishedHarnessSidecar
+                            ? harnessSidecarProfileLabel(publishedHarnessSidecar.profile)
+                            : t("agentWorkspace.legacyConfigMissing")}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>{t("agentWorkspace.selectedOptimizations")}</dt>
+                        <dd className="aw-fact-badges">
+                          {!publishedHarnessSidecar
+                            ? t("agentWorkspace.legacyConfigMissing")
+                            : publishedHarnessOptimizations.length
+                              ? publishedHarnessOptimizations.map((optionId) => (
+                                  <span key={optionId}>
+                                    {harnessSidecarOptionLabel(optionId)}
+                                  </span>
+                                ))
+                              : t("agentWorkspace.noneSelected")}
                         </dd>
                       </div>
                     </dl>
@@ -2814,11 +4662,11 @@ export function AgentWorkspace({
                   aria-busy={agentUsageLoading}
                 >
                   <div className="aw-usage-intro">
-                    <h3>使用概览</h3>
+                    <h3>{t("agentWorkspace.usageOverview")}</h3>
                   </div>
                   {agentUsageLoading && !selectedAgentUsage && (
                     <div className="aw-usage-state" role="status" aria-live="polite">
-                      <TextShimmer as="span">正在加载用量统计</TextShimmer>
+                      <TextShimmer as="span">{t("agentWorkspace.loadingUsage")}</TextShimmer>
                     </div>
                   )}
                   {agentUsageError && (
@@ -2828,7 +4676,7 @@ export function AgentWorkspace({
                         type="button"
                         onClick={() => setAgentUsageReloadToken((value) => value + 1)}
                       >
-                        重试
+                        {t("common.retry")}
                       </button>
                     </div>
                   )}
@@ -2837,57 +4685,57 @@ export function AgentWorkspace({
                     !selectedAgentUsage &&
                     !selectedAgentAppName && (
                       <div className="aw-usage-state">
-                        当前 Runtime 未返回可用的 Agent 应用名称，暂时无法读取用量。
+                        {t("agentWorkspace.usageUnavailable")}
                       </div>
                     )}
                   {selectedAgentUsage && (
                     <>
-                      <dl className="aw-usage-summary" aria-label="Agent 用量摘要">
+                      <dl className="aw-usage-summary" aria-label={t("agentWorkspace.usageSummary")}>
                         <div>
-                          <dt>总调用次数</dt>
-                          <dd>{selectedAgentUsage.totalInvocations.toLocaleString("zh-CN")}</dd>
+                          <dt>{t("agentWorkspace.totalCalls")}</dt>
+                          <dd>{selectedAgentUsage.totalInvocations.toLocaleString(i18n.resolvedLanguage ?? i18n.language)}</dd>
                         </div>
                         <div>
-                          <dt>使用用户数</dt>
-                          <dd>{selectedAgentUsage.totalUsers.toLocaleString("zh-CN")}</dd>
+                          <dt>{t("agentWorkspace.userCount")}</dt>
+                          <dd>{selectedAgentUsage.totalUsers.toLocaleString(i18n.resolvedLanguage ?? i18n.language)}</dd>
                         </div>
                       </dl>
                       <div className="aw-usage-users-head">
-                        <h3>用户明细</h3>
+                        <h3>{t("agentWorkspace.userDetails")}</h3>
                         {agentUsageLoading && (
                           <TextShimmer as="span" role="status" aria-live="polite">
-                            正在刷新
+                            {t("agentWorkspace.refreshing")}
                           </TextShimmer>
                         )}
                       </div>
                       {selectedAgentUsage.users.length === 0 ? (
                         <div className="aw-usage-state">
-                          暂无使用记录。用户成功调用后将在这里显示。
+                          {t("agentWorkspace.noUsage")}
                         </div>
                       ) : (
                         <div className="aw-usage-table-wrap">
                           <table className="aw-usage-table">
-                            <caption>当前 Agent 的使用用户列表</caption>
+                            <caption>{t("agentWorkspace.usageUserList")}</caption>
                             <thead>
                               <tr>
-                                <th scope="col">用户</th>
-                                <th scope="col">调用次数</th>
-                                <th scope="col">最近使用</th>
+                                <th scope="col">{t("agentWorkspace.user")}</th>
+                                <th scope="col">{t("agentWorkspace.callCount")}</th>
+                                <th scope="col">{t("agentWorkspace.lastUsed")}</th>
                               </tr>
                             </thead>
                             <tbody>
                               {selectedAgentUsage.users.map((user) => (
                                 <tr key={user.userId}>
                                   <td>
-                                    <strong>{user.displayName || user.userId || "未知用户"}</strong>
+                                    <strong>{user.displayName || user.userId || t("agentWorkspace.unknownUser")}</strong>
                                     {user.displayName && user.userId && (
                                       <small title={user.userId}>{user.userId}</small>
                                     )}
                                   </td>
-                                  <td>{user.invocationCount.toLocaleString("zh-CN")}</td>
+                                  <td>{user.invocationCount.toLocaleString(i18n.resolvedLanguage ?? i18n.language)}</td>
                                   <td>
                                     <time dateTime={user.lastUsedAt}>
-                                      {formatAgentUsageTime(user.lastUsedAt)}
+                                      {formatAgentUsageTime(user.lastUsedAt, i18n.resolvedLanguage ?? i18n.language, t)}
                                     </time>
                                   </td>
                                 </tr>
@@ -2897,16 +4745,16 @@ export function AgentWorkspace({
                         </div>
                       )}
                       {selectedAgentUsage.totalPages > 1 && (
-                        <nav className="aw-usage-pagination" aria-label="用量用户列表分页">
+                        <nav className="aw-usage-pagination" aria-label={t("agentWorkspace.usagePagination")}>
                           <button
                             type="button"
                             disabled={agentUsageLoading || selectedAgentUsage.page <= 1}
                             onClick={() => setAgentUsagePage((page) => Math.max(1, page - 1))}
                           >
-                            上一页
+                            {t("common.previousPage")}
                           </button>
                           <span aria-live="polite">
-                            第 {selectedAgentUsage.page} / {selectedAgentUsage.totalPages} 页
+                            {t("agentWorkspace.pageOf", { page: selectedAgentUsage.page, total: selectedAgentUsage.totalPages })}
                           </span>
                           <button
                             type="button"
@@ -2916,7 +4764,7 @@ export function AgentWorkspace({
                             }
                             onClick={() => setAgentUsagePage((page) => page + 1)}
                           >
-                            下一页
+                            {t("common.nextPage")}
                           </button>
                         </nav>
                       )}
@@ -2924,11 +4772,195 @@ export function AgentWorkspace({
                   )}
                 </section>
               )}
+              {section === "sessionConfig" && (
+                <SessionExecutionConfigPanel
+                  config={selectedSessionExecutionConfig}
+                  profileStatus={selectedMpaProfileStatus}
+                  loadable={sessionExecutionConfigLoadable}
+                  disabledReason={sessionConfigDisabledReason}
+                  loading={sessionConfigLoading}
+                  saving={sessionConfigSaving}
+                  upgrading={sessionConfigUpgradeRunning}
+                  error={sessionConfigError}
+                  notice={sessionConfigNotice}
+                  modelValue={sessionConfigModelInput}
+                  modelDirty={modelInputDirty}
+                  profileUpgradeAvailable={profileUpgradeAvailable}
+                  onModelChange={setSessionConfigModelInput}
+                  onSaveModel={() => void saveSessionModelOverride()}
+                  onInheritModel={() => void saveSessionModelOverride("inherit")}
+                  onClearMcp={() => void updateSessionMcpMode("clear")}
+                  onInheritMcp={() => void updateSessionMcpMode("inherit")}
+                  onUpgradeProfile={() => void upgradeSessionProfileRevision()}
+                  onRefresh={() => setSessionConfigReloadToken((value) => value + 1)}
+                />
+              )}
+              {section === "profileConfig" && (
+                <MpaProfileConfigPanel
+                  profile={profileDraft}
+                  profileStatus={selectedMpaProfileStatus}
+                  runtimeReady={mpaProfileCanWrite}
+                  disabledReason={profileConfigDisabledReason}
+                  saving={mpaProfileApply.saving}
+                  error={mpaProfileApply.error}
+                  notice={mpaProfileApply.notice}
+                  onApply={() => void applyMpaProfileFromStudio()}
+                  onEditProfile={editMpaProfileFromStudio}
+                  onRefresh={() => setDetailReloadToken((value) => value + 1)}
+                />
+              )}
+              {section === "diagnostics" && (
+                <MpaDiagnosticsPanel
+                  data={selectedMpaDiagnostics}
+                  loadable={!diagnosticsDisabledReason}
+                  disabledReason={diagnosticsDisabledReason}
+                  loading={mpaDiagnosticsLoading}
+                  error={mpaDiagnosticsError}
+                  onRefresh={() => setMpaDiagnosticsReloadToken((value) => value + 1)}
+                  locale={i18n.resolvedLanguage ?? i18n.language}
+                />
+              )}
+              {section === "versions" && (
+                <section className="aw-version-stack">
+                  <div className="aw-integration-intro">
+                    <h3>{t("agentWorkspace.githubVersions")}</h3>
+                    <p>
+                      {githubVersions?.cicd?.enabled
+                        ? t("agentWorkspace.githubVersionsDescription")
+                        : t("agentWorkspace.currentVersionOnly")}
+                    </p>
+                  </div>
+                  {githubVersionsLoading && (
+                    <div className="aw-case-empty">{t("agentWorkspace.loadingVersions")}</div>
+                  )}
+                  {githubVersionsError && (
+                    <div className="aw-integration-error" role="alert">
+                      <span>{githubVersionsError}</span>
+                      {selectedAgent?.runtimeId && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void getGithubDeliveryVersions(
+                              selectedAgent.runtimeId ?? "",
+                            ).then(setGithubVersions)
+                          }
+                        >
+                          {t("common.retry")}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {!githubVersionsLoading && !githubVersionsError && (
+                    <div className="aw-version-list">
+                      {githubVersions?.githubSyncError && (
+                        <div className="aw-integration-error" role="alert">
+                          <span>{githubVersions.githubSyncError}</span>
+                        </div>
+                      )}
+                      {githubVersions?.latestSourceRuntimeStatus
+                        && githubVersions.latestSourceRuntimeStatus !== "published"
+                        && githubVersions.versions[0]?.commitSha
+                        && githubVersions.versions[0].commitSha
+                          !== githubVersions.currentCommitSha && (
+                          <div className="aw-integration-notice" role="status">
+                            <span>
+                              {t("agentWorkspace.sourceMergedRuntimeStill")}
+                              {githubRuntimeStatusLabel(
+                                githubVersions.latestSourceRuntimeStatus,
+                                t,
+                              )}
+                              {t("agentWorkspace.currentProductionVersionHint")}
+                            </span>
+                          </div>
+                        )}
+                      {githubVersions?.versions.length ? (
+                        githubVersions.versions.map((version) => {
+                          const commitSha = version.commitSha ?? "";
+                          const runtimeStatus = version.runtimeStatus ?? version.status;
+                          const isRollbackEvent = version.changeType === "rollback";
+                          const canRollback =
+                            Boolean(githubVersions.cicd?.enabled) &&
+                            Boolean(commitSha) &&
+                            !isRollbackEvent &&
+                            commitSha !== githubVersions.currentCommitSha;
+                          return (
+                            <article
+                              className="aw-version-row"
+                              key={`${version.version}-${commitSha || version.createdAt}`}
+                            >
+                              <div>
+                                <strong>{githubVersionTitle(version, t)}</strong>
+                                <small>{version.createdAt || t("agentWorkspace.noTime")}</small>
+                              </div>
+                              <div>
+                                <span>{t("agentWorkspace.prLink")}</span>
+                                {version.pullRequestUrl ? (
+                                  <a
+                                    href={version.pullRequestUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                  >
+                                    {t("agentWorkspace.viewPr")}
+                                  </a>
+                                ) : (
+                                  <em>{t("agentWorkspace.noPr")}</em>
+                                )}
+                              </div>
+                              <div>
+                                <span>{t("agentWorkspace.author")}</span>
+                                <em>{version.author || "Studio"}</em>
+                              </div>
+                              <div>
+                                <span>{t("agentWorkspace.publishStatus")}</span>
+                                <em>{githubRuntimeStatusLabel(runtimeStatus, t)}</em>
+                              </div>
+                              <div className="aw-version-actions">
+                                <button
+                                  type="button"
+                                  disabled={
+                                    !canRollback || rollbackCommit === commitSha
+                                  }
+                                  onClick={() => void createRollbackPr(version)}
+                                >
+                                  {rollbackCommit === commitSha
+                                    ? t("agentWorkspace.rollingBack")
+                                    : t("agentWorkspace.rollbackToVersion")}
+                                </button>
+                                {version.workflowRunUrl && (
+                                  <a
+                                    href={version.workflowRunUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                  >
+                                    {t("agentWorkspace.viewRelease")}
+                                  </a>
+                                )}
+                              </div>
+                            </article>
+                          );
+                        })
+                      ) : (
+                        <article className="aw-version-row">
+                          <div>
+                            <strong>
+                              {displayCurrentVersion != null
+                                ? `v${displayCurrentVersion}`
+                                : t("agentWorkspace.noVersion")}
+                            </strong>
+                            <small>{runtimeDetail?.updatedAt || t("agentWorkspace.noTime")}</small>
+                          </div>
+                          <p>{t("agentWorkspace.currentVersionOnly")}</p>
+                        </article>
+                      )}
+                    </div>
+                  )}
+                </section>
+              )}
               {section === "integrations" && (
                 <div className="aw-integration-stack">
                   <div className="aw-integration-intro">
-                    <h3>接入方式</h3>
-                    <p>仅展示当前 Runtime 可确认的公开协议与地址。</p>
+                    <h3>{t("agentWorkspace.integrationMethods")}</h3>
+                    <p>{t("agentWorkspace.integrationDescription")}</p>
                   </div>
                   {integrationError && (
                     <div className="aw-integration-error" role="alert">
@@ -2937,7 +4969,7 @@ export function AgentWorkspace({
                         type="button"
                         onClick={() => setIntegrationReloadToken((value) => value + 1)}
                       >
-                        重试
+                        {t("common.retry")}
                       </button>
                     </div>
                   )}
@@ -2948,7 +4980,7 @@ export function AgentWorkspace({
                           integrationProtocol === "a2a" ? " is-a2a" : ""
                         }`}
                         role="tablist"
-                        aria-label="接入协议"
+                        aria-label={t("agentWorkspace.integrationProtocol")}
                       >
                         <span
                           className="aw-integration-protocol-slider"
@@ -3006,21 +5038,21 @@ export function AgentWorkspace({
                                 : "",
                             },
                             {
-                              label: "发现接口",
+                              label: t("agentWorkspace.discoveryEndpoint"),
                               value: apiIntegrationAvailable
                                 ? endpointPath(runtimeEndpoint, "/list-apps")
                                 : "",
                             },
                             {
-                              label: "调用接口",
+                              label: t("agentWorkspace.invocationEndpoint"),
                               value: apiIntegrationAvailable
                                 ? endpointPath(runtimeEndpoint, "/run_sse")
                                 : "",
                             },
                             {
-                              label: "鉴权方式",
+                              label: t("agentWorkspace.authentication"),
                               value: apiIntegrationAvailable
-                                ? authTypeLabel(runtimeDetail?.authType)
+                                ? authTypeLabel(runtimeDetail?.authType, t)
                                 : "",
                             },
                             {
@@ -3066,13 +5098,13 @@ export function AgentWorkspace({
                                 : "",
                             },
                             {
-                              label: "调用地址",
+                              label: t("agentWorkspace.invocationUrl"),
                               value: a2aEndpoint,
                             },
                             {
-                              label: "鉴权方式",
+                              label: t("agentWorkspace.authentication"),
                               value: a2aIntegrationAvailable
-                                ? authTypeLabel(runtimeDetail?.authType)
+                                ? authTypeLabel(runtimeDetail?.authType, t)
                                 : "",
                             },
                             {
@@ -3118,7 +5150,7 @@ export function AgentWorkspace({
                             onClick={() => focusCaseKind(kind)}
                           >
                             <strong>{count}</strong>
-                            <span>{kind === "good" ? "Good cases" : "Bad cases"}</span>
+                            <span>{t(kind === "good" ? "agentWorkspace.goodCases" : "agentWorkspace.badCases")}</span>
                           </button>
                         );
                       })}
@@ -3126,7 +5158,7 @@ export function AgentWorkspace({
                   )}
                   <div className="aw-case-filter-bar">
                     <div className="aw-case-filter-stack">
-                      <div className="aw-case-filters" aria-label="案例结果筛选">
+                      <div className="aw-case-filters" aria-label={t("agentWorkspace.caseResultFilter")}>
                         {(["good", "bad"] as const).map((filter) => (
                           <button
                             type="button"
@@ -3135,11 +5167,11 @@ export function AgentWorkspace({
                             aria-pressed={caseFilter === filter}
                             onClick={() => setCaseFilter(filter)}
                           >
-                            {filter === "good" ? "Good case" : "Bad case"}
+                            {t(filter === "good" ? "agentWorkspace.goodCase" : "agentWorkspace.badCase")}
                           </button>
                         ))}
                       </div>
-                      <div className="aw-case-source-filters" aria-label="回流方式筛选">
+                      <div className="aw-case-source-filters" aria-label={t("agentWorkspace.feedbackSourceFilter")}>
                         {(["auto", "user"] as const).map((source) => (
                           <button
                             type="button"
@@ -3148,7 +5180,7 @@ export function AgentWorkspace({
                             aria-pressed={caseSourceFilter === source}
                             onClick={() => setCaseSourceFilter(source)}
                           >
-                            {source === "auto" ? "自动回流" : "手动回流"}
+                            {source === "auto" ? t("agentWorkspace.automaticFeedback") : t("agentWorkspace.manualFeedback")}
                           </button>
                         ))}
                       </div>
@@ -3159,8 +5191,8 @@ export function AgentWorkspace({
                         type="search"
                         value={caseQuery}
                         onChange={(event) => setCaseQuery(event.currentTarget.value)}
-                        placeholder="搜索用户输入、期望行为或标签"
-                        aria-label="搜索评测案例"
+                        placeholder={t("agentWorkspace.searchCasesPlaceholder")}
+                        aria-label={t("agentWorkspace.searchCases")}
                       />
                     </label>
                   </div>
@@ -3169,14 +5201,14 @@ export function AgentWorkspace({
                       {caseSelectionMode ? (
                         <>
                           <span className="aw-selection-count">
-                            已选 {selectedVisibleCases.length} 条
+                            {t("agentWorkspace.selectedCaseCount", { count: selectedVisibleCases.length })}
                           </span>
                           <button
                             type="button"
                             onClick={selectAllVisibleCases}
                             disabled={visibleCases.length === 0 || deletingCases}
                           >
-                            全选当前
+                            {t("agentWorkspace.selectAllVisible")}
                           </button>
                           <button
                             type="button"
@@ -3184,14 +5216,14 @@ export function AgentWorkspace({
                             onClick={() => void deleteCases(selectedVisibleCases)}
                             disabled={selectedVisibleCases.length === 0 || deletingCases}
                           >
-                            {deletingCases ? "删除中…" : "删除所选"}
+                            {deletingCases ? t("common.deleting") : t("agentWorkspace.deleteSelected")}
                           </button>
                           <button
                             type="button"
                             onClick={clearCaseSelection}
                             disabled={deletingCases}
                           >
-                            取消
+                            {t("common.cancel")}
                           </button>
                         </>
                       ) : (
@@ -3203,7 +5235,7 @@ export function AgentWorkspace({
                           }}
                           disabled={visibleCases.length === 0 || deletingCases}
                         >
-                          选择案例
+                          {t("agentWorkspace.selectCases")}
                         </button>
                       )}
                     </div>
@@ -3236,13 +5268,13 @@ export function AgentWorkspace({
               {section === "optimizations" && (
                 <section className="aw-optimizations">
                   <div className="aw-optimization-intro">
-                    <h3>优化项</h3>
-                    <p>根据评测结果汇总需要优先处理的改进建议。</p>
+                    <h3>{t("agentWorkspace.optimizations")}</h3>
+                    <p>{t("agentWorkspace.optimizationsDescription")}</p>
                   </div>
                   {optimizationsLoading ? (
                     <div className="aw-optimization-state" role="status">
                       <span className="loading-gap-spinner" aria-hidden="true" />
-                      <span>正在读取优化项</span>
+                      <span>{t("agentWorkspace.loadingOptimizations")}</span>
                     </div>
                   ) : optimizationsError ? (
                     <div className="aw-optimization-state is-error" role="alert">
@@ -3251,14 +5283,14 @@ export function AgentWorkspace({
                         type="button"
                         onClick={() => setOptimizationsReloadToken((value) => value + 1)}
                       >
-                        重试
+                        {t("common.retry")}
                       </button>
                     </div>
                   ) : optimizationGroups.length > 0 ? (
                     <OptimizationTable groups={optimizationGroups} />
                   ) : (
                     <div className="aw-optimization-state">
-                      暂无优化项，自动评测完成后会在这里生成建议。
+                      {t("agentWorkspace.noOptimizations")}
                     </div>
                   )}
                 </section>
@@ -3273,10 +5305,10 @@ export function AgentWorkspace({
                     onClick={() => onTalkAgent?.(selectedAgent)}
                   >
                     <MessageCircle aria-hidden />
-                    <span>去对话</span>
+                    <span>{t("agentWorkspace.chat")}</span>
                   </button>
                 )}
-                <span
+                {selectedAgentCategory !== "mpa" && <span
                   className={`aw-update-wrap${updateBlockedReason ? " is-disabled" : ""}`}
                   tabIndex={updateBlockedReason ? 0 : undefined}
                   aria-describedby={updateBlockedReason ? updateReasonId : undefined}
@@ -3287,21 +5319,15 @@ export function AgentWorkspace({
                     disabled={Boolean(updateBlockedReason)}
                     aria-busy={updateCapabilityLoading || undefined}
                     aria-describedby={updateBlockedReason ? updateReasonId : undefined}
-                    onClick={() =>
-                      selectedDraft
-                        ? onEditDraft?.(selectedDraft)
-                        : selectedAgentUpdateDraft
-                          ? onEditDraft?.({
-                              ...selectedAgentUpdateDraft,
-                              deploymentTarget: selectedUpdateTarget,
-                            })
-                          : selectedUpdateCapability
-                            ? onUpdateAgent(
-                                selectedUpdateCapability.agent?.draft ?? draft,
-                                selectedUpdateCapability,
-                              )
-                            : undefined
-                    }
+                    onClick={() => {
+                      if (selectedDraft) {
+                        onEditDraft?.(selectedDraft);
+                        return;
+                      }
+                      if (selectedUpdateCapability) {
+                        onUpdateAgent(selectedUpdateCapability);
+                      }
+                    }}
                   >
                     {updateCapabilityLoading ? (
                       <>
@@ -3309,12 +5335,12 @@ export function AgentWorkspace({
                           className="loading-gap-spinner aw-update-spinner"
                           aria-hidden="true"
                         />
-                        <span>检测中</span>
+                        <span>{t("agentWorkspace.preparing")}</span>
                       </>
                     ) : selectedDraft || selectedAgentUpdateDraft ? (
-                      "继续编辑"
+                      t("agentWorkspace.continueEditing")
                     ) : (
-                      "更新"
+                      t("agentWorkspace.update")
                     )}
                   </button>
                   {updateBlockedReason && (
@@ -3326,15 +5352,22 @@ export function AgentWorkspace({
                       {updateBlockedReason}
                     </span>
                   )}
-                </span>
+                </span>}
               </div>
             )}
+                  </>
+                ) : null,
+              }))}
+              activeSectionKey={section}
+              navigationLabel={t("agentWorkspace.agentDetails")}
+              onSectionChange={setSection}
+            />
           </main>
         )}
         </div>
         {view === "evaluation" && (
           <div className="aw-evaluation-glass" role="status">
-            <span>敬请期待</span>
+            <span>{t("agentWorkspace.comingSoon")}</span>
           </div>
         )}
       </div>
@@ -3344,10 +5377,17 @@ export function AgentWorkspace({
         variant="danger"
         title={deleteConfirmTarget.title}
         description={deleteConfirmTarget.description}
-        confirmLabel={deletingAgents ? "删除中..." : deleteConfirmTarget.confirmLabel}
-        closeLabel="关闭删除确认"
+        error={deleteError || undefined}
+        confirmLabel={deletingAgents ? t("common.deleting") : deleteConfirmTarget.confirmLabel}
+        closeLabel={t("agentWorkspace.closeDeleteConfirmation")}
         busy={deletingAgents}
-        onCancel={() => setDeleteConfirmTarget(null)}
+        confirmDisabled={deleteConfirmTarget.canConfirm === false}
+        onCancel={() => {
+          deletePreviewAbortRef.current?.abort();
+          deletePreviewAbortRef.current = null;
+          setDeleteConfirmTarget(null);
+          setDeleteError("");
+        }}
         onConfirm={() => void confirmDeleteTarget()}
       />
     )}
@@ -3356,14 +5396,15 @@ export function AgentWorkspace({
 }
 
 function OptimizationTable({ groups }: { groups: OptimizationGroup[] }) {
+  const { t } = useTranslation("ui");
   return (
     <div className="aw-optimization-table-wrap">
       <table className="aw-optimization-table">
         <thead>
           <tr>
-            <th scope="col">修复优先级</th>
-            <th scope="col">建议优化模块</th>
-            <th scope="col">优化建议和理由</th>
+            <th scope="col">{t("agentWorkspace.fixPriority")}</th>
+            <th scope="col">{t("agentWorkspace.suggestedModule")}</th>
+            <th scope="col">{t("agentWorkspace.suggestionAndReason")}</th>
           </tr>
         </thead>
         <tbody>
@@ -3373,12 +5414,12 @@ function OptimizationTable({ groups }: { groups: OptimizationGroup[] }) {
             >
               <td>
                 <span className={`aw-priority is-${group.priority}`}>
-                  {optimizationPriorityLabel(group.priority)}
+                  {optimizationPriorityLabel(group.priority, t)}
                 </span>
               </td>
               <td>
                 <span className="aw-optimization-module">
-                  {optimizationModuleLabel(group)}
+                  {optimizationModuleLabel(group, t)}
                 </span>
               </td>
               <td>
@@ -3453,27 +5494,28 @@ function CaseTable({
   onDeleteCase?: (item: AgentCase) => void;
   onRetry?: () => void;
 }) {
+  const { t, i18n } = useTranslation("ui");
   return (
     <div className="aw-case-table">
       <div className="aw-case-row aw-case-row-head">
-        <span>用户输入</span>
-        <span>Agent 输出</span>
-        <span>评分</span>
-        <span>评分理由</span>
-        <span className="aw-case-action-head">操作</span>
+        <span>{t("agentWorkspace.userInput")}</span>
+        <span>{t("agentWorkspace.agentOutput")}</span>
+        <span>{t("agentWorkspace.score")}</span>
+        <span>{t("agentWorkspace.scoreReason")}</span>
+        <span className="aw-case-action-head">{t("skillCenter.actions")}</span>
       </div>
       {loading ? (
-        <div className="aw-case-empty">正在读取 AgentKit 评测集…</div>
+        <div className="aw-case-empty">{t("agentWorkspace.loadingEvaluationSet")}</div>
       ) : error ? (
         <div className="aw-case-empty aw-case-error">
           <span>{error}</span>
-          {onRetry && <button type="button" onClick={onRetry}>重试</button>}
+          {onRetry && <button type="button" onClick={onRetry}>{t("common.retry")}</button>}
         </div>
       ) : notice ? (
         <div className="aw-case-empty">{notice}</div>
       ) : cases.length === 0 ? (
         <div className="aw-case-empty">
-          {runtimeBacked ? "暂无用户反馈案例" : "没有匹配的案例"}
+          {runtimeBacked ? t("agentWorkspace.noFeedbackCases") : t("agentWorkspace.noMatchingCases")}
         </div>
       ) : (
         cases.map((item) => {
@@ -3517,7 +5559,7 @@ function CaseTable({
                 }
               }}
             >
-              <div className="aw-case-text aw-case-cell" data-label="用户输入">
+              <div className="aw-case-text aw-case-cell" data-label={t("agentWorkspace.userInput")}>
                 <span className="aw-case-title-line">
                   {selectionMode && canDeleteCase && (
                     <span
@@ -3525,10 +5567,10 @@ function CaseTable({
                       aria-hidden="true"
                     />
                   )}
-                  <strong title={item.input}>{item.input || "无用户输入"}</strong>
+                  <strong title={item.input}>{item.input || t("agentWorkspace.noUserInput")}</strong>
                 </span>
-                {showComment && <small title={item.comment}>备注：{item.comment}</small>}
-                <small className="aw-case-time">{formatCaseTime(item.createdAt)}</small>
+                {showComment && <small title={item.comment}>{t("agentWorkspace.note")}{item.comment}</small>}
+                <small className="aw-case-time">{formatCaseTime(item.createdAt, i18n.resolvedLanguage ?? i18n.language, t)}</small>
                 {(item.userId || item.sessionId) && (
                   <small title={[item.userId, item.sessionId].filter(Boolean).join(" · ")}>
                     {[item.userId, item.sessionId].filter(Boolean).join(" · ")}
@@ -3537,17 +5579,17 @@ function CaseTable({
               </div>
               <div
                 className={`aw-case-output aw-case-cell${isExpanded ? " is-expanded" : ""}`}
-                data-label="Agent 输出"
+                data-label={t("agentWorkspace.agentOutput")}
               >
                 <p className="aw-case-output-preview" title={item.output}>
-                  {item.output || "无可见回复"}
+                  {item.output || t("agentWorkspace.noVisibleResponse")}
                 </p>
                 {item.referenceOutput && (
                   <small
                     className="aw-case-output-preview"
                     title={item.referenceOutput}
                   >
-                    Reference: {item.referenceOutput}
+                    {t("agentWorkspace.reference")}: {item.referenceOutput}
                   </small>
                 )}
                 {canExpand && (
@@ -3559,22 +5601,22 @@ function CaseTable({
                       onToggleExpanded?.(item.id);
                     }}
                   >
-                    {isExpanded ? "收起" : "展开"}
+                    {isExpanded ? t("common.collapse") : t("common.expand")}
                   </button>
                 )}
               </div>
-              <div className="aw-case-score aw-case-cell" data-label="评分">
-                {formatCaseScore(item)}
+              <div className="aw-case-score aw-case-cell" data-label={t("agentWorkspace.score")}>
+                {formatCaseScore(item, t)}
               </div>
               <div
                 className={`aw-case-reason aw-case-cell${isExpanded ? " is-expanded" : ""}`}
-                data-label="评分理由"
+                data-label={t("agentWorkspace.scoreReason")}
               >
                 <p title={item.reason || undefined}>
                   {item.reason || "—"}
                 </p>
               </div>
-              <div className="aw-case-actions aw-case-cell" data-label="操作">
+              <div className="aw-case-actions aw-case-cell" data-label={t("skillCenter.actions")}>
                 {canDeleteCase && (
                   <button
                     type="button"
@@ -3584,8 +5626,8 @@ function CaseTable({
                       onDeleteCase?.(item);
                     }}
                     disabled={deleting}
-                    title="删除反馈案例"
-                    aria-label="删除反馈案例"
+                    title={t("agentWorkspace.deleteFeedbackCase")}
+                    aria-label={t("agentWorkspace.deleteFeedbackCase")}
                   >
                     <DeleteCaseIcon />
                   </button>
@@ -3612,6 +5654,7 @@ function EvaluationWorkspace({
   onChange: (group: EvaluationGroup) => void;
   onRun: (group: EvaluationGroup) => void;
 }) {
+  const { t } = useTranslation("ui");
   const [section, setSection] = useState<EvaluationSection>("config");
   const selectedAgents = group.agentIds
     .map((id) => agents.find((agent) => agent.id === id))
@@ -3642,45 +5685,45 @@ function EvaluationWorkspace({
     <main className="aw-main">
       <div className="aw-eval-head">
         <div>
-          <div className="aw-agent-title-row"><h2>{group.name}</h2><span>评测组</span></div>
-          <p>{selectedAgents.length} 个参评智能体 · {group.caseSet} · {group.history.length} 次运行</p>
+          <div className="aw-agent-title-row"><h2>{evaluationText(group.name, t)}</h2><span>{t("agentWorkspace.evaluationGroup")}</span></div>
+          <p>{t("agentWorkspace.evaluationGroupStats", { agents: selectedAgents.length, caseSet: evaluationText(group.caseSet, t), runs: group.history.length })}</p>
         </div>
         <button type="button" className="aw-run" onClick={() => onRun(group)} disabled>
-          <FlaskConical aria-hidden />开始评测
+          <FlaskConical aria-hidden />{t("agentWorkspace.startEvaluation")}
         </button>
       </div>
-      <nav className="aw-agent-tabs" aria-label="评测组详情">
-        <button type="button" className={section === "config" ? "is-active" : ""} aria-pressed={section === "config"} onClick={() => setSection("config")} disabled>评测配置</button>
-        <button type="button" className={section === "history" ? "is-active" : ""} aria-pressed={section === "history"} onClick={() => setSection("history")} disabled>历史结果</button>
+      <nav className="aw-agent-tabs" aria-label={t("agentWorkspace.evaluationGroupDetails")}>
+        <button type="button" className={section === "config" ? "is-active" : ""} aria-pressed={section === "config"} onClick={() => setSection("config")} disabled>{t("agentWorkspace.evaluationConfig")}</button>
+        <button type="button" className={section === "history" ? "is-active" : ""} aria-pressed={section === "history"} onClick={() => setSection("history")} disabled>{t("agentWorkspace.historyResults")}</button>
       </nav>
       <div className="aw-content">
         {section === "config" ? (
           <div className="aw-eval-setup">
             <section className="aw-eval-block">
-              <div className="aw-card-head"><strong>参评智能体</strong><span>已选择 {selectedAgents.length} 个</span></div>
+              <div className="aw-card-head"><strong>{t("agentWorkspace.participatingAgents")}</strong><span>{t("agentWorkspace.selectedCount", { count: selectedAgents.length })}</span></div>
               <div className="aw-eval-agent-grid">
                 {agents.map((agent) => (
                   <label key={agent.id}>
                     <input type="checkbox" checked={group.agentIds.includes(agent.id)} onChange={() => toggleAgent(agent.id)} />
-                    <span><strong>{agent.label}</strong><small>{agent.remote ? "远程" : "本地"}</small></span>
+                    <span><strong>{agent.label}</strong><small>{agent.remote ? t("agentWorkspace.remote") : t("agentWorkspace.local")}</small></span>
                   </label>
                 ))}
               </div>
             </section>
             <div className="aw-eval-setting-grid">
               <section className="aw-eval-block">
-                <div className="aw-card-head"><strong>评测资源</strong></div>
+                <div className="aw-card-head"><strong>{t("agentWorkspace.evaluationResources")}</strong></div>
                 <div className="aw-eval-fields">
-                  <label><span>评测集</span><select value={group.caseSet} onChange={(event) => onChange({ ...group, caseSet: event.currentTarget.value })}><option>核心回归集</option><option>安全边界集</option><option>工具调用集</option></select><small>{cases.length} 条案例</small></label>
-                  <label><span>评估器</span><select value={group.evaluator} onChange={(event) => onChange({ ...group, evaluator: event.currentTarget.value })}><option>综合质量评估器</option><option>事实一致性评估器</option><option>工具调用评估器</option></select></label>
-                  <label><span>并发数</span><select value={group.concurrency} onChange={(event) => onChange({ ...group, concurrency: event.currentTarget.value })}><option value="2">2</option><option value="4">4</option><option value="8">8</option></select></label>
+                  <label><span>{t("agentWorkspace.evaluationSet")}</span><select value={group.caseSet} onChange={(event) => onChange({ ...group, caseSet: event.currentTarget.value })}><option value="核心回归集">{t("agentWorkspace.evaluationDefaults.coreSet")}</option><option value="安全边界集">{t("agentWorkspace.evaluationDefaults.safetySet")}</option><option value="工具调用集">{t("agentWorkspace.evaluationDefaults.toolSet")}</option></select><small>{t("agentWorkspace.caseCount", { count: cases.length })}</small></label>
+                  <label><span>{t("agentWorkspace.evaluator")}</span><select value={group.evaluator} onChange={(event) => onChange({ ...group, evaluator: event.currentTarget.value })}><option value="综合质量评估器">{t("agentWorkspace.evaluationDefaults.qualityEvaluator")}</option><option value="事实一致性评估器">{t("agentWorkspace.evaluationDefaults.factualEvaluator")}</option><option value="工具调用评估器">{t("agentWorkspace.evaluationDefaults.toolEvaluator")}</option></select></label>
+                  <label><span>{t("agentWorkspace.concurrency")}</span><select value={group.concurrency} onChange={(event) => onChange({ ...group, concurrency: event.currentTarget.value })}><option value="2">2</option><option value="4">4</option><option value="8">8</option></select></label>
                 </div>
               </section>
               <section className="aw-eval-block">
-                <div className="aw-card-head"><strong>评测指标</strong><span>已选择 {group.metrics.length} 项</span></div>
+                <div className="aw-card-head"><strong>{t("agentWorkspace.evaluationMetrics")}</strong><span>{t("agentWorkspace.selectedMetricCount", { count: group.metrics.length })}</span></div>
                 <div className="aw-metric-list">
                   {metrics.map((metric) => (
-                    <label key={metric}><input type="checkbox" checked={group.metrics.includes(metric)} onChange={() => toggleMetric(metric)} /><span>{metric}</span></label>
+                    <label key={metric}><input type="checkbox" checked={group.metrics.includes(metric)} onChange={() => toggleMetric(metric)} /><span>{evaluationText(metric, t)}</span></label>
                   ))}
                 </div>
               </section>
@@ -3688,16 +5731,16 @@ function EvaluationWorkspace({
           </div>
         ) : (
           <section className="aw-eval-history">
-            <div className="aw-section-head"><div><h3>历史结果</h3><p>查看该评测组历次运行的总体表现。</p></div></div>
+            <div className="aw-section-head"><div><h3>{t("agentWorkspace.historyResults")}</h3><p>{t("agentWorkspace.historyDescription")}</p></div></div>
             {group.history.length === 0 ? (
-              <div className="aw-results-empty"><strong>暂无历史结果</strong><span>完成首次评测后，结果会出现在这里。</span></div>
+              <div className="aw-results-empty"><strong>{t("agentWorkspace.noHistory")}</strong><span>{t("agentWorkspace.noHistoryDescription")}</span></div>
             ) : (
               <div className="aw-history-list">
                 {group.history.map((run, index) => (
                   <button type="button" key={run.id}>
-                    <span><strong>评测运行 #{group.history.length - index}</strong><small>{run.createdAt} · {selectedAgents.length} 个智能体</small></span>
-                    <span className="aw-history-score"><strong>{run.score}</strong><small>综合得分</small></span>
-                    <span className="aw-complete"><Check />已完成</span>
+                    <span><strong>{t("agentWorkspace.evaluationRun", { index: group.history.length - index })}</strong><small>{t("agentWorkspace.evaluationRunMeta", { time: evaluationText(run.createdAt, t), agents: selectedAgents.length })}</small></span>
+                    <span className="aw-history-score"><strong>{run.score}</strong><small>{t("agentWorkspace.overallScore")}</small></span>
+                    <span className="aw-complete"><Check />{t("agentWorkspace.completed")}</span>
                     <ArrowRight aria-hidden />
                   </button>
                 ))}

@@ -1,0 +1,114 @@
+.users-page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 32px;
+  overflow: auto;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+.users-page-header { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.users-page-header h1 { margin: 0; font-size: 21px; font-weight: 650; line-height: 1.25; letter-spacing: -.02em; }
+.users-count { padding: 3px 8px; background: hsl(var(--muted)); border-radius: 6px; font-size: 12px; color: hsl(var(--muted-foreground)); }
+.users-content { width: 100%; max-width: 1440px; margin-top: 24px; }
+.users-pool { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 20px; margin-bottom: 20px; color: hsl(var(--muted-foreground)); font-size: 12px; line-height: 1.5; }
+.users-pool > span:first-child { color: hsl(var(--foreground)); font-weight: 500; }
+.users-pool-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.users-toolbar { display: flex; align-items: center; gap: 10px; }
+.users-search { display: flex; gap: 8px; flex: 1; max-width: 520px; min-width: 0; }
+.users-search input { min-width: 0; flex: 1; height: 36px; padding: 0 12px; border: 1px solid hsl(var(--border)); border-radius: 6px; color: hsl(var(--foreground)); background: hsl(var(--panel)); font: inherit; font-size: 13px; }
+.users-search input::placeholder { color: hsl(var(--muted-foreground)); }
+.users-role-filter { width: 154px; flex-shrink: 0; }
+.users-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 0 12px; border: 1px solid hsl(var(--border)); border-radius: 6px; background: hsl(var(--panel)); color: hsl(var(--foreground)); font: inherit; font-size: 12px; font-weight: 500; white-space: nowrap; cursor: pointer; transition: background-color 140ms ease, opacity 140ms ease; }
+.users-button:hover:not(:disabled) { background: hsl(var(--muted)); }
+.users-button:disabled { opacity: .45; cursor: not-allowed; }
+.users-button.is-primary { background: hsl(var(--foreground)); color: hsl(var(--background)); border-color: transparent; }
+.users-button.is-primary:hover:not(:disabled) { background: hsl(var(--foreground) / .86); }
+.users-button.is-text { border-color: transparent; background: transparent; min-height: 32px; }
+.users-button svg { width: 16px; height: 16px; flex-shrink: 0; }
+.users-refresh { margin-left: auto; }
+.users-feedback { min-height: 40px; display: flex; align-items: center; font-size: 12px; color: hsl(var(--muted-foreground)); }
+.users-table-wrap { border: 1px solid hsl(var(--border)); border-radius: 10px; overflow: hidden; background: hsl(var(--panel)); }
+.users-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+.users-table thead { background: hsl(var(--muted) / .5); }
+.users-table th { padding: 12px 16px; color: hsl(var(--muted-foreground)); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.users-table td { padding: 18px 16px; border-top: 1px solid hsl(var(--border)); vertical-align: middle; }
+.users-table tbody tr { transition: background-color 140ms ease; }
+.users-table tbody tr:hover { background: hsl(var(--muted) / .2); }
+.users-person { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.users-avatar { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; border-radius: 50%; color: hsl(var(--foreground) / .7); background: hsl(var(--secondary)); font-size: 14px; font-weight: 500; }
+.users-account { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.users-account strong { font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.users-account > span { font-size: 12px; color: hsl(var(--muted-foreground)); overflow-wrap: anywhere; }
+.users-self { font-size: 11px; font-weight: 400; color: hsl(var(--muted-foreground)); }
+.users-role-badge { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 6px; background: hsl(var(--muted)); color: hsl(var(--foreground) / .8); font-size: 12px; line-height: 1.4; white-space: nowrap; }
+.users-role-badge.is-super { background: hsl(var(--foreground) / .08); color: hsl(var(--foreground)); }
+.users-status, .users-last-login { font-size: 12px; white-space: nowrap; color: hsl(var(--muted-foreground)); }
+.users-actions { text-align: right; }
+.users-protected { font-size: 12px; color: hsl(var(--muted-foreground)); white-space: nowrap; }
+.users-inline-warning { display: block; margin-top: 6px; font-size: 12px; color: hsl(var(--destructive)); }
+.users-pagination { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding-top: 16px; font-size: 12px; color: hsl(var(--muted-foreground)); }
+.users-pagination > div { display: flex; align-items: center; gap: 12px; }
+.users-pagination .users-button { min-height: 30px; }
+.users-empty { min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: hsl(var(--muted-foreground)); font-size: 13px; }
+.users-empty strong { color: hsl(var(--foreground)); font-size: 14px; font-weight: 500; }
+.users-error { font-size: 13px; line-height: 1.6; color: hsl(var(--destructive)); margin: 0; }
+.users-error-banner { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; margin-bottom: 12px; border-radius: 8px; background: hsl(var(--destructive) / .06); }
+.user-role-dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  padding: 0;
+  overflow: visible;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  color: hsl(var(--foreground));
+  background: hsl(var(--panel));
+  box-shadow: 0 16px 64px hsl(var(--foreground) / .15);
+}
+.user-role-dialog::backdrop { background: hsl(var(--foreground) / .28); }
+.user-role-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 20px 24px 0; }
+.user-role-dialog h2 { font-size: 17px; font-weight: 600; margin: 0; }
+.users-close { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; background: transparent; color: hsl(var(--muted-foreground)); border-radius: 6px; cursor: pointer; }
+.users-close svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.users-close:hover { background: hsl(var(--muted)); }
+.user-role-dialog-body { padding: 20px 24px 0; }
+.user-role-dialog .users-account { padding-bottom: 24px; }
+.users-field-label { display: block; margin-bottom: 8px; color: hsl(var(--foreground)); font-size: 13px; font-weight: 500; }
+.users-help { color: hsl(var(--muted-foreground)); margin: 12px 0 0; font-size: 12px; line-height: 1.6; }
+.user-role-dialog .users-error { margin-top: 12px; }
+.user-role-dialog footer { display: flex; justify-content: flex-end; gap: 8px; padding: 24px; }
+.users-page :focus-visible, .user-role-dialog :focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+@media (max-width: 1000px) {
+  .users-page { padding: 24px 20px; }
+  .users-table th, .users-table td { padding-left: 12px; padding-right: 12px; }
+  .users-avatar { display: none; }
+}
+@media (max-width: 720px) {
+  .users-page { padding: 20px 16px; }
+  .users-toolbar { flex-wrap: wrap; }
+  .users-search { flex-basis: 100%; max-width: none; }
+  .users-table thead { display: none; }
+  .users-table, .users-table tbody, .users-table tr { display: block; }
+  .users-table tr { padding: 16px; border-top: 1px solid hsl(var(--border)); }
+  .users-table tr:first-child { border-top: 0; }
+  .users-table td { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 0; padding: 8px 0; }
+  .users-table td[data-label]::before { content: attr(data-label); font-size: 12px; color: hsl(var(--muted-foreground)); flex-shrink: 0; }
+  .users-table td:first-child { padding-top: 0; padding-bottom: 16px; }
+  .users-table td:first-child::before { display: none; }
+  .users-avatar { display: inline-flex; }
+  .users-table td.users-actions { justify-content: flex-end; padding-bottom: 0; }
+  .users-pagination { align-items: flex-start; gap: 10px; }
+  .users-pagination > div { gap: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .users-button, .users-table tbody tr { transition: none; }
+}
+@media (max-height: 600px) {
+  .user-role-dialog { overflow-y: auto; }
+  .user-role-dialog .pp-deployment-select-menu { position: static; margin-top: 6px; }
+}

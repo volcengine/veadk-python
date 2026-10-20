@@ -17,17 +17,37 @@
 import hashlib
 import io
 import json
+import os
+import shutil
+import subprocess
+import sys
+import zipfile
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
+from frontend.service.studio_release_server import publisher
+from frontend.service.studio_release_server.publisher import (
+    StudioPublisherError,
+    validate_studio_agentkit_cli_archive,
+    validate_studio_bundle_dependencies,
+)
+
+from veadk.cli import studio_release as studio_release_module
+
 from veadk.cli.studio_dependencies import (
+    STUDIO_AGENTKIT_CLI_ARTIFACT,
+    STUDIO_DEPENDENCY_SOURCES,
     StudioDependencyWheel,
     stage_studio_dependency_wheels,
+    studio_dependency_wheels,
     write_studio_dependency_manifest,
 )
 from veadk.cli.studio_package import build_frontend_assets, studio_run_script
 from veadk.cli.studio_release import (
+    BYTEPLUS_STUDIO_RELEASE_REGION,
     StudioReleaseError,
     StudioReleaseManifest,
     StudioReleaseStore,
@@ -36,7 +56,10 @@ from veadk.cli.studio_release import (
     latest_manifest_object_key,
     manifest_object_key,
     release_catalog_object_key,
+    studio_release_region,
+    thin_bundle_object_key,
 )
+from veadk.utils.cloud_provider import CloudProvider
 
 
 def _manifest(content: bytes = b"bundle") -> StudioReleaseManifest:
@@ -48,6 +71,32 @@ def _manifest(content: bytes = b"bundle") -> StudioReleaseManifest:
         created_at="2026-07-24T15:30:45+08:00",
         changelog=("新增版本选择", "修复自更新权限"),
     )
+
+
+def test_release_zip_normalizes_runtime_file_permissions(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    run_script = package / "run.sh"
+    run_script.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    run_script.chmod(0o600)
+    cli_archive = package / "agentkit-linux-x64.tar.gz"
+    cli_archive.write_bytes(b"cli")
+    cli_archive.chmod(0o600)
+    regular_file = package / "requirements.txt"
+    regular_file.write_text("dependency\n", encoding="utf-8")
+    regular_file.chmod(0o700)
+    bundle = tmp_path / "bundle.zip"
+
+    studio_release_module._zip_directory(package, bundle)
+
+    with zipfile.ZipFile(bundle) as archive:
+        assert archive.getinfo("run.sh").create_system == 3
+        assert archive.getinfo("run.sh").external_attr >> 16 & 0o777 == 0o755
+        assert (
+            archive.getinfo("agentkit-linux-x64.tar.gz").external_attr >> 16 & 0o777
+            == 0o644
+        )
+        assert archive.getinfo("requirements.txt").external_attr >> 16 & 0o777 == 0o644
 
 
 class _FakeTosClient:
@@ -85,6 +134,44 @@ def _store(client: _FakeTosClient) -> StudioReleaseStore:
     )
 
 
+@pytest.mark.parametrize(
+    ("provider", "region", "expected_endpoint"),
+    [
+        ("volcengine", "cn-beijing", "tos-cn-beijing.volces.com"),
+        ("byteplus", "ap-southeast-1", "tos-ap-southeast-1.bytepluses.com"),
+    ],
+)
+def test_release_store_uses_provider_tos_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: CloudProvider,
+    region: str,
+    expected_endpoint: str,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _client(*args: object, **kwargs: object) -> object:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setitem(sys.modules, "tos", SimpleNamespace(TosClientV2=_client))
+
+    StudioReleaseStore(
+        bucket="studio-releases",
+        region=region,
+        provider=provider,
+        access_key="ak",
+        secret_key="sk",
+    )
+
+    assert captured["kwargs"]["endpoint"] == expected_endpoint
+
+
+def test_byteplus_release_region_is_provider_specific() -> None:
+    assert studio_release_region("volcengine") == "cn-beijing"
+    assert studio_release_region("byteplus") == BYTEPLUS_STUDIO_RELEASE_REGION
+
+
 def test_manifest_round_trip_uses_public_field_names() -> None:
     manifest = _manifest()
 
@@ -93,6 +180,26 @@ def test_manifest_round_trip_uses_public_field_names() -> None:
     assert payload["version"] == "20260724153045"
     assert payload["gitSha"] == "a" * 40
     assert payload["changelog"] == ["新增版本选择", "修复自更新权限"]
+    assert StudioReleaseManifest.from_json(manifest.to_json()) == manifest
+
+
+def test_thin_manifest_round_trip_includes_separate_thin_bundle() -> None:
+    manifest = StudioReleaseManifest(
+        version="20260724153046",
+        git_sha="a" * 40,
+        sha256="b" * 64,
+        size=100,
+        created_at="2026-07-24T15:30:46+08:00",
+        runtime_epoch="c" * 64,
+        thin_sha256="d" * 64,
+        thin_size=200,
+    )
+
+    payload = json.loads(manifest.to_json())
+
+    assert payload["runtimeEpoch"] == "c" * 64
+    assert payload["thinSha256"] == "d" * 64
+    assert payload["thinSize"] == 200
     assert StudioReleaseManifest.from_json(manifest.to_json()) == manifest
 
 
@@ -163,6 +270,59 @@ def test_publish_moves_latest_pointer_after_immutable_objects(tmp_path: Path) ->
     assert store.release_catalog() == [manifest]
 
 
+def test_publish_thin_release_preserves_full_legacy_bundle(tmp_path: Path) -> None:
+    content = b"full-offline"
+    thin_content = b"thin"
+    bundle = tmp_path / "full.zip"
+    bundle.write_bytes(content)
+    thin_bundle = tmp_path / "thin.zip"
+    thin_bundle.write_bytes(thin_content)
+    manifest = StudioReleaseManifest(
+        version="20260724153047",
+        git_sha="a" * 40,
+        sha256=hashlib.sha256(content).hexdigest(),
+        size=len(content),
+        created_at="2026-07-24T15:30:47+08:00",
+        runtime_epoch="c" * 64,
+        thin_sha256=hashlib.sha256(thin_content).hexdigest(),
+        thin_size=len(thin_content),
+    )
+    client = _FakeTosClient()
+    store = _store(client)
+
+    store.publish(bundle, manifest, thin_bundle=thin_bundle)
+
+    thin_key = thin_bundle_object_key(store.prefix, manifest.version)
+    assert client.put_order[:3] == [
+        bundle_object_key(store.prefix, manifest.version),
+        thin_key,
+        manifest_object_key(store.prefix, manifest.version),
+    ]
+    legacy_destination = tmp_path / "downloaded-full.zip"
+    store.download_bundle(manifest, legacy_destination)
+    assert legacy_destination.read_bytes() == content
+    thin_destination = tmp_path / "downloaded-thin.zip"
+    store.download_thin_bundle(manifest, thin_destination)
+    assert thin_destination.read_bytes() == thin_content
+
+
+def test_bundle_download_is_atomic_on_checksum_failure(tmp_path: Path) -> None:
+    content = b"expected"
+    manifest = _manifest(content)
+    client = _FakeTosClient()
+    client.objects[
+        ("studio-releases", bundle_object_key("veadk/studio/main", manifest.version))
+    ] = b"corrupt!"
+    destination = tmp_path / "bundle.zip"
+    destination.write_bytes(b"previous")
+
+    with pytest.raises(StudioReleaseError, match="checksum"):
+        _store(client).download_bundle(manifest, destination)
+
+    assert destination.read_bytes() == b"previous"
+    assert not list(tmp_path.glob("*.part"))
+
+
 def test_publish_catalog_keeps_newest_release_first(tmp_path: Path) -> None:
     client = _FakeTosClient()
     store = _store(client)
@@ -190,7 +350,7 @@ def test_publish_catalog_keeps_newest_release_first(tmp_path: Path) -> None:
     assert store.manifest(older.version) == older
 
 
-def test_publish_does_not_replace_an_immutable_release(tmp_path: Path) -> None:
+def test_publish_identical_release_is_idempotent(tmp_path: Path) -> None:
     content = b"complete-studio-bundle"
     bundle = tmp_path / "bundle.zip"
     bundle.write_bytes(content)
@@ -199,9 +359,62 @@ def test_publish_does_not_replace_an_immutable_release(tmp_path: Path) -> None:
     store = _store(client)
 
     store.publish(bundle, manifest)
+    put_order = list(client.put_order)
 
-    with pytest.raises(FileExistsError):
+    store.publish(bundle, manifest)
+
+    assert client.put_order == put_order
+
+
+@pytest.mark.parametrize("failed_pointer", ["releases.json", "latest.json"])
+def test_publish_repairs_interrupted_pointer_update(
+    tmp_path: Path,
+    failed_pointer: str,
+) -> None:
+    content = b"complete-studio-bundle"
+    bundle = tmp_path / "bundle.zip"
+    bundle.write_bytes(content)
+    manifest = _manifest(content)
+
+    class _FailOnceClient(_FakeTosClient):
+        failed = False
+
+        def put_object(self, **kwargs: Any) -> None:
+            if kwargs["key"].endswith(failed_pointer) and not self.failed:
+                self.failed = True
+                raise OSError("injected ambiguous write failure")
+            super().put_object(**kwargs)
+
+    client = _FailOnceClient()
+    store = _store(client)
+
+    with pytest.raises(StudioReleaseError, match="pointer upload failed"):
         store.publish(bundle, manifest)
+
+    store.publish(bundle, manifest)
+
+    assert store.latest_manifest() == manifest
+    assert store.release_catalog() == [manifest]
+
+
+def test_publish_rejects_conflicting_partial_immutable_object(tmp_path: Path) -> None:
+    content = b"complete-studio-bundle"
+    bundle = tmp_path / "bundle.zip"
+    bundle.write_bytes(content)
+    manifest = _manifest(content)
+    client = _FakeTosClient()
+    store = _store(client)
+    client.objects[
+        (store.bucket, bundle_object_key(store.prefix, manifest.version))
+    ] = b"conflicting-content"
+
+    with pytest.raises(StudioReleaseError, match="immutable release object conflicts"):
+        store.publish(bundle, manifest)
+
+    assert (
+        store.bucket,
+        latest_manifest_object_key(store.prefix),
+    ) not in client.objects
 
 
 def test_publish_does_not_move_latest_pointer_to_an_older_release(
@@ -269,8 +482,8 @@ def test_stage_dependency_wheels_copies_only_verified_content(
         sha256=hashlib.sha256(content).hexdigest(),
     )
     monkeypatch.setattr(
-        "veadk.cli.studio_dependencies.STUDIO_DEPENDENCY_WHEELS",
-        (dependency,),
+        "veadk.cli.studio_dependencies.studio_dependency_wheels",
+        lambda _provider, **_kwargs: (dependency,),
     )
     source = tmp_path / "source"
     source.mkdir()
@@ -305,8 +518,8 @@ def test_stage_dependency_wheels_prefers_domestic_mirrors(
         return io.BytesIO(content)
 
     monkeypatch.setattr(
-        "veadk.cli.studio_dependencies.STUDIO_DEPENDENCY_WHEELS",
-        (dependency,),
+        "veadk.cli.studio_dependencies.studio_dependency_wheels",
+        lambda _provider, **_kwargs: (dependency,),
     )
     monkeypatch.setattr(
         "veadk.cli.studio_dependencies.urllib.request.urlopen",
@@ -322,6 +535,53 @@ def test_stage_dependency_wheels_prefers_domestic_mirrors(
     ]
 
 
+def test_stage_byteplus_dependency_wheels_prefers_primary_pypi(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b"downloaded-wheel"
+    dependency = StudioDependencyWheel(
+        filename="downloaded.whl",
+        url="https://files.pythonhosted.org/packages/example/downloaded.whl",
+        sha256=hashlib.sha256(content).hexdigest(),
+    )
+    urls: list[str] = []
+
+    def _urlopen(url: str, *, timeout: int) -> io.BytesIO:
+        urls.append(url)
+        assert timeout == 60
+        return io.BytesIO(content)
+
+    monkeypatch.setattr(
+        "veadk.cli.studio_dependencies.studio_dependency_wheels",
+        lambda _provider, **_kwargs: (dependency,),
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_dependencies.urllib.request.urlopen",
+        _urlopen,
+    )
+
+    staged = stage_studio_dependency_wheels(
+        tmp_path / "destination",
+        provider="byteplus",
+    )
+
+    assert staged[0].read_bytes() == content
+    assert urls == [dependency.url]
+
+
+def test_byteplus_dependency_wheels_include_vikingdb_sdk_pin() -> None:
+    volcengine_names = {
+        dependency.filename for dependency in studio_dependency_wheels("volcengine")
+    }
+    byteplus_names = {
+        dependency.filename for dependency in studio_dependency_wheels("byteplus")
+    }
+
+    assert "vikingdb_python_sdk-0.1.32-py3-none-any.whl" not in volcengine_names
+    assert "vikingdb_python_sdk-0.1.32-py3-none-any.whl" in byteplus_names
+
+
 def test_write_dependency_manifest_uses_pinned_wheel_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -331,18 +591,14 @@ def test_write_dependency_manifest_uses_pinned_wheel_metadata(
         url="https://example.com/prepared.whl",
         sha256="a" * 64,
     )
-    monkeypatch.setattr(
-        "veadk.cli.studio_dependencies.STUDIO_DEPENDENCY_WHEELS",
-        (dependency,),
-    )
     byteplus_dependency = StudioDependencyWheel(
         filename="byteplus.whl",
         url="https://example.com/byteplus.whl",
         sha256="b" * 64,
     )
     monkeypatch.setattr(
-        "veadk.cli.studio_dependencies.BYTEPLUS_STUDIO_DEPENDENCY_WHEELS",
-        (byteplus_dependency,),
+        "veadk.cli.studio_dependencies.studio_dependency_wheels",
+        lambda _provider: (dependency, byteplus_dependency),
     )
     manifest = tmp_path / "dependencies.json"
 
@@ -360,8 +616,111 @@ def test_write_dependency_manifest_uses_pinned_wheel_metadata(
                 "url": byteplus_dependency.url,
                 "sha256": byteplus_dependency.sha256,
             },
-        ]
+        ],
+        "sources": [
+            {
+                "filename": source.filename,
+                "url": source.url,
+                "sha256": source.sha256,
+            }
+            for source in STUDIO_DEPENDENCY_SOURCES
+        ],
+        "artifacts": [
+            {
+                "filename": STUDIO_AGENTKIT_CLI_ARTIFACT.filename,
+                "url": STUDIO_AGENTKIT_CLI_ARTIFACT.url,
+                "sha256": STUDIO_AGENTKIT_CLI_ARTIFACT.sha256,
+            }
+        ],
     }
+
+
+def test_project_does_not_depend_on_unpublished_companion() -> None:
+    pyproject = (Path(__file__).parents[2] / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "volcengine-agentkit-cli-bin" not in pyproject
+
+
+def _write_release_package(
+    destination: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, Path]:
+    destination.mkdir(parents=True, exist_ok=True)
+    veadk_wheel = destination / "veadk_python-1.2.3-py3-none-any.whl"
+    with zipfile.ZipFile(veadk_wheel, "w") as archive:
+        archive.writestr(
+            "veadk_python-1.2.3.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: veadk-python\nVersion: 1.2.3\n",
+        )
+    cli_archive = destination / STUDIO_AGENTKIT_CLI_ARTIFACT.filename
+    cli_archive.write_bytes(b"pinned-cli")
+    monkeypatch.setattr(
+        publisher,
+        "_AGENTKIT_CLI_ARCHIVE_SHA256",
+        hashlib.sha256(cli_archive.read_bytes()).hexdigest(),
+    )
+    return veadk_wheel, cli_archive
+
+
+def test_release_validation_accepts_pinned_native_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _veadk_wheel, cli_archive = _write_release_package(tmp_path, monkeypatch)
+
+    assert validate_studio_agentkit_cli_archive([cli_archive]) == cli_archive
+
+
+def test_release_validation_rejects_tampered_native_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _veadk_wheel, cli_archive = _write_release_package(tmp_path, monkeypatch)
+    cli_archive.write_bytes(b"tampered")
+
+    with pytest.raises(StudioPublisherError, match="checksum"):
+        validate_studio_agentkit_cli_archive([cli_archive])
+
+
+def test_extracted_bundle_requires_local_pinned_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = tmp_path / "package"
+    veadk_wheel, cli_archive = _write_release_package(package, monkeypatch)
+    (package / "requirements.txt").write_text(
+        "--no-index\n"
+        "--require-hashes\n"
+        f"./{veadk_wheel.name} --hash=sha256:{hashlib.sha256(veadk_wheel.read_bytes()).hexdigest()}\n",
+        encoding="utf-8",
+    )
+
+    assert validate_studio_bundle_dependencies(package) == cli_archive
+
+
+def test_extracted_bundle_rejects_nested_wheelhouse_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = tmp_path / "package"
+    wheelhouse = package / "wheelhouse"
+    veadk_wheel, _cli_archive = _write_release_package(wheelhouse, monkeypatch)
+    shutil.move(
+        str(wheelhouse / STUDIO_AGENTKIT_CLI_ARTIFACT.filename),
+        package / STUDIO_AGENTKIT_CLI_ARTIFACT.filename,
+    )
+    (package / "requirements.txt").write_text(
+        "--no-index\n"
+        "--require-hashes\n"
+        f"./wheelhouse/{veadk_wheel.name} "
+        f"--hash=sha256:{hashlib.sha256(veadk_wheel.read_bytes()).hexdigest()}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(StudioPublisherError, match="full release dependency"):
+        validate_studio_bundle_dependencies(package)
 
 
 def test_release_entrypoint_reads_deployed_provider() -> None:
@@ -371,6 +730,191 @@ def test_release_entrypoint_reads_deployed_provider() -> None:
         '--provider "${CLOUD_PROVIDER:-${AGENTKIT_CLOUD_PROVIDER:-volcengine}}"'
         in run_script
     )
+    assert "python3 -m veadk.cli.studio_companion" in run_script
+
+
+def test_release_entrypoint_exports_exact_managed_cli_source() -> None:
+    full_script = studio_run_script(provider="volcengine")
+    thin_script = studio_run_script(
+        provider="volcengine",
+        runtime_manifest_filename="studio-runtime.json",
+    )
+
+    assert (
+        "unset VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE "
+        "VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST" in full_script
+    )
+    assert (
+        'export VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE="$ROOT_DIR/'
+        'agentkit-linux-x64.tar.gz"' in full_script
+    )
+    assert "export VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST=" not in full_script
+    assert (
+        'export VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST="$ROOT_DIR/'
+        'studio-runtime.json"' in thin_script
+    )
+    assert "export VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE=" not in thin_script
+
+
+def test_publisher_entrypoint_exports_exact_managed_cli_source() -> None:
+    full_script = publisher._studio_run_script()
+    thin_script = publisher._studio_run_script(thin=True)
+
+    assert (
+        'export VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE="$ROOT_DIR/'
+        'agentkit-linux-x64.tar.gz"' in full_script
+    )
+    assert (
+        'export VEADK_STUDIO_AGENTKIT_CLI_RUNTIME_MANIFEST="$ROOT_DIR/'
+        'studio-runtime.json"' in thin_script
+    )
+
+
+@pytest.mark.parametrize(
+    "run_script",
+    (studio_run_script(provider="volcengine"), publisher._studio_run_script()),
+    ids=("direct-package", "release-server"),
+)
+def test_release_entrypoint_starts_companion_and_studio_concurrently(
+    run_script: str,
+) -> None:
+    companion_start = run_script.index("python3 -m veadk.cli.studio_companion")
+    companion_pid = run_script.index("COMPANION_PID=$!", companion_start)
+    studio_start = run_script.index("python3 -m veadk.cli.studio_start")
+    studio_pid = run_script.index("STUDIO_PID=$!", studio_start)
+    companion_wait = run_script.index('wait "$COMPANION_PID"', studio_pid)
+    studio_wait = run_script.index('wait "$STUDIO_PID"', companion_wait)
+
+    assert 'agentkit-linux-x64.tar.gz" &\n' in run_script
+    assert '--port "$PORT" &\n' in run_script
+    assert companion_start < companion_pid < studio_start < studio_pid
+    assert companion_pid < studio_pid < companion_wait < studio_wait
+    assert 'kill "$STUDIO_PID"' in run_script
+
+
+def test_release_entrypoint_does_not_load_generic_cli() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import veadk.cli.studio_start; "
+            "assert 'veadk.cli.cli' not in sys.modules",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("companion_exit", "expected_returncode", "studio_terminated"),
+    (("0", 1, False), ("7", 1, True)),
+)
+@pytest.mark.parametrize(
+    "entrypoint_script",
+    (studio_run_script(provider="volcengine"), publisher._studio_run_script()),
+    ids=("direct-package", "release-server"),
+)
+def test_release_entrypoint_parallel_startup_fails_closed(
+    tmp_path: Path,
+    entrypoint_script: str,
+    companion_exit: str,
+    expected_returncode: int,
+    studio_terminated: bool,
+) -> None:
+    package = tmp_path / "package"
+    fake_bin = tmp_path / "bin"
+    package.mkdir()
+    fake_bin.mkdir()
+    entrypoint = package / "run.sh"
+    entrypoint.write_text(
+        entrypoint_script,
+        encoding="utf-8",
+    )
+    entrypoint.chmod(0o755)
+    fake_python = fake_bin / "python3"
+    fake_python.write_text(
+        "#!/bin/bash\n"
+        "set -eu\n"
+        'if [[ "$*" == *"veadk.cli.studio_companion"* ]]; then\n'
+        '  touch "$FAKE_STATE/companion-started"\n'
+        '  while [ ! -f "$FAKE_STATE/studio-started" ]; do sleep 0.01; done\n'
+        '  exit "$FAKE_COMPANION_EXIT"\n'
+        "fi\n"
+        "trap 'touch \"$FAKE_STATE/studio-terminated\"; exit 0' TERM\n"
+        'touch "$FAKE_STATE/studio-started"\n'
+        'while [ ! -f "$FAKE_STATE/companion-started" ]; do sleep 0.01; done\n'
+        'if [ "$FAKE_COMPANION_EXIT" != 0 ]; then\n'
+        "  while true; do sleep 1; done\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}:{environment['PATH']}",
+            "FAKE_STATE": str(tmp_path),
+            "FAKE_COMPANION_EXIT": companion_exit,
+        }
+    )
+
+    completed = subprocess.run(
+        ["bash", str(entrypoint)],
+        cwd=package,
+        env=environment,
+        timeout=5,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == expected_returncode
+    assert (tmp_path / "companion-started").is_file()
+    assert (tmp_path / "studio-started").is_file()
+    assert (tmp_path / "studio-terminated").exists() is studio_terminated
+    if companion_exit == "0":
+        assert "studio_process_exited_unexpectedly" in completed.stderr
+
+
+def test_release_entrypoint_prefers_bundled_dependencies(
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "package"
+    bundled = package / "site-packages"
+    platform = tmp_path / "platform-site-packages"
+    bundled.mkdir(parents=True)
+    platform.mkdir()
+    module = "studio_dependency_precedence_probe"
+    (bundled / f"{module}.py").write_text('SOURCE = "bundled"\n', encoding="utf-8")
+    (platform / f"{module}.py").write_text('SOURCE = "platform"\n', encoding="utf-8")
+
+    lines = studio_run_script(provider=None).splitlines()
+    companion_index = next(
+        index
+        for index, line in enumerate(lines)
+        if "veadk.cli.studio_companion" in line
+    )
+    lines[companion_index:] = [
+        f'exec python3 -c "import {module}; print({module}.SOURCE)"'
+    ]
+    entrypoint = package / "run.sh"
+    entrypoint.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(platform)
+    completed = subprocess.run(
+        ["bash", str(entrypoint)],
+        cwd=tmp_path,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.stdout.strip() == "bundled"
 
 
 def test_publish_workflow_sends_release_request_to_server() -> None:
@@ -382,6 +926,16 @@ def test_publish_workflow_sends_release_request_to_server() -> None:
     assert "sourceKey" not in workflow
     assert '"Accept": "text/event-stream"' in workflow
     assert 'source_root = Path(os.environ["GITHUB_WORKSPACE"])' in workflow
+
+
+def test_pypi_publish_workflow_rejects_embedded_native_cli() -> None:
+    workflow = (
+        Path(__file__).parents[2] / ".github/workflows/publish-tag-to-pypi.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert "agentkit-cli-companion-release-gate:" not in workflow
+    assert "must not embed an AgentKit CLI archive" in workflow
+    assert "must not depend on an unpublished CLI companion" in workflow
 
 
 def test_build_release_uses_prepared_frontend_and_wheels(
@@ -407,10 +961,12 @@ def test_build_release_uses_prepared_frontend_and_wheels(
         frontend_assets: Path | None = None,
         dependency_wheels: Path | None = None,
         provider: str = "volcengine",
+        optimize_cold_start: bool = False,
     ) -> str:
         captured["frontend"] = frontend_assets
         captured["wheels"] = dependency_wheels
         captured["requirements_provider"] = provider
+        captured["optimize_cold_start"] = optimize_cold_start
         package_dir.mkdir(parents=True)
         (package_dir / "veadk.whl").write_bytes(b"wheel")
         return "./veadk.whl\n"
@@ -456,5 +1012,6 @@ def test_build_release_uses_prepared_frontend_and_wheels(
         "frontend": frontend_assets,
         "wheels": dependency_wheels,
         "requirements_provider": "byteplus",
+        "optimize_cold_start": True,
         "package_provider": None,
     }

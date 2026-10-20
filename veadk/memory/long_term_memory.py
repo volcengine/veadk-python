@@ -38,6 +38,45 @@ from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+MemoryEventType = Literal[
+    "text",
+    "thought",
+    "function_call",
+    "function_response",
+    "tool_call",
+    "tool_response",
+    "media",
+    "executable_code",
+    "code_execution_result",
+    "transcription",
+    "error",
+]
+MemoryRole = Literal["user", "assistant", "system"]
+MemoryAutoSavePreset = Literal["default", "all", "custom"]
+
+
+class MemoryAutoSavePolicy(BaseModel):
+    """Controls which events automatic long-term-memory saving persists."""
+
+    preset: MemoryAutoSavePreset = "default"
+    include_roles: list[MemoryRole] | None = None
+    exclude_roles: list[MemoryRole] = Field(default_factory=list)
+    include_authors: list[str] | None = None
+    exclude_authors: list[str] = Field(default_factory=list)
+    include_event_types: list[MemoryEventType] | None = None
+    exclude_event_types: list[MemoryEventType] = Field(default_factory=list)
+    text_only: bool = True
+    include_thought: bool = False
+    include_empty_text: bool = False
+
+
+MemoryAutoSavePolicyInput = Union[
+    MemoryAutoSavePolicy,
+    Literal["default", "all", "custom"],
+    dict[str, Any],
+    None,
+]
+
 
 def _get_backend_cls(backend: str) -> type[BaseLongTermMemoryBackend]:
     try:
@@ -195,28 +234,110 @@ class LongTermMemory(BaseMemoryService, BaseModel):
         )
 
     def _filter_and_convert_events(
-        self, events: Iterable[Event], *, include_assistant: bool = False
+        self,
+        events: Iterable[Event],
+        *,
+        include_assistant: bool = False,
+        auto_save_memory_policy: MemoryAutoSavePolicyInput = None,
     ) -> list[str]:
+        policy = self._resolve_auto_save_memory_policy(
+            auto_save_memory_policy,
+            include_assistant=include_assistant,
+        )
         final_events = []
         for event in events:
-            # filter: bad event
-            if not event.content or not event.content.parts:
+            message = self._convert_event_to_memory_message(event, policy)
+            if not message:
                 continue
-
-            # filter: only add user event to memory to enhance retrieve performance
-            if not include_assistant and not event.author == "user":
-                continue
-
-            # filter: discard function call and function response
-            if not event.content.parts[0].text:
-                continue
-
-            # convert: to string-format for storage
-            message = event.content.model_dump(exclude_none=True, mode="json")
-            message["role"] = self._normalize_event_role(event, message)
 
             final_events.append(json.dumps(message, ensure_ascii=False))
         return final_events
+
+    def _resolve_auto_save_memory_policy(
+        self,
+        auto_save_memory_policy: MemoryAutoSavePolicyInput,
+        *,
+        include_assistant: bool,
+    ) -> MemoryAutoSavePolicy:
+        if auto_save_memory_policy is None:
+            return self._base_auto_save_memory_policy(
+                "default", include_assistant=include_assistant
+            )
+
+        if isinstance(auto_save_memory_policy, str):
+            return self._base_auto_save_memory_policy(
+                auto_save_memory_policy,
+                include_assistant=include_assistant,
+            )
+
+        raw_policy = MemoryAutoSavePolicy.model_validate(auto_save_memory_policy)
+        base_policy = self._base_auto_save_memory_policy(
+            raw_policy.preset,
+            include_assistant=include_assistant,
+        )
+        fields_set = getattr(raw_policy, "model_fields_set", set())
+        overrides = {
+            field: getattr(raw_policy, field)
+            for field in fields_set
+            if field != "preset"
+        }
+        if overrides:
+            base_policy = base_policy.model_copy(update=overrides)
+        return base_policy
+
+    def _base_auto_save_memory_policy(
+        self, preset: MemoryAutoSavePreset, *, include_assistant: bool
+    ) -> MemoryAutoSavePolicy:
+        if preset == "all":
+            return MemoryAutoSavePolicy(
+                preset="all",
+                include_roles=["user", "assistant", "system"],
+                include_event_types=None,
+                text_only=False,
+                include_thought=True,
+                include_empty_text=True,
+            )
+        if preset == "custom":
+            return MemoryAutoSavePolicy(preset="custom")
+        return MemoryAutoSavePolicy(
+            preset="default",
+            include_roles=["user", "assistant"] if include_assistant else ["user"],
+            include_event_types=["text"],
+            text_only=True,
+            include_thought=False,
+            include_empty_text=False,
+        )
+
+    def _convert_event_to_memory_message(
+        self, event: Event, policy: MemoryAutoSavePolicy
+    ) -> dict[str, Any] | None:
+        message = (
+            event.content.model_dump(exclude_none=True, mode="json")
+            if event.content
+            else {"parts": []}
+        )
+        role = self._normalize_event_role(event, message)
+        author = str(getattr(event, "author", "") or "")
+
+        if not self._is_role_allowed(role, policy):
+            return None
+        if not self._is_author_allowed(author, policy):
+            return None
+
+        event_types = self._infer_event_types(event)
+        if not self._has_allowed_event_type(event_types, policy):
+            return None
+
+        parts = self._filter_memory_parts(message.get("parts") or [], policy)
+        parts.extend(self._event_metadata_parts(event, policy))
+        if not parts and not policy.include_empty_text:
+            return None
+
+        message["role"] = role
+        message["parts"] = parts
+        if author and policy.preset != "default":
+            message["author"] = author
+        return message
 
     def _normalize_event_role(self, event: Event, message: dict[str, Any]) -> str:
         role = message.get("role")
@@ -225,6 +346,177 @@ class LongTermMemory(BaseMemoryService, BaseModel):
         if role == "system":
             return "system"
         return "assistant"
+
+    def _is_role_allowed(self, role: str, policy: MemoryAutoSavePolicy) -> bool:
+        if policy.include_roles is not None and role not in policy.include_roles:
+            return False
+        return role not in policy.exclude_roles
+
+    def _is_author_allowed(self, author: str, policy: MemoryAutoSavePolicy) -> bool:
+        if policy.include_authors is not None and author not in policy.include_authors:
+            return False
+        return author not in policy.exclude_authors
+
+    def _has_allowed_event_type(
+        self, event_types: set[str], policy: MemoryAutoSavePolicy
+    ) -> bool:
+        if not event_types:
+            return bool(policy.include_empty_text)
+        event_types = event_types - set(policy.exclude_event_types)
+        if not event_types:
+            return False
+        if policy.include_event_types is None:
+            return True
+        return bool(event_types & set(policy.include_event_types))
+
+    def _filter_memory_parts(
+        self, parts: list[Any], policy: MemoryAutoSavePolicy
+    ) -> list[dict[str, Any]]:
+        final_parts = []
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            part_types = self._infer_part_event_types(part)
+            if not self._has_allowed_part_type(part_types, policy):
+                continue
+            if "thought" in part_types and not policy.include_thought:
+                part = dict(part)
+                part.pop("thought", None)
+                part.pop("thought_signature", None)
+                if part_types == {"thought"}:
+                    continue
+            final_parts.append(self._sanitize_memory_part(part))
+        return final_parts
+
+    def _has_allowed_part_type(
+        self, part_types: set[str], policy: MemoryAutoSavePolicy
+    ) -> bool:
+        if not part_types:
+            return False
+        if (
+            policy.text_only
+            and policy.include_event_types is None
+            and not part_types <= {"text", "thought"}
+        ):
+            return False
+        if part_types & set(policy.exclude_event_types):
+            return False
+        if policy.include_event_types is None:
+            return True
+        return bool(part_types & set(policy.include_event_types))
+
+    def _infer_event_types(self, event: Event) -> set[str]:
+        event_types = set()
+        content = getattr(event, "content", None)
+        for part in getattr(content, "parts", None) or []:
+            if hasattr(part, "model_dump"):
+                part = part.model_dump(exclude_none=True, mode="json")
+            if isinstance(part, dict):
+                event_types.update(self._infer_part_event_types(part))
+
+        if getattr(event, "input_transcription", None) is not None:
+            event_types.add("transcription")
+        if getattr(event, "output_transcription", None) is not None:
+            event_types.add("transcription")
+        if getattr(event, "error_code", None) or getattr(event, "error_message", None):
+            event_types.add("error")
+        return event_types
+
+    def _infer_part_event_types(self, part: dict[str, Any]) -> set[str]:
+        part_types = set()
+        text = part.get("text")
+        if text:
+            part_types.add("thought" if part.get("thought") else "text")
+        if part.get("function_call") is not None:
+            part_types.add("function_call")
+        if part.get("function_response") is not None:
+            part_types.add("function_response")
+        if part.get("tool_call") is not None:
+            part_types.add("tool_call")
+        if part.get("tool_response") is not None:
+            part_types.add("tool_response")
+        if part.get("inline_data") is not None or part.get("file_data") is not None:
+            part_types.add("media")
+        if part.get("executable_code") is not None:
+            part_types.add("executable_code")
+        if part.get("code_execution_result") is not None:
+            part_types.add("code_execution_result")
+        return part_types
+
+    def _event_metadata_parts(
+        self, event: Event, policy: MemoryAutoSavePolicy
+    ) -> list[dict[str, Any]]:
+        metadata_parts = []
+        if self._is_event_type_allowed("transcription", policy):
+            metadata_parts.extend(
+                self._serialize_event_metadata(
+                    "input_transcription",
+                    getattr(event, "input_transcription", None),
+                )
+            )
+            metadata_parts.extend(
+                self._serialize_event_metadata(
+                    "output_transcription",
+                    getattr(event, "output_transcription", None),
+                )
+            )
+        if self._is_event_type_allowed("error", policy):
+            error_code = getattr(event, "error_code", None)
+            error_message = getattr(event, "error_message", None)
+            if error_code or error_message:
+                text = ": ".join(str(v) for v in (error_code, error_message) if v)
+                metadata_parts.append(
+                    {
+                        "text": text,
+                        "part_metadata": {"event_type": "error"},
+                    }
+                )
+        return metadata_parts
+
+    def _is_event_type_allowed(
+        self, event_type: MemoryEventType, policy: MemoryAutoSavePolicy
+    ) -> bool:
+        if (
+            policy.text_only
+            and policy.include_event_types is None
+            and event_type not in {"text", "thought"}
+        ):
+            return False
+        if event_type in policy.exclude_event_types:
+            return False
+        if event_type == "thought" and not policy.include_thought:
+            return False
+        if policy.include_event_types is None:
+            return True
+        return event_type in policy.include_event_types
+
+    def _serialize_event_metadata(self, name: str, value: Any) -> list[dict[str, Any]]:
+        if value is None:
+            return []
+        if hasattr(value, "model_dump"):
+            value = value.model_dump(exclude_none=True, mode="json")
+        if isinstance(value, str):
+            text = value
+        else:
+            text = json.dumps(value, ensure_ascii=False)
+        if not text:
+            return []
+        return [{"text": text, "part_metadata": {"event_type": name}}]
+
+    def _sanitize_memory_part(self, part: dict[str, Any]) -> dict[str, Any]:
+        sanitized = dict(part)
+        inline_data = sanitized.get("inline_data")
+        if isinstance(inline_data, dict) and "data" in inline_data:
+            sanitized["inline_data"] = self._sanitize_inline_data(inline_data)
+        return sanitized
+
+    def _sanitize_inline_data(self, inline_data: dict[str, Any]) -> dict[str, Any]:
+        sanitized = dict(inline_data)
+        data = sanitized.pop("data", None)
+        if data is not None:
+            sanitized["data_size"] = len(str(data))
+            sanitized["data_omitted"] = True
+        return sanitized
 
     @override
     async def add_session_to_memory(
@@ -264,6 +556,7 @@ class LongTermMemory(BaseMemoryService, BaseModel):
         nested_kwargs = save_kwargs.pop("kwargs", None)
         if isinstance(nested_kwargs, dict):
             save_kwargs.update(nested_kwargs)
+        auto_save_memory_policy = save_kwargs.pop("auto_save_memory_policy", None)
         app_name = self.app_name or getattr(session, "app_name", "")
         include_assistant = (
             self.backend == "openviking"
@@ -272,6 +565,7 @@ class LongTermMemory(BaseMemoryService, BaseModel):
         event_strings = self._filter_and_convert_events(
             session.events,
             include_assistant=include_assistant,
+            auto_save_memory_policy=auto_save_memory_policy,
         )
 
         logger.info(

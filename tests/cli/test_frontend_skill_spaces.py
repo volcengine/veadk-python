@@ -17,13 +17,11 @@ from __future__ import annotations
 import asyncio
 import json
 import zipfile
-
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
 from fastapi import FastAPI
 from fastapi.responses import Response
 from fastapi.testclient import TestClient
@@ -37,6 +35,8 @@ def _create_frontend_app(
     tmp_path: Path,
     *,
     provider: str = "volcengine",
+    admins: str | None = None,
+    developers: str | None = None,
 ) -> FastAPI:
     captured: dict[str, Any] = {}
     monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
@@ -69,6 +69,8 @@ def _create_frontend_app(
         oauth2_provider_label=None,
         auth_mode="frontend",
         generated_agent_test_run_ttl=60,
+        studio_admins=admins,
+        studio_developers=developers,
         open_browser=False,
         provider=provider,
     )
@@ -80,10 +82,17 @@ def _assert_sdk_call_is_off_event_loop() -> None:
         asyncio.get_running_loop()
 
 
-def test_frontend_server_compresses_large_static_responses(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    "provider,expected_encoding",
+    [("volcengine", "gzip"), ("byteplus", None)],
+)
+def test_frontend_server_uses_provider_compatible_static_response_encoding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: str,
+    expected_encoding: str | None,
 ) -> None:
-    app = _create_frontend_app(monkeypatch, tmp_path)
+    app = _create_frontend_app(monkeypatch, tmp_path, provider=provider)
 
     @app.get("/compression-probe")
     def compression_probe() -> Response:
@@ -95,14 +104,15 @@ def test_frontend_server_compresses_large_static_responses(
     )
 
     assert response.status_code == 200
-    assert response.headers["content-encoding"] == "gzip"
-    assert "Accept-Encoding" in response.headers["vary"]
+    assert response.headers.get("content-encoding") == expected_encoding
+    if expected_encoding:
+        assert "Accept-Encoding" in response.headers["vary"]
 
 
 def test_list_a2a_spaces_paginates_and_maps_names(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    app = _create_frontend_app(monkeypatch, tmp_path)
+    app = _create_frontend_app(monkeypatch, tmp_path, developers="developer")
     calls: list[dict[str, Any]] = []
 
     class _FakeResponse:
@@ -171,6 +181,7 @@ def test_list_a2a_spaces_paginates_and_maps_names(
         response = client.get(
             "/web/a2a-spaces",
             params={"region": "cn-beijing", "page_size": 2, "project": "default"},
+            headers={"X-VeADK-Local-User": "developer"},
         )
 
     assert response.status_code == 200
@@ -231,8 +242,9 @@ def test_a2a_space_routes_keep_missing_credentials_status(
     assert response.status_code == 409
 
 
+@pytest.mark.parametrize("display_name", [None, "中文显示名称"])
 def test_list_skill_spaces_maps_metadata_and_pagination(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, display_name: str | None
 ) -> None:
     app = _create_frontend_app(monkeypatch, tmp_path)
     calls: list[tuple[str, Any]] = []
@@ -250,6 +262,9 @@ def test_list_skill_spaces_maps_metadata_and_pagination(
                     SimpleNamespace(
                         id="space-1",
                         name="客户支持技能",
+                        tags=[SimpleNamespace(key="display_name", value=display_name)]
+                        if display_name
+                        else None,
                         description="客服工作流",
                         status="Ready",
                         project_name="support-project",
@@ -280,6 +295,7 @@ def test_list_skill_spaces_maps_metadata_and_pagination(
             {
                 "id": "space-1",
                 "name": "客户支持技能",
+                "displayName": display_name or "客户支持技能",
                 "description": "客服工作流",
                 "status": "Ready",
                 "region": "cn-shanghai",
@@ -300,7 +316,7 @@ def test_list_skill_spaces_maps_metadata_and_pagination(
     assert request.project_name == "support-project"
 
 
-def test_list_skill_spaces_keeps_cross_region_defaults(
+def test_list_skill_spaces_defaults_to_local_studio_region(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     app = _create_frontend_app(monkeypatch, tmp_path)
@@ -335,14 +351,11 @@ def test_list_skill_spaces_keeps_cross_region_defaults(
         response = client.get("/web/skill-spaces")
 
     assert response.status_code == 200
-    assert response.json()["totalCount"] == 2
+    assert response.json()["totalCount"] == 100
     assert response.json()["page"] == 1
     assert response.json()["pageSize"] == 50
-    assert {item["region"] for item in response.json()["items"]} == {
-        "cn-beijing",
-        "cn-shanghai",
-    }
-    assert {region for region, _ in calls} == {"cn-beijing", "cn-shanghai"}
+    assert {item["region"] for item in response.json()["items"]} == {"cn-beijing"}
+    assert {region for region, _ in calls} == {"cn-beijing"}
     assert all(request.page_number == 1 for _, request in calls)
     assert all(request.page_size == 50 for _, request in calls)
     assert all(request.project_name is None for _, request in calls)
@@ -446,6 +459,10 @@ def test_list_skills_maps_existing_dto_and_pagination(
         def __init__(self, **kwargs: Any) -> None:
             self.region = kwargs["region"]
 
+        def get_skill_space(self, request: Any) -> SimpleNamespace:
+            _assert_sdk_call_is_off_event_loop()
+            return SimpleNamespace(id=request.id, name="personal", description="")
+
         def list_skills_by_skill_space(self, request: Any) -> SimpleNamespace:
             _assert_sdk_call_is_off_event_loop()
             calls.append((self.region, request))
@@ -500,6 +517,73 @@ def test_list_skills_maps_existing_dto_and_pagination(
     assert request.page_size == 5
 
 
+def test_list_skills_recovers_name_addressable_items_from_dangling_relation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _DanglingRelationError(RuntimeError):
+        code = "ResourceNotFound.skill"
+
+    class _FakeSkillsClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def list_skills_by_skill_space(self, request: Any) -> SimpleNamespace:
+            _assert_sdk_call_is_off_event_loop()
+            del request
+            raise _DanglingRelationError("dangling relation")
+
+        def get_skill_space(self, request: Any) -> SimpleNamespace:
+            assert request.id == "space-1"
+            return SimpleNamespace(name="Writers")
+
+        def list_skills_by_space_id(self, request: Any) -> SimpleNamespace:
+            assert request.skill_space_id == "space-1"
+            assert request.skill_space_name == "Writers"
+            return SimpleNamespace(
+                items=[SimpleNamespace(name="writer", description="basic")]
+            )
+
+        def get_skill_info(self, request: Any) -> SimpleNamespace:
+            assert request.skill_name == "writer"
+            return SimpleNamespace(
+                skill_name="writer",
+                description="Write content",
+                skill_md="# Writer",
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.skills.client.AgentkitSkillsClient", _FakeSkillsClient
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/skill-spaces/space-1/skills",
+            params={"region": "cn-shanghai", "page": 1, "page_size": 5},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [
+            {
+                "skillId": "",
+                "skillName": "writer",
+                "skillDescription": "Write content",
+                "version": "",
+                "skillStatus": "",
+                "lookupByName": True,
+                "degraded": True,
+            }
+        ],
+        "totalCount": 1,
+        "page": 1,
+        "pageSize": 5,
+        "degraded": True,
+        "warnings": ["部分关联异常，已恢复可读取技能"],
+    }
+
+
 def test_skill_space_errors_preserve_sdk_details(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -521,18 +605,7 @@ def test_skill_space_errors_preserve_sdk_details(
         response = client.get("/web/skill-spaces", params={"region": "cn-beijing"})
 
     assert response.status_code == 502
-    assert response.json() == {
-        "detail": {
-            "code": "SKILL_SERVICE_UNAVAILABLE",
-            "message": "暂时无法访问 AgentKit Skills。",
-            "retryable": True,
-            "originalError": {
-                "type": "builtins.RuntimeError",
-                "message": "upstream failure: signed-token-value",
-                "repr": "RuntimeError('upstream failure: signed-token-value')",
-            },
-        }
-    }
+    assert response.json() == {"detail": "upstream failure: signed-token-value"}
     assert "signed-token-value" in response.text
 
 
@@ -577,6 +650,99 @@ def test_get_skill_detail_runs_sdk_call_off_event_loop(
     assert request.skill_version == "1.2.0"
 
 
+def test_get_skill_detail_uses_name_lookup_for_recovered_relation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeSkillsClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_skill_version(self, request: Any) -> SimpleNamespace:
+            del request
+            raise AssertionError("degraded name lookup must not invent a version id")
+
+        def get_skill_info(self, request: Any) -> SimpleNamespace:
+            _assert_sdk_call_is_off_event_loop()
+            assert request.skill_name == "writer"
+            assert request.skill_space_name == "Writers"
+            assert request.skill_space_id == "space-1"
+            return SimpleNamespace(
+                skill_name="writer",
+                description="Write content",
+                skill_md="# Writer\n",
+                bucket_name="",
+                tos_path="",
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.skills.client.AgentkitSkillsClient", _FakeSkillsClient
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/skill-spaces/space-1/skills/writer",
+            params={
+                "region": "cn-shanghai",
+                "skill_name": "writer",
+                "skill_space_name": "Writers",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "writer"
+    assert response.json()["skillMd"] == "# Writer\n"
+    assert response.json()["version"] == ""
+
+
+def test_get_skill_detail_falls_back_for_legacy_skill_type(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    calls: list[tuple[str, Any]] = []
+
+    class _FakeSkillsClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.region = kwargs["region"]
+
+        def get_skill_version(self, request: Any) -> SimpleNamespace:
+            _assert_sdk_call_is_off_event_loop()
+            calls.append(("version", request))
+            raise RuntimeError("interface type not consistent with skill type")
+
+        def get_skill_info(self, request: Any) -> SimpleNamespace:
+            _assert_sdk_call_is_off_event_loop()
+            calls.append(("info", request))
+            return SimpleNamespace(
+                skill_name="cloud-migration-qa",
+                description="Migration checks",
+                skill_md="---\nname: cloud-migration-qa\n---\nBody.\n",
+                bucket_name="",
+                tos_path="",
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.skills.client.AgentkitSkillsClient", _FakeSkillsClient
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/skill-spaces/space-1/skills/skill-1",
+            params={
+                "region": "cn-beijing",
+                "version": "v1",
+                "skill_space_name": "migration-space",
+                "skill_name": "cloud-migration-qa",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "cloud-migration-qa"
+    assert response.json()["skillMd"].endswith("Body.\n")
+    assert [name for name, _request in calls] == ["version", "info"]
+
+
 def test_get_skill_detail_falls_back_to_skillspace_package(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -597,9 +763,17 @@ def test_get_skill_detail_falls_back_to_skillspace_package(
                 tos_path="skills/ticket-classifier.zip",
             )
 
-    def _download_skill(skill: Any, zip_path: Path) -> bool:
+    def _download_skill(
+        skill: Any,
+        zip_path: Path,
+        *,
+        region: str | None = None,
+        raise_on_error: bool = False,
+    ) -> bool:
         assert skill.bucket_name == "skills-bucket"
         assert skill.path == "skills/ticket-classifier.zip"
+        assert region == "cn-shanghai"
+        assert raise_on_error is True
         with zipfile.ZipFile(zip_path, "w") as archive:
             archive.writestr(
                 "ticket-classifier/SKILL.md",
@@ -640,6 +814,78 @@ def test_get_skill_detail_falls_back_to_skillspace_package(
     ]
 
 
+def test_get_skill_detail_skips_binary_package_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeSkillsClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_skill_version(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                name="canvas-design",
+                description="Canvas design skill",
+                version="v1",
+                skill_md="",
+                bucket_name="skills-bucket",
+                tos_path="skills/canvas-design.zip",
+            )
+
+    def _download_skill(
+        skill: Any,
+        zip_path: Path,
+        *,
+        region: str | None = None,
+        raise_on_error: bool = False,
+    ) -> bool:
+        assert skill.name == "canvas-design"
+        assert region == "cn-beijing"
+        assert raise_on_error is True
+        with zipfile.ZipFile(zip_path, "w") as archive:
+            archive.writestr(
+                "canvas-design/SKILL.md",
+                "---\nname: canvas-design\ndescription: Canvas.\n---\nBody.\n",
+            )
+            archive.writestr(
+                "canvas-design/scripts/render.py",
+                "def render():\n    return 'ok'\n",
+            )
+            archive.writestr(
+                "canvas-design/assets/font.ttf",
+                b"\x00\x01\x00\x00binary-font",
+            )
+            archive.writestr(
+                "canvas-design/assets/preview.png",
+                b"\x89PNG\r\n\x1a\n\x00binary-image",
+            )
+        return True
+
+    monkeypatch.setattr(
+        "agentkit.sdk.skills.client.AgentkitSkillsClient", _FakeSkillsClient
+    )
+    monkeypatch.setattr(
+        "veadk.skills.materializer._download_legacy_skill_space_skill",
+        _download_skill,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/skill-spaces/space-1/skills/skill-1",
+            params={"region": "cn-beijing", "version": "v1"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["skillMd"].endswith("Body.\n")
+    assert [file["path"] for file in body["files"]] == [
+        "skills/canvas-design/SKILL.md",
+        "skills/canvas-design/scripts/render.py",
+    ]
+
+
 def test_get_skill_detail_falls_back_to_skill_md_when_package_download_fails(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -660,8 +906,16 @@ def test_get_skill_detail_falls_back_to_skill_md_when_package_download_fails(
                 tos_path="skills/ticket-classifier.zip",
             )
 
-    def _download_skill(skill: Any, zip_path: Path) -> bool:
+    def _download_skill(
+        skill: Any,
+        zip_path: Path,
+        *,
+        region: str | None = None,
+        raise_on_error: bool = False,
+    ) -> bool:
         del skill, zip_path
+        assert region == "cn-shanghai"
+        assert raise_on_error is True
         return False
 
     monkeypatch.setattr(
@@ -682,6 +936,47 @@ def test_get_skill_detail_falls_back_to_skill_md_when_package_download_fails(
     body = response.json()
     assert body["skillMd"].endswith("Body.\n")
     assert body["files"] == []
+
+
+def test_get_skill_detail_preserves_package_download_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeSkillsClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_skill_version(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                name="ticket-classifier",
+                description="识别工单类型",
+                version="1.2.0",
+                skill_md="",
+                bucket_name="skills-bucket",
+                tos_path="skills/ticket-classifier.zip",
+            )
+
+    def _download_skill(*_args: Any, **_kwargs: Any) -> bool:
+        raise RuntimeError("TOS GetObject failed with request-id-3")
+
+    monkeypatch.setattr(
+        "agentkit.sdk.skills.client.AgentkitSkillsClient", _FakeSkillsClient
+    )
+    monkeypatch.setattr(
+        "veadk.skills.materializer._download_legacy_skill_space_skill",
+        _download_skill,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/skill-spaces/space-1/skills/skill-1",
+            params={"region": "cn-shanghai", "version": "1.2.0"},
+        )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == ("TOS GetObject failed with request-id-3")
 
 
 def test_skill_space_routes_keep_missing_credentials_status(

@@ -1,4 +1,5 @@
 import type { NewChatVideoConfig, VideoTaskMode } from "./video-types";
+import { newChatT } from "./newChatI18n";
 
 export type VideoTaskStatus =
   | "optimizing"
@@ -7,6 +8,7 @@ export type VideoTaskStatus =
   | "error";
 
 export type VideoTaskErrorStage = "optimization" | "generation";
+export type VideoProviderStatus = "queued" | "running";
 
 export interface VideoTaskOutput {
   previewUrl: string;
@@ -26,6 +28,8 @@ export interface VideoGenerationTask {
   config: NewChatVideoConfig;
   enhancerModel: string;
   generationModel: string;
+  providerStatus: VideoProviderStatus | null;
+  generationStartedAt: number | null;
   assetIds: string[];
   output: VideoTaskOutput | null;
   errorStage: VideoTaskErrorStage | null;
@@ -40,7 +44,16 @@ export type VideoTaskEvent =
       enhancerModel: string;
     }
   | { type: "assets_uploaded"; assetIds: string[] }
-  | { type: "generation_started"; remoteTaskId: string; generationModel: string }
+  | {
+      type: "generation_started";
+      remoteTaskId: string;
+      generationModel: string;
+      startedAt: number;
+    }
+  | {
+      type: "generation_status_changed";
+      providerStatus: VideoProviderStatus;
+    }
   | { type: "generation_succeeded"; output: VideoTaskOutput }
   | { type: "failed"; stage: VideoTaskErrorStage; error: string }
   | { type: "retry"; stage: VideoTaskErrorStage };
@@ -51,17 +64,11 @@ export interface VideoTaskStep {
   status: "pending" | "active" | "done" | "failed";
 }
 
-const VIDEO_TASK_LABELS: Record<VideoTaskMode, string> = {
-  auto: "视频生成",
-  text_to_video: "文生视频",
-  reference_to_video: "参考素材生视频",
-  video_editing: "视频编辑",
-  video_extension: "视频续写",
-  first_last_frame: "首尾帧生成",
-};
-
-export function videoTaskModeLabel(mode: VideoTaskMode | null): string {
-  return mode ? VIDEO_TASK_LABELS[mode] : "视频生成";
+export function videoTaskModeLabel(
+  mode: VideoTaskMode | null,
+  locale?: string,
+): string {
+  return newChatT(`video.taskNames.${mode ?? "auto"}`, locale ? { lng: locale } : {});
 }
 
 export function createVideoGenerationTask({
@@ -87,6 +94,8 @@ export function createVideoGenerationTask({
     config: { ...config },
     enhancerModel,
     generationModel,
+    providerStatus: null,
+    generationStartedAt: null,
     assetIds: [],
     output: null,
     errorStage: null,
@@ -118,14 +127,21 @@ export function updateVideoGenerationTask(
       status: "generating",
       remoteTaskId: event.remoteTaskId,
       generationModel: event.generationModel,
+      providerStatus: "queued",
+      generationStartedAt: event.startedAt,
       errorStage: null,
       error: "",
     };
+  }
+  if (event.type === "generation_status_changed") {
+    if (task.providerStatus === event.providerStatus) return task;
+    return { ...task, providerStatus: event.providerStatus };
   }
   if (event.type === "generation_succeeded") {
     return {
       ...task,
       status: "success",
+      providerStatus: null,
       output: event.output,
       errorStage: null,
       error: "",
@@ -135,6 +151,7 @@ export function updateVideoGenerationTask(
     return {
       ...task,
       status: "error",
+      providerStatus: null,
       errorStage: event.stage,
       error: event.error,
     };
@@ -144,6 +161,8 @@ export function updateVideoGenerationTask(
     runId: task.runId + 1,
     status: event.stage === "optimization" ? "optimizing" : "generating",
     remoteTaskId: "",
+    providerStatus: null,
+    generationStartedAt: null,
     optimizedPrompt: event.stage === "optimization" ? "" : task.optimizedPrompt,
     resolvedMode: event.stage === "optimization" ? null : task.resolvedMode,
     output: null,
@@ -152,8 +171,12 @@ export function updateVideoGenerationTask(
   };
 }
 
-export function videoTaskSteps(task: VideoGenerationTask): VideoTaskStep[] {
-  const taskLabel = videoTaskModeLabel(task.resolvedMode);
+export function videoTaskSteps(
+  task: VideoGenerationTask,
+  locale?: string,
+): VideoTaskStep[] {
+  const options = locale ? { lng: locale } : {};
+  const taskLabel = videoTaskModeLabel(task.resolvedMode, locale);
   const optimizationFailed =
     task.status === "error" && task.errorStage === "optimization";
   const generationFailed =
@@ -164,11 +187,14 @@ export function videoTaskSteps(task: VideoGenerationTask): VideoTaskStep[] {
   return [
     {
       id: "optimization",
-      label: optimizationFailed
-        ? "提示词优化失败"
-        : optimizationDone
-          ? "提示词优化完成"
-          : "提示词优化中",
+      label: newChatT(
+        optimizationFailed
+          ? "video.task.steps.optimizationFailed"
+          : optimizationDone
+            ? "video.task.steps.optimizationDone"
+            : "video.task.steps.optimizationActive",
+        options,
+      ),
       status: optimizationFailed
         ? "failed"
         : optimizationDone
@@ -177,13 +203,20 @@ export function videoTaskSteps(task: VideoGenerationTask): VideoTaskStep[] {
     },
     {
       id: "generation",
-      label: task.status === "success"
-        ? `${taskLabel}已完成`
-        : generationFailed
-          ? `${taskLabel}失败`
-          : task.status === "generating"
-            ? `${taskLabel}进行中`
-            : "等待视频生成",
+      label: newChatT(
+        task.status === "success"
+          ? "video.task.steps.generationDone"
+          : generationFailed
+            ? "video.task.steps.generationFailed"
+            : task.status === "generating"
+              ? task.providerStatus === "queued"
+                ? "video.task.steps.generationQueued"
+                : task.providerStatus === "running"
+                  ? "video.task.steps.generationRunning"
+                  : "video.task.steps.generationActive"
+              : "video.task.steps.generationPending",
+        { ...options, task: taskLabel },
+      ),
       status: task.status === "success"
         ? "done"
         : generationFailed
@@ -195,10 +228,37 @@ export function videoTaskSteps(task: VideoGenerationTask): VideoTaskStep[] {
   ];
 }
 
-export function currentVideoTaskStatus(task: VideoGenerationTask): string {
-  return videoTaskSteps(task).find((step) => step.status === "active")?.label
-    ?? videoTaskSteps(task).find((step) => step.status === "failed")?.label
-    ?? "视频生成完成";
+export function formatVideoTaskElapsed(elapsedMs: number, locale?: string): string {
+  const options = locale ? { lng: locale } : {};
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1_000));
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return newChatT("video.task.elapsedHours", {
+      ...options,
+      hours,
+      minutes: String(minutes).padStart(2, "0"),
+    });
+  }
+  if (minutes > 0) {
+    return newChatT("video.task.elapsedMinutes", {
+      ...options,
+      minutes,
+      seconds: String(seconds).padStart(2, "0"),
+    });
+  }
+  return newChatT("video.task.elapsedSeconds", { ...options, seconds });
+}
+
+export function currentVideoTaskStatus(
+  task: VideoGenerationTask,
+  locale?: string,
+): string {
+  const steps = videoTaskSteps(task, locale);
+  return steps.find((step) => step.status === "active")?.label
+    ?? steps.find((step) => step.status === "failed")?.label
+    ?? newChatT("video.task.steps.generationComplete", locale ? { lng: locale } : {});
 }
 
 export function isVideoTaskRunning(task: VideoGenerationTask | null): boolean {

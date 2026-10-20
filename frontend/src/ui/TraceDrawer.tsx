@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { ChevronRight, Loader2, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import {
   getGeneratedAgentTestTrace,
   getSessionTrace,
@@ -31,6 +33,17 @@ interface TNode {
 }
 
 type SpanId = TraceSpan["span_id"];
+type TraceLoadState = "loading" | "ready" | "collecting" | "disabled" | "forbidden" | "error";
+
+const TRACE_COLLECTING_RETRIES = 2;
+const TRACE_COLLECTING_RETRY_MS = 1_500;
+
+function traceErrorState(message: string): Exclude<TraceLoadState, "loading" | "ready"> {
+  if (message.includes("HTTP 425") || message.includes("仍在采集中")) return "collecting";
+  if (message.includes("HTTP 404") || message.includes("未开启链路观测")) return "disabled";
+  if (/HTTP 40[13]/.test(message) || message.includes("无权限读取 APMPlus")) return "forbidden";
+  return "error";
+}
 
 function buildTree(spans: TraceSpan[]) {
   const byId = new Map<SpanId, TraceSpan>();
@@ -106,32 +119,65 @@ export function TraceDrawer({
   sessionId,
   endTimeMs,
   onClose,
-  title = "调用链路观测",
+  title,
 }: TraceDrawerProps) {
+  const { t } = useTranslation("conversation");
   const [spans, setSpans] = useState<TraceSpan[] | null>(null);
-  const [err, setErr] = useState("");
+  const [loadState, setLoadState] = useState<TraceLoadState>("loading");
+  const [loadRevision, setLoadRevision] = useState(0);
   const [collapsed, setCollapsed] = useState<Set<SpanId>>(new Set());
   const [selectedId, setSelectedId] = useState<SpanId | null>(null);
+  const collectingRetries = useRef(0);
+  const sourceKey = `${appName ?? ""}:${testRunId ?? ""}:${sessionId}:${endTimeMs ?? ""}`;
+  const previousSourceKey = useRef(sourceKey);
 
   useEffect(() => {
+    if (previousSourceKey.current !== sourceKey) {
+      previousSourceKey.current = sourceKey;
+      collectingRetries.current = 0;
+    }
     setSpans(null);
-    setErr("");
+    setLoadState("loading");
+    let cancelled = false;
+    let retryTimer: number | undefined;
     let request: Promise<TraceSpan[]>;
     if (testRunId) {
       request = getGeneratedAgentTestTrace(testRunId, sessionId);
     } else if (appName) {
       request = getSessionTrace(appName, sessionId, endTimeMs);
     } else {
-      setErr("缺少调用链路来源");
+      setLoadState("error");
       return;
     }
     request
       .then((s) => {
+        if (cancelled) return;
         setSpans(s);
+        setLoadState("ready");
         setSelectedId(s.length ? s.reduce((a, b) => (a.start_time <= b.start_time ? a : b)).span_id : null);
       })
-      .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
-  }, [appName, endTimeMs, sessionId, testRunId]);
+      .catch((e) => {
+        if (cancelled) return;
+        const state = traceErrorState(e instanceof Error ? e.message : String(e));
+        setLoadState(state);
+        if (state === "collecting" && collectingRetries.current < TRACE_COLLECTING_RETRIES) {
+          collectingRetries.current += 1;
+          retryTimer = window.setTimeout(
+            () => setLoadRevision((value) => value + 1),
+            TRACE_COLLECTING_RETRY_MS,
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+    };
+  }, [appName, endTimeMs, loadRevision, sessionId, sourceKey, testRunId]);
+
+  const retry = () => {
+    collectingRetries.current = 0;
+    setLoadRevision((value) => value + 1);
+  };
 
   const { rootNodes, min, total } = useMemo(() => buildTree(spans ?? []), [spans]);
   const rows = useMemo(() => flatten(rootNodes, collapsed), [rootNodes, collapsed]);
@@ -151,24 +197,44 @@ export function TraceDrawer({
       <aside className="drawer drawer--trace">
         <header className="drawer-head">
           <div>
-            <div className="drawer-title">{title}</div>
+            <div className="drawer-title">{title ?? t("trace.title")}</div>
             <div className="drawer-sub">
-              {spans ? `${spans.length} 个调用 · ${totalMs.toFixed(1)} ms` : "加载中"}
+              {loadState === "ready" && spans
+                ? t("trace.callCount", { count: spans.length, duration: totalMs.toFixed(1) })
+                : t(`trace.statuses.${loadState}`)}
             </div>
           </div>
-          <button className="drawer-close" onClick={onClose} aria-label="关闭">
+          <button className="drawer-close" onClick={onClose} aria-label={t("trace.close")}>
             <X className="icon" />
           </button>
         </header>
 
-        {spans == null && !err && (
+        {loadState === "loading" && (
           <div className="drawer-loading">
-            <Loader2 className="icon spin" /> 加载调用链路…
+            <Loader2 className="icon spin" /> {t("trace.loading")}
           </div>
         )}
-        {err && <div className="error">{err}</div>}
-        {spans && spans.length === 0 && (
-          <div className="drawer-empty">该会话暂无调用链路（可能尚未产生调用）。</div>
+        {loadState === "collecting" && (
+          <div className="drawer-loading" role="status" aria-live="polite">
+            <Loader2 className="icon spin" />
+            <span>{t("trace.errors.collecting")}</span>
+            <Button type="button" color="secondary" variant="outline" size="sm" pill={false} onClick={retry}>
+              {t("trace.retryNow")}
+            </Button>
+          </div>
+        )}
+        {(loadState === "disabled" || loadState === "forbidden" || loadState === "error") && (
+          <div className="drawer-empty trace-state" role="alert">
+            <span>{t(`trace.errors.${loadState}`)}</span>
+            {loadState === "error" && (
+              <Button type="button" color="secondary" variant="outline" size="sm" pill={false} onClick={retry}>
+                {t("trace.reload")}
+              </Button>
+            )}
+          </div>
+        )}
+        {loadState === "ready" && spans && spans.length === 0 && (
+          <div className="drawer-empty">{t("trace.empty")}</div>
         )}
 
         {rows.length > 0 && (
@@ -223,7 +289,7 @@ export function TraceDrawer({
                     {fmtMs(selected.end_time - selected.start_time)}
                   </div>
 
-                  <div className="td-section">属性</div>
+                  <div className="td-section">{t("trace.attributes")}</div>
                   <div className="td-props">
                     {attrs(selected)
                       .filter((a) => !a.long)
@@ -245,7 +311,7 @@ export function TraceDrawer({
                     ))}
                 </>
               ) : (
-                <div className="drawer-empty">选择左侧的一个调用查看详情</div>
+                <div className="drawer-empty">{t("trace.selectCall")}</div>
               )}
             </div>
           </div>

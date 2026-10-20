@@ -1,0 +1,6 @@
+.app-layout-preview { min-width: 0; }
+.app-layout-preview[data-fullscreen] { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100dvh; }
+.app-layout-preview__toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; min-height: 64px; padding: 12px 16px; }
+.app-layout-preview__toolbar h2 { margin: 0; color: var(--studio-text-primary); font: 400 16px/24px var(--studio-font-family-ui); }
+.app-layout-preview__controls { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+.app-layout-preview__controls a { color: var(--studio-text-secondary); font: 400 14px/22px var(--studio-font-family-ui); text-underline-offset: 4px; }

@@ -22,6 +22,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from .analysis_input import MAX_ANSWER_LENGTH, MAX_QUESTIONS
+from .evaluation.models import MigrationEvaluationConfig
+
 MigrationFramework = Literal[
     "langchain",
     "langgraph",
@@ -47,6 +50,7 @@ STRUCTURED_MIGRATION_FRAMEWORKS: frozenset[str] = frozenset(
 _SOURCE_FILE_NAME_RE = re.compile(r"^[^/\\\x00-\x1f]{1,255}\.zip$", re.IGNORECASE)
 _APP_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _TASK_ID_RE = re.compile(r"^migration-v1-[0-9a-f]{32}$")
+_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 STRUCTURED_ENTRY_PATTERN = (
     r"^[A-Za-z0-9_./-]+\.(?:py|json)(?::[A-Za-z_][A-Za-z0-9_]*)?$"
 )
@@ -71,6 +75,10 @@ class CreateMigrationTaskBody(BaseModel):
     task_id: str | None = Field(default=None, alias="taskId", max_length=45)
     source_file_name: str = Field(alias="sourceFileName", min_length=1, max_length=255)
     instruction: str = Field(default="", max_length=20_000)
+    model_id: str | None = Field(default=None, alias="modelId", max_length=128)
+    evaluation: MigrationEvaluationConfig = Field(
+        default_factory=MigrationEvaluationConfig
+    )
 
     model_config = {"populate_by_name": True, "extra": "forbid"}
 
@@ -79,11 +87,18 @@ class CreateMigrationTaskBody(BaseModel):
         self.task_id = (self.task_id or "").strip() or None
         self.source_file_name = self.source_file_name.strip()
         self.instruction = self.instruction.strip()
+        self.model_id = (self.model_id or "").strip() or None
         if self.task_id is not None and not _TASK_ID_RE.fullmatch(self.task_id):
             raise ValueError("迁移会话 ID 无效")
         if not _SOURCE_FILE_NAME_RE.fullmatch(self.source_file_name):
             raise ValueError("请选择名称有效的 ZIP 文件")
+        if self.model_id is not None and not _MODEL_ID_RE.fullmatch(self.model_id):
+            raise ValueError("模型 ID 格式无效")
         return self
+
+
+def is_valid_model_id(value: object) -> bool:
+    return isinstance(value, str) and _MODEL_ID_RE.fullmatch(value) is not None
 
 
 class ConfirmMigrationBody(BaseModel):
@@ -155,6 +170,38 @@ class SubmitAnalysisAnswersBody(BaseModel):
         return self
 
 
+class SubmitAnalysisInputBody(BaseModel):
+    """Answers for the questions a running analysis turn asked the user."""
+
+    request_id: str = Field(alias="requestId", min_length=1, max_length=64)
+    answers: dict[str, str]
+
+    model_config = {"populate_by_name": True, "extra": "forbid"}
+
+    @model_validator(mode="after")
+    def normalize(self) -> SubmitAnalysisInputBody:
+        self.request_id = self.request_id.strip()
+        if not self.request_id:
+            raise ValueError("分析问题标识无效")
+        if not self.answers:
+            raise ValueError("请先回答全部分析问题")
+        if len(self.answers) > MAX_QUESTIONS:
+            raise ValueError(f"分析问题不能超过 {MAX_QUESTIONS} 个")
+        normalized_answers: dict[str, str] = {}
+        for key, value in self.answers.items():
+            normalized_key = key.strip()
+            normalized_value = value.strip()
+            if not normalized_key or len(normalized_key) > 64:
+                raise ValueError("分析问题 ID 无效")
+            if not normalized_value:
+                raise ValueError("分析问题的回答不能为空")
+            if len(normalized_value) > MAX_ANSWER_LENGTH:
+                raise ValueError(f"单个分析回答不能超过 {MAX_ANSWER_LENGTH} 个字符")
+            normalized_answers[normalized_key] = normalized_value
+        self.answers = normalized_answers
+        return self
+
+
 __all__ = [
     "MIGRATION_FRAMEWORKS",
     "STRUCTURED_ENTRY_PATTERN",
@@ -163,5 +210,6 @@ __all__ = [
     "CreateMigrationTaskBody",
     "MigrationFramework",
     "SubmitAnalysisAnswersBody",
+    "SubmitAnalysisInputBody",
     "is_valid_structured_entry",
 ]

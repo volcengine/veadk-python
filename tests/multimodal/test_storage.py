@@ -15,20 +15,21 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from types import SimpleNamespace
-import sys
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
-from veadk.multimodal.models import MediaRecord
-from veadk.multimodal.models import MediaRef
-from veadk.multimodal.service import MediaService
 from veadk.multimodal import storage as storage_module
-from veadk.multimodal.storage import LocalMediaStorage
-from veadk.multimodal.storage import TosMediaStorage
-from veadk.multimodal.storage import create_media_storage
+from veadk.multimodal.models import MediaRecord, MediaRef
+from veadk.multimodal.service import MediaService
+from veadk.multimodal.storage import (
+    LocalMediaStorage,
+    TosMediaStorage,
+    create_media_storage,
+)
 
 
 def _record(ref: MediaRef, *, size_bytes: int = 5) -> MediaRecord:
@@ -166,10 +167,10 @@ class _FakeTosServerError(Exception):
 
 
 class _FakeTosClient:
-    objects: dict[str, bytes] = {}
+    objects: ClassVar[dict[str, bytes]] = {}
 
     def __init__(self, **_: object) -> None:
-        self.objects = self.__class__.objects
+        pass
 
     def put_object(self, *, key: str, content: Any, **_: object) -> None:
         data = content.read() if hasattr(content, "read") else content
@@ -180,8 +181,11 @@ class _FakeTosClient:
             raise _FakeTosServerError(404)
         return SimpleNamespace(read=lambda: self.objects[key])
 
-    def pre_signed_url(self, _: object, *, key: str, **__: object) -> SimpleNamespace:
-        return SimpleNamespace(signed_url=f"https://tos.example/{key}?signed=1")
+    def pre_signed_url(
+        self, _: object, *, key: str, **kwargs: object
+    ) -> SimpleNamespace:
+        endpoint = str(kwargs.get("alternative_endpoint") or "tos.example")
+        return SimpleNamespace(signed_url=f"https://{endpoint}/{key}?signed=1")
 
     def delete_object(self, *, key: str, **_: object) -> None:
         self.objects.pop(key, None)
@@ -237,3 +241,33 @@ async def test_tos_storage_persists_signs_and_deletes(
     await storage.save_bytes(record, b"hello")
     await storage.delete_session("demo", "user", "session")
     assert await storage.get_record(ref) is None
+
+
+@pytest.mark.asyncio
+async def test_tos_storage_keeps_signed_urls_on_the_public_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_tos = SimpleNamespace(
+        TosClientV2=_FakeTosClient,
+        HttpMethodType=SimpleNamespace(Http_Method_Get="GET"),
+        exceptions=SimpleNamespace(TosServerError=_FakeTosServerError),
+    )
+    monkeypatch.setitem(sys.modules, "tos", fake_tos)
+    storage = TosMediaStorage(
+        bucket="bucket",
+        region="cn-beijing",
+        endpoint="tos-cn-beijing.ivolces.com",
+        access_key="",
+        secret_key="",
+        client=_FakeTosClient(),
+        signed_url_endpoint="tos-cn-beijing.volces.com",
+    )
+    ref = MediaRef("demo", "user", "session", "media-id")
+
+    signed_url = await storage.signed_url(ref)
+
+    assert signed_url == (
+        "https://tos-cn-beijing.volces.com/"
+        "veadk-media/users/user/apps/demo/sessions/session/media/media-id/content"
+        "?signed=1"
+    )

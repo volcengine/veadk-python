@@ -20,6 +20,8 @@ idempotent — a fixed role/policy name is reused across re-deploys.
 """
 
 import json
+import os
+from collections.abc import Callable
 from typing import Any
 
 from veadk.cli.frontend_deploy_policy import (
@@ -132,7 +134,11 @@ def _verify_custom_policy(svc: Any, policy_name: str) -> None:
     if not isinstance(document, dict):
         raise RuntimeError(f"IAM policy {policy_name} has no readable document")
 
-    expected_actions = set(FRONTEND_DEPLOY_POLICY["Statement"][0]["Action"])
+    expected_actions = {
+        action
+        for statement in FRONTEND_DEPLOY_POLICY["Statement"]
+        for action in statement.get("Action", [])
+    }
     actual_actions = {
         action
         for statement in document.get("Statement", [])
@@ -146,28 +152,32 @@ def _verify_custom_policy(svc: Any, policy_name: str) -> None:
         )
 
 
-def ensure_frontend_role(
+def _ensure_frontend_role(
     access_key: str,
     secret_key: str,
     role_name: str = DEFAULT_ROLE_NAME,
     policy_name: str = DEFAULT_POLICY_NAME,
     session_token: str = "",
     provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+    *,
+    ensure_role_policies: Callable[[Any, str, str], None],
 ) -> str:
-    """Get-or-create the frontend's IAM role and return its TRN.
-
-    IAM is a global service, so region is irrelevant here. Safe to call
-    repeatedly: an existing role is reused, and create/attach errors for
-    already-existing resources are tolerated.
-    """
     from volcengine.iam.IamService import IamService
 
     svc = IamService()
     svc.set_ak(access_key)
     svc.set_sk(secret_key)
     svc.set_host(iam_openapi_host(provider))
-    if provider == "byteplus":
-        svc.set_scheme("https")
+    svc.set_scheme(os.getenv("IAM_OPENAPI_SCHEME", "https").strip() or "https")
+    if ca_bundle := os.getenv("VOLCENGINE_OPENAPI_CA_BUNDLE", "").strip():
+        svc.session.verify = ca_bundle
+    elif os.getenv("VOLCENGINE_OPENAPI_VERIFY_SSL", "").strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        svc.session.verify = False
     if session_token:
         svc.set_session_token(session_token)
     _ensure_custom_policy(svc, policy_name)
@@ -181,7 +191,7 @@ def ensure_frontend_role(
         trn = _role_trn(existing)
         if trn:
             logger.info(f"Reusing existing IAM role {role_name} ({trn})")
-            _ensure_role_policies(svc, role_name, policy_name)
+            ensure_role_policies(svc, role_name, policy_name)
             return trn
 
     # Create the role with the vefaas trust relationship.
@@ -189,6 +199,7 @@ def ensure_frontend_role(
         svc.create_role(
             {
                 "RoleName": role_name,
+                "DisplayName": role_name,
                 "TrustPolicyDocument": json.dumps(FRONTEND_DEPLOY_TRUST_POLICY),
                 "Description": "VeADK frontend VeFaaS runtime role",
             }
@@ -201,9 +212,34 @@ def ensure_frontend_role(
         trn = _role_trn(_result(svc.get_role({"RoleName": role_name})))
     if not trn:
         raise RuntimeError(f"Could not resolve TRN for role {role_name}")
-    _ensure_role_policies(svc, role_name, policy_name)
+    ensure_role_policies(svc, role_name, policy_name)
     logger.info(f"Ensured IAM role {role_name} ({trn})")
     return trn
+
+
+def ensure_frontend_role(
+    access_key: str,
+    secret_key: str,
+    role_name: str = DEFAULT_ROLE_NAME,
+    policy_name: str = DEFAULT_POLICY_NAME,
+    session_token: str = "",
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+) -> str:
+    """Get-or-create the public-cloud frontend IAM role and return its TRN.
+
+    IAM is a global service, so region is irrelevant here. Safe to call
+    repeatedly: an existing role is reused, and every configured system policy
+    remains required.
+    """
+    return _ensure_frontend_role(
+        access_key,
+        secret_key,
+        role_name,
+        policy_name,
+        session_token,
+        provider,
+        ensure_role_policies=_ensure_role_policies,
+    )
 
 
 def ensure_default_frontend_role_policy(

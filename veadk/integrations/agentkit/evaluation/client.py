@@ -149,6 +149,17 @@ class AgentKitEvaluationDatasetsClient:
         """Return the feedback set, creating it when absent."""
         name = feedback_set_name(agent_name, rating)
         workspace_id = await self._resolve_workspace_id()
+        if workspace_id is None:
+            try:
+                return await self._create_set(name, workspace_id=None)
+            except AgentKitOpenApiError as error:
+                if error.code != _DUPLICATE_DATASET_ERROR_CODE:
+                    raise
+                existing = await self._wait_for_set(name, workspace_id=None)
+                if existing is not None:
+                    return existing
+                raise
+
         fallback_name = _fallback_set_name(name, workspace_id)
         existing = await self._find_set(name, workspace_id=workspace_id)
         if existing is not None:
@@ -186,12 +197,15 @@ class AgentKitEvaluationDatasetsClient:
         self,
         name: str,
         *,
-        workspace_id: str,
+        workspace_id: str | None,
     ) -> EvaluationSetRef:
         """Create one evaluation set and verify its stable identifiers."""
+        query = dict(self._project_query)
+        if workspace_id:
+            query["WorkspaceId"] = workspace_id
         created = await self._post(
             action="CreateEvaluationSet",
-            query={**self._project_query, "WorkspaceId": workspace_id},
+            query=query,
             payload={
                 "Name": name,
                 "Description": "AgentKit Studio 对话反馈自动回流评测集",
@@ -214,8 +228,8 @@ class AgentKitEvaluationDatasetsClient:
             )
         return visible
 
-    async def _resolve_workspace_id(self) -> str:
-        """Resolve the account's evaluation workspace from visible datasets."""
+    async def _resolve_workspace_id(self) -> str | None:
+        """Resolve the project's evaluation workspace when a dataset exists."""
         if self._workspace_id is not None:
             return self._workspace_id
         response = await self._post(
@@ -232,7 +246,7 @@ class AgentKitEvaluationDatasetsClient:
             if workspace_id:
                 self._workspace_id = workspace_id
                 return workspace_id
-        raise RuntimeError("AgentKit account does not expose an evaluation workspace")
+        return None
 
     async def upsert_item(
         self,
@@ -293,6 +307,8 @@ class AgentKitEvaluationDatasetsClient:
         if rating not in {"good", "bad"}:
             raise ValueError(f"unsupported feedback rating: {rating}")
         workspace_id = await self._resolve_workspace_id()
+        if workspace_id is None:
+            return None, []
         set_name = feedback_set_name(agent_name, rating)
         evaluation_set = await self._find_set(
             set_name,
@@ -339,11 +355,14 @@ class AgentKitEvaluationDatasetsClient:
         self,
         name: str,
         *,
-        workspace_id: str,
+        workspace_id: str | None,
     ) -> EvaluationSetRef | None:
+        query = dict(self._project_query)
+        if workspace_id:
+            query["WorkspaceId"] = workspace_id
         response = await self._post(
             action="ListEvaluationSets",
-            query={**self._project_query, "WorkspaceId": workspace_id},
+            query=query,
             payload={"Name": name, "PageNumber": 1, "PageSize": 100},
         )
         items = (response.get("Result") or {}).get("EvaluationSets") or []
@@ -358,6 +377,7 @@ class AgentKitEvaluationDatasetsClient:
         )
         if not evaluation_set_id or not resolved_workspace_id:
             raise RuntimeError("AgentKit evaluation set is missing stable identifiers")
+        self._workspace_id = resolved_workspace_id
         return EvaluationSetRef(
             id=evaluation_set_id,
             workspace_id=resolved_workspace_id,
@@ -368,7 +388,7 @@ class AgentKitEvaluationDatasetsClient:
         self,
         name: str,
         *,
-        workspace_id: str,
+        workspace_id: str | None,
     ) -> EvaluationSetRef | None:
         """Wait until a newly created evaluation set is list-visible."""
         for delay in _DUPLICATE_LOOKUP_DELAYS:

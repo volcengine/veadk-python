@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode, useState } from "react";
 import { ArrowLeftRight, ChevronDown, ChevronRight } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { RuntimeScope } from "../adk/client";
 import { AgentSelector, type SelectedRuntime } from "./AgentSelector";
 
@@ -45,12 +46,13 @@ export function Navbar({
   crumbs,
   rightContent,
 }: NavbarProps) {
+  const { t } = useTranslation("shell");
   return (
     <div className="navbar">
       <div className="navbar-left">
         <div className="navbar-default">
           {crumbs && crumbs.length > 0 ? (
-            <nav className="navbar-crumbs" aria-label="面包屑">
+            <nav className="navbar-crumbs" aria-label={t("navbar.breadcrumbs")}>
               {crumbs.map((c, i) => (
                 <Fragment key={i}>
                   {i > 0 && <ChevronRight className="crumb-sep" />}
@@ -116,6 +118,7 @@ function AgentSelect({
   | "runtimeScope"
   | "onBrowseAgents"
 >) {
+  const { t } = useTranslation("shell");
   const [open, setOpen] = useState(false);
   const label = (id: string) => (agentLabel ? agentLabel(id) : id);
 
@@ -123,14 +126,14 @@ function AgentSelect({
     return (
       <div className="agent-switch">
         <span className="agent-dd-current">
-          {appName ? label(appName) : "选择 Agent"}
+          {appName ? label(appName) : t("navbar.selectAgent")}
         </span>
         {appName && onBrowseAgents ? (
           <button
             type="button"
             className="agent-switch-action"
-            aria-label="切换智能体"
-            title="切换智能体"
+            aria-label={t("navbar.switchAgent")}
+            title={t("navbar.switchAgent")}
             onClick={onBrowseAgents}
           >
             <ArrowLeftRight aria-hidden="true" />
@@ -147,7 +150,7 @@ function AgentSelect({
   return (
     <div className="agent-dd">
       <button className="agent-dd-trigger" onClick={() => setOpen((o) => !o)}>
-        <span className="agent-dd-current">{appName ? label(appName) : "选择 Agent"}</span>
+        <span className="agent-dd-current">{appName ? label(appName) : t("navbar.selectAgent")}</span>
         <ChevronDown className={`agent-dd-chev ${open ? "open" : ""}`} />
       </button>
       {open && (

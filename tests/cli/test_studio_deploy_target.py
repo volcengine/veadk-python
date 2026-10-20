@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import base64
 import threading
+import zipfile
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,13 +24,14 @@ from uuid import uuid4
 import click
 import pytest
 from click.testing import CliRunner
-from typing_extensions import Self
 from volcenginesdkcore.interceptor.interceptors.build_request_interceptor import (
     sanitize_for_serialization,
 )
 from volcenginesdkcore.rest import ApiException
 
 from veadk.cli.cli_frontend import (
+    STUDIO_ENVIRONMENT_CP_WORKSPACE_ENV,
+    STUDIO_ENVIRONMENT_CR_REPOSITORY_ENV,
     _resolve_or_create_studio_identity_resources,
     _resolve_studio_cloud_credentials,
     _resolve_studio_identity_region,
@@ -41,12 +44,90 @@ from veadk.cli.studio_knowledge_signing import (
     resolve_studio_knowledge_signing_key,
     studio_knowledge_signing_namespace,
 )
+from veadk.cli.studio_dependencies import STUDIO_AGENTKIT_CLI_ARTIFACT
 from veadk.config import veadk_environments
 from veadk.integrations.ve_identity.identity_client import IdentityClient
 
 
+def _write_test_veadk_wheel(destination: Path) -> Path:
+    wheel = destination / "veadk_python-test-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(
+            "veadk_python-test.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: veadk-python\nVersion: 0.0.0\n",
+        )
+    return wheel
+
+
+def _stage_test_studio_dependencies(
+    destination: Path,
+    *,
+    provider: str,
+    **_kwargs: object,
+) -> tuple[Path, ...]:
+    destination.mkdir(parents=True, exist_ok=True)
+    names = [
+        "trustedmcp-0.0.5-py3-none-any.whl",
+        "volcengine_python_sdk-5.0.36-py2.py3-none-any.whl",
+        ("tokenizers-0.22.2-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"),
+        "openviking_sdk-0.1.9-py3-none-any.whl",
+    ]
+    if provider == "byteplus":
+        names.append("pydantic-2.12.5-py3-none-any.whl")
+        names.append("vikingdb_python_sdk-0.1.32-py3-none-any.whl")
+    staged: list[Path] = []
+    for name in names:
+        wheel = destination / name
+        wheel.write_bytes(b"test-wheel")
+        staged.append(wheel)
+    return tuple(staged)
+
+
+def _stage_test_studio_dependency_sources(
+    _destination: Path,
+    **_kwargs: object,
+) -> tuple[Path, ...]:
+    return ()
+
+
+def _build_test_offline_runtime(
+    _source_root: Path,
+    package_dir: Path,
+    *,
+    veadk_wheel: Path,
+    **_kwargs: object,
+) -> str:
+    target = package_dir / veadk_wheel.name
+    target.write_bytes(veadk_wheel.read_bytes())
+    (package_dir / "studio-runtime.lock").write_text(
+        "dependency==1\n",
+        encoding="utf-8",
+    )
+    return f"--no-index\n--require-hashes\n./{target.name} --hash=sha256:test\n"
+
+
+def _stage_test_agentkit_cli_archive(
+    destination: Path,
+    **_kwargs: object,
+) -> Path:
+    archive = destination / STUDIO_AGENTKIT_CLI_ARTIFACT.filename
+    archive.write_bytes(b"test-agentkit-cli")
+    return archive
+
+
 @pytest.fixture(autouse=True)
 def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.stage_studio_agentkit_cli_archive",
+        _stage_test_agentkit_cli_archive,
+    )
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("REGION", raising=False)
+    monkeypatch.delenv("BYTEPLUS_REGION", raising=False)
+    monkeypatch.delenv("BYTEPLUS_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SECRET_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SESSION_TOKEN", raising=False)
     monkeypatch.delenv("VOLCENGINE_SESSION_TOKEN", raising=False)
     monkeypatch.delenv("VOLC_SESSIONTOKEN", raising=False)
     monkeypatch.delenv("SANDBOX_CHAT_CODEX", raising=False)
@@ -86,10 +167,20 @@ def _skip_serverless_role_setup(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda **_: None,
     )
     monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.deploy_scheduler",
+        lambda *_args, **_kwargs: (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+        ),
+    )
+    monkeypatch.setattr(
         "frontend.server.storage.provisioning.resolve_studio_storage_for_deploy",
         lambda **kwargs: SimpleNamespace(
             bucket="veadk-studio-2100123456",
             region=kwargs["region"],
+            endpoint=f"tos-{kwargs['region']}.volces.com",
             object_host=(
                 f"veadk-studio-2100123456.tos-{kwargs['region']}."
                 + (
@@ -342,7 +433,14 @@ def test_studio_identity_resources_reject_client_without_pool() -> None:
 
 
 @pytest.mark.parametrize(
-    ("provider_args", "expected_region", "expected_provider", "dev_args"),
+    (
+        "provider_args",
+        "expected_region",
+        "expected_provider",
+        "dev_args",
+        "login_args",
+        "expected_login_mode",
+    ),
     [
         (
             [
@@ -356,6 +454,8 @@ def test_studio_identity_resources_reject_client_without_pool() -> None:
             "cn-beijing",
             "volcengine",
             ["--sandbox-dev-tool-id", "dev-tool"],
+            [],
+            "idp_only",
         ),
         (
             [
@@ -369,6 +469,8 @@ def test_studio_identity_resources_reject_client_without_pool() -> None:
             "cn-shanghai",
             "volcengine",
             ["--sandbox-dev-tool-id", "dev-tool"],
+            [],
+            "idp_only",
         ),
         (
             [
@@ -382,6 +484,23 @@ def test_studio_identity_resources_reject_client_without_pool() -> None:
             "ap-southeast-1",
             "byteplus",
             ["--sandbox-dev-tool-id", "dev-tool"],
+            [],
+            "idp_only",
+        ),
+        (
+            [
+                "--region",
+                "cn-beijing",
+                "--volcengine-access-key",
+                "ak",
+                "--volcengine-secret-key",
+                "sk",
+            ],
+            "cn-beijing",
+            "volcengine",
+            ["--sandbox-dev-tool-id", "dev-tool"],
+            ["--allow-dangerous-login"],
+            "local_login",
         ),
     ],
 )
@@ -391,6 +510,8 @@ def test_studio_deploy_auto_identity_is_injected_and_printed(
     expected_region: str,
     expected_provider: str,
     dev_args: list[str],
+    login_args: list[str],
+    expected_login_mode: str,
 ) -> None:
     captured: dict[str, object] = {}
     environments: dict[str, str] = {}
@@ -418,7 +539,10 @@ def test_studio_deploy_auto_identity_is_injected_and_printed(
             captured["callback"] = kwargs
 
         def configure_user_pool_for_idp_only(self, user_pool_uid: str) -> None:
-            captured["configured_user_pool"] = user_pool_uid
+            captured["configured_user_pool"] = ("idp_only", user_pool_uid)
+
+        def configure_user_pool_for_local_login(self, user_pool_uid: str) -> None:
+            captured["configured_user_pool"] = ("local_login", user_pool_uid)
 
     monkeypatch.setattr("veadk.config.veadk_environments", environments)
     monkeypatch.setattr(
@@ -451,6 +575,7 @@ def test_studio_deploy_auto_identity_is_injected_and_printed(
             "hermes-tool",
             *provider_args,
             *dev_args,
+            *login_args,
         ],
     )
 
@@ -468,8 +593,13 @@ def test_studio_deploy_auto_identity_is_injected_and_printed(
     assert "user pool id: pool-created" in result.output
     assert "user pool domain: identity.example.com" in result.output
     assert "client id: client-created" in result.output
-    assert captured["configured_user_pool"] == "pool-created"
-    assert "Configured the user pool for IdP-only sign-in." in result.output
+    assert captured["configured_user_pool"] == (expected_login_mode, "pool-created")
+    assert ("Configured the user pool for IdP-only sign-in." in result.output) == (
+        expected_login_mode == "idp_only"
+    )
+    assert ("WARNING: Enabled dangerous local account flows" in result.output) == (
+        expected_login_mode == "local_login"
+    )
     tos_domain = "bytepluses.com" if expected_provider == "byteplus" else "volces.com"
     identity_console = (
         "https://console.byteplus.com/identity"
@@ -487,8 +617,12 @@ def test_studio_deploy_auto_identity_is_injected_and_printed(
         in result.output
     )
     assert f"Identity console: {identity_console}" in result.output
-    assert "Password sign-in is disabled by default for security." in result.output
-    assert "Configure an SSO identity provider before inviting users." in result.output
+    assert (
+        "Password sign-in is disabled by default for security." in result.output
+    ) == (expected_login_mode == "idp_only")
+    assert ("Local account login flows are enabled." in result.output) == (
+        expected_login_mode == "local_login"
+    )
     callback_client = captured["callback_client"]
     assert isinstance(callback_client, dict)
     assert callback_client["enable_vefaas_iam_fallback"] is False
@@ -630,6 +764,8 @@ def test_studio_deploy_surfaces_redacted_provisioning_error_chain(
         studio,
         [
             "deploy",
+            "--provider",
+            "volcengine",
             "--user-pool-id",
             "pool-id",
             "--allowed-client-id",
@@ -767,6 +903,8 @@ def test_studio_deploy_surfaces_tool_id_from_provisioning_failure(
         studio,
         [
             "deploy",
+            "--provider",
+            "volcengine",
             "--user-pool-id",
             "pool-id",
             "--allowed-client-id",
@@ -827,9 +965,27 @@ def test_safe_exception_detail_preserves_real_agentkit_api_error_shape() -> None
         "expected_project",
         "expected_update_bucket",
         "update_bucket_env",
+        "provider",
     ),
     [
-        ([], "cn-beijing", "cn-beijing", "default", "veadk-studio", None),
+        (
+            [],
+            "cn-beijing",
+            "cn-beijing",
+            "default",
+            "veadk-studio",
+            None,
+            "volcengine",
+        ),
+        (
+            [],
+            "ap-southeast-1",
+            "ap-southeast-1",
+            "default",
+            "veadk-studio-byteplus",
+            None,
+            "byteplus",
+        ),
         (
             [
                 "--region",
@@ -844,6 +1000,7 @@ def test_safe_exception_detail_preserves_real_agentkit_api_error_shape() -> None
             "studio-project",
             "custom-studio-releases",
             "environment-studio-releases",
+            "volcengine",
         ),
         (
             [],
@@ -852,6 +1009,7 @@ def test_safe_exception_detail_preserves_real_agentkit_api_error_shape() -> None
             "default",
             "environment-studio-releases",
             "environment-studio-releases",
+            "volcengine",
         ),
     ],
 )
@@ -863,14 +1021,32 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     expected_project: str,
     expected_update_bucket: str,
     update_bucket_env: str | None,
+    provider: str,
 ) -> None:
     captured: dict[str, object] = {}
+    callbacks: list[dict[str, object]] = []
     credential_tool_ids: list[str] = []
     monkeypatch.setitem(
         veadk_environments,
         "VEADK_STUDIO_TOS_BUCKET",
         "existing-studio-storage",
     )
+
+    monkeypatch.setitem(
+        veadk_environments,
+        "VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE",
+        "/developer-only/credential",
+    )
+    monkeypatch.setenv(
+        "VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE", "/developer-only/credential"
+    )
+    for secret_name in (
+        "BYTEPLUS_ACCESS_KEY",
+        "BYTEPLUS_SECRET_KEY",
+        "VOLCENGINE_ACCESS_KEY",
+        "VOLCENGINE_SECRET_KEY",
+    ):
+        monkeypatch.setitem(veadk_environments, secret_name, "test-deployer-secret")
 
     if update_bucket_env is None:
         monkeypatch.delenv("VEADK_STUDIO_UPDATE_BUCKET", raising=False)
@@ -882,6 +1058,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
             captured.update(kwargs)
 
         def deploy(self, **kwargs: object) -> SimpleNamespace:
+            captured["deployment"] = kwargs
             return SimpleNamespace(
                 vefaas_endpoint="https://studio.example.com",
                 vefaas_application_id="app-id",
@@ -894,6 +1071,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
 
         def register_callback_for_user_pool_client(self, **kwargs: object) -> None:
             captured["callback"] = kwargs
+            callbacks.append(kwargs)
 
         def configure_user_pool_for_idp_only(self, user_pool_uid: str) -> None:
             captured["configured_user_pool"] = user_pool_uid
@@ -918,6 +1096,8 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
         studio,
         [
             "deploy",
+            "--provider",
+            provider,
             "--user-pool-id",
             "pool-id",
             "--allowed-client-id",
@@ -948,6 +1128,13 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
             "sk",
             "--volcengine-session-token",
             "sts-token",
+            "--byteplus-access-key",
+            "ak",
+            "--byteplus-secret-key",
+            "sk",
+            "--byteplus-session-token",
+            "sts-token",
+            "--allow-dangerous-login",
             *target_args,
         ],
     )
@@ -955,21 +1142,38 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert result.exit_code == 0, result.output
     assert captured["region"] == expected_region
     assert captured["project"] == expected_project
+    deployment = captured["deployment"]
+    assert isinstance(deployment, dict)
+    assert deployment["cpu_milli"] == 8000
+    assert deployment["memory_mb"] == 16384
+    assert deployment["max_instance"] == 1
     assert captured["volcengine_session_token"] == "sts-token"
     assert captured["identity_client"] == {
         "access_key": "ak",
         "secret_key": "sk",
         "session_token": "sts-token",
         "region": expected_identity_region,
-        "provider": "volcengine",
+        "provider": provider,
         "enable_vefaas_iam_fallback": False,
     }
-    assert captured["provider"] == "volcengine"
-    assert veadk_environments["CLOUD_PROVIDER"] == "volcengine"
-    assert veadk_environments["AGENTKIT_CLOUD_PROVIDER"] == "volcengine"
+    assert captured["provider"] == provider
+    assert veadk_environments["CLOUD_PROVIDER"] == provider
+    credential_env = "VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE"
+    if provider == "byteplus":
+        assert veadk_environments[credential_env] == "/var/run/secrets/iam/credential"
+    else:
+        assert credential_env not in veadk_environments
+    for secret_name in (
+        "BYTEPLUS_ACCESS_KEY",
+        "BYTEPLUS_SECRET_KEY",
+        "VOLCENGINE_ACCESS_KEY",
+        "VOLCENGINE_SECRET_KEY",
+    ):
+        assert secret_name not in veadk_environments
+    assert veadk_environments["AGENTKIT_CLOUD_PROVIDER"] == provider
     assert veadk_environments["VEIDENTITY_REGION"] == expected_identity_region
-    assert "VEADK_STUDIO_ADMINS" not in veadk_environments
-    assert "VEADK_STUDIO_DEVELOPERS" not in veadk_environments
+    assert veadk_environments["VEADK_STUDIO_ADMINS"] == ""
+    assert veadk_environments["VEADK_STUDIO_DEVELOPERS"] == ""
     assert veadk_environments["SANDBOX_CHAT_CODEX"] == "chat-code-env-id"
     assert veadk_environments["SANDBOX_CHAT_CODEX_SNAPSHOT"] == (
         "chat-code-env-snapshot-id"
@@ -1009,6 +1213,102 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert isinstance(callback, dict)
     assert callback["dismiss_login_page_enabled"] is False
     assert callback["skip_consent_enabled"] is True
+    assert {item["callback_url"] for item in callbacks} == {
+        "https://studio.example.com/oauth2/callback",
+        "https://studio.example.com/oauth/callback",
+    }
+    assert "configured_user_pool" not in captured
+    assert "Preserved the existing Identity user pool login settings." in result.output
+
+
+def test_studio_deploy_uploads_github_app_review_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    private_key = "-----BEGIN PRIVATE KEY-----\ntest-key\n-----END PRIVATE KEY-----\n"
+    private_key_path = tmp_path / "github-app.pem"
+    private_key_path.write_text(private_key, encoding="utf-8")
+
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY_PATH", str(private_key_path))
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "webhook-secret")
+    monkeypatch.setenv("VEADK_GITHUB_APP_REVIEW_OWNER_ID", "github-owner")
+    monkeypatch.setenv("VEADK_GITHUB_APP_REVIEW_CREATOR", "GitHub App")
+
+    class _FakeCloudAgentEngine:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def deploy(self, **_: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                vefaas_endpoint="https://studio.example.com",
+                vefaas_application_id="app-id",
+                vefaas_function_id="",
+            )
+
+    monkeypatch.setattr(
+        "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
+    )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_studio_identity_region",
+        lambda **kwargs: kwargs["deployment_region"],
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.register_callback_for_user_pool_client",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.configure_user_pool_for_idp_only",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--user-pool-id",
+            "pool-id",
+            "--allowed-client-id",
+            "client-id",
+            "--vefaas-app-name",
+            "studio-app",
+            "--sandbox-dev-tool-id",
+            "dev-env-id",
+            "--sandbox-chat-codex-tool-id",
+            "chat-code-env-id",
+            "--sandbox-chat-openclaw-tool-id",
+            "openclaw-tool-id",
+            "--sandbox-chat-hermes-tool-id",
+            "hermes-tool-id",
+            "--sandbox-chat-codex-snapshot-tool-id",
+            "chat-code-env-snapshot-id",
+            "--sandbox-chat-openclaw-snapshot-tool-id",
+            "openclaw-snapshot-tool-id",
+            "--sandbox-chat-hermes-snapshot-tool-id",
+            "hermes-snapshot-tool-id",
+            "--iam-role",
+            "trn:iam::role/test",
+            "--gateway-name",
+            "gateway",
+            "--volcengine-access-key",
+            "ak",
+            "--volcengine-secret-key",
+            "sk",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert veadk_environments["VEADK_GITHUB_APP_ID"] == "4830047"
+    assert veadk_environments["VEADK_GITHUB_APP_SLUG"] == "agentkit-veadk-studio"
+    assert veadk_environments["VEADK_GITHUB_APP_WEBHOOK_SECRET"] == "webhook-secret"
+    assert veadk_environments["VEADK_GITHUB_APP_REVIEW_OWNER_ID"] == "github-owner"
+    assert veadk_environments["VEADK_GITHUB_APP_REVIEW_CREATOR"] == "GitHub App"
+    assert veadk_environments["VEADK_GITHUB_APP_PRIVATE_KEY_B64"] == (
+        base64.b64encode(private_key.encode("utf-8")).decode("ascii")
+    )
+    assert "VEADK_GITHUB_APP_PRIVATE_KEY_PATH" not in veadk_environments
+    assert "VEADK_GITHUB_APP_PRIVATE_KEY" not in veadk_environments
 
 
 def test_studio_deploy_persists_studio_context_environment(
@@ -1041,48 +1341,64 @@ def test_studio_deploy_persists_studio_context_environment(
     )
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._resolve_studio_identity_region",
-        lambda **_: "cn-beijing",
+        lambda **_: "cn-shanghai",
     )
     monkeypatch.setattr(
         "veadk.integrations.ve_identity.identity_client.IdentityClient.register_callback_for_user_pool_client",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.get_user_pool_resource_names",
+        lambda _self, pool_uid, client_uid: (
+            "studio-userpool" if pool_uid == "pool-id" else "wrong-pool",
+            "studio-client" if client_uid == "client-id" else "wrong-client",
+        ),
+    )
+    monkeypatch.setattr(
         "veadk.integrations.ve_identity.identity_client.IdentityClient.configure_user_pool_for_idp_only",
         lambda *_args, **_kwargs: None,
     )
-    result = CliRunner().invoke(
-        studio,
-        [
-            "deploy",
-            "--user-pool-id",
-            "pool-id",
-            "--allowed-client-id",
-            "client-id",
-            "--vefaas-app-name",
-            "studio-app",
-            "--sandbox-chat-codex-tool-id",
-            "chat-code-env-id",
-            "--sandbox-chat-openclaw-tool-id",
-            "openclaw-tool-id",
-            "--sandbox-chat-hermes-tool-id",
-            "hermes-tool-id",
-            "--iam-role",
-            "trn:iam::role/test",
-            "--gateway-name",
-            "gateway",
-            "--volcengine-access-key",
-            "ak-for-deployer",
-            "--volcengine-secret-key",
-            "sk-for-deployer",
-        ],
-    )
+    deploy_args = [
+        "deploy",
+        "--provider",
+        "volcengine",
+        "--user-pool-id",
+        "pool-id",
+        "--allowed-client-id",
+        "client-id",
+        "--vefaas-app-name",
+        "studio-app",
+        "--sandbox-chat-codex-tool-id",
+        "chat-code-env-id",
+        "--sandbox-chat-openclaw-tool-id",
+        "openclaw-tool-id",
+        "--sandbox-chat-hermes-tool-id",
+        "hermes-tool-id",
+        "--iam-role",
+        "trn:iam::role/test",
+        "--environment-cp-workspace",
+        "cp-workspace-id",
+        "--environment-cr-repository",
+        "registry/namespace/environment-images",
+        "--gateway-name",
+        "gateway",
+        "--volcengine-access-key",
+        "ak-for-deployer",
+        "--volcengine-secret-key",
+        "sk-for-deployer",
+    ]
+    result = CliRunner().invoke(studio, deploy_args)
 
     assert result.exit_code == 0, result.output
     deploy_id = veadk_environments["VEADK_STUDIO_DEPLOY_ID"]
     assert deploy_id.startswith("stddep_")
     assert veadk_environments["VEADK_STUDIO_USER_POOL_ID"] == "pool-id"
     assert veadk_environments["VEADK_STUDIO_DEPLOY_REGION"] == "cn-beijing"
+    assert veadk_environments[STUDIO_ENVIRONMENT_CP_WORKSPACE_ENV] == "cp-workspace-id"
+    assert (
+        veadk_environments[STUDIO_ENVIRONMENT_CR_REPOSITORY_ENV]
+        == "registry/namespace/environment-images"
+    )
 
     assert captured["release_function_id"] == "function-id"
     release_environment = captured["release_environment"]
@@ -1090,11 +1406,31 @@ def test_studio_deploy_persists_studio_context_environment(
     assert release_environment["OAUTH2_REDIRECT_URI"] == (
         "https://studio.example.com/oauth2/callback"
     )
+    assert release_environment["VEADK_STUDIO_MPA_USER_POOL_NAME"] == "studio-userpool"
+    assert (
+        release_environment["VEADK_STUDIO_MPA_USER_POOL_CLIENT_NAME"] == "studio-client"
+    )
+    assert release_environment["VEADK_STUDIO_MPA_IDENTITY_REGION"] == "cn-shanghai"
+    assert release_environment["VEADK_STUDIO_MPA_IDENTITY_CALLBACK_URL"] == (
+        "https://studio.example.com/oauth/callback"
+    )
     assert release_environment["VEADK_STUDIO_DEPLOY_ID"] == deploy_id
     assert release_environment["VEADK_STUDIO_USER_POOL_ID"] == "pool-id"
     assert release_environment["VEADK_STUDIO_ACCOUNT_ID"] == "2100123456"
     assert release_environment["VEADK_STUDIO_APPLICATION_ID"] == "app-id"
     assert release_environment["VEADK_STUDIO_FUNCTION_ID"] == "function-id"
+
+    def unavailable_names(*_args: object) -> tuple[str, str]:
+        raise RuntimeError("private-sdk-error-with-secret")
+
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.get_user_pool_resource_names",
+        unavailable_names,
+    )
+    failed = CliRunner().invoke(studio, deploy_args)
+    assert failed.exit_code != 0
+    assert "Unable to resolve Studio UserPool/client names" in failed.output
+    assert "private-sdk-error-with-secret" not in failed.output
 
 
 def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
@@ -1102,7 +1438,7 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
 ) -> None:
     captured: dict[str, object] = {}
     credential_tool_ids: list[str] = []
-    monkeypatch.setenv("BYTEPLUS_REGION", "cn-beijing")
+    monkeypatch.setenv("BYTEPLUS_REGION", "ap-southeast-1")
     monkeypatch.setenv("BYTEPLUS_WEB_SEARCH_API_KEY", "bp-search-key")
 
     class _FakeCloudAgentEngine:
@@ -1201,6 +1537,10 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
             "dev-env-id",
             "--iam-role",
             "trn:iam::role/test",
+            "--environment-cp-workspace",
+            "byteplus-cp-workspace",
+            "--environment-cr-repository",
+            "bp-registry/studio/environment-images",
             "--gateway-name",
             "gateway",
             "--byteplus-access-key",
@@ -1228,9 +1568,16 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
     assert identity["provider"] == "byteplus"
     assert identity["region"] == "ap-southeast-1"
     assert identity["enable_vefaas_iam_fallback"] is False
-    assert captured["deploy"]["enable_mcp_session"] is False
+    deploy = captured["deploy"]
+    assert isinstance(deploy, dict)
+    assert deploy["cpu_milli"] == 8000
+    assert deploy["memory_mb"] == 16384
+    assert deploy["max_instance"] == 1
+    assert deploy["enable_mcp_session"] is False
+    assert deploy["disable_gateway_cors"] is True
     assert "--provider byteplus --auth-mode frontend" in str(captured["run_script"])
     assert str(captured["requirements"]).startswith(
+        "--extra-index-url https://pypi.org/simple\n"
         "./pydantic-2.12.5-py3-none-any.whl\n"
     )
     assert captured["serverless_role"] == {
@@ -1251,6 +1598,14 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
     assert veadk_environments["VEIDENTITY_REGION"] == "ap-southeast-1"
     assert veadk_environments["AGENTKIT_SANDBOX_REGION"] == "ap-southeast-1"
     assert veadk_environments["VEADK_STUDIO_ACCOUNT_ID"] == "3001037806"
+    assert (
+        veadk_environments[STUDIO_ENVIRONMENT_CP_WORKSPACE_ENV]
+        == "byteplus-cp-workspace"
+    )
+    assert (
+        veadk_environments[STUDIO_ENVIRONMENT_CR_REPOSITORY_ENV]
+        == "bp-registry/studio/environment-images"
+    )
     assert sorted(credential_tool_ids) == [
         "chat-code-env-id",
         "chat-code-env-snapshot-id",
@@ -1760,16 +2115,24 @@ def test_studio_deploy_creates_distinct_sandbox_tools_when_ids_are_omitted(
     ("role_args", "expected_environment"),
     [
         (
-            ["--admin", "admin@example.com"],
-            {"VEADK_STUDIO_ADMINS": "admin@example.com"},
+            ["--super-admin", "admin@example.com"],
+            {
+                "VEADK_STUDIO_IDENTITY_ROLES": "1",
+                "VEADK_STUDIO_ADMINS": "",
+                "VEADK_STUDIO_DEVELOPERS": "",
+            },
         ),
         (
-            ["--developer", "dev@example.com"],
-            {"VEADK_STUDIO_DEVELOPERS": "dev@example.com"},
+            [],
+            {
+                "VEADK_STUDIO_IDENTITY_ROLES": "1",
+                "VEADK_STUDIO_ADMINS": "",
+                "VEADK_STUDIO_DEVELOPERS": "",
+            },
         ),
     ],
 )
-def test_studio_deploy_enables_rbac_when_either_role_is_configured(
+def test_studio_deploy_uses_identity_roles_after_initialization(
     monkeypatch: pytest.MonkeyPatch,
     role_args: list[str],
     expected_environment: dict[str, str],
@@ -1827,7 +2190,12 @@ def test_studio_deploy_enables_rbac_when_either_role_is_configured(
     configured_roles = {
         key: value
         for key, value in veadk_environments.items()
-        if key in {"VEADK_STUDIO_ADMINS", "VEADK_STUDIO_DEVELOPERS"}
+        if key
+        in {
+            "VEADK_STUDIO_ADMINS",
+            "VEADK_STUDIO_DEVELOPERS",
+            "VEADK_STUDIO_IDENTITY_ROLES",
+        }
     }
     assert configured_roles == expected_environment
 
@@ -2085,6 +2453,120 @@ def test_register_callback_only_sends_requested_login_switches(
     } == expected_switches
 
 
+def test_list_identity_providers_returns_normalized_enabled_entries() -> None:
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+    )
+    identity_client._api_client = Mock()
+    identity_client._api_client.list_identity_providers.side_effect = [
+        SimpleNamespace(
+            data=[
+                SimpleNamespace(
+                    uid="provider-1",
+                    name="feishu",
+                    provider="feishu",
+                    connection_type="OAuth",
+                    enabled=True,
+                )
+            ],
+            total_count=2,
+        ),
+        SimpleNamespace(
+            data=[
+                SimpleNamespace(
+                    uid="provider-2",
+                    name="disabled",
+                    provider="oidc",
+                    connection_type="OIDC",
+                    enabled=False,
+                )
+            ],
+            total_count=2,
+        ),
+    ]
+
+    assert identity_client.list_identity_providers("pool-id") == [
+        {
+            "uid": "provider-1",
+            "connection_type": "OAuth",
+            "enabled": True,
+        },
+        {
+            "uid": "provider-2",
+            "connection_type": "OIDC",
+            "enabled": False,
+        },
+    ]
+    requests = [
+        call.args[0]
+        for call in identity_client._api_client.list_identity_providers.call_args_list
+    ]
+    assert [(item.page_number, item.page_size) for item in requests] == [
+        (1, 100),
+        (2, 100),
+    ]
+
+
+def test_get_user_pool_resource_names_resolves_both_configured_uids() -> None:
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+    )
+    identity_client._api_client = Mock()
+    identity_client._api_client.get_user_pool.return_value = SimpleNamespace(
+        name="studio-userpool"
+    )
+    identity_client._api_client.get_user_pool_client.return_value = SimpleNamespace(
+        name="studio-client"
+    )
+
+    assert identity_client.get_user_pool_resource_names("pool-id", "client-id") == (
+        "studio-userpool",
+        "studio-client",
+    )
+    pool_request = identity_client._api_client.get_user_pool.call_args.args[0]
+    client_request = identity_client._api_client.get_user_pool_client.call_args.args[0]
+    assert pool_request.user_pool_uid == "pool-id"
+    assert client_request.user_pool_uid == "pool-id"
+    assert client_request.client_uid == "client-id"
+
+    identity_client._api_client.get_user_pool.return_value = SimpleNamespace(name="")
+    with pytest.raises(ValueError, match="name is unavailable"):
+        identity_client.get_user_pool_resource_names("pool-id", "client-id")
+
+
+def test_register_callback_does_not_duplicate_existing_values() -> None:
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+    )
+    identity_client._api_client = Mock()
+    identity_client._api_client.get_user_pool_client.return_value = SimpleNamespace(
+        allowed_callback_urls=["https://studio.example.com/oauth/callback"],
+        allowed_web_origins=["https://studio.example.com"],
+        name="studio-client",
+        description=None,
+        allowed_logout_urls=None,
+        allowed_cors=None,
+        id_token=None,
+        refresh_token=None,
+    )
+
+    identity_client.register_callback_for_user_pool_client(
+        user_pool_uid="pool-id",
+        client_uid="client-id",
+        callback_url="https://studio.example.com/oauth/callback",
+        web_origin="https://studio.example.com",
+    )
+
+    request = identity_client._api_client.update_user_pool_client.call_args.args[0]
+    assert request.allowed_callback_urls == [
+        "https://studio.example.com/oauth/callback"
+    ]
+    assert request.allowed_web_origins == ["https://studio.example.com"]
+
+
 def test_configure_user_pool_for_idp_only_disables_local_account_flows() -> None:
     identity_client = IdentityClient(
         access_key="test_access_key",
@@ -2103,6 +2585,28 @@ def test_configure_user_pool_for_idp_only_disables_local_account_flows() -> None
         "SignUpAutoVerificationEnabled": False,
         "SmsPasswordlessSignInEnabled": False,
         "UnconfirmedUserSignInEnabled": False,
+        "UserPoolUid": "pool-id",
+    }
+
+
+def test_configure_user_pool_for_local_login_enables_local_account_flows() -> None:
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+    )
+    identity_client._api_client = Mock()
+
+    identity_client.configure_user_pool_for_local_login("pool-id")
+
+    update_request = identity_client._api_client.update_user_pool.call_args.args[0]
+    assert sanitize_for_serialization(update_request) == {
+        "EmailPasswordlessSignInEnabled": True,
+        "PasswordSignInEnabled": True,
+        "SelfAccountRecoveryEnabled": True,
+        "SelfSignUpEnabled": True,
+        "SignUpAutoVerificationEnabled": True,
+        "SmsPasswordlessSignInEnabled": True,
+        "UnconfirmedUserSignInEnabled": True,
         "UserPoolUid": "pool-id",
     }
 
@@ -2128,24 +2632,17 @@ def test_studio_deploy_rejects_unsupported_region() -> None:
 
 
 @pytest.mark.parametrize(
-    ("provider_args", "credential_args", "expected_prefix"),
+    ("provider_args", "credential_args", "expected_provider"),
     [
         (
             [],
             ["--volcengine-access-key", "ak", "--volcengine-secret-key", "sk"],
-            "",
+            "volcengine",
         ),
         (
             ["--provider", "byteplus"],
             ["--byteplus-access-key", "ak", "--byteplus-secret-key", "sk"],
-            (
-                "./trustedmcp-0.0.5-py3-none-any.whl\n"
-                "./volcengine_python_sdk-5.0.36-py2.py3-none-any.whl\n"
-                "./tokenizers-0.22.2-cp39-abi3-manylinux_2_17_x86_64."
-                "manylinux2014_x86_64.whl\n"
-                "./openviking_sdk-0.1.4-py3-none-any.whl\n"
-                "./pydantic-2.12.5-py3-none-any.whl\n"
-            ),
+            "byteplus",
         ),
     ],
 )
@@ -2153,7 +2650,7 @@ def test_studio_deploy_from_source_bundles_unmirrored_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     provider_args: list[str],
     credential_args: list[str],
-    expected_prefix: str,
+    expected_provider: str,
 ) -> None:
     captured: dict[str, str] = {}
 
@@ -2173,17 +2670,7 @@ def test_studio_deploy_from_source_bundles_unmirrored_dependencies(
     def _fake_build(command: list[str], check: bool) -> None:
         assert check is True
         output_dir = Path(command[-1])
-        (output_dir / "veadk_python-test-py3-none-any.whl").write_bytes(b"wheel")
-
-    class _FakeWheelResponse:
-        def __enter__(self) -> Self:
-            return self
-
-        def __exit__(self, *_: object) -> None:
-            pass
-
-        def read(self) -> bytes:
-            return b"dependency-wheel"
+        _write_test_veadk_wheel(output_dir)
 
     monkeypatch.setattr(
         "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
@@ -2199,20 +2686,20 @@ def test_studio_deploy_from_source_bundles_unmirrored_dependencies(
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/uv")
     monkeypatch.setattr("subprocess.run", _fake_build)
     monkeypatch.setattr(
-        "urllib.request.urlopen", lambda *_args, **_kwargs: _FakeWheelResponse()
-    )
-    wheel_hashes = iter(
-        [
-            "3e89f6c9f5fb17cb70aaaa37df21a6e01722ccb1eec6cb8fc2e61417016986d4",
-            "3a74fa7a7baa5d5f604b175f967660cd0aa4c7057ce44d98c4041fbaf7944b5b",
-            "369cc9fc8cc10cb24143873a0d95438bb8ee257bb80c71989e3ee290e8d72c67",
-            "1e9f23332b1b687dd7f272e660953992de60ad3e9d07d62f7460fd4aedb99616",
-            "e561593fccf61e8a20fc46dfc2dfe075b8be7d0188df33f221ad1f0139180f9d",
-        ]
+        "veadk.cli.studio_package.validate_studio_wheel",
+        lambda *_args: None,
     )
     monkeypatch.setattr(
-        "hashlib.sha256",
-        lambda _: SimpleNamespace(hexdigest=lambda: next(wheel_hashes)),
+        "veadk.cli.studio_package.stage_studio_dependency_wheels",
+        _stage_test_studio_dependencies,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.stage_studio_dependency_sources",
+        _stage_test_studio_dependency_sources,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_studio_offline_runtime",
+        _build_test_offline_runtime,
     )
 
     result = CliRunner().invoke(
@@ -2236,14 +2723,108 @@ def test_studio_deploy_from_source_bundles_unmirrored_dependencies(
     )
 
     assert result.exit_code == 0, result.output
-    expected_common_requirements = (
-        "./trustedmcp-0.0.5-py3-none-any.whl\n"
-        "./volcengine_python_sdk-5.0.36-py2.py3-none-any.whl\n"
-        "./tokenizers-0.22.2-cp39-abi3-manylinux_2_17_x86_64."
-        "manylinux2014_x86_64.whl\n"
-        "./openviking_sdk-0.1.4-py3-none-any.whl\n"
+    assert expected_provider in {"volcengine", "byteplus"}
+    expected_requirements = (
+        "--no-index\n"
+        "--require-hashes\n"
+        "./veadk_python-test-py3-none-any.whl --hash=sha256:test\n"
     )
-    assert captured["requirements"] == (
-        (expected_prefix or expected_common_requirements)
-        + "./veadk_python-test-py3-none-any.whl\n"
+    assert captured["requirements"] == expected_requirements
+
+
+def test_studio_deploy_from_source_writes_lf_run_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, bytes] = {}
+
+    class _FakeCloudAgentEngine:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def deploy(self, **kwargs: object) -> SimpleNamespace:
+            deploy_path = Path(str(kwargs["path"]))
+            captured["run_script"] = (deploy_path / "run.sh").read_bytes()
+            return SimpleNamespace(
+                vefaas_endpoint="",
+                vefaas_application_id="app-id",
+                vefaas_function_id="",
+            )
+
+    def _fake_build(command: list[str], check: bool) -> None:
+        assert check is True
+        output_dir = Path(command[-1])
+        _write_test_veadk_wheel(output_dir)
+
+    monkeypatch.setattr(
+        "veadk.cloud.cloud_agent_engine.CloudAgentEngine", _FakeCloudAgentEngine
+    )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._resolve_studio_identity_region",
+        lambda **kwargs: kwargs["deployment_region"],
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.configure_user_pool_for_idp_only",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.stage_studio_dependency_wheels",
+        _stage_test_studio_dependencies,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.stage_studio_dependency_sources",
+        _stage_test_studio_dependency_sources,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.build_studio_offline_runtime",
+        _build_test_offline_runtime,
+    )
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/uv")
+    monkeypatch.setattr("subprocess.run", _fake_build)
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.validate_studio_wheel",
+        lambda *_args: None,
+    )
+
+    result = CliRunner().invoke(
+        studio,
+        [
+            "deploy",
+            "--user-pool-id",
+            "pool-id",
+            "--allowed-client-id",
+            "client-id",
+            "--vefaas-app-name",
+            "studio-app",
+            "--iam-role",
+            "trn:iam::role/test",
+            "--gateway-name",
+            "gateway",
+            "--volcengine-access-key",
+            "ak",
+            "--volcengine-secret-key",
+            "sk",
+            "--from-source",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["run_script"].startswith(b"#!/bin/bash\n")
+    assert b"\r\n" not in captured["run_script"]
+    assert b"/bin/bash\r" not in captured["run_script"]
+
+
+@pytest.fixture(autouse=True)
+def _workspace_tool_provisioning(monkeypatch):
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.prepare_identity_roles",
+        lambda **kwargs: {
+            "VEADK_STUDIO_IDENTITY_ROLES": "1",
+            "VEADK_STUDIO_ADMINS": "",
+            "VEADK_STUDIO_DEVELOPERS": "",
+            "VEADK_STUDIO_SUPER_ADMIN": "",
+        },
+    )
+    monkeypatch.setattr(
+        "frontend.server.workspace_tool.provision_workspace_tool",
+        lambda **kwargs: "studio-workspace-tool",
     )

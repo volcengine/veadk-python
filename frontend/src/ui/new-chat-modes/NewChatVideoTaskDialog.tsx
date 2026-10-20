@@ -1,6 +1,9 @@
-import { useEffect, useId, useRef, type SVGProps } from "react";
+import { useEffect, useId, useRef, useState, type SVGProps } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import {
+  currentVideoTaskStatus,
+  formatVideoTaskElapsed,
   videoTaskModeLabel,
   videoTaskSteps,
   type VideoGenerationTask,
@@ -78,10 +81,12 @@ export function NewChatVideoTaskDialog({
   onRetry,
   onDownload,
 }: NewChatVideoTaskDialogProps) {
+  const { t, i18n } = useTranslation("newChat");
   const titleId = useId();
   const dialogRef = useRef<HTMLElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const [clockMs, setClockMs] = useState(() => Date.now());
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
@@ -134,14 +139,44 @@ export function NewChatVideoTaskDialog({
     };
   }, [open, task?.localId]);
 
+  useEffect(() => {
+    if (
+      !open
+      || task?.status !== "generating"
+      || task.generationStartedAt === null
+    ) return;
+    const tick = () => setClockMs(Date.now());
+    tick();
+    const timer = window.setInterval(tick, 1_000);
+    return () => window.clearInterval(timer);
+  }, [open, task?.localId, task?.runId, task?.status, task?.generationStartedAt]);
+
   if (!open || !task) return null;
 
-  const steps = videoTaskSteps(task);
+  const locale = i18n.resolvedLanguage ?? i18n.language;
+  const steps = videoTaskSteps(task, locale);
   const running = task.status === "optimizing" || task.status === "generating";
   const retryLabel =
-    task.errorStage === "optimization" ? "重试提示词优化" : "重试视频生成";
-  const taskLabel = videoTaskModeLabel(task.resolvedMode ?? task.requestedMode);
+    task.errorStage === "optimization"
+      ? t("video.task.retryOptimization")
+      : t("video.task.retryGeneration");
+  const taskLabel = videoTaskModeLabel(
+    task.resolvedMode ?? task.requestedMode,
+    locale,
+  );
   const requiresModelActivation = task.error.includes("尚未开通");
+  const activeStatus = currentVideoTaskStatus(task, locale);
+  const elapsed = task.generationStartedAt === null
+    ? ""
+    : formatVideoTaskElapsed(clockMs - task.generationStartedAt, locale);
+  const providerPhase = task.providerStatus === "queued"
+    ? t("video.task.providerQueued")
+    : task.providerStatus === "running"
+      ? t("video.task.providerRunning")
+      : t("video.task.providerSubmitting");
+  const generationHint = task.providerStatus === "queued"
+    ? t("video.task.queuedHint")
+    : t("video.task.runningHint");
 
   return createPortal(
     <div
@@ -161,7 +196,7 @@ export function NewChatVideoTaskDialog({
         <header className="new-chat-video-task-dialog__head">
           <div>
             <h2 ref={titleRef} id={titleId} tabIndex={-1}>
-              视频生成任务
+              {t("video.task.title")}
             </h2>
             <p>
               {taskLabel} · {task.generationModel}
@@ -171,7 +206,7 @@ export function NewChatVideoTaskDialog({
             type="button"
             className="new-chat-video-task-dialog__close"
             onClick={onClose}
-            aria-label="关闭视频生成任务弹窗"
+            aria-label={t("video.task.closeAria")}
           >
             <CloseIcon />
           </button>
@@ -180,7 +215,7 @@ export function NewChatVideoTaskDialog({
         <div className="new-chat-video-task-dialog__body">
           <ol
             className="new-chat-video-task-steps"
-            aria-label="视频生成进度"
+            aria-label={t("video.task.progressAria")}
             aria-live="polite"
             aria-atomic="true"
           >
@@ -207,21 +242,37 @@ export function NewChatVideoTaskDialog({
               className="new-chat-video-task-prompt"
               aria-labelledby={`${titleId}-prompt`}
             >
-              <h3 id={`${titleId}-prompt`}>优化后的提示词</h3>
+              <h3 id={`${titleId}-prompt`}>{t("video.task.optimizedPrompt")}</h3>
               <p>{task.optimizedPrompt}</p>
             </section>
           ) : null}
 
           {task.status === "generating" ? (
-            <div
-              className="new-chat-video-task-preview is-loading"
-              role="status"
-            >
+            <div className="new-chat-video-task-preview is-loading">
               <LoadingIcon className="new-chat-video-task-preview__loading" />
-              <TextShimmer as="strong" duration={2.2} spread={18}>
-                {taskLabel}进行中
+              <TextShimmer
+                as="strong"
+                duration={2.2}
+                spread={18}
+                aria-live="polite"
+              >
+                {activeStatus}
               </TextShimmer>
-              <span>这可能持续数分钟，生成完成后将在这里显示视频预览</span>
+              <div
+                className="new-chat-video-task-progress"
+                role="progressbar"
+                aria-label={t("video.task.processingAria", { task: taskLabel })}
+                aria-valuetext={elapsed
+                  ? t("video.task.waitingAria", { status: activeStatus, elapsed })
+                  : activeStatus}
+              >
+                <span aria-hidden="true" />
+              </div>
+              <div className="new-chat-video-task-progress__meta">
+                <span>{providerPhase}</span>
+                {elapsed ? <span>{t("video.task.elapsed", { elapsed })}</span> : null}
+              </div>
+              <span>{generationHint}</span>
             </div>
           ) : task.output ? (
             <div className="new-chat-video-task-preview">
@@ -230,21 +281,21 @@ export function NewChatVideoTaskDialog({
                 controls
                 playsInline
                 preload="metadata"
-                aria-label="生成结果预览"
+                aria-label={t("video.task.previewAria")}
               />
             </div>
           ) : null}
         </div>
 
         <footer className="new-chat-video-task-dialog__actions">
-          <p className={running ? "is-warning" : undefined}>
+          <p>
             {running
-              ? "请勿关闭弹窗，关闭后任务将丢失"
+              ? t("video.task.backgroundHint")
               : task.status === "success"
-                ? "视频已生成，可预览或下载"
+                ? t("video.task.successHint")
                 : requiresModelActivation
-                  ? "请先在模型控制台开通服务，再重试生成"
-                  : "修正问题后可重试当前步骤"}
+                  ? t("video.task.activationHint")
+                  : t("video.task.retryHint")}
           </p>
           <div>
             <button
@@ -252,7 +303,7 @@ export function NewChatVideoTaskDialog({
               className="new-chat-video-task-button"
               onClick={onClose}
             >
-              关闭
+              {t("video.task.close")}
             </button>
             {task.status === "error" ? (
               <button
@@ -269,7 +320,7 @@ export function NewChatVideoTaskDialog({
                 onClick={onDownload}
               >
                 <DownloadIcon />
-                下载视频
+                {t("video.task.download")}
               </button>
             ) : null}
           </div>

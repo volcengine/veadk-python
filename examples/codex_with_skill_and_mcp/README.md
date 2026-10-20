@@ -3,6 +3,18 @@
 A `runtime="codex"` agent that uses **both a local skill and an MCP tool** on a
 chat backend (Volcengine Ark).
 
+> **What this example is:** a **wiring reference**. It shows how a local skill
+> and an MCP tool reach the model under `runtime="codex"`, using a deliberately
+> trivial task (one weather lookup) so that the plumbing is the only thing on
+> screen. Read it that way, not as a recommendation to use the codex runtime for
+> that kind of task — a single tool call plus a formatted answer is exactly what
+> `runtime="adk"` does faster and cheaper, without a Codex subprocess per turn.
+> For what this runtime is actually *for* — a model that writes a script, runs
+> it, reads the traceback and fixes it — see
+> [`codex_data_analysis/`](../codex_data_analysis/) and
+> [`codex_ops_assistant/`](../codex_ops_assistant/), or
+> [when to use the codex runtime](../../docs/content/docs/framework/agent/runtime.en.mdx#when-to-use-the-codex-runtime).
+
 ```
 codex_with_skill_and_mcp/
 ├── main.py                     # the agent + a sample run
@@ -34,17 +46,20 @@ API — so the two tools take different paths:
 - **Skill** → materialized into Codex's on-disk skill directory
   (`$CODEX_HOME/skills/<name>/SKILL.md`) and discovered by Codex's native skill
   system. Backend-independent.
-- **MCP tool** → Codex can't be handed MCP tools directly (it presents them to
-  the model as a `namespace` tool the chat backend rejects), so the runtime's
-  Responses shim advertises them to the backend as plain `function` tools and
-  executes them itself, invisibly to Codex.
+- **MCP tool** → handed to Codex as one of its own tools. On a
+  Responses-capable backend (Volcengine Ark, OpenAI) Codex calls the model
+  directly and reaches the agent's tools through a local MCP server the runtime
+  runs for the turn, so Codex drives the tool loop. For a chat-only backend
+  the runtime's Responses shim sits in between and executes the tools itself.
+  `CodexRuntimeConfig(model_transport=...)` (`auto` / `direct` / `shim`)
+  chooses; `auto` picks direct for Ark and OpenAI.
 
 Both are handled by the runtime — the agent code is just normal tool wiring.
 
 ## Run
 
 ```bash
-pip install openai-codex          # bundles the Codex CLI binary
+pip install "veadk-python[codex]"   # openai-codex + the bundled Codex CLI binary
 # Ark (or another OpenAI-compatible chat) credentials:
 export MODEL_AGENT_API_KEY=...
 export MODEL_AGENT_API_BASE=https://ark.cn-beijing.volces.com/api/v3
@@ -55,10 +70,20 @@ python examples/codex_with_skill_and_mcp/main.py
 
 ## Notes
 
-- Tools are dispatched by the runtime shim, while calls, results, state
-  changes, confirmations, and authentication surface as standard ADK events
-  for Session/Trace/UI.
+- Tools execute in the runtime (through the MCP bridge or the shim), and
+  calls, results, state changes, confirmations, and authentication surface as
+  standard ADK events for Session/Trace/UI.
 - Static authentication (headers / bearer tokens / ve-identity workload
   tokens) and ADK interactive authentication requested during tool execution
   are supported. Authentication required before an MCP toolset can list tools
   still depends on the corresponding ADK/MCP client capability.
+- `runtime="codex"` is a *sandboxed-execution* runtime, not a drop-in
+  replacement for the ADK flow. Part of the `Agent` surface is rejected outright
+  under it (`sub_agents`, `output_schema`, `planner`, `code_executor`,
+  `generate_content_config` beyond `system_instruction`, `include_contents="none"`,
+  `enable_supervisor`, and an explicit `model=`), and more is dropped with a
+  warning (`knowledgebase`, `example_store`, `skills_mode`, ...). See the
+  [support matrix](../../docs/content/docs/framework/agent/runtime.en.mdx#support-matrix).
+- Note the distinction this example relies on: ADK's `SkillToolset` is bridged
+  into Codex's native skill system, but VeADK's own `Agent(skills_mode=...)` is
+  **not** — that one warns and has no effect.

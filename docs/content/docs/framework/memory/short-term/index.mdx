@@ -31,6 +31,7 @@ stm = ShortTermMemory(backend="sqlite", local_database_path="./stm.db")
 | `db_kwargs` | `dict` | `{}` | 透传给底层数据库会话服务/驱动的额外参数（如连接池配置）。 |
 | `local_database_path` | `str` | `/tmp/veadk_local_database.db` | 仅 `sqlite` 使用的本地数据库文件路径。 |
 | `after_load_memory_callback` | `Callable \| None` | `None` | 读取会话后触发的回调，入参为加载到的 `Session`。 |
+| `after_create_session_callback` | `Callable \| None` | `None` | 新会话创建成功后触发的同步或异步回调，入参为新建的 `Session`；复用已有会话时不触发。 |
 
 <Callout type="warn">
 当连接串里的用户名或密码包含 `@`、`:` 等特殊字符时，请先用 `urllib.parse.quote_plus` 编码（例如 `p@ssword` → `p%40ssword`），否则解析会出错。
@@ -101,6 +102,19 @@ asyncio.run(main())
 5. **清理会话** `delete_session()`：删除 `Session` 及其关联数据。
 
 `ShortTermMemory.create_session()` 在数据库后端下会先列出并复用同 `session_id` 的已有会话，避免重复创建。
+
+如果需要在会话首次创建后执行资源准备、审计或外部系统同步，可以注册 `after_create_session_callback`：
+
+```python
+async def after_create_session(session):
+    await provision_external_resources(session.id)
+
+stm = ShortTermMemory(
+    after_create_session_callback=after_create_session,
+)
+```
+
+回调只在真正创建新会话时执行。如果回调抛出异常，异常会传递给调用方，Agent 不会继续执行。
 
 ## 上下文压缩
 

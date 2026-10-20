@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import ts from "typescript";
+import { build } from "esbuild";
 
-const source = readFileSync(new URL("../src/adk/sse.ts", import.meta.url), "utf8");
-const { outputText } = ts.transpileModule(source, {
-  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+const result = await build({
+  entryPoints: [fileURLToPath(new URL("../src/adk/sse.ts", import.meta.url))],
+  bundle: true,
+  format: "esm",
+  platform: "node",
+  target: "node20",
+  write: false,
 });
-const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
-const { parseSSE } = await import(moduleUrl);
+const moduleUrl = `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].contents).toString("base64")}`;
+const { parseSSE, SSE_EVENT_NAME } = await import(moduleUrl);
 
 function sseResponse(chunks, { hold = false, onCancel } = {}) {
   const encoder = new TextEncoder();
@@ -43,22 +47,71 @@ test("parses CRLF frames", async () => {
   assert.deepEqual(events, [{ ok: true }]);
 });
 
-test("logs malformed data but ignores known terminators", async () => {
-  const messages = [];
-  const originalDebug = console.debug;
-  console.debug = (...args) => messages.push(args);
-  try {
-    const response = sseResponse([
-      "data: [DONE]\n\ndata: ping\n\ndata: malformed\n\ndata: {\"ok\":true}\n\n",
-    ]);
-    const events = [];
-    for await (const event of parseSSE(response)) events.push(event);
-    assert.deepEqual(events, [{ ok: true }]);
-    assert.equal(messages.length, 1);
-    assert.match(String(messages[0][0]), /dropping unparseable frame/);
-  } finally {
-    console.debug = originalDebug;
-  }
+test("preserves named SSE event metadata without changing payload shape", async () => {
+  const response = sseResponse([
+    'event: done\ndata: {"sessionId":"s1","invocationId":"e1"}\n\n',
+  ]);
+  const events = [];
+  for await (const event of parseSSE(response)) events.push(event);
+  assert.deepEqual(events, [{ sessionId: "s1", invocationId: "e1" }]);
+  assert.equal(events[0][SSE_EVENT_NAME], "done");
+});
+
+test("parses a final data frame when EOF arrives without a blank separator", async () => {
+  const response = sseResponse(['data: {"ok":true}']);
+  const events = [];
+  for await (const event of parseSSE(response)) events.push(event);
+  assert.deepEqual(events, [{ ok: true }]);
+});
+
+test("rejects a truncated final data frame instead of silently dropping it", async () => {
+  const response = sseResponse(['data: {"content":']);
+  await assert.rejects(async () => {
+    for await (const _event of parseSSE(response)) {
+      // Consume the stream so its EOF handling runs.
+    }
+  }, (error) => {
+    assert.match(error.message, /incomplete SSE event/i);
+    assert.match(error.message, /Raw data: \{"content":/);
+    return true;
+  });
+});
+
+test("rejects malformed JSON frames and includes their original data", async () => {
+  const response = sseResponse(["data: malformed\n\n"]);
+  await assert.rejects(async () => {
+    for await (const _event of parseSSE(response)) {
+      // Consume the stream so frame parsing runs.
+    }
+  }, (error) => {
+    assert.match(error.message, /Failed to parse (?:the )?SSE event JSON/);
+    assert.match(error.message, /Raw data: malformed/);
+    return true;
+  });
+});
+
+test("ignores known terminators", async () => {
+  const response = sseResponse([
+    "data: [DONE]\n\ndata: ping\n\ndata: {\"ok\":true}\n\n",
+  ]);
+  const events = [];
+  for await (const event of parseSSE(response)) events.push(event);
+  assert.deepEqual(events, [{ ok: true }]);
+});
+
+test("bounds malformed frame details while preserving the original prefix", async () => {
+  const malformed = "x".repeat(700);
+  const response = sseResponse([`data: ${malformed}\n\n`]);
+  await assert.rejects(async () => {
+    for await (const _event of parseSSE(response)) {
+      // Consume the stream so frame parsing runs.
+    }
+  }, (error) => {
+    assert.match(error.message, new RegExp(`Raw data: ${"x".repeat(40)}`));
+    assert.match(error.message, /truncated, 700 characters total/);
+    assert.ok(error.message.length < 650);
+    return true;
+  });
 });
 
 test("cancels and unlocks the stream when the consumer exits early", async () => {

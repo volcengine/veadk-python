@@ -14,3 +14,16 @@ repos:
   rev: v8.24.2
   hooks:
     - id: gitleaks
+- repo: local
+  hooks:
+    - id: dependency-policy-gate
+      name: Check runtime dependency policy
+      entry: python3 scripts/check_dependency_e2e.py policy
+      language: system
+      pass_filenames: false
+      files: ^pyproject\.toml$
+    - id: yaml-secret-scan
+      name: Detect concrete secrets in YAML
+      entry: scripts/scan_yaml_secrets.py
+      language: python
+      types_or: [yaml]

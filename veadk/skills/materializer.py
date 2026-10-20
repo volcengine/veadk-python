@@ -23,8 +23,11 @@ import shutil
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qsl, quote, urljoin, urlparse
 
 import frontmatter
+import httpx
 from google.adk.skills import load_skill_from_dir
 
 from veadk.skills.exceptions import SkillMaterializeError
@@ -39,19 +42,48 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _SKILL_MD_NAMES = ("SKILL.md", "skill.md")
+_FINDSKILL_DOWNLOAD_URL = os.getenv(
+    "FINDSKILL_DOWNLOAD_URL",
+    "https://skills.volces.com/v1/skills/download",
+)
+_MAX_FINDSKILL_ARCHIVE_BYTES = 64 * 1024 * 1024
+_MAX_TOS_PUBLIC_ARCHIVE_BYTES = 64 * 1024 * 1024
+_MAX_TOS_PUBLIC_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
+_MAX_TOS_PUBLIC_ARCHIVE_FILES = 1024
+_MAX_TOS_PUBLIC_REDIRECTS = 3
+_MAX_TOS_DIRECTORY_BYTES = 64 * 1024 * 1024
+_MAX_TOS_DIRECTORY_OBJECTS = 1024
+_TOS_PUBLIC_HOST_SUFFIXES = (".volces.com", ".bytepluses.com")
+_TOS_PUBLIC_CREDENTIAL_QUERY_KEYS = {
+    "x-tos-algorithm",
+    "x-tos-credential",
+    "x-tos-date",
+    "x-tos-expires",
+    "x-tos-security-token",
+    "x-tos-signature",
+    "x-tos-signedheaders",
+}
 
 
 def materialize_remote_skill(
     skill: Skill,
     *,
     cache_dir: Path | None = None,
+    credentials: tuple[str, str, str] | None = None,
+    region: str | None = None,
 ) -> Path:
     """Download one remote VeADK skill and return an ADK-loadable skill dir."""
     base_cache_dir = _default_cache_dir() if cache_dir is None else Path(cache_dir)
     _ensure_cache_dir(base_cache_dir)
 
-    source_type = "skillhub" if skill.source_type == "skillhub" else "skillspace"
-    source_id = skill.skill_space_id or skill.id or "unknown-source"
+    source_type = _cache_source_type(skill)
+    source_id = (
+        skill.skill_space_id
+        or skill.slug
+        or skill.id
+        or skill.bucket_name
+        or "unknown-source"
+    )
     version_key = skill_version_key(skill)
     version_dir = (
         base_cache_dir
@@ -82,9 +114,49 @@ def materialize_remote_skill(
         shutil.rmtree(staging_dir)
     version_dir.mkdir(parents=True, exist_ok=True)
 
-    _download_remote_skill(skill, zip_path)
+    if skill.source_type == "tos":
+        _download_tos_skill_directory(
+            skill,
+            staging_dir,
+            region=region,
+        )
+        final_dir = _normalize_extracted_skill_dir(
+            staging_dir,
+            version_dir,
+            skill,
+            require_root_skill=True,
+        )
+        try:
+            load_skill_from_dir(final_dir)
+        except Exception as e:
+            raise SkillMaterializeError(
+                f"Skill directory '{final_dir}' failed ADK load validation: {e}"
+            ) from e
+
+        _cleanup_old_versions(version_dir)
+        return final_dir
+
+    _download_remote_skill(
+        skill,
+        zip_path,
+        credentials=credentials,
+        region=region,
+    )
     try:
-        _safe_extract_zip(zip_path, staging_dir)
+        _safe_extract_zip(
+            zip_path,
+            staging_dir,
+            max_files=(
+                _MAX_TOS_PUBLIC_ARCHIVE_FILES
+                if skill.source_type == "tos-public"
+                else None
+            ),
+            max_uncompressed_bytes=(
+                _MAX_TOS_PUBLIC_UNCOMPRESSED_BYTES
+                if skill.source_type == "tos-public"
+                else None
+            ),
+        )
     finally:
         if zip_path.exists():
             zip_path.unlink()
@@ -101,8 +173,54 @@ def materialize_remote_skill(
     return final_dir
 
 
-def _download_remote_skill(skill: Skill, zip_path: Path) -> None:
+def materialize_tos_skill_source(
+    *,
+    uri: str | None = None,
+    public_url: str | None = None,
+    cache_dir: Path | None = None,
+    region: str | None = None,
+    version: str | None = None,
+) -> Path:
+    """Materialize one TOS-backed Skill directory or public zip URL."""
+    if bool((uri or "").strip()) == bool((public_url or "").strip()):
+        raise SkillMaterializeError("TOS skill source requires uri or public_url.")
+
+    if uri:
+        bucket, prefix = _parse_tos_skill_uri(uri)
+        skill = Skill(
+            name=_skill_name_from_prefix(prefix),
+            description="TOS skill.",
+            path=prefix,
+            bucket_name=bucket,
+            source_type="tos",
+            version_id=version,
+        )
+    else:
+        public_url = _validate_public_tos_zip_url(public_url or "")
+        skill = Skill(
+            name=Path(urlparse(public_url).path).stem or "public-tos-skill",
+            description="Public TOS skill.",
+            path=public_url,
+            source_type="tos-public",
+            public_url=public_url,
+            version_id=version,
+        )
+
+    return materialize_remote_skill(skill, cache_dir=cache_dir, region=region)
+
+
+def _download_remote_skill(
+    skill: Skill,
+    zip_path: Path,
+    *,
+    credentials: tuple[str, str, str] | None = None,
+    region: str | None = None,
+) -> None:
     zip_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if skill.source_type == "findskill":
+        _download_findskill_skill(skill, zip_path)
+        return
 
     if skill.source_type == "skillhub":
         if not download_skillhub_skill(skill, zip_path):
@@ -111,20 +229,205 @@ def _download_remote_skill(skill: Skill, zip_path: Path) -> None:
             )
         return
 
-    if not _download_legacy_skill_space_skill(skill, zip_path):
+    if skill.source_type == "tos-public":
+        _download_public_tos_zip(skill, zip_path)
+        return
+
+    legacy_options: dict[str, Any] = {}
+    if credentials is not None:
+        legacy_options["credentials"] = credentials
+    if region is not None:
+        legacy_options["region"] = region
+    if not _download_legacy_skill_space_skill(skill, zip_path, **legacy_options):
         raise SkillMaterializeError(
             f"Failed to download skill-space skill '{skill.name}'."
         )
 
 
-def _download_legacy_skill_space_skill(skill: Skill, zip_path: Path) -> bool:
+def _download_findskill_skill(skill: Skill, zip_path: Path) -> None:
+    slug = (skill.slug or skill.path or skill.id or "").strip("/")
+    if not slug:
+        raise SkillMaterializeError(
+            f"Skill Hub skill '{skill.name}' has no download slug."
+        )
+    url = f"{_FINDSKILL_DOWNLOAD_URL.rstrip('/')}/{quote(slug, safe='/')}"
+    try:
+        response = httpx.get(url, timeout=60, follow_redirects=True)
+        response.raise_for_status()
+    except httpx.HTTPError as error:
+        raise SkillMaterializeError(
+            f"Failed to download Skill Hub skill '{skill.name}'."
+        ) from error
+    content = response.content
+    if len(content) > _MAX_FINDSKILL_ARCHIVE_BYTES:
+        raise SkillMaterializeError(
+            f"Skill Hub skill '{skill.name}' archive exceeds 64 MiB."
+        )
+    if not (content.startswith(b"PK\x03\x04") or content.startswith(b"PK\x05\x06")):
+        raise SkillMaterializeError(
+            f"Skill Hub skill '{skill.name}' download is not a zip archive."
+        )
+    zip_path.write_bytes(content)
+
+
+def _download_public_tos_zip(skill: Skill, zip_path: Path) -> None:
+    public_url = _validate_public_tos_zip_url(skill.public_url or skill.path)
+    try:
+        final_response = None
+        with httpx.Client(timeout=60, follow_redirects=False) as client:
+            next_url = public_url
+            for _ in range(_MAX_TOS_PUBLIC_REDIRECTS + 1):
+                _validate_public_tos_zip_url(next_url)
+                response = client.build_request("GET", next_url)
+                streamed_response = client.send(response, stream=True)
+                if streamed_response.is_redirect:
+                    location = streamed_response.headers.get("location")
+                    streamed_response.close()
+                    if not location:
+                        raise SkillMaterializeError(
+                            "Public TOS skill redirect has no Location header."
+                        )
+                    next_url = _validate_public_tos_zip_url(urljoin(next_url, location))
+                    continue
+                final_response = streamed_response
+                break
+            if final_response is None:
+                raise SkillMaterializeError(
+                    "Public TOS skill redirects too many times."
+                )
+            try:
+                final_response.raise_for_status()
+                zip_path.parent.mkdir(parents=True, exist_ok=True)
+                total_bytes = 0
+                header = b""
+                with zip_path.open("wb") as output:
+                    for chunk in final_response.iter_bytes():
+                        if not chunk:
+                            continue
+                        if len(header) < 4:
+                            header = (header + chunk)[:4]
+                        total_bytes += len(chunk)
+                        if total_bytes > _MAX_TOS_PUBLIC_ARCHIVE_BYTES:
+                            raise SkillMaterializeError(
+                                "Public TOS skill archive exceeds 64 MiB."
+                            )
+                        output.write(chunk)
+            finally:
+                final_response.close()
+    except httpx.HTTPError as error:
+        raise SkillMaterializeError("Failed to download public TOS skill.") from error
+    if not (header.startswith(b"PK\x03\x04") or header.startswith(b"PK\x05\x06")):
+        raise SkillMaterializeError("Public TOS skill download is not a zip archive.")
+
+
+def _download_tos_skill_directory(
+    skill: Skill,
+    dest_dir: Path,
+    *,
+    region: str | None = None,
+) -> None:
+    if not skill.bucket_name or not skill.path:
+        raise SkillMaterializeError("TOS skill is missing bucket or prefix.")
+    from veadk.integrations.ve_tos.ve_tos import VeTOS
+
+    access_key, secret_key, session_token = _get_cloud_credentials()
+    tos_client = VeTOS(
+        ak=access_key,
+        sk=secret_key,
+        session_token=session_token,
+        bucket_name=skill.bucket_name,
+        region=region or "",
+    )
+    downloaded = tos_client.download_directory(
+        skill.bucket_name,
+        skill.path,
+        str(dest_dir),
+        raise_on_error=True,
+        max_files=_MAX_TOS_DIRECTORY_OBJECTS,
+        max_bytes=_MAX_TOS_DIRECTORY_BYTES,
+    )
+    if not downloaded:
+        raise SkillMaterializeError("TOS skill directory contains no files.")
+
+
+def _parse_tos_skill_uri(uri: str) -> tuple[str, str]:
+    parsed = urlparse(uri)
+    if parsed.scheme != "tos" or not parsed.netloc:
+        raise SkillMaterializeError("TOS skill uri must use tos://bucket/prefix.")
+    prefix = parsed.path.lstrip("/")
+    if not prefix or not prefix.strip("/"):
+        raise SkillMaterializeError("TOS skill uri must point to a Skill directory.")
+    _validate_relative_object_path(prefix)
+    if not prefix.endswith("/"):
+        prefix += "/"
+    return parsed.netloc, prefix
+
+
+def _validate_relative_object_path(value: str) -> None:
+    path = Path(value)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise SkillMaterializeError(
+            "TOS skill uri must point to a safe Skill directory."
+        )
+
+
+def _cache_source_type(skill: Skill) -> str:
+    if skill.source_type in {"skillhub", "findskill"}:
+        return "skillhub"
+    if skill.source_type in {"tos", "tos-public"}:
+        return "tos"
+    return "skillspace"
+
+
+def _skill_name_from_prefix(prefix: str) -> str:
+    return Path(prefix.rstrip("/")).name or "tos-skill"
+
+
+def _validate_public_tos_zip_url(url: str) -> str:
+    parsed = urlparse(url.strip())
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host:
+        raise SkillMaterializeError("Public TOS skill URL must be an HTTPS URL.")
+    if parsed.username or parsed.password:
+        raise SkillMaterializeError(
+            "Public TOS skill URL must not include credentials."
+        )
+    if not _is_tos_public_host(host):
+        raise SkillMaterializeError("Public TOS skill URL host is not a TOS endpoint.")
+    query_keys = {key.lower() for key, _value in parse_qsl(parsed.query)}
+    if query_keys & _TOS_PUBLIC_CREDENTIAL_QUERY_KEYS:
+        raise SkillMaterializeError(
+            "Public TOS skill URL must not include credentials."
+        )
+    if not parsed.path.endswith(".zip"):
+        raise SkillMaterializeError("Public TOS skill URL must point to a zip archive.")
+    return url.strip()
+
+
+def _is_tos_public_host(host: str) -> bool:
+    labels = host.split(".")
+    if len(labels) < 4:
+        return False
+    if not any(host.endswith(suffix) for suffix in _TOS_PUBLIC_HOST_SUFFIXES):
+        return False
+    return labels[-3].startswith("tos-")
+
+
+def _download_legacy_skill_space_skill(
+    skill: Skill,
+    zip_path: Path,
+    *,
+    region: str | None = None,
+    credentials: tuple[str, str, str] | None = None,
+    raise_on_error: bool = False,
+) -> bool:
     if not skill.bucket_name or not skill.path:
         raise SkillMaterializeError(
             f"Skill-space skill '{skill.name}' is missing bucket or TOS path."
         )
 
-    access_key, secret_key, session_token = _get_cloud_credentials()
-    service, region, host = _get_agentkit_endpoint()
+    access_key, secret_key, session_token = credentials or _get_cloud_credentials()
+    service, resolved_region, host = _get_agentkit_endpoint(region)
     scheme = os.getenv("AGENTKIT_TOP_SCHEME", "https").lower()
     cloud_provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
 
@@ -135,7 +438,7 @@ def _download_legacy_skill_space_skill(skill: Skill, zip_path: Path) -> bool:
             secret_key=secret_key,
             session_token=session_token,
             service=service,
-            region=region,
+            region=resolved_region,
             host=host,
             scheme=scheme,
             zip_path=zip_path,
@@ -148,12 +451,13 @@ def _download_legacy_skill_space_skill(skill: Skill, zip_path: Path) -> bool:
         sk=secret_key,
         session_token=session_token,
         bucket_name=skill.bucket_name,
-        region=region,
+        region=resolved_region,
     )
     return tos_client.download(
         bucket_name=skill.bucket_name,
         object_key=skill.path,
         save_path=str(zip_path),
+        raise_on_error=raise_on_error,
     )
 
 
@@ -231,12 +535,20 @@ def _download_legacy_skill_via_vestack(
         return False
 
 
-def _safe_extract_zip(zip_path: Path, dest_dir: Path) -> None:
+def _safe_extract_zip(
+    zip_path: Path,
+    dest_dir: Path,
+    *,
+    max_files: int | None = None,
+    max_uncompressed_bytes: int | None = None,
+) -> None:
     dest_root = dest_dir.resolve()
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
+            total_files = 0
+            total_uncompressed_bytes = 0
             for member in zf.infolist():
                 member_name = member.filename
                 if (
@@ -251,6 +563,21 @@ def _safe_extract_zip(zip_path: Path, dest_dir: Path) -> None:
                     raise SkillMaterializeError(
                         f"Unsafe path detected in zip archive: '{member_name}'"
                     )
+                if member.is_dir():
+                    continue
+                total_files += 1
+                if max_files is not None and total_files > max_files:
+                    raise SkillMaterializeError(
+                        f"Zip archive exceeds file count limit of {max_files}."
+                    )
+                total_uncompressed_bytes += member.file_size
+                if (
+                    max_uncompressed_bytes is not None
+                    and total_uncompressed_bytes > max_uncompressed_bytes
+                ):
+                    raise SkillMaterializeError(
+                        "Zip archive exceeds uncompressed size limit."
+                    )
             zf.extractall(path=str(dest_root))
     except zipfile.BadZipFile as e:
         raise SkillMaterializeError(
@@ -262,8 +589,12 @@ def _normalize_extracted_skill_dir(
     staging_dir: Path,
     version_dir: Path,
     source_skill: Skill,
+    *,
+    require_root_skill: bool = False,
 ) -> Path:
-    skill_dir = _find_extracted_skill_dir(staging_dir)
+    skill_dir = (
+        staging_dir if require_root_skill else _find_extracted_skill_dir(staging_dir)
+    )
     skill_md = _find_skill_md(skill_dir)
     if skill_md is None:
         raise SkillMaterializeError(

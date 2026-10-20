@@ -1,0 +1,11 @@
+.select-preview-description {
+  margin-top: 32px;
+}
+
+.select-preview-description h3 {
+  margin: 0 0 16px;
+  color: var(--studio-text-secondary);
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 400;
+}

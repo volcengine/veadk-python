@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from typing import TYPE_CHECKING, Optional, Any
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -57,6 +58,19 @@ class VeIdentityConfig(BaseSettings):
 
     # Global singleton IdentityClient instance
     _identity_client: Optional["IdentityClient"] = None
+
+    def model_post_init(self, __context, /) -> None:
+        cloud_provider = (
+            (os.getenv("AGENTKIT_CLOUD_PROVIDER") or os.getenv("CLOUD_PROVIDER") or "")
+            .strip()
+            .lower()
+        )
+        if (
+            cloud_provider != "byteplus"
+            and not os.getenv("VEIDENTITY_REGION")
+            and self.region == "cn-beijing"
+        ):
+            self.region = os.getenv("REGION") or self.region
 
     def get_endpoint(self) -> str:
         """Get the endpoint URL for Identity service.

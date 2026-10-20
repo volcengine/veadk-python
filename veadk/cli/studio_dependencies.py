@@ -24,6 +24,12 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from veadk.cli.agentkit_cli import (
+    AgentKitCliArtifact,
+    agentkit_cli_artifact,
+    download_agentkit_cli_archive,
+    verify_agentkit_cli_archive,
+)
 from veadk.utils.cloud_provider import DEFAULT_CLOUD_PROVIDER, CloudProvider
 
 _PYPI_FILE_HOST = "https://files.pythonhosted.org"
@@ -31,11 +37,24 @@ _PYPI_MIRROR_HOSTS = (
     "https://pypi.tuna.tsinghua.edu.cn",
     "https://mirrors.aliyun.com/pypi",
 )
+STUDIO_AGENTKIT_CLI_ARTIFACT = agentkit_cli_artifact(
+    system="Linux",
+    machine="x86_64",
+)
 
 
 @dataclass(frozen=True)
 class StudioDependencyWheel:
     """One pinned wheel required by an offline Studio deployment."""
+
+    filename: str
+    url: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class StudioDependencySource:
+    """One pinned source archive built once before the FaaS offline install."""
 
     filename: str
     url: str
@@ -74,13 +93,13 @@ STUDIO_DEPENDENCY_WHEELS = (
         sha256="369cc9fc8cc10cb24143873a0d95438bb8ee257bb80c71989e3ee290e8d72c67",
     ),
     StudioDependencyWheel(
-        filename="openviking_sdk-0.1.4-py3-none-any.whl",
+        filename="openviking_sdk-0.1.9-py3-none-any.whl",
         url=(
-            "https://files.pythonhosted.org/packages/fe/af/"
-            "4ca139b05f39c8ed04339d7c8aa56550df80f97d39768d2df9bd72fdbbb9/"
-            "openviking_sdk-0.1.4-py3-none-any.whl"
+            "https://files.pythonhosted.org/packages/47/d6/"
+            "aa82551f9c5d06ce682b9194c784beeb16478ce103d650ed8e8b487b1aa7/"
+            "openviking_sdk-0.1.9-py3-none-any.whl"
         ),
-        sha256="1e9f23332b1b687dd7f272e660953992de60ad3e9d07d62f7460fd4aedb99616",
+        sha256="6057f3ab921cee4697a7b424948347669cb7b8e04439f305503d8ab7132af3ce",
     ),
 )
 
@@ -93,6 +112,46 @@ BYTEPLUS_STUDIO_DEPENDENCY_WHEELS = (
             "pydantic-2.12.5-py3-none-any.whl"
         ),
         sha256="e561593fccf61e8a20fc46dfc2dfe075b8be7d0188df33f221ad1f0139180f9d",
+    ),
+    StudioDependencyWheel(
+        filename="vikingdb_python_sdk-0.1.32-py3-none-any.whl",
+        url=(
+            "https://files.pythonhosted.org/packages/e7/4d/"
+            "933c322781c6a1ac4543a3442d1975e164182a6a0e35eff81118cc92995d/"
+            "vikingdb_python_sdk-0.1.32-py3-none-any.whl"
+        ),
+        sha256="7e58ba299b561bd53859cfb63a5e4af95088a3723378109548c2011390f90bfb",
+    ),
+)
+
+
+STUDIO_DEPENDENCY_SOURCES = (
+    StudioDependencySource(
+        filename="antlr4-python3-runtime-4.9.3.tar.gz",
+        url=(
+            "https://files.pythonhosted.org/packages/3e/38/"
+            "7859ff46355f76f8d19459005ca000b6e7012f2f1ca597746cbcd1fbfe5e/"
+            "antlr4-python3-runtime-4.9.3.tar.gz"
+        ),
+        sha256="f224469b4168294902bb1efa80a8bf7855f24c99aef99cbefc1bcd3cce77881b",
+    ),
+    StudioDependencySource(
+        filename="crcmod-1.7.tar.gz",
+        url=(
+            "https://files.pythonhosted.org/packages/6b/b0/"
+            "e595ce2a2527e169c3bcd6c33d2473c1918e0b7f6826a043ca1245dd4e5b/"
+            "crcmod-1.7.tar.gz"
+        ),
+        sha256="dc7051a0db5f2bd48665a990d3ec1cc305a466a77358ca4492826f41f283601e",
+    ),
+    StudioDependencySource(
+        filename="tos-2.8.7.tar.gz",
+        url=(
+            "https://files.pythonhosted.org/packages/fe/a6/"
+            "a3345e0c789c38a48cf5a1cd0dffc69f9267735bdda6c1645bfc24fbd025/"
+            "tos-2.8.7.tar.gz"
+        ),
+        sha256="2190d9f9e982bbd9abd6244d736770358d9ddbf8c82828af974a2e39d8ad4e57",
     ),
 )
 
@@ -118,7 +177,10 @@ def stage_studio_dependency_wheels(
     staged: list[Path] = []
     for dependency in studio_dependency_wheels(provider) + tuple(extra_wheels):
         if source_dir is None:
-            content = _download_dependency(dependency)
+            content = _download_dependency(
+                dependency,
+                prefer_primary=provider == "byteplus",
+            )
         else:
             source = source_dir / dependency.filename
             if not source.is_file():
@@ -132,9 +194,60 @@ def stage_studio_dependency_wheels(
     return tuple(staged)
 
 
-def _download_dependency(dependency: StudioDependencyWheel) -> bytes:
+def stage_studio_dependency_sources(
+    destination: Path,
+    *,
+    source_dir: Path | None = None,
+) -> tuple[Path, ...]:
+    """Stage verified source-only dependencies for portable wheel creation."""
+    destination.mkdir(parents=True, exist_ok=True)
+    staged: list[Path] = []
+    for dependency in STUDIO_DEPENDENCY_SOURCES:
+        if source_dir is None:
+            content = _download_dependency(dependency)
+        else:
+            source = source_dir / dependency.filename
+            if not source.is_file():
+                raise ValueError(f"Missing prepared Studio source: {source.name}")
+            content = source.read_bytes()
+            if hashlib.sha256(content).hexdigest() != dependency.sha256:
+                raise ValueError(f"{dependency.filename} checksum verification failed.")
+        target = destination / dependency.filename
+        target.write_bytes(content)
+        staged.append(target)
+    return tuple(staged)
+
+
+def stage_studio_agentkit_cli_archive(
+    destination: Path,
+    *,
+    source_dir: Path | None = None,
+    artifact: AgentKitCliArtifact = STUDIO_AGENTKIT_CLI_ARTIFACT,
+) -> Path:
+    """Stage the verified Linux/x64 CLI archive outside Python requirements."""
+
+    destination.mkdir(parents=True, exist_ok=True)
+    target = destination / artifact.filename
+    if source_dir is None:
+        download_agentkit_cli_archive(target, artifact)
+    else:
+        source = source_dir / artifact.filename
+        if not source.is_file():
+            raise ValueError(f"Missing prepared Studio artifact: {source.name}")
+        verify_agentkit_cli_archive(source, artifact)
+        target.write_bytes(source.read_bytes())
+    verify_agentkit_cli_archive(target, artifact)
+    target.chmod(0o644)
+    return target
+
+
+def _download_dependency(
+    dependency: StudioDependencyWheel | StudioDependencySource,
+    *,
+    prefer_primary: bool = False,
+) -> bytes:
     last_error: OSError | ValueError | None = None
-    for url in _download_urls(dependency.url):
+    for url in _download_urls(dependency.url, prefer_primary=prefer_primary):
         try:
             with urllib.request.urlopen(url, timeout=60) as response:
                 content = response.read()
@@ -148,15 +261,16 @@ def _download_dependency(dependency: StudioDependencyWheel) -> bytes:
     raise last_error
 
 
-def _download_urls(url: str) -> tuple[str, ...]:
+def _download_urls(url: str, *, prefer_primary: bool = False) -> tuple[str, ...]:
     if not url.startswith(f"{_PYPI_FILE_HOST}/packages/"):
         return (url,)
     path = url.removeprefix(_PYPI_FILE_HOST)
-    return tuple(f"{host}{path}" for host in _PYPI_MIRROR_HOSTS) + (url,)
+    mirrors = tuple(f"{host}{path}" for host in _PYPI_MIRROR_HOSTS)
+    return (url, *mirrors) if prefer_primary else (*mirrors, url)
 
 
 def write_studio_dependency_manifest(destination: Path) -> None:
-    """Write the pinned wheel metadata consumed by the release-server cache."""
+    """Write pinned wheel and native CLI metadata for the release-server cache."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "wheels": [
@@ -166,7 +280,22 @@ def write_studio_dependency_manifest(destination: Path) -> None:
                 "sha256": dependency.sha256,
             }
             for dependency in studio_dependency_wheels("byteplus")
-        ]
+        ],
+        "sources": [
+            {
+                "filename": dependency.filename,
+                "url": dependency.url,
+                "sha256": dependency.sha256,
+            }
+            for dependency in STUDIO_DEPENDENCY_SOURCES
+        ],
+        "artifacts": [
+            {
+                "filename": STUDIO_AGENTKIT_CLI_ARTIFACT.filename,
+                "url": STUDIO_AGENTKIT_CLI_ARTIFACT.url,
+                "sha256": STUDIO_AGENTKIT_CLI_ARTIFACT.sha256,
+            }
+        ],
     }
     destination.write_text(
         json.dumps(payload, indent=2) + "\n",
@@ -194,9 +323,19 @@ def main() -> None:
     if args.output_dir is None:
         raise SystemExit("--output-dir is required")
     staged = stage_studio_dependency_wheels(args.output_dir)
+    staged_sources = stage_studio_dependency_sources(args.output_dir)
+    staged_archive = stage_studio_agentkit_cli_archive(args.output_dir)
     if args.manifest is not None:
         write_studio_dependency_manifest(args.manifest)
-    print(json.dumps({"wheels": [path.name for path in staged]}))
+    print(
+        json.dumps(
+            {
+                "wheels": [path.name for path in staged],
+                "sources": [path.name for path in staged_sources],
+                "artifacts": [staged_archive.name],
+            }
+        )
+    )
 
 
 if __name__ == "__main__":
@@ -205,9 +344,14 @@ if __name__ == "__main__":
 
 __all__ = [
     "BYTEPLUS_STUDIO_DEPENDENCY_WHEELS",
+    "STUDIO_AGENTKIT_CLI_ARTIFACT",
     "STUDIO_DEPENDENCY_WHEELS",
+    "STUDIO_DEPENDENCY_SOURCES",
+    "StudioDependencySource",
     "StudioDependencyWheel",
+    "stage_studio_agentkit_cli_archive",
     "stage_studio_dependency_wheels",
+    "stage_studio_dependency_sources",
     "studio_dependency_wheels",
     "write_studio_dependency_manifest",
 ]

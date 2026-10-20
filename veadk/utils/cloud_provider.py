@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import os
-from typing import Literal
+from typing import Any, Literal
 
 CloudProvider = Literal["volcengine", "byteplus"]
 
@@ -61,7 +61,7 @@ def default_region(provider: CloudProvider) -> str:
     """Return the provider's default control-plane region."""
     if provider == "byteplus":
         return os.getenv("BYTEPLUS_REGION") or DEFAULT_BYTEPLUS_REGION
-    return DEFAULT_VOLCENGINE_REGION
+    return os.getenv("REGION") or DEFAULT_VOLCENGINE_REGION
 
 
 def default_vefaas_application_template_id(
@@ -80,6 +80,8 @@ def default_vefaas_application_template_id(
 
 def vefaas_openapi_host(region: str, provider: CloudProvider) -> str:
     """Return the Function Service OpenAPI host for a provider."""
+    if override := os.getenv("VEFAAS_OPENAPI_HOST"):
+        return override.removeprefix("https://").removeprefix("http://").rstrip("/")
     if provider == "byteplus":
         return f"vefaas.{region}.byteplusapi.com"
     return "open.volcengineapi.com"
@@ -87,6 +89,8 @@ def vefaas_openapi_host(region: str, provider: CloudProvider) -> str:
 
 def apig_openapi_host(region: str, provider: CloudProvider) -> str:
     """Return the API Gateway OpenAPI host for a provider."""
+    if override := os.getenv("APIG_OPENAPI_HOST"):
+        return override.removeprefix("https://").removeprefix("http://").rstrip("/")
     if provider == "byteplus":
         return f"apig.{region}.byteplusapi.com"
     return "open.volcengineapi.com"
@@ -101,9 +105,43 @@ def cp_openapi_host(region: str, provider: CloudProvider) -> str:
 
 def iam_openapi_host(provider: CloudProvider) -> str:
     """Return the IAM OpenAPI host for a provider."""
+    if override := os.getenv("IAM_OPENAPI_HOST"):
+        return override.removeprefix("https://").removeprefix("http://").rstrip("/")
     if provider == "byteplus":
         return "iam.byteplusapi.com"
     return "iam.volcengineapi.com"
+
+
+def identity_openapi_host(region: str, provider: CloudProvider) -> str:
+    """Return the Identity OpenAPI host for a provider."""
+    if override := os.getenv("IDENTITY_OPENAPI_HOST"):
+        return override.removeprefix("https://").removeprefix("http://").rstrip("/")
+    if provider == "byteplus":
+        return f"id.{region}.byteplusapi.com"
+    return "open.volcengineapi.com"
+
+
+def tag_openapi_host(provider: CloudProvider) -> str:
+    """Return the Tag OpenAPI host for a provider."""
+    if provider == "byteplus":
+        return "open.byteplusapi.com"
+    return "open.volcengineapi.com"
+
+
+def configure_openapi_tls(configuration: Any) -> None:
+    """Apply explicit TLS settings to a Volcengine generated SDK config.
+
+    Full-stack environments commonly expose one internal OpenAPI endpoint with
+    a private CA.  Prefer a CA bundle.  Disabling verification is supported only
+    when the deployer explicitly opts in via the environment.
+    """
+    if ca_bundle := os.getenv("VOLCENGINE_OPENAPI_CA_BUNDLE", "").strip():
+        configuration.ssl_ca_cert = ca_bundle
+        configuration.verify_ssl = True
+        return
+    verify = os.getenv("VOLCENGINE_OPENAPI_VERIFY_SSL", "").strip().lower()
+    if verify in {"0", "false", "no", "off"}:
+        configuration.verify_ssl = False
 
 
 def apmplus_openapi_host(provider: CloudProvider) -> str:
@@ -113,8 +151,13 @@ def apmplus_openapi_host(provider: CloudProvider) -> str:
     return "open.volcengineapi.com"
 
 
+def apmplus_otlp_endpoint(region: str) -> str:
+    """Return the regional APMPlus OTLP/gRPC endpoint."""
+    return f"http://apmplus-{region}.volces.com:4317"
+
+
 def agentkit_openapi_base(region: str, provider: CloudProvider) -> str:
     """Return the AgentKit OpenAPI base URL used by Studio proxy helpers."""
     if provider == "byteplus":
-        return f"https://agentkit.{region}.bytepluses.com"
+        return f"https://agentkit.{region}.byteplusapi.com"
     return f"https://agentkit.{region}.volcengineapi.com"

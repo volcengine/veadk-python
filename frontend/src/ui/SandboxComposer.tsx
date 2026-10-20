@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
 import type { Attachment } from "../adk/client";
 import type {
   SandboxModel,
@@ -82,6 +83,13 @@ export interface SandboxComposerProps {
   selectedSkills: SandboxSkill[];
   onRequestSkills: () => void;
   onSelectedSkillsChange: (skills: SandboxSkill[]) => void;
+  textOnly?: boolean;
+  allowSteer?: boolean;
+  sending?: boolean;
+  stopping?: boolean;
+  statusText?: string;
+  errorText?: string;
+  onResume?: () => void;
 }
 
 export function SandboxComposer({
@@ -107,7 +115,15 @@ export function SandboxComposer({
   selectedSkills,
   onRequestSkills,
   onSelectedSkillsChange,
+  textOnly = false,
+  allowSteer = false,
+  sending = false,
+  stopping = false,
+  statusText,
+  errorText,
+  onResume,
 }: SandboxComposerProps) {
+  const { t, i18n } = useTranslation("sandbox");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
   const documentInput = useRef<HTMLInputElement>(null);
@@ -170,8 +186,8 @@ export function SandboxComposer({
         .map((command) => ({ kind: "command" as const, command }));
     }
     return [];
-  }, [mention, models, selectedSkills, skills, slash]);
-  const menuVisible = !menuDismissed && Boolean(mention || slash);
+  }, [i18n.resolvedLanguage, mention, models, selectedSkills, skills, slash]);
+  const menuVisible = !textOnly && !menuDismissed && Boolean(mention || slash);
 
   useEffect(() => {
     setActiveIndex(0);
@@ -188,10 +204,10 @@ export function SandboxComposer({
   const uploadPending = attachments.some(
     (attachment) => attachment.status !== "ready",
   );
-  const canStop = busy && Boolean(onStop);
+  const canStop = (busy || sending) && Boolean(onStop);
   const canSend =
     !disabled &&
-    !busy &&
+    (!busy || allowSteer) && !sending && !stopping &&
     !uploadPending &&
     (value.trim().length > 0 || attachments.length > 0);
 
@@ -249,13 +265,21 @@ export function SandboxComposer({
   }
 
   const menuLabel = mention
-    ? "可用 Skills"
+    ? t("composer.availableSkills")
     : slash?.modelMode
-      ? "选择模型"
-      : "Codex 快捷命令";
+      ? t("composer.selectModel")
+      : t("composer.commands");
 
   return (
     <div className="composer sandbox-codex-composer">
+      {statusText || stopping || errorText || onResume ? (
+        <div className="sandbox-run-status">
+          <span role={errorText ? "alert" : "status"}>
+            {errorText || (stopping ? t("composer.stopping") : statusText)}
+          </span>
+          {onResume ? <button type="button" className="cw-btn cw-btn-ghost" onClick={onResume} disabled={stopping}>{t("composer.resume")}</button> : null}
+        </div>
+      ) : null}
       {attachments.length > 0 ? (
         <MediaGroup
           appName={appName}
@@ -276,25 +300,25 @@ export function SandboxComposer({
               <SandboxSparkIcon />
               <span>{menuLabel}</span>
               {slash?.modelMode && currentModel ? (
-                <small>当前：{currentModel}</small>
+                <small>{t("composer.currentModel", { model: currentModel })}</small>
               ) : null}
               <kbd>{mention ? "$" : "/"}</kbd>
             </div>
             {mention && skillsLoading ? (
               <div className="composer-command-empty">
-                <SandboxSpinnerIcon className="spin" /> 正在发现当前工作区的 Skills…
+                <SandboxSpinnerIcon className="spin" /> {t("composer.loadingSkills")}
               </div>
             ) : slash?.modelMode && modelsLoading ? (
               <div className="composer-command-empty">
-                <SandboxSpinnerIcon className="spin" /> 正在读取模型…
+                <SandboxSpinnerIcon className="spin" /> {t("composer.loadingModels")}
               </div>
             ) : completions.length === 0 ? (
               <div className="composer-command-empty">
                 {mention
-                  ? "当前工作区没有匹配的 Skill"
+                  ? t("composer.noSkillMatches")
                   : slash?.modelMode
-                    ? "没有匹配模型，也可以直接输入模型 ID"
-                    : "没有匹配的快捷命令"}
+                    ? t("composer.noModelMatches")
+                    : t("composer.noCommandMatches")}
               </div>
             ) : (
               <div className="composer-command-list">
@@ -316,7 +340,7 @@ export function SandboxComposer({
                       ? item.command.description
                       : item.kind === "model"
                         ? item.model.description || item.model.id
-                        : item.skill.description || "加载并执行该 Skill";
+                        : item.skill.description || t("composer.skillFallback");
                   return (
                     <button
                       type="button"
@@ -356,12 +380,13 @@ export function SandboxComposer({
         ) : null}
 
         <div className="composer-left-controls">
+          {!textOnly && <>
           <div className="composer-menu-wrap">
             <button
               type="button"
               className="comp-icon"
-              title="添加"
-              aria-label="添加"
+              title={t("composer.add")}
+              aria-label={t("composer.add")}
               disabled={disabled}
               onClick={() => setAddMenuOpen((open) => !open)}
             >
@@ -381,7 +406,7 @@ export function SandboxComposer({
                     onClick={() => pick(imageInput)}
                   >
                     <SandboxImageIcon className="icon" />
-                    上传图片
+                    {t("composer.uploadImage")}
                   </button>
                   <button
                     type="button"
@@ -390,7 +415,7 @@ export function SandboxComposer({
                     onClick={() => pick(documentInput)}
                   >
                     <SandboxFileIcon className="icon" />
-                    上传文档或 PDF
+                    {t("composer.uploadDocument")}
                   </button>
                   <button
                     type="button"
@@ -399,7 +424,7 @@ export function SandboxComposer({
                     onClick={() => pick(videoInput)}
                   >
                     <SandboxVideoIcon className="icon" />
-                    上传视频
+                    {t("composer.uploadVideo")}
                   </button>
                   <div className="composer-menu-separator" role="separator" />
                   <button
@@ -411,7 +436,7 @@ export function SandboxComposer({
                     }}
                   >
                     <SandboxTerminalIcon className="icon" />
-                    进入终端
+                    {t("composer.openTerminal")}
                   </button>
                   <button
                     type="button"
@@ -422,7 +447,7 @@ export function SandboxComposer({
                     }}
                   >
                     <SandboxBrowserIcon className="icon" />
-                    查看浏览器
+                    {t("composer.viewBrowser")}
                   </button>
                 </div>
               </>
@@ -431,8 +456,8 @@ export function SandboxComposer({
           <button
             type="button"
             className="comp-icon sandbox-composer-control"
-            title="Codex 权限"
-            aria-label="Codex 权限"
+            title={t("composer.permissions")}
+            aria-label={t("composer.permissions")}
             disabled={actions.settingsBusy || busy}
             onClick={actions.onOpenPermissions}
           >
@@ -445,10 +470,10 @@ export function SandboxComposer({
             }`}
             title={
               actions.workspaceLocked
-                ? "对话已开始，工作空间已锁定"
-                : "选择工作空间"
+                ? t("composer.workspaceLocked")
+                : t("composer.selectWorkspace")
             }
-            aria-label="Codex 工作空间"
+            aria-label={t("composer.workspace")}
             disabled={actions.settingsBusy || busy}
             onClick={actions.onOpenWorkspace}
           >
@@ -460,13 +485,13 @@ export function SandboxComposer({
               className="comp-icon sandbox-composer-control"
               title={
                 actions.endpointCopyState === "copied"
-                  ? "Endpoint 已复制"
-                  : "复制 Sandbox Endpoint"
+                  ? t("composer.endpointCopied")
+                  : t("composer.copyEndpoint")
               }
               aria-label={
                 actions.endpointCopyState === "copied"
-                  ? "Endpoint 已复制"
-                  : "复制 Sandbox Endpoint"
+                  ? t("composer.endpointCopied")
+                  : t("composer.copyEndpoint")
               }
               disabled={actions.endpointCopyState === "copying"}
               onClick={actions.onCopyEndpoint}
@@ -480,10 +505,11 @@ export function SandboxComposer({
               )}
             </button>
           ) : null}
+          </>}
         </div>
 
         <div className="composer-input-stack sandbox-composer-input">
-          {selectedSkills.length > 0 ? (
+          {!textOnly && selectedSkills.length > 0 ? (
             <InvocationChips
               skillPrefix="$"
               value={{
@@ -505,7 +531,11 @@ export function SandboxComposer({
             rows={1}
             value={value}
             disabled={disabled}
-            placeholder="向 AgentKit 沙箱发送消息，输入 / 查看命令，输入 $ 调用 Skill…"
+            placeholder={
+              textOnly
+                ? t(busy && allowSteer ? "composer.steerPlaceholder" : "composer.continuePlaceholder")
+                : t("composer.messagePlaceholder")
+            }
             aria-expanded={menuVisible}
             onChange={(event) => updateValue(event.target.value)}
             onBlur={() => window.setTimeout(() => setMenuDismissed(true), 0)}
@@ -565,13 +595,26 @@ export function SandboxComposer({
             }}
           />
         </div>
-        <button
+        {allowSteer ? (
+          <div className="sandbox-run-actions">
+            {canStop ? (
+              <button type="button" className="comp-send" disabled={stopping} onClick={onStop}
+                aria-label={t(stopping ? "composer.stopping" : "composer.stop")} title={t("composer.stop")}>
+                <SandboxStopIcon className="icon" />
+              </button>
+            ) : null}
+            <button type="button" className="comp-send" disabled={!canSend} onClick={() => onSubmit(value)}
+              aria-label={t(busy ? "composer.steer" : "composer.send")} title={t(busy ? "composer.steer" : "composer.send")}>
+              {sending ? <SandboxSpinnerIcon className="icon spin" /> : <SandboxSendIcon className="icon" />}
+            </button>
+          </div>
+        ) : <button
           type="button"
           className="comp-send"
           disabled={canStop ? false : !canSend}
           onClick={canStop ? onStop : () => onSubmit(value)}
-          aria-label={canStop ? "停止生成" : "发送"}
-          title={canStop ? "停止生成" : undefined}
+          aria-label={canStop ? t("composer.stop") : t("composer.send")}
+          title={canStop ? t("composer.stop") : undefined}
         >
           {canStop ? (
             <SandboxStopIcon className="icon" />
@@ -580,7 +623,7 @@ export function SandboxComposer({
           ) : (
             <SandboxSendIcon className="icon" />
           )}
-        </button>
+        </button>}
       </div>
 
       <input

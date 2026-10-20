@@ -1,0 +1,6 @@
+{
+  "include": ["prepare-context.py", "runtime", "tests"],
+  "extraPaths": ["runtime"],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic"
+}

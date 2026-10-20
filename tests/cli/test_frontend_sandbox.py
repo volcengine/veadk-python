@@ -17,21 +17,32 @@
 from __future__ import annotations
 
 import asyncio
+import ast
+import hmac
 import json
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import replace
+from hashlib import sha256
+from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
+import httpx
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
 from veadk.cli import frontend_sandbox
+from veadk.cli.agentkit_session_metadata import (
+    SESSION_METADATA_VALUE_MAX_BYTES,
+    session_display_name_metadata_value,
+)
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerEvent,
+    CodexAppServerTurnInterruptedError,
     CodexDirectoryEntry,
     CodexDirectoryListing,
     CodexImportedImage,
@@ -50,13 +61,127 @@ from veadk.cli.frontend_sandbox import (
     SandboxAgentSessionService,
     SandboxCloudSession,
     SandboxCloudSnapshot,
+    SandboxCloudGateway,
     SandboxConfigurationError,
     SandboxConversationService,
     SandboxProvisioningError,
     SandboxSessionNotFoundError,
+    SandboxValidationError,
     mount_sandbox_agent_routes,
     mount_sandbox_routes,
 )
+from veadk.cli.github_app_pr_review import (
+    GITHUB_APP_REVIEW_HISTORY_KEY,
+    GitHubInstalledRepository,
+    TosGitHubAppReviewRepositoryStore,
+    create_review_record,
+)
+from veadk.cli.gitlab_app_mr_review import (
+    GitLabAppReviewError,
+    GITLAB_REVIEW_PROJECTS_KEY,
+    GitLabOAuthCredential,
+    GitLabProject,
+    TosGitLabAppReviewProjectStore,
+    create_review_record as create_gitlab_review_record,
+)
+
+
+def _configure_gitlab_oauth(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VEADK_GITLAB_BASE_URL", "https://gitlab.example.com")
+    monkeypatch.setenv("VEADK_GITLAB_WEBHOOK_SECRET", "secret")
+    monkeypatch.setenv("VEADK_STUDIO_PUBLIC_BASE_URL", "https://studio.example.com")
+    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_ID", "client-id")
+    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv(
+        "VEADK_GITLAB_OAUTH_REDIRECT_URI",
+        "https://studio.example.com/web/gitlab/oauth/callback",
+    )
+
+
+def _save_gitlab_oauth_credential(
+    storage: object,
+    *,
+    owner_id: str = "alice",
+    credential_id: str = "cred-1",
+    token: str = "oauth-token",
+) -> TosGitLabAppReviewProjectStore:
+    store = TosGitLabAppReviewProjectStore(
+        bucket="studio-state",
+        client_factory=lambda: storage,
+    )
+    asyncio.run(
+        store.save_oauth_credential(
+            GitLabOAuthCredential(
+                credential_id=credential_id,
+                owner_id=owner_id,
+                base_url="https://gitlab.example.com",
+                access_token=token,
+                refresh_token="refresh-token",
+                expires_at=0,
+                gitlab_user_id=42,
+                gitlab_username=owner_id,
+                gitlab_name=owner_id.title(),
+            )
+        )
+    )
+    return store
+
+
+@pytest.mark.parametrize("is_vestack_deployment", [False, True])
+@pytest.mark.asyncio
+async def test_hermes_cli_surface_configuration_isolated_by_deployment(
+    is_vestack_deployment: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Evaluate the real CLI registration without booting Studio or cloud clients.
+    source = Path(frontend_sandbox.__file__).with_name("cli_frontend.py")
+    tree = ast.parse(source.read_text())
+    registrations = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "sandbox_agent_services"
+            for target in node.targets
+        )
+    ]
+    assert len(registrations) == 1
+    registration = registrations[0]
+    hermes_call = next(
+        value
+        for key, value in zip(registration.keys, registration.values)
+        if isinstance(key, ast.Constant) and key.value == "hermes"
+    )
+    service = eval(
+        compile(ast.Expression(hermes_call), str(source), "eval"),
+        {
+            "SandboxAgentSessionService": SandboxAgentSessionService,
+            "sandbox_gateway": _FakeGateway(),
+            "sandbox_chat_hermes_tool_id": "tool-hermes",
+            "sandbox_chat_hermes_snapshot_tool_id": "tool-hermes-snapshot",
+            "hermes_managed_tool_spec": None,
+            "is_vestack_deployment": is_vestack_deployment,
+            "os": SimpleNamespace(getenv=lambda _: ""),
+        },
+    )
+    if is_vestack_deployment:
+        assert service.surface_path == "/proxy/4500/"
+        assert service._surface_ready_path == "/proxy/4500/"
+        assert "hermes dashboard" in service._surface_start_command
+        assert "--port 4500" in service._surface_start_command
+    else:
+        assert service.surface_path == "/hermes/"
+        assert service._surface_ready_path == ""
+        assert service._surface_start_command == ""
+
+        def unexpected_http_client(*args, **kwargs):
+            pytest.fail("Public-cloud Hermes must not start or probe Dashboard")
+
+        monkeypatch.setattr(httpx, "AsyncClient", unexpected_http_client)
+        created = await service.create("alice")
+        opened, token = await service.open(created.instance_id, "alice")
+        assert opened.instance_id == created.instance_id
+        assert token
 
 
 class _FakeCodex:
@@ -304,6 +429,7 @@ class _FakeGateway:
         self.usernames: list[str | None] = []
         self.creator_names: list[str] = []
         self.agent_kinds: list[str] = []
+        self.envs: list[dict[str, str] | None] = []
         self.deleted: list[SandboxCloudSession] = []
         self.deleted_snapshots: list[SandboxCloudSnapshot] = []
         self.thread_ids: list[str] = []
@@ -323,6 +449,13 @@ class _FakeGateway:
             )
         }
         self.snapshots: dict[str, SandboxCloudSnapshot] = {}
+
+    async def renew_session(self, session: SandboxCloudSession) -> SandboxCloudSession:
+        return session
+
+    async def get_tool(self, tool_id: str) -> SimpleNamespace:
+        self.tool_ids.append(tool_id)
+        return SimpleNamespace(envs=[])
 
     async def list_sessions(
         self, tool_id: str, username: str | None = None
@@ -359,12 +492,14 @@ class _FakeGateway:
         username: str = "",
         creator_name: str = "",
         agent_kind: str = "",
+        envs: Mapping[str, str] | None = None,
     ) -> SandboxCloudSession:
         self.created += 1
         self.tool_ids.append(tool_id)
         self.display_names.append(display_name)
         self.creator_names.append(creator_name)
         self.agent_kinds.append(agent_kind)
+        self.envs.append(dict(envs) if envs is not None else None)
         session = SandboxCloudSession(
             tool_id=tool_id,
             instance_id=f"remote-{self.created}",
@@ -420,10 +555,50 @@ class _FakeGateway:
         return None
 
 
+class _FakeTosObject:
+    def __init__(self, content: bytes) -> None:
+        self._content = content
+
+    def read(self, limit: int = -1) -> bytes:
+        if limit < 0:
+            return self._content
+        return self._content[:limit]
+
+
+class _FakeTosNotFound(Exception):
+    status_code = 404
+
+
+class _FakeTosClient:
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], bytes] = {}
+
+    def get_object(self, *, bucket: str, key: str) -> _FakeTosObject:
+        try:
+            return _FakeTosObject(self.objects[(bucket, key)])
+        except KeyError as error:
+            raise _FakeTosNotFound() from error
+
+    def put_object(
+        self,
+        *,
+        bucket: str,
+        key: str,
+        content: bytes,
+        content_length: int,
+        content_type: str,
+    ) -> None:
+        assert content_length == len(content)
+        assert content_type == "application/json"
+        self.objects[(bucket, key)] = content
+
+
 def _app(
     gateway: _FakeGateway,
     tool_id: str | None = "tool-studio",
     snapshot_tool_id: str | None = "tool-studio-snapshot",
+    github_app_review_storage_client: _FakeTosClient | None = None,
+    gitlab_app_review_storage_client: _FakeTosClient | None = None,
 ) -> FastAPI:
     app = FastAPI()
     service = SandboxConversationService(
@@ -450,6 +625,22 @@ def _app(
         _owner,
         admin_resolver=_admin,
         creator_resolver=_creator,
+        github_app_review_storage_bucket=(
+            "studio-state" if github_app_review_storage_client is not None else ""
+        ),
+        github_app_review_storage_client_factory=(
+            (lambda: github_app_review_storage_client)
+            if github_app_review_storage_client is not None
+            else None
+        ),
+        gitlab_app_review_storage_bucket=(
+            "studio-state" if gitlab_app_review_storage_client is not None else ""
+        ),
+        gitlab_app_review_storage_client_factory=(
+            (lambda: gitlab_app_review_storage_client)
+            if gitlab_app_review_storage_client is not None
+            else None
+        ),
     )
     return app
 
@@ -508,6 +699,1247 @@ def _agent_app(
         _creator,
     )
     return app
+
+
+def test_sandbox_route_response_types_resolve_in_openapi() -> None:
+    gateway = _FakeGateway()
+
+    for app in (_app(gateway), _agent_app(gateway)):
+        schema = app.openapi()
+
+        assert schema["openapi"]
+        assert schema["paths"]
+
+
+def test_github_app_config_reports_install_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+    client = TestClient(_app(_FakeGateway()))
+
+    response = client.get("/web/github/app/config", headers={"X-Test-User": "alice"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "configured": True,
+        "appSlug": "agentkit-veadk-studio",
+        "installUrl": "https://github.com/apps/agentkit-veadk-studio/installations/new",
+        "reason": "",
+    }
+
+
+def test_github_app_repositories_include_review_enablement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name="Rhosmarie/nice",
+                    html_url="https://github.com/Rhosmarie/nice",
+                    private=False,
+                )
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    storage = _FakeTosClient()
+    client = TestClient(_app(_FakeGateway(), github_app_review_storage_client=storage))
+
+    save_response = client.put(
+        "/web/github/app/review-repositories",
+        json={"repositories": ["Rhosmarie/nice"]},
+        headers={"X-Test-User": "alice"},
+    )
+    list_response = client.get(
+        "/web/github/app/repositories",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert save_response.status_code == 200
+    assert save_response.json() == {"repositories": ["Rhosmarie/nice"]}
+    assert list_response.status_code == 200
+    assert list_response.json() == {
+        "repositories": [
+            {
+                "installationId": 456,
+                "account": "Rhosmarie",
+                "fullName": "Rhosmarie/nice",
+                "htmlUrl": "https://github.com/Rhosmarie/nice",
+                "private": False,
+                "reviewEnabled": True,
+            }
+        ],
+        "page": 1,
+        "pageSize": 10,
+        "hasNextPage": False,
+        "reviewSettingsConfigured": True,
+        "reviewSettingsReason": "",
+    }
+
+
+def test_github_app_repositories_report_missing_review_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name="Rhosmarie/nice",
+                    html_url="https://github.com/Rhosmarie/nice",
+                    private=False,
+                )
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    client = TestClient(_app(_FakeGateway()))
+
+    response = client.get(
+        "/web/github/app/repositories",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["repositories"][0]["reviewEnabled"] is False
+    assert response.json()["page"] == 1
+    assert response.json()["pageSize"] == 10
+    assert response.json()["hasNextPage"] is False
+    assert response.json()["reviewSettingsConfigured"] is False
+
+
+def test_github_app_repositories_are_paginated_in_studio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name=f"Rhosmarie/repo-{index:02d}",
+                    html_url=f"https://github.com/Rhosmarie/repo-{index:02d}",
+                    private=False,
+                )
+                for index in range(12)
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    client = TestClient(
+        _app(_FakeGateway(), github_app_review_storage_client=_FakeTosClient())
+    )
+
+    response = client.get(
+        "/web/github/app/repositories?page=2&pageSize=10",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["page"] == 2
+    assert payload["pageSize"] == 10
+    assert payload["hasNextPage"] is False
+    assert [item["fullName"] for item in payload["repositories"]] == [
+        "Rhosmarie/repo-10",
+        "Rhosmarie/repo-11",
+    ]
+
+
+def test_github_app_repositories_can_be_searched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name="Rhosmarie/nice",
+                    html_url="https://github.com/Rhosmarie/nice",
+                    private=False,
+                ),
+                GitHubInstalledRepository(
+                    installation_id=789,
+                    account="Other",
+                    full_name="Other/service",
+                    html_url="https://github.com/Other/service",
+                    private=True,
+                ),
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    client = TestClient(
+        _app(_FakeGateway(), github_app_review_storage_client=_FakeTosClient())
+    )
+
+    response = client.get(
+        "/web/github/app/repositories?q=nice&page=1&pageSize=10",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["hasNextPage"] is False
+    assert [item["fullName"] for item in payload["repositories"]] == ["Rhosmarie/nice"]
+
+
+def test_github_app_review_repository_toggle_preserves_other_enabled_repositories(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name=f"Rhosmarie/repo-{index:02d}",
+                    html_url=f"https://github.com/Rhosmarie/repo-{index:02d}",
+                    private=False,
+                )
+                for index in range(12)
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    client = TestClient(
+        _app(_FakeGateway(), github_app_review_storage_client=_FakeTosClient())
+    )
+    assert (
+        client.put(
+            "/web/github/app/review-repositories",
+            json={"repositories": ["Rhosmarie/repo-00", "Rhosmarie/repo-10"]},
+            headers={"X-Test-User": "alice"},
+        ).status_code
+        == 200
+    )
+
+    response = client.put(
+        "/web/github/app/review-repositories",
+        json={"repository": "Rhosmarie/repo-11", "reviewEnabled": True},
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["repositories"] == [
+        "Rhosmarie/repo-00",
+        "Rhosmarie/repo-10",
+        "Rhosmarie/repo-11",
+    ]
+
+
+def test_pull_request_review_always_uses_github_app_installation_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+    calls: list[tuple[str, object]] = []
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            calls.append(("init", config))
+
+        async def repository_installation_id(self, owner: str, repo: str) -> int:
+            calls.append(("repository", f"{owner}/{repo}"))
+            return 987
+
+        async def installation_token(self, installation_id: int) -> str:
+            calls.append(("installation", installation_id))
+            return "app-installation-token"
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    gateway = _FakeGateway()
+    client = TestClient(_app(gateway))
+
+    response = client.post(
+        "/web/github/pull-request-reviews",
+        json={"pullRequestUrl": "https://github.com/Rhosmarie/nice/pull/23"},
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "started"
+    assert ("repository", "Rhosmarie/nice") in calls
+    assert ("installation", 987) in calls
+    assert gateway.envs[-1] == {
+        "GITHUB_TOKEN": "app-installation-token",
+        "GH_PROMPT_DISABLED": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
+
+def test_pull_request_review_records_manual_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def repository_installation_id(self, owner: str, repo: str) -> int:
+            assert f"{owner}/{repo}" == "Rhosmarie/nice"
+            return 987
+
+        async def installation_token(self, installation_id: int) -> str:
+            assert installation_id == 987
+            return "app-installation-token"
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    gateway = _FakeGateway()
+    client = TestClient(
+        _app(gateway, github_app_review_storage_client=_FakeTosClient())
+    )
+
+    response = client.post(
+        "/web/github/pull-request-reviews",
+        json={"pullRequestUrl": "https://github.com/Rhosmarie/nice/pull/23"},
+        headers={"X-Test-User": "alice"},
+    )
+    records = client.get(
+        "/web/github/app/review-records",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    assert records.status_code == 200
+    assert records.json()["reviewSettingsConfigured"] is True
+    assert records.json()["page"] == 1
+    assert records.json()["pageSize"] == 10
+    assert records.json()["hasNextPage"] is False
+    assert records.json()["records"][0] | {
+        "id": "record-id",
+        "createdAt": "now",
+        "status": "started",
+    } == {
+        "id": "record-id",
+        "repository": "Rhosmarie/nice",
+        "pullRequestUrl": "https://github.com/Rhosmarie/nice/pull/23",
+        "pullRequestNumber": 23,
+        "status": "started",
+        "trigger": "manual",
+        "createdAt": "now",
+        "deliveryId": "",
+        "action": "",
+        "sessionId": response.json()["sessionId"],
+        "displayName": response.json()["displayName"],
+        "reason": "",
+    }
+
+
+def test_pull_request_review_records_are_paginated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+    storage = _FakeTosClient()
+    storage.objects[("studio-state", GITHUB_APP_REVIEW_HISTORY_KEY)] = json.dumps(
+        {
+            "records": [
+                {
+                    "id": f"record-{index}",
+                    "repository": "Rhosmarie/nice",
+                    "pullRequestUrl": f"https://github.com/Rhosmarie/nice/pull/{index}",
+                    "pullRequestNumber": index,
+                    "status": "started",
+                    "trigger": "manual",
+                    "createdAt": "2026-09-07T00:00:00Z",
+                    "deliveryId": "",
+                    "action": "",
+                    "sessionId": f"session-{index}",
+                    "displayName": f"PR Review {index}",
+                    "reason": "",
+                }
+                for index in range(1, 6)
+            ]
+        },
+        separators=(",", ":"),
+    ).encode()
+    client = TestClient(_app(_FakeGateway(), github_app_review_storage_client=storage))
+
+    response = client.get(
+        "/web/github/app/review-records?page=2&pageSize=2",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["page"] == 2
+    assert payload["pageSize"] == 2
+    assert payload["hasNextPage"] is True
+    assert [item["id"] for item in payload["records"]] == ["record-3", "record-4"]
+
+
+def test_pull_request_review_record_status_can_be_completed() -> None:
+    storage = _FakeTosClient()
+    store = TosGitHubAppReviewRepositoryStore(
+        bucket="studio-state",
+        client_factory=lambda: storage,
+    )
+    record = create_review_record(
+        repository="Rhosmarie/nice",
+        pull_request_url="https://github.com/Rhosmarie/nice/pull/23",
+        pull_request_number=23,
+        status="started",
+        trigger="webhook",
+        session_id="remote-1",
+    )
+    asyncio.run(store.append_review_record(record))
+
+    updated = asyncio.run(
+        store.update_review_record_status(
+            record.record_id,
+            status="completed",
+        )
+    )
+
+    assert updated is not None
+    records = asyncio.run(store.review_records())
+    assert records[0].record_id == record.record_id
+    assert records[0].status == "completed"
+    assert records[0].session_id == "remote-1"
+
+
+def test_gitlab_merge_request_review_record_status_can_be_completed() -> None:
+    storage = _FakeTosClient()
+    store = TosGitLabAppReviewProjectStore(
+        bucket="studio-state",
+        client_factory=lambda: storage,
+    )
+    record = create_gitlab_review_record(
+        instance_id="default",
+        base_url="https://gitlab.example.com",
+        project_id=123,
+        path_with_namespace="Group/nice",
+        merge_request_url="https://gitlab.example.com/Group/nice/-/merge_requests/7",
+        merge_request_iid=7,
+        status="started",
+        trigger="webhook",
+        session_id="remote-1",
+    )
+    asyncio.run(store.append_review_record(record))
+
+    updated = asyncio.run(
+        store.update_review_record_status(
+            record.record_id,
+            status="completed",
+        )
+    )
+
+    assert updated is not None
+    records, _page = asyncio.run(
+        store.review_records_page(frontend_sandbox.PageRequest(1, 10))
+    )
+    assert records[0].record_id == record.record_id
+    assert records[0].status == "completed"
+    assert records[0].session_id == "remote-1"
+
+
+def test_github_app_webhook_starts_pull_request_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+    calls: list[tuple[str, object]] = []
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            calls.append(("init", config))
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name="Rhosmarie/nice",
+                    html_url="https://github.com/Rhosmarie/nice",
+                    private=False,
+                )
+            ]
+
+        async def installation_token(self, installation_id: int) -> str:
+            calls.append(("installation", installation_id))
+            return "webhook-installation-token"
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    storage = _FakeTosClient()
+    gateway = _FakeGateway()
+    client = TestClient(_app(gateway, github_app_review_storage_client=storage))
+    assert (
+        client.put(
+            "/web/github/app/review-repositories",
+            json={"repositories": ["Rhosmarie/nice"]},
+            headers={"X-Test-User": "alice"},
+        ).status_code
+        == 200
+    )
+    payload = {
+        "action": "opened",
+        "installation": {"id": 456},
+        "repository": {"full_name": "Rhosmarie/nice"},
+        "pull_request": {
+            "number": 23,
+            "html_url": "https://github.com/Rhosmarie/nice/pull/23",
+            "draft": False,
+            "head": {"repo": {"full_name": "Rhosmarie/nice"}},
+        },
+    }
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    signature = "sha256=" + hmac.new(b"secret", body, sha256).hexdigest()
+
+    response = client.post(
+        "/web/github/app/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-1",
+            "X-Hub-Signature-256": signature,
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "started"
+    records = client.get(
+        "/web/github/app/review-records",
+        headers={"X-Test-User": "alice"},
+    )
+    assert records.status_code == 200
+    record = records.json()["records"][0]
+    assert record | {"id": "record-id", "createdAt": "now", "status": "started"} == {
+        "id": "record-id",
+        "repository": "Rhosmarie/nice",
+        "pullRequestUrl": "https://github.com/Rhosmarie/nice/pull/23",
+        "pullRequestNumber": 23,
+        "status": "started",
+        "trigger": "webhook",
+        "createdAt": "now",
+        "deliveryId": "delivery-1",
+        "action": "opened",
+        "sessionId": response.json()["sessionId"],
+        "displayName": response.json()["displayName"],
+        "reason": "",
+    }
+    assert ("installation", 456) in calls
+    assert gateway.display_names[-1] == "PR Review: Rhosmarie/nice#23"
+    assert gateway.envs[-1] == {
+        "GITHUB_TOKEN": "webhook-installation-token",
+        "GH_PROMPT_DISABLED": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
+
+def test_github_app_webhook_ignores_disabled_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installation_token(self, installation_id: int) -> str:
+            raise AssertionError("disabled repositories must not request tokens")
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    gateway = _FakeGateway()
+    client = TestClient(
+        _app(gateway, github_app_review_storage_client=_FakeTosClient())
+    )
+    payload = {
+        "action": "opened",
+        "installation": {"id": 456},
+        "repository": {"full_name": "Rhosmarie/nice"},
+        "pull_request": {
+            "number": 23,
+            "html_url": "https://github.com/Rhosmarie/nice/pull/23",
+            "draft": False,
+            "head": {"repo": {"full_name": "Rhosmarie/nice"}},
+        },
+    }
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    signature = "sha256=" + hmac.new(b"secret", body, sha256).hexdigest()
+
+    response = client.post(
+        "/web/github/app/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-1",
+            "X-Hub-Signature-256": signature,
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "status": "ignored",
+        "reason": "repository-review-disabled",
+        "repository": "Rhosmarie/nice",
+    }
+    records = client.get(
+        "/web/github/app/review-records",
+        headers={"X-Test-User": "alice"},
+    )
+    assert records.status_code == 200
+    record = records.json()["records"][0]
+    assert record["status"] == "ignored"
+    assert record["trigger"] == "webhook"
+    assert record["reason"] == "repository-review-disabled"
+    assert record["pullRequestUrl"] == "https://github.com/Rhosmarie/nice/pull/23"
+    assert gateway.created == 0
+
+
+def test_gitlab_app_projects_include_review_enablement_and_create_webhook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_gitlab_oauth(monkeypatch)
+    calls: list[tuple[str, int]] = []
+
+    class _FakeGitLabAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def projects(self) -> list[GitLabProject]:
+            return [
+                GitLabProject(
+                    instance_id="default",
+                    base_url="https://gitlab.example.com",
+                    project_id=123,
+                    path_with_namespace="Group/nice",
+                    name="nice",
+                    namespace="Group",
+                    web_url="https://gitlab.example.com/Group/nice",
+                    private=False,
+                    access_level=40,
+                )
+            ]
+
+        async def ensure_project_webhook(self, project_id: int) -> None:
+            calls.append(("hook", project_id))
+
+    monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _FakeGitLabAppClient)
+    storage = _FakeTosClient()
+    _save_gitlab_oauth_credential(storage)
+    client = TestClient(_app(_FakeGateway(), gitlab_app_review_storage_client=storage))
+
+    save_response = client.put(
+        "/web/gitlab/app/review-projects",
+        json={"projectId": 123, "reviewEnabled": True},
+        headers={"X-Test-User": "alice"},
+    )
+    disable_response = client.put(
+        "/web/gitlab/app/review-projects",
+        json={"projectId": 123, "reviewEnabled": False},
+        headers={"X-Test-User": "alice"},
+    )
+    list_response = client.get(
+        "/web/gitlab/app/projects",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert save_response.status_code == 200
+    assert save_response.json()["projects"] == [
+        {
+            "instanceId": "default",
+            "baseUrl": "https://gitlab.example.com",
+            "projectId": 123,
+            "pathWithNamespace": "Group/nice",
+            "credentialOwner": "alice",
+            "credentialId": "cred-1",
+            "credentialType": "oauth",
+            "webhookId": 0,
+            "enabled": True,
+            "status": "active",
+            "reason": "",
+        }
+    ]
+    assert disable_response.status_code == 200
+    assert disable_response.json()["projects"] == [
+        {
+            "instanceId": "default",
+            "baseUrl": "https://gitlab.example.com",
+            "projectId": 123,
+            "pathWithNamespace": "Group/nice",
+            "credentialOwner": "alice",
+            "credentialId": "cred-1",
+            "credentialType": "oauth",
+            "webhookId": 0,
+            "enabled": False,
+            "status": "disabled",
+            "reason": "用户已关闭自动评审。",
+        }
+    ]
+    assert list_response.status_code == 200
+    assert list_response.json()["projects"][0] == {
+        "instanceId": "default",
+        "baseUrl": "https://gitlab.example.com",
+        "projectId": 123,
+        "pathWithNamespace": "Group/nice",
+        "name": "nice",
+        "namespace": "Group",
+        "webUrl": "https://gitlab.example.com/Group/nice",
+        "private": False,
+        "reviewEnabled": False,
+        "permissionsNote": "",
+        "accessLevel": 40,
+        "canManageWebhooks": True,
+        "reviewBindingStatus": "disabled",
+        "reviewBindingReason": "用户已关闭自动评审。",
+        "reviewCredentialOwner": "alice",
+        "reviewCredentialType": "oauth",
+    }
+    assert calls == [("hook", 123)]
+
+
+def test_gitlab_app_projects_tolerate_legacy_project_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_gitlab_oauth(monkeypatch)
+
+    class _FakeGitLabAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def projects(self) -> list[GitLabProject]:
+            return [
+                GitLabProject(
+                    instance_id="default",
+                    base_url="https://gitlab.example.com",
+                    project_id=123,
+                    path_with_namespace="Group/nice",
+                    name="nice",
+                    namespace="Group",
+                    web_url="https://gitlab.example.com/Group/nice",
+                    private=False,
+                    access_level=40,
+                )
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _FakeGitLabAppClient)
+    storage = _FakeTosClient()
+    _save_gitlab_oauth_credential(storage)
+    storage.objects[("studio-state", GITLAB_REVIEW_PROJECTS_KEY)] = json.dumps(
+        {
+            "projects": [
+                {
+                    "instanceId": "default",
+                    "baseUrl": "https://gitlab.example.com",
+                    "projectId": 123,
+                    "pathWithNamespace": "Group/nice",
+                    "enabled": True,
+                    "status": "active",
+                }
+            ]
+        }
+    ).encode("utf-8")
+    client = TestClient(_app(_FakeGateway(), gitlab_app_review_storage_client=storage))
+
+    response = client.get(
+        "/web/gitlab/app/projects",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    project = response.json()["projects"][0]
+    assert project["reviewEnabled"] is False
+    assert project["reviewBindingStatus"] == "auth_invalid"
+    assert (
+        project["reviewBindingReason"]
+        == "历史项目绑定缺少 OAuth 授权，请重新启用自动评审。"
+    )
+
+
+def test_gitlab_oauth_project_binding_uses_user_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_gitlab_oauth(monkeypatch)
+    tokens: list[str] = []
+
+    class _FakeGitLabAppClient:
+        def __init__(self, config: object) -> None:
+            tokens.append(config.token)
+
+        async def projects(self) -> list[GitLabProject]:
+            return [
+                GitLabProject(
+                    instance_id="default",
+                    base_url="https://gitlab.example.com",
+                    project_id=123,
+                    path_with_namespace="Group/nice",
+                    name="nice",
+                    namespace="Group",
+                    web_url="https://gitlab.example.com/Group/nice",
+                    private=False,
+                    access_level=40,
+                )
+            ]
+
+        async def ensure_project_webhook(self, project_id: int) -> int:
+            assert project_id == 123
+            return 456
+
+    monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _FakeGitLabAppClient)
+    storage = _FakeTosClient()
+    _save_gitlab_oauth_credential(storage)
+    client = TestClient(_app(_FakeGateway(), gitlab_app_review_storage_client=storage))
+
+    config_response = client.get(
+        "/web/gitlab/app/config",
+        headers={"X-Test-User": "alice"},
+    )
+    save_response = client.put(
+        "/web/gitlab/app/review-projects",
+        json={"projectId": 123, "reviewEnabled": True},
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert config_response.status_code == 200
+    assert config_response.json()["oauthConnected"] is True
+    assert save_response.status_code == 200
+    assert save_response.json()["projects"] == [
+        {
+            "instanceId": "default",
+            "baseUrl": "https://gitlab.example.com",
+            "projectId": 123,
+            "pathWithNamespace": "Group/nice",
+            "credentialOwner": "alice",
+            "credentialId": "cred-1",
+            "credentialType": "oauth",
+            "webhookId": 456,
+            "enabled": True,
+            "status": "active",
+            "reason": "",
+        }
+    ]
+    assert tokens == ["oauth-token"]
+
+
+def test_gitlab_expired_oauth_requires_reconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITLAB_BASE_URL", "https://gitlab.example.com")
+    monkeypatch.setenv("VEADK_GITLAB_WEBHOOK_SECRET", "secret")
+    monkeypatch.setenv("VEADK_STUDIO_PUBLIC_BASE_URL", "https://studio.example.com")
+    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_ID", "client-id")
+    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv(
+        "VEADK_GITLAB_OAUTH_REDIRECT_URI",
+        "https://studio.example.com/web/gitlab/oauth/callback",
+    )
+
+    class _FailingOAuthClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def refresh_token(self, refresh_token: str) -> dict[str, object]:
+            assert refresh_token == "refresh-token"
+            raise GitLabAppReviewError("refresh failed")
+
+    class _UnexpectedGitLabAppClient:
+        def __init__(self, config: object) -> None:
+            raise AssertionError(f"unexpected GitLab request with {config.token}")
+
+    monkeypatch.setattr(frontend_sandbox, "GitLabOAuthClient", _FailingOAuthClient)
+    monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _UnexpectedGitLabAppClient)
+    storage = _FakeTosClient()
+    store = TosGitLabAppReviewProjectStore(
+        bucket="studio-state",
+        client_factory=lambda: storage,
+    )
+    asyncio.run(
+        store.save_oauth_credential(
+            GitLabOAuthCredential(
+                credential_id="cred-1",
+                owner_id="alice",
+                base_url="https://gitlab.example.com",
+                access_token="expired-oauth-token",
+                refresh_token="refresh-token",
+                expires_at=1,
+                gitlab_user_id=42,
+                gitlab_username="alice",
+                gitlab_name="Alice",
+            )
+        )
+    )
+    client = TestClient(_app(_FakeGateway(), gitlab_app_review_storage_client=storage))
+
+    response = client.put(
+        "/web/gitlab/app/review-projects",
+        json={"projectId": 123, "reviewEnabled": True},
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 503
+    assert "GitLab 授权已失效" in response.json()["detail"]["message"]
+
+
+def test_gitlab_oauth_start_url_returns_authorization_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_gitlab_oauth(monkeypatch)
+    client = TestClient(
+        _app(_FakeGateway(), gitlab_app_review_storage_client=_FakeTosClient())
+    )
+
+    response = client.get(
+        "/web/gitlab/oauth/start-url",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    authorization_url = response.json()["authorizationUrl"]
+    assert authorization_url.startswith("https://gitlab.example.com/oauth/authorize?")
+    assert "client_id=client-id" in authorization_url
+    assert "response_type=code" in authorization_url
+    assert "scope=api" in authorization_url
+
+
+def test_gitlab_app_webhook_starts_merge_request_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_gitlab_oauth(monkeypatch)
+
+    class _FakeGitLabAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def projects(self) -> list[GitLabProject]:
+            return [
+                GitLabProject(
+                    instance_id="default",
+                    base_url="https://gitlab.example.com",
+                    project_id=123,
+                    path_with_namespace="Group/nice",
+                    name="nice",
+                    namespace="Group",
+                    web_url="https://gitlab.example.com/Group/nice",
+                    private=False,
+                    access_level=40,
+                )
+            ]
+
+        async def project(self, project_id: int) -> GitLabProject:
+            assert project_id == 123
+            return (await self.projects())[0]
+
+        async def ensure_project_webhook(self, project_id: int) -> None:
+            assert project_id == 123
+
+    monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _FakeGitLabAppClient)
+    storage = _FakeTosClient()
+    _save_gitlab_oauth_credential(storage)
+    gateway = _FakeGateway()
+    client = TestClient(_app(gateway, gitlab_app_review_storage_client=storage))
+    assert (
+        client.put(
+            "/web/gitlab/app/review-projects",
+            json={"projectId": 123, "reviewEnabled": True},
+            headers={"X-Test-User": "alice"},
+        ).status_code
+        == 200
+    )
+    payload = {
+        "project": {"id": 123, "path_with_namespace": "Group/nice"},
+        "object_attributes": {
+            "iid": 7,
+            "action": "open",
+            "url": "https://gitlab.example.com/Group/nice/-/merge_requests/7",
+            "source_project_id": 123,
+            "target_project_id": 123,
+            "work_in_progress": False,
+            "title": "Add feature",
+            "last_commit": {"id": "abc123"},
+        },
+    }
+
+    response = client.post(
+        "/web/gitlab/app/webhook",
+        json=payload,
+        headers={
+            "X-Gitlab-Event": "Merge Request Hook",
+            "X-Gitlab-Token": "secret",
+            "X-Gitlab-Event-UUID": "delivery-1",
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "started"
+    records = client.get(
+        "/web/gitlab/app/review-records",
+        headers={"X-Test-User": "alice"},
+    )
+    assert records.status_code == 200
+    record = records.json()["records"][0]
+    assert record | {"id": "record-id", "createdAt": "now", "status": "started"} == {
+        "id": "record-id",
+        "instanceId": "default",
+        "baseUrl": "https://gitlab.example.com",
+        "projectId": 123,
+        "pathWithNamespace": "Group/nice",
+        "mergeRequestUrl": "https://gitlab.example.com/Group/nice/-/merge_requests/7",
+        "mergeRequestIid": 7,
+        "status": "started",
+        "trigger": "webhook",
+        "createdAt": "now",
+        "deliveryId": "delivery-1",
+        "action": "open",
+        "sessionId": response.json()["sessionId"],
+        "displayName": response.json()["displayName"],
+        "reason": "",
+    }
+    assert gateway.display_names[-1] == "MR Review: Group/nice!7"
+    assert gateway.envs[-1] == {
+        "GITLAB_TOKEN": "oauth-token",
+        "GITLAB_API_BASE": "https://gitlab.example.com/api/v4",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
+
+def test_gitlab_manual_review_bounds_long_session_display_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_gitlab_oauth(monkeypatch)
+    long_path = "Group/veadk-mr-review-test-with-a-very-long-project-name"
+
+    class _FakeGitLabAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def projects(self) -> list[GitLabProject]:
+            return [
+                GitLabProject(
+                    instance_id="default",
+                    base_url="https://gitlab.example.com",
+                    project_id=123,
+                    path_with_namespace=long_path,
+                    name="veadk-mr-review-test-with-a-very-long-project-name",
+                    namespace="Group",
+                    web_url=f"https://gitlab.example.com/{long_path}",
+                    private=False,
+                )
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _FakeGitLabAppClient)
+    storage = _FakeTosClient()
+    _save_gitlab_oauth_credential(storage)
+    gateway = _FakeGateway()
+    client = TestClient(_app(gateway, gitlab_app_review_storage_client=storage))
+
+    response = client.post(
+        "/web/gitlab/merge-request-reviews",
+        json={
+            "mergeRequestUrl": (
+                f"https://gitlab.example.com/{long_path}/-/merge_requests/7"
+            )
+        },
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    display_name = response.json()["displayName"]
+    assert display_name.startswith("MR Review: Group/")
+    assert display_name.endswith("name!7")
+    assert "..." in display_name
+    assert len(display_name) <= STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH
+    assert gateway.display_names[-1] == display_name
+
+
+def test_gitlab_app_webhook_ignores_disabled_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_gitlab_oauth(monkeypatch)
+
+    class _FakeGitLabAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def project(self, project_id: int) -> GitLabProject:
+            raise AssertionError("disabled projects must not fetch project details")
+
+    monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _FakeGitLabAppClient)
+    gateway = _FakeGateway()
+    client = TestClient(
+        _app(gateway, gitlab_app_review_storage_client=_FakeTosClient())
+    )
+    payload = {
+        "project": {"id": 123, "path_with_namespace": "Group/nice"},
+        "object_attributes": {
+            "iid": 7,
+            "action": "open",
+            "url": "https://gitlab.example.com/Group/nice/-/merge_requests/7",
+            "source_project_id": 123,
+            "target_project_id": 123,
+            "work_in_progress": False,
+            "title": "Add feature",
+        },
+    }
+
+    response = client.post(
+        "/web/gitlab/app/webhook",
+        json=payload,
+        headers={"X-Gitlab-Event": "Merge Request Hook", "X-Gitlab-Token": "secret"},
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "status": "ignored",
+        "reason": "project-review-disabled",
+        "projectId": 123,
+    }
+    records = client.get(
+        "/web/gitlab/app/review-records",
+        headers={"X-Test-User": "alice"},
+    )
+    assert records.status_code == 200
+    record = records.json()["records"][0]
+    assert record["status"] == "ignored"
+    assert record["reason"] == "project-review-disabled"
+    assert (
+        record["mergeRequestUrl"]
+        == "https://gitlab.example.com/Group/nice/-/merge_requests/7"
+    )
+    assert gateway.created == 0
+
+
+def test_github_app_webhook_retries_pr_review_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITHUB_APP_ID", "4830047")
+    monkeypatch.setenv("VEADK_GITHUB_APP_SLUG", "agentkit-veadk-studio")
+    monkeypatch.setenv("VEADK_GITHUB_APP_PRIVATE_KEY", "pem")
+    monkeypatch.setenv("VEADK_GITHUB_APP_WEBHOOK_SECRET", "secret")
+    monkeypatch.setattr(
+        frontend_sandbox,
+        "_GITHUB_PR_REVIEW_CONNECT_RETRY_SECONDS",
+        0,
+    )
+
+    class _FakeGitHubAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def installed_repositories(self) -> list[GitHubInstalledRepository]:
+            return [
+                GitHubInstalledRepository(
+                    installation_id=456,
+                    account="Rhosmarie",
+                    full_name="Rhosmarie/nice",
+                    html_url="https://github.com/Rhosmarie/nice",
+                    private=False,
+                )
+            ]
+
+        async def installation_token(self, installation_id: int) -> str:
+            assert installation_id == 456
+            return "webhook-installation-token"
+
+    class _FlakyGateway(_FakeGateway):
+        def __init__(self) -> None:
+            super().__init__()
+            self.open_codex_calls = 0
+
+        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
+            self.open_codex_calls += 1
+            if self.open_codex_calls == 1:
+                raise frontend_sandbox.SandboxInvocationError(
+                    "server rejected WebSocket connection: HTTP 200"
+                )
+            return await super().open_codex(session)
+
+    monkeypatch.setattr(frontend_sandbox, "GitHubAppClient", _FakeGitHubAppClient)
+    storage = _FakeTosClient()
+    gateway = _FlakyGateway()
+    client = TestClient(_app(gateway, github_app_review_storage_client=storage))
+    assert (
+        client.put(
+            "/web/github/app/review-repositories",
+            json={"repositories": ["Rhosmarie/nice"]},
+            headers={"X-Test-User": "alice"},
+        ).status_code
+        == 200
+    )
+    payload = {
+        "action": "opened",
+        "installation": {"id": 456},
+        "repository": {"full_name": "Rhosmarie/nice"},
+        "pull_request": {
+            "number": 23,
+            "html_url": "https://github.com/Rhosmarie/nice/pull/23",
+            "draft": False,
+            "head": {"repo": {"full_name": "Rhosmarie/nice"}},
+        },
+    }
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    signature = "sha256=" + hmac.new(b"secret", body, sha256).hexdigest()
+
+    response = client.post(
+        "/web/github/app/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-1",
+            "X-Hub-Signature-256": signature,
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "started"
+    assert gateway.open_codex_calls == 2
 
 
 @pytest.mark.parametrize(
@@ -739,7 +2171,9 @@ def test_managed_agent_snapshot_is_listed_resumed_and_deleted() -> None:
         )
 
     assert alice_list.status_code == 200
-    assert "snapshots" not in alice_list.json()
+    assert [item["snapshotId"] for item in alice_list.json()["snapshots"]] == [
+        "snapshot-alice"
+    ]
     assert {item["snapshotId"] for item in admin_list.json()["snapshots"]} == {
         "snapshot-alice",
         "snapshot-bob",
@@ -752,7 +2186,7 @@ def test_managed_agent_snapshot_is_listed_resumed_and_deleted() -> None:
     assert [item.snapshot_id for item in gateway.deleted_snapshots] == ["snapshot-bob"]
 
 
-def test_managed_agent_admin_listing_auto_resumes_current_kind_snapshots() -> None:
+def test_managed_agent_listing_never_resumes_snapshots() -> None:
     gateway = _FakeGateway()
     gateway.snapshots["snapshot-openclaw"] = SandboxCloudSnapshot(
         tool_id="tool-openclaw-snapshot",
@@ -781,21 +2215,22 @@ def test_managed_agent_admin_listing_auto_resumes_current_kind_snapshots() -> No
 
     with TestClient(_agent_app(gateway)) as client:
         ordinary = client.get(
-            "/web/openclaw/sessions",
+            "/web/openclaw/sessions?autoResumeSnapshots=true",
             headers={"X-Test-User": "alice"},
         )
         admin = client.get(
-            "/web/openclaw/sessions",
+            "/web/openclaw/sessions?autoResumeSnapshots=true",
             headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
         )
 
     assert ordinary.status_code == 200
-    assert "snapshots" not in ordinary.json()
-    assert "resumed-snapshot-openclaw" in {
-        item["sessionId"] for item in admin.json()["sessions"]
+    assert "snapshot-openclaw" in {
+        item["snapshotId"] for item in ordinary.json()["snapshots"]
     }
-    assert "snapshots" not in admin.json()
-    assert "resumed-snapshot-hermes" not in gateway.sessions
+    assert "snapshot-openclaw" in {
+        item["snapshotId"] for item in admin.json()["snapshots"]
+    }
+    assert not any(key.startswith("resumed-") for key in gateway.sessions)
 
 
 def test_managed_agent_routes_enforce_username_scope() -> None:
@@ -906,6 +2341,8 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
                 "expireAt": "2026-07-30T16:00:00Z",
                 "toolType": "CodeEnv",
                 "createdBy": "alice",
+                "region": "cn-beijing",
+                "isMine": True,
                 "displayName": "",
                 "persistent": False,
             }
@@ -935,7 +2372,10 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sandbox_client_disconnect_keeps_the_cloud_turn_running() -> None:
+@pytest.mark.parametrize("interrupted", [False, True])
+async def test_sandbox_client_disconnect_keeps_the_cloud_turn_running(
+    interrupted: bool,
+) -> None:
     class _CancellableCodex(_FakeCodex):
         def __init__(self, turns: list[str]) -> None:
             super().__init__(turns)
@@ -955,6 +2395,8 @@ async def test_sandbox_client_disconnect_keeps_the_cloud_turn_running() -> None:
                 yield CodexAppServerEvent(kind="text", text="partial")
                 self.partial_sent.set()
                 await self.release.wait()
+                if interrupted:
+                    raise CodexAppServerTurnInterruptedError("Codex 本轮任务已中断。")
                 yield CodexAppServerEvent(kind="text", text="completed")
             finally:
                 self.active = False
@@ -1022,6 +2464,48 @@ async def test_sandbox_client_disconnect_keeps_the_cloud_turn_running() -> None:
         async for event in service.stream_message("remote-existing", "alice", "again")
     ]
     assert [event.text for event in follow_up] == ["reply:again"]
+
+
+def test_interrupted_turn_preserves_output_and_releases_the_session() -> None:
+    class _InterruptedCodex(_FakeCodex):
+        async def stream_turn(
+            self, prompt: str, skill_ids: tuple[str, ...] = ()
+        ) -> AsyncIterator[CodexAppServerEvent]:
+            if prompt == "interrupt":
+                yield CodexAppServerEvent(kind="text", text="partial-output")
+                raise CodexAppServerTurnInterruptedError("Codex 本轮任务已中断。")
+            async for event in super().stream_turn(prompt, skill_ids):
+                yield event
+
+    class _InterruptedGateway(_FakeGateway):
+        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
+            connection = _InterruptedCodex(self.thread_ids)
+            self.connections.append(connection)
+            return connection
+
+    gateway = _InterruptedGateway()
+    headers = {"X-Test-User": "alice"}
+    with TestClient(_app(gateway)) as client:
+        connected = client.post(
+            "/web/sandbox/sessions/remote-existing/connect", headers=headers
+        )
+        assert connected.status_code == 200
+        response = client.post(
+            "/web/sandbox/sessions/remote-existing/messages",
+            headers=headers,
+            json={"message": "interrupt"},
+        )
+        assert "partial-output" in response.text
+        assert '"code": "SANDBOX_TURN_INTERRUPTED"' in response.text
+        assert gateway.connections[0].closed is False
+        follow_up = client.post(
+            "/web/sandbox/sessions/remote-existing/messages",
+            headers=headers,
+            json={"message": "again"},
+        )
+        assert "reply:again" in follow_up.text
+        assert "event: error" not in follow_up.text
+        assert len(gateway.connections) == 1
 
 
 @pytest.mark.asyncio
@@ -1517,8 +3001,9 @@ def test_codex_project_handoff_creation_retry_preserves_original_error() -> None
             username: str = "",
             creator_name: str = "",
             agent_kind: str = "",
+            envs: Mapping[str, str] | None = None,
         ) -> SandboxCloudSession:
-            del tool_id, display_name, username, creator_name, agent_kind
+            del tool_id, display_name, username, creator_name, agent_kind, envs
             self.created += 1
             raise SandboxProvisioningError("AgentKit Tool 已失效。")
 
@@ -1817,7 +3302,7 @@ def test_codex_project_handoff_rejects_invalid_and_expired_pairing_code(
     assert gateway.created == 0
 
 
-def test_sandbox_snapshot_is_wakeable_for_admin_only() -> None:
+def test_sandbox_snapshot_is_wakeable_for_owner_and_admin() -> None:
     gateway = _FakeGateway()
     gateway.snapshots["snapshot-alice"] = SandboxCloudSnapshot(
         tool_id="tool-studio-snapshot",
@@ -1878,18 +3363,21 @@ def test_sandbox_snapshot_is_wakeable_for_admin_only() -> None:
             headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
         )
 
-    assert "snapshots" not in alice_list.json()
+    assert [item["snapshotId"] for item in alice_list.json()["snapshots"]] == [
+        "snapshot-alice"
+    ]
     assert {item["snapshotId"] for item in admin_list.json()["snapshots"]} == {
         "snapshot-alice",
         "snapshot-bob",
+        "snapshot-failed",
     }
-    assert resumed.status_code == 404
+    assert resumed.status_code == 200
     assert admin_resumed.json()["sessionId"] == "resumed-snapshot-alice"
     assert admin_resumed.json()["persistent"] is True
     assert deleted.json() == {"deleted": True}
 
 
-def test_sandbox_admin_listing_auto_resumes_snapshots() -> None:
+def test_sandbox_listing_never_resumes_snapshots() -> None:
     gateway = _FakeGateway()
     gateway.snapshots["snapshot-alice"] = SandboxCloudSnapshot(
         tool_id="tool-studio-snapshot",
@@ -1918,21 +3406,22 @@ def test_sandbox_admin_listing_auto_resumes_snapshots() -> None:
 
     with TestClient(_app(gateway)) as client:
         ordinary = client.get(
-            "/web/sandbox/sessions",
+            "/web/sandbox/sessions?autoResumeSnapshots=true",
             headers={"X-Test-User": "alice"},
         )
         admin = client.get(
-            "/web/sandbox/sessions",
+            "/web/sandbox/sessions?autoResumeSnapshots=true",
             headers={"X-Test-User": "admin", "X-Test-Role": "admin"},
         )
 
     assert ordinary.status_code == 200
-    assert "snapshots" not in ordinary.json()
-    assert "resumed-snapshot-alice" in {
-        item["sessionId"] for item in admin.json()["sessions"]
+    assert "snapshot-alice" in {
+        item["snapshotId"] for item in ordinary.json()["snapshots"]
     }
-    assert "snapshots" not in admin.json()
-    assert "resumed-snapshot-failed" not in gateway.sessions
+    assert "snapshot-alice" in {
+        item["snapshotId"] for item in admin.json()["snapshots"]
+    }
+    assert not any(key.startswith("resumed-") for key in gateway.sessions)
 
 
 def test_sandbox_list_scope_follows_user_role() -> None:
@@ -1972,11 +3461,13 @@ def test_sandbox_list_scope_follows_user_role() -> None:
         "alice",
         "bob",
     }
-    assert gateway.usernames[-7:] == [
+    assert gateway.usernames[-9:] == [
         "alice",
         "alice",
+        None,
         "bob",
         "bob",
+        None,
         None,
         None,
         None,
@@ -2384,6 +3875,74 @@ async def test_service_allows_multiple_sessions_for_the_same_owner() -> None:
 
 
 @pytest.mark.asyncio
+async def test_service_passes_allowed_session_environment_to_gateway() -> None:
+    gateway = _FakeGateway()
+    service = SandboxConversationService(gateway, tool_id="tool-studio")
+    envs = {
+        "AGENTKIT_SANDBOX_MODEL_PROVIDER": "volcengine",
+        "OPENCODE_MODEL": "doubao-seed-2-1-pro-260628",
+        "CODEX_MODEL": "doubao-seed-2-1-pro-260628",
+        "ANTHROPIC_MODEL": "doubao-seed-2-1-pro-260628",
+        "OPENCODE_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
+        "CODEX_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
+        "MODEL_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
+        "ANTHROPIC_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
+        "CODEX_CONFIG_TOML": 'model = "doubao-seed-2-1-pro-260628"',
+        "GH_TOKEN": "github-secret-token",
+    }
+
+    await service.create(
+        "alice",
+        display_name="智能构建",
+        persistent=False,
+        envs=envs,
+    )
+
+    assert gateway.envs == [envs]
+
+
+@pytest.mark.asyncio
+async def test_service_omits_blank_session_environment_values() -> None:
+    gateway = _FakeGateway()
+    service = SandboxConversationService(gateway, tool_id="tool-studio")
+
+    await service.create(
+        "alice",
+        display_name="智能构建",
+        persistent=False,
+        envs={"CODEX_MODEL": "   "},
+    )
+
+    assert gateway.envs == [None]
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_unsupported_session_environment() -> None:
+    service = SandboxConversationService(_FakeGateway(), tool_id="tool-studio")
+
+    with pytest.raises(SandboxValidationError, match="不支持该键"):
+        await service.create(
+            "alice",
+            display_name="智能构建",
+            persistent=False,
+            envs={"CODEX_API_KEY": "secret"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_invalid_session_model_environment() -> None:
+    service = SandboxConversationService(_FakeGateway(), tool_id="tool-studio")
+
+    with pytest.raises(SandboxValidationError, match="模型 ID 格式无效"):
+        await service.create(
+            "alice",
+            display_name="智能构建",
+            persistent=False,
+            envs={"CODEX_MODEL": "model; export SECRET=value"},
+        )
+
+
+@pytest.mark.asyncio
 async def test_gateway_accepts_a_lazy_client_factory() -> None:
     class _Client:
         def list_tools(self, request: object) -> str:
@@ -2600,6 +4159,76 @@ async def test_gateway_creates_session_with_username_metadata() -> None:
     assert session.created_by == "alice"
     assert session.creator_name == "alice@example.com"
     assert session.agent_kind == "deepseek-harness"
+
+
+@pytest.mark.asyncio
+async def test_gateway_creates_session_with_session_environment() -> None:
+    requests: list[dict[str, object]] = []
+
+    class _Client:
+        def create_session(self, request: object) -> SimpleNamespace:
+            requests.append(request.model_dump(by_alias=True, exclude_none=True))
+            return SimpleNamespace(
+                session_id="remote-model",
+                user_session_id="model-agent",
+                endpoint="https://sandbox.example",
+            )
+
+    await AgentkitSandboxGateway(_Client()).create_session(
+        "tool-sdk",
+        "智能构建",
+        "alice",
+        "alice@example.com",
+        "intelligent-development",
+        envs={
+            "CODEX_MODEL": "doubao-seed-2-1-pro-260628",
+            "CODEX_CONFIG_TOML": 'model = "doubao-seed-2-1-pro-260628"',
+        },
+    )
+
+    envs = {item["Key"]: item["Value"] for item in requests[0]["Envs"]}
+    assert envs["CODEX_MODEL"] == "doubao-seed-2-1-pro-260628"
+    assert "doubao-seed-2-1-pro-260628" in envs["CODEX_CONFIG_TOML"]
+    assert "CODEX_API_KEY" not in str(requests[0])
+
+
+@pytest.mark.asyncio
+async def test_gateway_truncates_multibyte_display_name_to_metadata_limit() -> None:
+    requests: list[dict[str, object]] = []
+
+    class _Client:
+        def create_session(self, request: object) -> SimpleNamespace:
+            requests.append(request.model_dump(by_alias=True, exclude_none=True))
+            return SimpleNamespace(
+                session_id="remote-multibyte",
+                user_session_id="multibyte-agent",
+                endpoint="https://sandbox.example",
+            )
+
+    display_name = "我想开发一个devops agent，能够使用veops Cli的能力，达到L3"
+    assert len(display_name) == STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH
+    assert len(display_name.encode("utf-8")) == 74
+
+    session = await AgentkitSandboxGateway(_Client()).create_session(
+        "tool-sdk",
+        display_name,
+    )
+
+    metadata = requests[0]["Metadata"]
+    assert isinstance(metadata, list)
+    metadata_display_name = metadata[0]["Value"]
+    assert metadata_display_name == ("我想开发一个devops agent，能够使用veops Cli的能…")
+    assert len(metadata_display_name.encode("utf-8")) < 64
+    assert session.display_name == metadata_display_name
+
+
+def test_display_name_metadata_value_preserves_exact_byte_limit() -> None:
+    at_limit = "名" * 21
+    over_limit = at_limit + "名"
+
+    assert len(at_limit.encode("utf-8")) == SESSION_METADATA_VALUE_MAX_BYTES
+    assert session_display_name_metadata_value(at_limit) == at_limit
+    assert session_display_name_metadata_value(over_limit) == "名" * 20 + "…"
 
 
 @pytest.mark.asyncio
@@ -2891,3 +4520,213 @@ async def test_cancelled_create_is_deleted_after_sdk_call_finishes(
     assert len(created) == 1
     assert created[0].tool_id == "tool-1"
     assert created[0].envs is None
+
+
+@pytest.mark.asyncio
+async def test_snapshot_metadata_survives_older_sdk_and_scopes_cards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from veadk.cli import agentkit_session_metadata
+
+    monkeypatch.setattr(
+        agentkit_session_metadata,
+        "_model_supports_alias",
+        lambda _model, _alias: False,
+    )
+
+    class Client:
+        def _invoke_api(self, *, api_action, request, response_type):
+            assert api_action == "ListSessionSnapshots"
+            return response_type.model_validate(
+                {
+                    "Snapshots": [
+                        {
+                            "SnapshotId": "snap-metadata",
+                            "SessionId": "expired",
+                            "UserSessionId": "logical",
+                            "Status": "Ready",
+                            "SessionMetadata": [
+                                {"Key": "Username", "Value": "alice", "Type": ""},
+                                {
+                                    "Key": "veadk_display_name",
+                                    "Value": "测试的60秒智能体",
+                                    "Type": "",
+                                },
+                                {
+                                    "Key": "veadk_creator_name",
+                                    "Value": "Alice",
+                                    "Type": "",
+                                },
+                                {
+                                    "Key": "veadk_agent_kind",
+                                    "Value": "hermes",
+                                    "Type": "",
+                                },
+                            ],
+                        }
+                    ]
+                }
+            )
+
+    gateway = AgentkitSandboxGateway(Client())
+    snapshots = await gateway.list_snapshots("shared")
+    snapshot = snapshots[0]
+    assert snapshot.display_name == "测试的60秒智能体"
+    assert snapshot.created_by == "alice"
+    assert snapshot.creator_name == "Alice"
+    assert snapshot.agent_kind == "hermes"
+    fake = _FakeGateway()
+    fake.snapshots[snapshot.snapshot_id] = snapshot
+    fake.snapshots["legacy"] = replace(
+        snapshot, snapshot_id="legacy", created_by="", agent_kind=""
+    )
+    hermes = SandboxAgentSessionService(
+        cast(SandboxCloudGateway, fake),
+        kind="hermes",
+        tool_id="shared",
+        snapshot_tool_id="shared",
+    )
+    other = SandboxAgentSessionService(
+        cast(SandboxCloudGateway, fake),
+        kind="openclaw",
+        tool_id="shared",
+        snapshot_tool_id="shared",
+    )
+    assert await hermes.list_snapshots("alice") == [snapshot]
+    assert await hermes.list_snapshots("bob") == []
+    assert {
+        s.snapshot_id for s in await hermes.list_snapshots("admin", is_admin=True)
+    } == {"snap-metadata", "legacy"}
+    assert snapshot not in await other.list_snapshots("admin", is_admin=True)
+    with pytest.raises(SandboxSessionNotFoundError):
+        await hermes.delete_snapshot(snapshot.snapshot_id, "bob")
+    assert not fake.deleted_snapshots
+    await hermes.delete_snapshot(snapshot.snapshot_id, "alice")
+    assert fake.deleted_snapshots == [snapshot]
+
+
+def test_snapshot_cards_deduplicate_latest_and_live_session_per_tool() -> None:
+    snapshot = SandboxCloudSnapshot(
+        tool_id="tool",
+        snapshot_id="new",
+        session_id="old-session",
+        user_session_id="logical",
+        status="Ready",
+        created_at="2026-09-08",
+    )
+    older = replace(snapshot, snapshot_id="old", created_at="2026-09-07")
+    unrelated = replace(snapshot, tool_id="other-tool", snapshot_id="other")
+    assert frontend_sandbox._snapshot_cards([], [older, snapshot, unrelated]) == [
+        snapshot,
+        unrelated,
+    ]
+    session = SandboxCloudSession(
+        tool_id="tool",
+        instance_id="live",
+        user_session_id="logical",
+        status="Ready",
+        endpoint="https://example.invalid",
+    )
+    assert frontend_sandbox._snapshot_cards([session], [snapshot, unrelated]) == [
+        unrelated
+    ]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_wake_is_serialized_and_retry_reuses_live_session() -> None:
+    class Gateway(_FakeGateway):
+        wake_calls = 0
+
+        async def resume_snapshot(self, snapshot):
+            self.wake_calls += 1
+            await asyncio.sleep(0)
+            return await super().resume_snapshot(snapshot)
+
+    gateway = Gateway()
+    gateway.snapshots["sleeping"] = SandboxCloudSnapshot(
+        tool_id="tool-hermes-snapshot",
+        snapshot_id="sleeping",
+        session_id="expired",
+        user_session_id="logical",
+        status="Ready",
+        created_by="alice",
+        agent_kind="hermes",
+    )
+    service = SandboxAgentSessionService(
+        cast(SandboxCloudGateway, gateway),
+        kind="hermes",
+        tool_id="tool-hermes",
+        snapshot_tool_id="tool-hermes-snapshot",
+    )
+    first, second = await asyncio.gather(
+        service.resume_snapshot("sleeping", "alice"),
+        service.resume_snapshot("sleeping", "alice"),
+    )
+    assert first.instance_id == second.instance_id
+    assert gateway.wake_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_snapshot_sends_exact_control_plane_identifiers() -> None:
+    calls = []
+
+    class Client:
+        def delete_session_snapshot(self, request):
+            calls.append(request.model_dump(by_alias=True, exclude_none=True))
+            return SimpleNamespace()
+
+    snapshot = SandboxCloudSnapshot(
+        tool_id="tool-history",
+        snapshot_id="snap-history",
+        session_id="expired",
+        user_session_id="logical",
+    )
+    await AgentkitSandboxGateway(Client()).delete_snapshot(snapshot)
+    assert calls == [{"ToolId": "tool-history", "SnapshotId": "snap-history"}]
+
+
+@pytest.mark.asyncio
+async def test_gateway_renews_using_native_ttl_response_and_owner_scope() -> None:
+    from datetime import datetime, timedelta, timezone
+    from agentkit.sdk.tools.types import SetSessionTtlResponse
+
+    calls = []
+    expiry = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+    confirmed_expiry = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+
+    class Client:
+        def set_session_ttl(self, request):
+            calls.append(request.model_dump(by_alias=True, exclude_none=True))
+            return SetSessionTtlResponse(
+                ExpireAt=confirmed_expiry, SessionId="session-1", ToolId="tool-1"
+            )
+
+    gateway = AgentkitSandboxGateway(Client())
+    session = SandboxCloudSession(
+        tool_id="tool-1",
+        instance_id="session-1",
+        user_session_id="workspace",
+        endpoint="https://sandbox.example",
+        expire_at=expiry,
+        created_by="alice",
+    )
+    renewed = await gateway.renew_session(session)
+    assert renewed.expire_at == confirmed_expiry
+    assert renewed.created_by == "alice"
+    assert calls == [
+        {
+            "ToolId": "tool-1",
+            "SessionId": "session-1",
+            "Ttl": frontend_sandbox.STUDIO_SANDBOX_TTL_SECONDS,
+            "TtlUnit": "second",
+        }
+    ]
+    assert await gateway.renew_session(renewed) is renewed
+    assert len(calls) == 1
+
+    class MissingExpiryClient:
+        def set_session_ttl(self, request):
+            return SetSessionTtlResponse(SessionId="session-1", ToolId="tool-1")
+
+    with pytest.raises(SandboxProvisioningError, match="续期结果无法确认"):
+        await AgentkitSandboxGateway(MissingExpiryClient()).renew_session(session)

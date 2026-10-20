@@ -37,13 +37,17 @@ from typing import Any
 from fastapi import HTTPException, Request
 
 from veadk.cli.frontend_branding import SiteLogo
+from veadk.cli.studio_artifacts import (
+    StudioRuntimeManifest,
+    probe_studio_artifact,
+)
 from veadk.cli.studio_package import studio_run_script
 from veadk.cli.studio_release import (
     DEFAULT_RELEASE_PREFIX,
-    STUDIO_RELEASE_REGION,
     StudioReleaseError,
     StudioReleaseManifest,
     StudioReleaseStore,
+    studio_release_region,
 )
 from veadk.utils.cloud_provider import DEFAULT_CLOUD_PROVIDER, CloudProvider
 from veadk.version import VERSION
@@ -57,7 +61,11 @@ _UPDATE_LOG_CACHE_SECONDS = 2
 _UPDATE_LOG_MAX_BYTES = 32 * 1024
 _UPDATE_LOG_MAX_LINES = 200
 _STAGED_RELEASE_GRACE_SECONDS = 60
-_SUBMIT_STATUS_GRACE_MILLISECONDS = 90 * 1000
+# Scheduler/worker reconciliation runs before the main Function update and can
+# legitimately take several minutes.  Cross-instance status requests must not
+# mistake the still-stable old revision for a failed submission while that
+# work is in progress.
+_SUBMIT_STATUS_GRACE_MILLISECONDS = 10 * 60 * 1000
 _UPDATE_HEADER = "X-VeADK-Studio-Update"
 
 Credentials = tuple[str, str, str | None]
@@ -78,6 +86,10 @@ def current_studio_display_version() -> str:
 
 class StudioUpdateConflict(StudioReleaseError):
     """Raised when an update is already being prepared by this instance."""
+
+
+class StudioUpdatePermissionRequired(StudioReleaseError):
+    """Raised when OTA cannot safely start with the current Function role."""
 
 
 @dataclass(frozen=True)
@@ -339,6 +351,33 @@ class StudioSelfUpdater:
         """Stage the latest bundle and submit a release for this Function."""
         return self.submit_version(None)
 
+    def permission_precheck(self) -> dict[str, Any]:
+        """Return the current Function role's complete OTA permission status."""
+        try:
+            credentials = self._credential_resolver()
+            return self._permission_report(credentials).to_payload()
+        except StudioReleaseError:
+            raise
+        except Exception as error:
+            logger.exception("Failed to pre-check Studio update permissions")
+            raise StudioReleaseError(
+                "Studio 更新权限预检失败，请管理员检查 Function 角色的 IAM 读取权限"
+            ) from error
+
+    def _permission_report(self, credentials: Credentials) -> Any:
+        """Evaluate OTA permissions with already-resolved credentials."""
+        from veadk.cli.studio_update_permissions import (
+            StudioUpdatePermissionService,
+        )
+
+        access_key, secret_key, session_token = credentials
+        return StudioUpdatePermissionService(
+            provider=self._settings.provider,
+            access_key=access_key,
+            secret_key=secret_key,
+            session_token=session_token or "",
+        ).check()
+
     def submit_version(self, version: str | None) -> StudioReleaseManifest:
         """Stage one selectable bundle and submit a release for this Function."""
         if not self._settings.enabled:
@@ -348,8 +387,16 @@ class StudioSelfUpdater:
         credentials: tuple[str, str, str] = ("", "", "")
         try:
             self._reset_diagnostics(version)
+            self._set_progress("permissions", "正在预检 Studio 更新权限")
+            resolved_credentials = self._credential_resolver()
+            report = self._permission_report(resolved_credentials)
+            if not report.ready:
+                raise StudioUpdatePermissionRequired(
+                    f"Studio 更新缺少 {len(report.missing_actions)} 项 IAM 权限，"
+                    "请先完成授权"
+                )
             self._set_progress("resolving", "正在读取目标版本信息")
-            access_key, secret_key, session_token = self._credential_resolver()
+            access_key, secret_key, session_token = resolved_credentials
             credentials = (access_key, secret_key, session_token or "")
             store = self._store(access_key, secret_key, session_token)
             manifest = store.manifest(version) if version else store.latest_manifest()
@@ -362,12 +409,25 @@ class StudioSelfUpdater:
                 raise StudioReleaseError("只能选择比当前版本新的 Studio 版本。")
             with tempfile.TemporaryDirectory(prefix="veadk_studio_self_update_") as tmp:
                 workspace = Path(tmp)
-                archive = workspace / "studio-bundle.zip"
-                package_dir = workspace / "package"
-                self._set_progress("downloading", "正在下载并校验完整更新包")
-                store.download_bundle(manifest, archive)
+                package_dir = self._download_runtime_package(
+                    store,
+                    manifest,
+                    workspace,
+                )
+                from frontend.server.user_management.deployment import (
+                    package_supports_identity_roles,
+                )
+
+                identity_roles_supported = package_supports_identity_roles(package_dir)
+                if (
+                    os.getenv("VEADK_STUDIO_IDENTITY_ROLES", "").strip().lower()
+                    in {"1", "true", "yes"}
+                    and not identity_roles_supported
+                ):
+                    raise StudioReleaseError(
+                        "所选更新包不支持 Identity 角色管理，请选择包含此功能的版本"
+                    )
                 self._set_progress("preparing", "正在准备 VeFaaS Function 代码")
-                extract_studio_bundle(archive, package_dir)
                 self._prepare_package(package_dir)
                 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
@@ -396,6 +456,7 @@ class StudioSelfUpdater:
                     access_key=access_key,
                     secret_key=secret_key,
                     session_token=session_token or "",
+                    migrate_identity_roles=identity_roles_supported,
                 )
                 environment_overrides = {
                     "VEADK_STUDIO_RELEASE_VERSION": manifest.version,
@@ -409,12 +470,41 @@ class StudioSelfUpdater:
                             "BYTEPLUS_REGION": self._settings.deployment_region,
                         }
                     )
+                from frontend.service.studio_scheduler.deploy import (
+                    deploy_scheduler_for_studio_update,
+                )
+
+                self._set_progress(
+                    "scheduler",
+                    "正在更新定时任务调度服务与分钟触发器",
+                )
+                try:
+                    _, _, _, _, scheduler_base = deploy_scheduler_for_studio_update(
+                        service,
+                        studio_function_id=self._settings.function_id,
+                        package_root=package_dir,
+                        provider=self._settings.provider,
+                        project=self._settings.project,
+                        environment_overrides=resource_environment,
+                    )
+                except Exception as error:  # noqa: BLE001 - scheduler is best effort
+                    self._record_warning(
+                        error,
+                        "定时任务更新未全部完成，继续更新 Studio 主函数",
+                        stage="scheduler",
+                        secrets=credentials,
+                    )
+                else:
+                    environment_overrides["VEADK_STUDIO_CRONJOB_SCHEDULER_BASE"] = (
+                        scheduler_base
+                    )
                 self._set_progress("submitting", "正在提交 VeFaaS Function 更新")
                 service.submit_application_code_bundle_update(
                     application_id=self._settings.application_id,
                     function_id=self._settings.function_id,
                     path=str(package_dir),
                     environment_overrides=environment_overrides,
+                    normalize_studio_entrypoint=True,
                 )
             self._submitted_version = manifest.version
             self._set_progress("publishing", "已提交，正在等待新 Revision 发布")
@@ -498,6 +588,34 @@ class StudioSelfUpdater:
         )
         self._set_progress("error", message)
 
+    def _record_warning(
+        self,
+        error: BaseException,
+        message: str,
+        *,
+        stage: str,
+        secrets: tuple[str, ...] = (),
+    ) -> None:
+        """Record a non-blocking component failure without masking main update state."""
+        warning_id = uuid.uuid4().hex[:12]
+        self._diagnostic_lines.extend(
+            (
+                f"warningId={warning_id}",
+                f"stage={stage}",
+                f"region={self._settings.deployment_region}",
+                f"project={self._settings.project}",
+                f"applicationId={self._settings.application_id}",
+                f"functionId={self._settings.function_id}",
+                "",
+                _redact_diagnostic(
+                    "".join(traceback.format_exception(error)).rstrip(),
+                    secrets,
+                ),
+            )
+        )
+        logger.warning(message)
+        self._set_progress(stage, message)
+
     def _progress_payload(self) -> dict[str, Any]:
         """Return stable progress fields for every status response."""
         return {
@@ -511,6 +629,7 @@ class StudioSelfUpdater:
             "updateLogs": _tail_log_lines(self._diagnostic_lines),
             "updateLogsVisible": self._vefaas_logs_visible,
             "consoleUrl": self._console_url(),
+            "permissionConsoleUrl": self._permission_console_url(),
         }
 
     def _status_failure_payload(
@@ -623,6 +742,15 @@ class StudioSelfUpdater:
             f"region:vefaas+{self._settings.deployment_region}/function/detail/"
             f"{self._settings.function_id}"
         )
+
+    def _permission_console_url(self) -> str:
+        """Return the provider IAM console used to grant optional log access."""
+        console_host = (
+            "console.byteplus.com"
+            if self._settings.provider == "byteplus"
+            else "console.volcengine.com"
+        )
+        return f"https://{console_host}/iam"
 
     def _application_status(self) -> tuple[str, str, int, bool]:
         """Read the Application status and Function's configured release version."""
@@ -738,7 +866,8 @@ class StudioSelfUpdater:
     ) -> StudioReleaseStore:
         return StudioReleaseStore(
             bucket=self._settings.bucket,
-            region=STUDIO_RELEASE_REGION,
+            region=studio_release_region(self._settings.provider),
+            provider=self._settings.provider,
             prefix=self._settings.prefix,
             access_key=access_key,
             secret_key=secret_key,
@@ -751,10 +880,63 @@ class StudioSelfUpdater:
             filename = f"site-logo.{self._branding_logo.extension}"
             (package_dir / filename).write_bytes(self._branding_logo.content)
         (package_dir / "run.sh").write_text(
-            studio_run_script(filename, provider=self._settings.provider),
+            studio_run_script(
+                filename,
+                provider=self._settings.provider,
+                runtime_manifest_filename=(
+                    "studio-runtime.json"
+                    if (package_dir / "studio-runtime.json").is_file()
+                    else None
+                ),
+            ),
             encoding="utf-8",
+            newline="\n",
         )
         (package_dir / "run.sh").chmod(0o755)
+
+    def _download_runtime_package(
+        self,
+        store: StudioReleaseStore,
+        release: StudioReleaseManifest,
+        workspace: Path,
+    ) -> Path:
+        """Prefer a verified thin bundle while preserving the legacy full fallback."""
+
+        if release.runtime_epoch:
+            try:
+                self._set_progress("downloading", "正在下载并校验精简更新包")
+                thin_archive = workspace / "studio-bundle-thin.zip"
+                thin_package = workspace / "package-thin"
+                store.download_thin_bundle(release, thin_archive)
+                extract_studio_bundle(thin_archive, thin_package)
+                runtime = StudioRuntimeManifest.from_json(
+                    (thin_package / "studio-runtime.json").read_bytes()
+                )
+                if (
+                    runtime.provider != self._settings.provider
+                    or runtime.runtime_epoch != release.runtime_epoch
+                ):
+                    raise ValueError("Studio runtime manifest does not match release.")
+                for artifact in runtime.artifacts:
+                    probe_studio_artifact(artifact)
+                return thin_package
+            except Exception:
+                logger.warning(
+                    "Studio thin bundle is unavailable; using the full bundle"
+                )
+        self._set_progress(
+            "downloading",
+            (
+                "公共运行时制品不可用，正在切换完整离线更新包"
+                if release.runtime_epoch
+                else "正在下载并校验完整更新包"
+            ),
+        )
+        archive = workspace / "studio-bundle.zip"
+        package = workspace / "package"
+        store.download_bundle(release, archive)
+        extract_studio_bundle(archive, package)
+        return package
 
 
 def extract_studio_bundle(archive: Path, destination: Path) -> None:
@@ -782,6 +964,14 @@ def extract_studio_bundle(archive: Path, destination: Path) -> None:
     required = (destination / "run.sh", destination / "requirements.txt")
     if not all(path.is_file() for path in required):
         raise StudioReleaseError("Studio release bundle is missing its entrypoint.")
+    from frontend.service.studio_release_server.publisher import (
+        validate_studio_bundle_dependencies,
+    )
+
+    try:
+        validate_studio_bundle_dependencies(destination)
+    except ValueError as error:
+        raise StudioReleaseError(str(error)) from error
     (destination / "run.sh").chmod(0o755)
 
 
@@ -926,6 +1116,14 @@ def mount_studio_update_routes(
             started_at=started_at,
         )
 
+    @app.get("/web/studio-update/permissions")
+    async def _studio_update_permissions(request: Request) -> dict[str, Any]:
+        require_admin(request)
+        try:
+            return await asyncio.to_thread(updater.permission_precheck)
+        except StudioReleaseError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+
     @app.post("/web/studio-update", status_code=202)
     async def _studio_update_start(request: Request) -> dict[str, Any]:
         require_admin(request)
@@ -945,6 +1143,8 @@ def mount_studio_update_routes(
                 version = raw_version
             manifest = await asyncio.to_thread(updater.submit_version, version)
         except StudioUpdateConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except StudioUpdatePermissionRequired as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except StudioReleaseError as error:
             raise HTTPException(status_code=502, detail=str(error)) from error

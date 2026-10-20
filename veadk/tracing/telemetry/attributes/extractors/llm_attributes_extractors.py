@@ -205,29 +205,16 @@ def llm_gen_ai_usage_total_tokens(params: LLMAttributesParams) -> ExtractorRespo
     return ExtractorResponse(content=None)
 
 
-# FIXME
 def llm_gen_ai_usage_cache_creation_input_tokens(
     params: LLMAttributesParams,
 ) -> ExtractorResponse:
-    """Extract the number of tokens used for cache creation.
+    """Omit cache creation usage until response metadata provides it
 
-    Provides the count of tokens used for creating cached content,
-    which affects cost calculation in caching-enabled models.
-
-    Args:
-        params: LLM execution parameters containing response metadata
-
-    Returns:
-        ExtractorResponse: Response containing cache creation token count or None
+    cached_content_token_count measures cache reads, not cache creation
     """
-    if params.llm_response.usage_metadata:
-        return ExtractorResponse(
-            content=params.llm_response.usage_metadata.cached_content_token_count,
-        )
     return ExtractorResponse(content=None)
 
 
-# FIXME
 def llm_gen_ai_usage_cache_read_input_tokens(
     params: LLMAttributesParams,
 ) -> ExtractorResponse:

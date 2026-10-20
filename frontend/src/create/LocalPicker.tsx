@@ -5,6 +5,7 @@
 // round-trip and project generation without any network round-trip.
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Check, FolderUp, Info, Plus } from "lucide-react";
 import { readFolderSkills, readZipSkills, type LocalReadResult } from "./skills/local";
 import type { SelectedSkill, SkillHit } from "./skills/types";
@@ -79,6 +80,7 @@ export function LocalPicker({
   selected: SelectedSkill[];
   onChange: (next: SelectedSkill[]) => void;
 }) {
+  const { t } = useTranslation("create");
   const [errors, setErrors] = useState<string[]>([]);
   const [foundHits, setFoundHits] = useState<SkillHit[]>([]);
   const [busy, setBusy] = useState(false);
@@ -149,7 +151,7 @@ export function LocalPicker({
     // Surface duplicates as a banner line (combined with any parse errors).
     const allErrors = [...res.errors];
     if (duplicateNames.length > 0) {
-      allErrors.push(`已跳过重复技能：${duplicateNames.join("、")}`);
+      allErrors.push(t("skills.local.duplicatesSkipped", { names: duplicateNames.join(", ") }));
     }
     setErrors(allErrors);
 
@@ -193,7 +195,7 @@ export function LocalPicker({
       .map((item) => item.webkitGetAsEntry?.() as DroppedEntry | null)
       .filter((entry): entry is DroppedEntry => entry !== null);
     if (entries.length === 0) {
-      setErrors(["请拖入包含 SKILL.md 的文件夹或一个 .zip 文件"]);
+      setErrors([t("skills.local.invalidDrop")]);
       return;
     }
 
@@ -212,14 +214,14 @@ export function LocalPicker({
         return;
       }
       if (!includesDirectory) {
-        setErrors(["请拖入包含 SKILL.md 的文件夹或一个 .zip 文件"]);
+        setErrors([t("skills.local.invalidDrop")]);
         return;
       }
       const paths = new Map(dropped.map(({ file, path }) => [file, path]));
       showResult(await readFolderSkills(dropped.map(({ file }) => file), paths));
     } catch (error) {
       setErrors([
-        `读取失败：${error instanceof Error ? error.message : String(error)}`,
+        t("skills.local.readError", { detail: error instanceof Error ? error.message : String(error) }),
       ]);
     } finally {
       setBusy(false);
@@ -231,7 +233,7 @@ export function LocalPicker({
       <div
         className={`cw-local-dropzone ${dragging ? "is-dragging" : ""}`}
         role="group"
-        aria-label="拖入文件夹或 ZIP，自动识别 Skill"
+        aria-label={t("skills.local.dropLabel")}
         onDragEnter={onDragEnter}
         onDragOver={(event) => event.preventDefault()}
         onDragLeave={onDragLeave}
@@ -239,15 +241,15 @@ export function LocalPicker({
       >
         <FolderUp className="cw-local-drop-icon" aria-hidden />
         <p className="cw-local-drop-hint">
-          拖入文件夹或 ZIP，自动识别 Skill
+          {t("skills.local.dropLabel")}
         </p>
       </div>
 
       <p className="cw-local-hint">
-        每个技能需包含 SKILL.md。支持包含多个技能的目录。
+        {t("skills.local.hint")}
       </p>
 
-      {busy && <p className="cw-empty-line">正在读取文件…</p>}
+      {busy && <p className="cw-empty-line">{t("skills.local.reading")}</p>}
 
       {errors.length > 0 && (
         <div className="cw-banner">
@@ -283,7 +285,7 @@ export function LocalPicker({
                     </span>
                   )}
                   <span className="cw-skill-result-repo">
-                    本地 · {hit.localFiles?.length ?? 0} 个文件
+                    {t("skills.local.fileCount", { count: hit.localFiles?.length ?? 0 })}
                   </span>
                 </span>
               </button>

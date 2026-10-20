@@ -12,7 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import subprocess
+import sys
+
 from veadk.extensions.harness import HarnessExtension
+from veadk.extensions.harness.sidecar import ManagedHarnessSidecar
+
+
+def test_harness_extension_keeps_enabled_constructor_default() -> None:
+    plugins = HarnessExtension().plugins()
+
+    assert [plugin.name for plugin in plugins] == [
+        "harness_invocation_context_plugin",
+        "harness_compress_plugin",
+        "harness_response_verification_plugin",
+    ]
 
 
 def test_harness_extension_builds_runner_plugins() -> None:
@@ -41,3 +55,53 @@ def test_harness_extension_from_env_builds_configured_plugins() -> None:
     ).plugins()
 
     assert [plugin.name for plugin in plugins] == ["harness_invocation_context_plugin"]
+
+
+def test_sidecar_mode_uses_private_runtime_without_python_plugins(monkeypatch) -> None:
+    monkeypatch.setattr(ManagedHarnessSidecar, "start", lambda self: None)
+
+    extension = HarnessExtension(sidecar={"enabled": True}, profile="ops")
+
+    assert extension.plugins() == []
+    assert extension.config.enabled is False
+    assert extension.config.components == []
+    assert extension.sidecar.plan.activation_targets.veadk_plugins == [
+        "invocation_context",
+        "compactor",
+        "response_verification",
+        "long_run_control",
+    ]
+    assert extension.sidecar.plan.activation_targets.model_proxy.components == [
+        "context_engine",
+        "compressor",
+        "verifier",
+        "long_run_control",
+    ]
+    assert extension.sidecar.plan.activation_targets.runtime_components == [
+        "harness_core",
+        "ops",
+        "goal_runtime",
+        "model_proxy",
+        "mcp_gateway",
+    ]
+
+
+def test_importing_sidecar_extension_does_not_import_python_plugins() -> None:
+    script = """
+import sys
+from veadk.extensions.harness import HarnessExtension
+
+prefix = "veadk.extensions.harness.plugins"
+loaded = [name for name in sys.modules if name == prefix or name.startswith(prefix + ".")]
+assert loaded == [], loaded
+assert HarnessExtension is not None
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr

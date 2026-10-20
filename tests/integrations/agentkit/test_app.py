@@ -20,11 +20,16 @@ from typing import Any, cast
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from google.adk.agents import Agent as AdkAgent
+from google.adk.agents import LoopAgent, ParallelAgent, SequentialAgent
 from google.adk.agents.base_agent import BaseAgent
+from google.adk.apps.app import App
+from google.adk.plugins.base_plugin import BasePlugin
 
 import veadk
 import veadk.integrations.agentkit.app as agentkit_app
 from veadk.cli.frontend_invocation import FrontendInvocationPlugin
+from veadk.integrations.agentkit.studio_channel import StudioExternalToolset
 
 
 class _FakeAgentServer:
@@ -32,12 +37,15 @@ class _FakeAgentServer:
 
     def __init__(
         self,
-        agent: BaseAgent,
-        short_term_memory: object,
+        agent: BaseAgent | None = None,
+        short_term_memory: object | None = None,
+        *,
+        app: object | None = None,
         identity: object | None = None,
         identity_health_routes: tuple[str, ...] = (),
     ) -> None:
-        self.agent = agent
+        self.agent = agent or getattr(app, "root_agent", None)
+        self.adk_app = app
         self.short_term_memory = short_term_memory
         self.identity = identity
         self.identity_health_routes = identity_health_routes
@@ -139,6 +147,40 @@ def test_create_agentkit_app_preserves_platform_route_contract() -> None:
     assert client.get("/web/agent-graph").json()["graph"] == info.json()["graph"]
 
 
+def test_create_agentkit_app_preserves_adk_plugins_and_closes_harness() -> None:
+    events: list[str] = []
+    harness = SimpleNamespace(
+        sidecar_status_payload=lambda: {
+            "enabled": True,
+            "status": "ok",
+            "planHash": "sha256:test",
+            "effectiveComponents": ["context_engine"],
+        },
+        close=lambda: events.append("close"),
+    )
+    plugin = BasePlugin(name="harness-plugin")
+    adk_app = agentkit_app.App(
+        name="agent",
+        root_agent=AdkAgent(name="agent"),
+        plugins=[plugin],
+    )
+
+    app = agentkit_app.create_agentkit_app(
+        app=adk_app,
+        harness_extension=harness,
+    )
+    assert _FakeAgentServer.instances[-1].adk_app is adk_app
+    with TestClient(app) as client:
+        assert client.get("/web/harness-sidecar/status").json() == {
+            "enabled": True,
+            "status": "ok",
+            "planHash": "sha256:test",
+            "effectiveComponents": ["context_engine"],
+        }
+        assert events == []
+    assert events == ["close"]
+
+
 def test_create_agentkit_app_passes_runtime_identity_to_agentkit() -> None:
     identity = object()
 
@@ -165,6 +207,126 @@ def test_create_agentkit_app_keeps_legacy_agentkit_compatible_without_identity(
     assert isinstance(app, FastAPI)
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_create_agentkit_app_uses_runtime_bff_tool_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+) -> None:
+    class SessionAgentServer(_FakeAgentServer):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.session_service = object()
+
+    monkeypatch.setattr(agentkit_app, "AgentkitAgentServerApp", SessionAgentServer)
+    root_agent = _root_agent()
+
+    app = agentkit_app.create_agentkit_app(
+        root_agent,
+        enable_studio_tools=enabled,
+    )
+    client = TestClient(app)
+    capability = client.get("/harness/studio-channel/v1/capabilities")
+
+    assert capability.status_code == 200
+    assert capability.json() == {
+        "enabled": enabled,
+        "protocol": "studio-tool-channel/1",
+        "transports": ["websocket", "http-sse"] if enabled else [],
+    }
+    rpc_paths = {
+        route.path
+        for route in app.routes
+        if hasattr(route, "path")
+        and route.path != "/harness/studio-channel/v1/capabilities"
+    }
+    assert ("/harness/studio-channel/v1/http-runs" in rpc_paths) is enabled
+
+    studio_toolsets = [
+        tool for tool in root_agent.tools if isinstance(tool, StudioExternalToolset)
+    ]
+    assert bool(studio_toolsets) is enabled
+
+
+@pytest.mark.parametrize("workflow_type", [SequentialAgent, ParallelAgent, LoopAgent])
+@pytest.mark.parametrize("use_app", [False, True])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_workflow_roots_disable_studio_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    workflow_type: type[BaseAgent],
+    use_app: bool,
+    enabled: bool,
+) -> None:
+    class SessionAgentServer(_FakeAgentServer):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.session_service = object()
+
+    monkeypatch.setattr(agentkit_app, "AgentkitAgentServerApp", SessionAgentServer)
+
+    def existing_tool() -> str:
+        return "ok"
+
+    child = AdkAgent(name="worker", tools=[existing_tool])
+    root = workflow_type(name="workflow", sub_agents=[child])
+    kwargs = (
+        {"app": App(name="workflow_app", root_agent=root)}
+        if use_app
+        else {"root_agent": root}
+    )
+    app = agentkit_app.create_agentkit_app(**kwargs, enable_studio_tools=enabled)
+    client = TestClient(app)
+
+    assert client.get("/harness/studio-channel/v1/capabilities").json() == {
+        "enabled": False,
+        "protocol": "studio-tool-channel/1",
+        "transports": [],
+    }
+    paths = {getattr(route, "path", "") for route in app.routes}
+    assert "/harness/studio-channel/v1/http-runs" not in paths
+    assert child.tools == [existing_tool]
+    assert existing_tool() == "ok"
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_create_agentkit_app_uses_runtime_bff_route_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+) -> None:
+    class SessionAgentServer(_FakeAgentServer):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.session_service = object()
+
+    monkeypatch.setattr(agentkit_app, "AgentkitAgentServerApp", SessionAgentServer)
+    app = agentkit_app.create_agentkit_app(
+        _root_agent(),
+        enable_studio_routes=enabled,
+    )
+
+    capability = TestClient(app).get("/__studio/routes/v1/capabilities")
+
+    assert capability.status_code == 200
+    assert capability.json() == {
+        "enabled": enabled,
+        "protocol": "studio-route-channel/2",
+        "transports": ["websocket", "http-sse"] if enabled else [],
+        "route_modes": ["exact", "segment-template"] if enabled else [],
+    }
+    paths = {
+        getattr(candidate, "path", "")
+        for route in app.routes
+        for candidate in (
+            route,
+            *getattr(getattr(route, "original_router", None), "routes", ()),
+        )
+    }
+    assert "/harness/skills/findskill" not in paths
+    assert "/harness/skills/spaces" not in paths
+    assert "/harness/skills/spaces/{space_id}/skills" not in paths
+    assert "/harness/capabilities/tools" not in paths
+    assert "/harness/run_sse" not in paths
+
+
 def test_create_agentkit_app_requires_new_agentkit_only_when_identity_is_used(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -189,6 +351,45 @@ def test_agent_info_exposes_sanitized_builder_draft() -> None:
     )
 
     assert client.get("/web/agent-info/agent").json()["draft"] == draft
+    assert client.get("/web/agent-draft/agent").json() == {"draft": draft}
+    assert client.get("/web/agent-draft/unknown").status_code == 404
+
+
+def test_agent_draft_endpoint_is_absent_without_a_published_snapshot() -> None:
+    client = TestClient(agentkit_app.create_agentkit_app(_root_agent()))
+
+    assert client.get("/web/agent-draft/agent").status_code == 404
+
+
+def test_agent_draft_endpoint_precedes_a_root_mount(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RootMountedAgentServer(_FakeAgentServer):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.app.mount("/", FastAPI())
+
+    monkeypatch.setattr(
+        agentkit_app,
+        "AgentkitAgentServerApp",
+        RootMountedAgentServer,
+    )
+    draft = {"name": "agent", "instruction": "Keep this editable."}
+    app = agentkit_app.create_agentkit_app(_root_agent(), agent_draft=draft)
+
+    draft_route_index = next(
+        index
+        for index, route in enumerate(app.router.routes)
+        if getattr(route, "path", "") == "/web/agent-draft/{app_name}"
+    )
+    root_mount_index = next(
+        index
+        for index, route in enumerate(app.router.routes)
+        if getattr(route, "path", None) == ""
+    )
+
+    assert draft_route_index < root_mount_index
+    assert TestClient(app).get("/web/agent-draft/agent").json() == {"draft": draft}
 
 
 def test_dynamic_runner_registers_frontend_invocation_plugin(

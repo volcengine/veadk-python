@@ -348,3 +348,39 @@ test("requests snapshot auto-resume when listing sandbox agents", async (t) => {
     },
   ]);
 });
+
+test("lists sleeping agents without waking and preserves their creator", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previousFetch; });
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, method: init.method });
+    return Response.json({ sessions: [], snapshots: [{ snapshotId: "sleeping", status: "Wakeable", displayName: "My agent", createdBy: "Alice", isMine: true }] });
+  };
+  const cards = await sandboxClient.listAgentSessions("hermes", { autoResumeSnapshots: false });
+  await sandboxClient.listSessions({ autoResumeSnapshots: false });
+  assert.equal(cards[0].displayName, "My agent");
+  assert.equal(cards[0].createdBy, "Alice");
+  assert.equal(cards[0].resourceType, "snapshot");
+  assert.deepEqual(requests, [
+    { url: "/web/hermes/sessions?autoResumeSnapshots=false", method: "GET" },
+    { url: "/web/sandbox/sessions?autoResumeSnapshots=false", method: "GET" },
+  ]);
+});
+
+test("wakes and deletes only the selected sleeping agent", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previousFetch; });
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, method: init.method });
+    return Response.json(init.method === "DELETE" ? { deleted: true } : { sessionId: "awake", status: "Ready" });
+  };
+  const session = await sandboxClient.resumeSnapshot("hermes", "sleeping/1");
+  assert.equal(session.id, "awake");
+  await sandboxClient.deleteSnapshot("hermes", "sleeping/2");
+  assert.deepEqual(requests, [
+    { url: "/web/hermes/snapshots/sleeping%2F1/resume", method: "POST" },
+    { url: "/web/hermes/snapshots/sleeping%2F2", method: "DELETE" },
+  ]);
+});

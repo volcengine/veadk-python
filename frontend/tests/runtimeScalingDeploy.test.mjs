@@ -18,6 +18,14 @@ const clientSource = readFileSync(
   new URL("../src/adk/client.ts", import.meta.url),
   "utf8",
 );
+const customCreateSource = readFileSync(
+  new URL("../src/create/CustomCreate.tsx", import.meta.url),
+  "utf8",
+);
+const codePackageCreateSource = readFileSync(
+  new URL("../src/create/CodePackageCreate.tsx", import.meta.url),
+  "utf8",
+);
 
 test("deployment sends the selected Runtime instance range", () => {
   assert.match(
@@ -35,14 +43,18 @@ test("deployment sends the selected Runtime instance range", () => {
   assert.match(clientSource, /maxInstance: opts\?\.maxInstance/);
 });
 
-test("renders editable Runtime instance inputs with memory-aware defaults", () => {
+test("renders Runtime instance inputs with memory-aware and Sidecar-safe defaults", () => {
   assert.match(
     projectPreviewSource,
-    /useState\([\s\S]*?inMemorySession \? "1" : "5"[\s\S]*?\)/,
+    /const \[minInstance, setMinInstance\] = useState\("1"\)/,
   );
   assert.match(
     projectPreviewSource,
-    /id="runtime-min-instance"[\s\S]*?type="number"[\s\S]*?value=\{minInstance\}/,
+    /const \[maxInstance, setMaxInstance\] = useState\([\s\S]*?inMemorySession \|\| sidecarEnabled \? "1" : "5"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /id="runtime-min-instance"[\s\S]*?type="number"[\s\S]*?min="0"[\s\S]*?value=\{minInstance\}/,
   );
   assert.match(
     projectPreviewSource,
@@ -50,7 +62,16 @@ test("renders editable Runtime instance inputs with memory-aware defaults", () =
   );
   assert.match(
     projectPreviewSource,
-    /inMemorySession && \([\s\S]*?className="pp-instance-note"[\s\S]*?为避免多实例间会话丢失，推荐将 Runtime 固定为 1～1/,
+    /disabled=\{deploying \|\| sidecarEnabled\}/,
+  );
+  assert.match(projectPreviewSource, /min < 0/);
+  assert.match(
+    projectPreviewSource,
+    /t\("projectPreview\.errors\.instanceRangeInteger"\)/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /inMemorySession \|\| sidecarEnabled[\s\S]*?className="pp-instance-note"[\s\S]*?projectPreview\.sidecarSingleInstance[\s\S]*?projectPreview\.inMemorySingleInstance/,
   );
   assert.match(
     projectPreviewStyles,
@@ -61,30 +82,76 @@ test("renders editable Runtime instance inputs with memory-aware defaults", () =
 test("renders the Runtime update progress step conditionally", () => {
   assert.match(
     projectPreviewSource,
-    /needsInstanceUpdate[\s\S]*?\[\.\.\.baseDeploymentSteps, INSTANCE_UPDATE_STEP\][\s\S]*?: baseDeploymentSteps[\s\S]*?createEvaluationSets/,
+    /deploymentStepsWithInstanceUpdate = needsInstanceUpdate[\s\S]*?\[\.\.\.baseDeploymentSteps, \{ phase: "update", label: t\("projectPreview\.steps\.updateInstances"\) \}\][\s\S]*?: baseDeploymentSteps[\s\S]*?deploymentStepsBeforeGithub = effectiveCreateEvaluationSets[\s\S]*?projectPreview\.steps\.createEvaluationSets[\s\S]*?deploymentStepsWithGithub[\s\S]*?projectPreview\.steps\.syncCode/,
   );
   assert.match(
     workspaceSource,
-    /task\.instanceRange[\s\S]*?instanceUpdateStep\(task\.instanceRange\)[\s\S]*?: DEPLOYMENT_STEPS/,
+    /if \(task\.instanceRange\) steps\.push\(instanceUpdateStep\(task\.instanceRange, t\)\)/,
   );
   assert.match(
     workspaceSource,
-    /phase: "update"[\s\S]*?label: "更新实例配置"[\s\S]*?将 Runtime 实例数调整为 \$\{range\.min\}～\$\{range\.max\}/,
+    /if \(task\.instanceRange\)[\s\S]*?if \(task\.createEvaluationSets\)[\s\S]*?agentWorkspace\.deploymentSteps\.evaluation[\s\S]*?if \(task\.mpaProfile\)[\s\S]*?if \(task\.githubDelivery\)[\s\S]*?agentWorkspace\.deploymentSteps\.github[\s\S]*?steps\.push\(baseSteps\[baseSteps\.length - 1\]\)/,
   );
+  assert.match(
+    workspaceSource,
+    /phase: "update"[\s\S]*?label: t\("agentWorkspace\.deploymentSteps\.update\.label"\)[\s\S]*?description: t\("agentWorkspace\.deploymentSteps\.update\.description", range\)/,
+  );
+});
+
+test("only explicit MPA deployments apply Profile after Runtime publish", () => {
+  assert.match(clientSource, /export async function applyMpaProfileAfterDeployment/);
+  assert.match(clientSource, /sourceProfileId = params\.sourceDraftId\?\.trim\(\)/);
+  assert.match(clientSource, /`studio-draft:\$\{params\.sourceDraftId\.trim\(\)\}`/);
+  assert.doesNotMatch(clientSource, /sourceProfileRevision/);
+  assert.match(projectPreviewSource, /applyMpaProfileAfterDeployment\(/);
+  assert.match(
+    projectPreviewSource,
+    /const isMpaDeployment = agentCategory === "mpa";[\s\S]*?const shouldRunMpaLifecycle = isMpaDeployment && !githubUpdateOffloaded/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /const deploymentSteps = shouldRunMpaLifecycle[\s\S]*?phase: "profile_applying"[\s\S]*?phase: "smoke_running"[\s\S]*?phase: "runnable"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /if \(shouldRunMpaLifecycle && agentDraft && \(completeResult\.runtimeId \|\| deploymentRuntimeId\)\)[\s\S]*?applyMpaProfileAfterDeployment/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /agentCategory: isMpaDeployment \? "mpa" : "general"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /syncGithubCicdRuntime\(\{[\s\S]*?agentCategory: isMpaDeployment \? "mpa" : "general"/,
+  );
+  assert.match(customCreateSource, /agentCategory: deploymentAgentCategory\(deploymentTarget\)/);
+  assert.match(
+    projectPreviewSource,
+    /runtimeRevision: isRuntimeUpdate \? deploymentRuntimeRevision : undefined/,
+  );
+  assert.match(projectPreviewSource, /mpaProfile: shouldRunMpaLifecycle/);
+  assert.match(projectPreviewSource, /mpaSmoke: shouldRunMpaLifecycle && !isRuntimeUpdate/);
+  assert.match(workspaceSource, /if \(task\.mpaProfile\)/);
+  assert.match(workspaceSource, /if \(task\.mpaSmoke\)/);
+  assert.match(customCreateSource, /applyMpaProfileAfterDeployment/);
+  assert.match(customCreateSource, /runtimeRevision: deploymentTarget\?\.etag/);
+  assert.match(customCreateSource, /deploymentRuntimeRevision=\{deploymentTarget\?\.etag\}/);
+  assert.doesNotMatch(codePackageCreateSource, /agentDraft=\{/);
+  assert.doesNotMatch(codePackageCreateSource, /applyMpaProfileAfterDeployment/);
 });
 
 test("renders the evaluation-set progress step only when selected", () => {
   assert.match(
     projectPreviewSource,
-    /phase: "evaluation"[\s\S]*?label: "创建评测集"/,
+    /phase: "evaluation"[\s\S]*?label: t\("projectPreview\.steps\.createEvaluationSets"\)/,
   );
   assert.match(
     projectPreviewSource,
-    /createEvaluationSets[\s\S]*?\[\.\.\.deploymentStepsWithInstanceUpdate, EVALUATION_SET_STEP\][\s\S]*?: deploymentStepsWithInstanceUpdate/,
+    /effectiveCreateEvaluationSets[\s\S]*?\[\.\.\.deploymentStepsWithInstanceUpdate, \{ phase: "evaluation", label: t\("projectPreview\.steps\.createEvaluationSets"\) \}\][\s\S]*?: deploymentStepsWithInstanceUpdate/,
   );
   assert.match(
     workspaceSource,
-    /task\.createEvaluationSets[\s\S]*?EVALUATION_SET_STEP/,
+    /task\.createEvaluationSets[\s\S]*?agentWorkspace\.deploymentSteps\.evaluation/,
   );
 });
 
@@ -105,4 +172,12 @@ test("draws complete native radio and checkbox states after the global reset", (
     projectPreviewStyles,
     /\.pp-network-check input:checked::before,\s*\.pp-evaluation-set-option input:checked::before\s*\{[\s\S]*?rotate\(45deg\)/,
   );
+});
+
+test("quick deploy and failure tasks keep generic agents out of the MPA lifecycle", () => {
+  assert.match(customCreateSource, /if \(isMpaDeployment && mpaRuntimeId\)/);
+  assert.match(customCreateSource, /if \(isMpaDeployment && deploymentTarget\?\.mpaProfileOnly\)/);
+  assert.doesNotMatch(projectPreviewSource, /mpaProfile: Boolean\(agentDraft\)/);
+  assert.doesNotMatch(customCreateSource, /mpaProfile: true/);
+  assert.match(customCreateSource, /agentCategory=\{deploymentAgentCategory\(deploymentTarget\)\}/);
 });

@@ -6,38 +6,55 @@ import {
   type ChangeEvent,
   type DragEvent,
 } from "react";
+import { useTranslation } from "react-i18next";
+import {
+  DEFAULT_LOCALE,
+  localeCompatibleBackendText,
+  resolveSupportedLocale,
+} from "../i18n/locales";
 import {
   confirmMigrationTask,
   createMigrationTask,
   downloadMigrationArtifact,
-  getMigrationActivity,
+  downloadMigrationEvaluationReport,
   getMigrationArtifact,
   getMigrationArtifactFile,
   getMigrationCapabilities,
+  getMigrationEvaluationDataset,
+  getMigrationEvaluationReport,
   getMigrationTask,
   listMigrationTasks,
+  observeMigrationTask,
   MigrationApiError,
+  putMigrationEvaluationDataset,
+  resumeMigrationEvaluation,
+  retryMigrationEvaluation,
   stopMigrationTask,
   submitMigrationAnalysisAnswers,
+  submitMigrationAnalysisInput,
   uploadMigrationSource,
   type MigrationAnalysis,
   type MigrationActivity,
-  type MigrationActivityItem,
   type MigrationArtifact,
   type MigrationCapabilities,
+  type MigrationEvaluationDataset,
   type MigrationFramework,
   type MigrationTask,
 } from "../adk/migrations";
-import type { Block } from "../blocks";
 import {
   deployAgentkitProject,
+  listModelOptions,
   type DeployStage,
+  type ModelOption,
 } from "../adk/client";
-import {
-  defaultCloudRegion,
-  type CloudProvider,
-} from "../adk/cloudProvider";
+import { defaultCloudRegion, type CloudProvider } from "../adk/cloudProvider";
 import type { AgentProject } from "../create/project";
+import type {
+  IntelligentCreateBaseVersion,
+  IntelligentDevelopmentCapabilities,
+  IntelligentPreparationStage,
+} from "../create/IntelligentCreate";
+import type { IntelligentDevelopmentReleaseRef } from "../blocks";
 import type { NetworkConfig } from "../create/types";
 import type { EnvVar } from "../create/veadkCatalog";
 import CodeEditor from "../ui/CodeEditor";
@@ -66,24 +83,79 @@ import {
   isSecretEnvironmentKey,
   migrationDeploymentEnvDefaults,
 } from "./deploymentEnvironment";
+import { migrationActivityBlocks } from "./migrationActivityBlocks";
+import {
+  isMigrationEnvironmentExpired,
+  migrationHistoryStatus,
+} from "./migrationHistoryStatus";
+import {
+  createMigrationEvaluationDraft,
+  evaluationCasesFromDraft,
+  evaluationDraftFromDataset,
+  MigrationEvaluationResult,
+  MigrationEvaluationSetup,
+  validateMigrationEvaluationDraft,
+  type MigrationEvaluationDraft,
+} from "./MigrationEvaluation";
+import {
+  evaluationSettingsAreLocked,
+  needsEvaluationDraftHydration,
+} from "./evaluationDraftState";
+import { MigratedProjectsPage } from "./MigratedProjectsPage";
+import { i18n } from "../i18n/runtime";
 import "./MigrationWorkspace.css";
 
-const MAX_SOURCE_BYTES = 50 * 1024 * 1024;
-const POLL_INTERVAL_MS = 1_200;
-const ACTIVITY_POLL_INTERVAL_MS = 3_000;
+const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
+// Task detail and activity arrive on one Server-Sent Events stream; only the
+// list of recent tasks is still polled.
 const LIST_POLL_INTERVAL_MS = 5_000;
 const MAX_VISIBLE_FILES = 500;
 const ignoreMigrationAction = () => undefined;
 
-const FRAMEWORK_LABELS: Record<MigrationFramework, string> = {
-  langchain: "LangChain",
-  langgraph: "LangGraph",
-  adk: "Google ADK",
-  strands: "Strands",
-  agentcore: "AgentCore",
-  dify: "Dify",
-  any: "Any（通用迁移）",
+function isEvaluationPollingState(task: MigrationTask): boolean {
+  return Boolean(
+    task.evaluation?.enabled &&
+      [
+        "pending",
+        "preparing",
+        "deploying",
+        "executing",
+        "judging",
+        "aggregating",
+      ].includes(task.evaluation.state),
+  );
+}
+
+function evaluationTabStatusKey(task: MigrationTask): string {
+  const state = task.evaluation?.state;
+  if (!state || state === "pending") return "evaluation.tabs.waitingMigration";
+  if (["waiting_dataset", "waiting_environment"].includes(state)) {
+    return "evaluation.tabs.waitingConfiguration";
+  }
+  if (["preparing", "deploying", "executing", "judging", "aggregating"].includes(state)) {
+    return "evaluation.tabs.running";
+  }
+  if (state === "completed") return "evaluation.tabs.completed";
+  return "evaluation.tabs.issue";
+}
+
+const FRAMEWORK_LABEL_KEYS: Record<MigrationFramework, string> = {
+  langchain: "framework.langchain",
+  langgraph: "framework.langgraph",
+  adk: "framework.adk",
+  strands: "framework.strands",
+  agentcore: "framework.agentcore",
+  dify: "framework.dify",
+  any: "framework.any",
 };
+
+function migrationText(key: string, options?: Record<string, unknown>): string {
+  return i18n.t(key, { ns: "migrations", ...options });
+}
+
+function frameworkLabel(framework: MigrationFramework): string {
+  return migrationText(FRAMEWORK_LABEL_KEYS[framework]);
+}
 
 const STRUCTURED_FRAMEWORKS = new Set<MigrationFramework>([
   "langchain",
@@ -101,6 +173,22 @@ interface MigrationWorkspaceProps {
   onDeploymentStarted?: (task: DeploymentTaskUpdate) => void;
   onDeploymentComplete?: (result: DeployResult) => void | Promise<void>;
   initialDeployRegion?: string;
+  projectCapabilities: IntelligentDevelopmentCapabilities | null;
+  projectCapabilitiesLoading: boolean;
+  optimizationPreparationStage: IntelligentPreparationStage | null;
+  optimizationError: string;
+  onOptimizeVersion: (
+    goal: string,
+    modelId: string,
+    base: IntelligentCreateBaseVersion,
+  ) => Promise<void>;
+  onCancelOptimization: () => void;
+  onDownloadSavedVersion: (
+    delivery: IntelligentDevelopmentReleaseRef,
+  ) => Promise<void>;
+  onDeploySavedVersion: (delivery: IntelligentDevelopmentReleaseRef) => void;
+  initialPage?: "new" | "projects";
+  initialProjectId?: string;
 }
 
 interface PreviewState {
@@ -111,48 +199,17 @@ interface PreviewState {
   error?: string;
 }
 
-function stateLabel(state: MigrationTask["state"]): string {
-  switch (state) {
-    case "awaiting_upload":
-      return "待上传";
-    case "analyzing":
-      return "分析中";
-    case "needs_input":
-      return "待补充";
-    case "analysis_ready":
-      return "待确认";
-    case "migrating":
-      return "迁移中";
-    case "validating":
-      return "校验中";
-    case "packaging":
-      return "打包中";
-    case "succeeded":
-      return "已完成";
-    case "succeeded_with_warnings":
-      return "已完成，有提示";
-    case "partial":
-      return "部分完成";
-    case "failed":
-      return "失败";
-    case "cancelled":
-      return "已终止";
-    case "expired":
-      return "已过期";
-  }
-}
-
 function taskDisplayMessage(task: MigrationTask): string {
   if (task.state === "partial" && task.artifact.previewReady) {
-    return "迁移产物已生成，但交付不完整，请查看迁移提示。";
+    return migrationText("task.partialReady");
   }
   if (
     ["succeeded", "succeeded_with_warnings"].includes(task.state) &&
     task.artifact.previewReady
   ) {
     return task.state === "succeeded_with_warnings"
-      ? "迁移产物已生成，请查看迁移提示。"
-      : "迁移产物已生成。";
+      ? migrationText("task.readyWithWarnings")
+      : migrationText("task.ready");
   }
   return task.message;
 }
@@ -162,11 +219,11 @@ function verificationLabel(
 ): string {
   switch (status) {
     case "passed":
-      return "产物校验通过";
+      return migrationText("verification.passed");
     case "failed":
-      return "产物校验未通过";
+      return migrationText("verification.failed");
     case "degraded":
-      return "产物校验未完成";
+      return migrationText("verification.degraded");
   }
 }
 
@@ -175,10 +232,11 @@ function MigrationTransferProgress({
 }: {
   stage: "session" | "upload" | "analysis";
 }) {
+  const { t } = useTranslation("migrations");
   const stages = [
-    { id: "session", label: "创建迁移环境" },
-    { id: "upload", label: "上传项目" },
-    { id: "analysis", label: "分析项目" },
+    { id: "session", label: t("transfer.session") },
+    { id: "upload", label: t("transfer.upload") },
+    { id: "analysis", label: t("transfer.analysis") },
   ] as const;
   const activeIndex = stages.findIndex((item) => item.id === stage);
   return (
@@ -194,7 +252,10 @@ function MigrationTransferProgress({
                 : ""
           }
         >
-          <span className="migration-transfer-progress__marker" aria-hidden="true" />
+          <span
+            className="migration-transfer-progress__marker"
+            aria-hidden="true"
+          />
           {index === activeIndex ? (
             <TextShimmer>{item.label}</TextShimmer>
           ) : (
@@ -210,6 +271,29 @@ function isActiveState(state: MigrationTask["state"]): boolean {
   return ["analyzing", "migrating", "validating", "packaging"].includes(state);
 }
 
+function migrationStartingTask(
+  task: MigrationTask,
+  framework: MigrationFramework,
+  entry: string | null,
+  appName: string,
+): MigrationTask {
+  return {
+    ...task,
+    state: "migrating",
+    message: migrationText("confirmation.starting"),
+    canModify: false,
+    canUpload: false,
+    canAnswer: false,
+    canConfirm: false,
+    canStop: false,
+    confirmation: {
+      framework,
+      entry,
+      app_name: appName,
+    },
+  };
+}
+
 function isTerminalState(state: MigrationTask["state"]): boolean {
   return [
     "succeeded",
@@ -219,6 +303,27 @@ function isTerminalState(state: MigrationTask["state"]): boolean {
     "cancelled",
     "expired",
   ].includes(state);
+}
+
+/**
+ * What the collapsed process header says while Codex is working, the way the
+ * intelligent build reports its run phase there. Settled migrations still have a
+ * closing turn to describe, so their status is the delivery review.
+ */
+function migrationLiveStatus(task: MigrationTask): string {
+  if (task.state === "analyzing") return migrationText("activity.liveAnalyzing");
+  if (task.state === "migrating") return migrationText("activity.liveMigrating");
+  if (task.state === "validating") return migrationText("activity.liveValidating");
+  if (task.state === "packaging") return migrationText("activity.livePackaging");
+  if (
+    task.state === "succeeded" ||
+    task.state === "succeeded_with_warnings" ||
+    task.state === "partial" ||
+    task.state === "failed"
+  ) {
+    return migrationText("activity.liveDelivery");
+  }
+  return "";
 }
 
 function shouldShowCodexActivity(task: MigrationTask): boolean {
@@ -234,6 +339,17 @@ function sourceStem(name: string): string {
   return name.replace(/\.zip$/i, "");
 }
 
+function isSelectableMigrationModel(
+  model: ModelOption,
+  unsupportedModelIds: ReadonlySet<string>,
+): boolean {
+  return (
+    model.apiKeyAllowed !== false &&
+    !unsupportedModelIds.has(model.id) &&
+    (model.available || model.lifecycleStatus === "Retiring")
+  );
+}
+
 function defaultAppName(name: string): string {
   const value = sourceStem(name)
     .toLowerCase()
@@ -246,9 +362,9 @@ function defaultAppName(name: string): string {
 }
 
 function appNameError(value: string): string {
-  if (!value.trim()) return "请输入 Agent 名称";
+  if (!value.trim()) return migrationText("validation.agentNameRequired");
   if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value.trim())) {
-    return "Agent 名称必须为 1-63 位，只能包含小写字母、数字和连字符，且必须以字母或数字开头和结尾";
+    return migrationText("validation.agentNameInvalid");
   }
   return "";
 }
@@ -259,18 +375,23 @@ function formatBytes(value: number): string {
   return `${(value / 1024 / 1024).toFixed(1)} MiB`;
 }
 
+function formatByteLimit(value: number): string {
+  return formatBytes(value).replace(".0 MiB", " MiB").replace(".0 KiB", " KiB");
+}
+
 function formatElapsedTime(seconds: number): string {
-  if (seconds < 60) return `${seconds} 秒`;
-  return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+  if (seconds < 60) return migrationText("duration.seconds", { seconds });
+  return migrationText("duration.minutesSeconds", {
+    minutes: Math.floor(seconds / 60),
+    seconds: seconds % 60,
+  });
 }
 
 function formatDate(value: string | number): string {
   const date =
-    typeof value === "number"
-      ? new Date(value * 1000)
-      : new Date(value);
+    typeof value === "number" ? new Date(value * 1000) : new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString("zh-CN", {
+  return date.toLocaleString(i18n.resolvedLanguage || i18n.language, {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -283,56 +404,35 @@ function migrationExpiryCopy(
   task: MigrationTask,
   now: number,
 ): { title: string; detail: string } {
+  const sourceSaved = task.persistence?.state === "saved";
+  const sourceSaving = task.persistence?.state === "saving";
+  const activeDetail = sourceSaved
+    ? migrationText("expiry.savedUnaffected")
+    : sourceSaving
+      ? migrationText("expiry.savingUnaffected")
+      : migrationText("expiry.activeDetail");
   const expiry = new Date(task.expiresAt).getTime();
   if (!Number.isFinite(expiry)) {
     return {
-      title: "迁移环境保留 1 小时",
-      detail: "过期后无法查看会话，也无法预览、下载或部署产物",
+      title: migrationText("expiry.oneHour"),
+      detail: activeDetail,
     };
   }
-  if (task.state === "expired" || now >= expiry) {
+  if (isMigrationEnvironmentExpired(task, now)) {
     return {
-      title: "迁移环境已过期",
-      detail: "会话和产物已无法访问",
+      title: migrationText("expiry.ended"),
+      detail: sourceSaved
+        ? migrationText("expiry.savedAvailable")
+        : migrationText("expiry.unavailable"),
     };
   }
   const remaining = Math.max(0, expiry - now);
   const minutes = Math.floor(remaining / 60_000);
   const seconds = Math.floor((remaining % 60_000) / 1_000);
   return {
-    title: `迁移环境将在 ${minutes} 分 ${seconds} 秒后过期`,
-    detail: "过期后无法查看会话，也无法预览、下载或部署产物",
+    title: migrationText("expiry.countdown", { minutes, seconds }),
+    detail: activeDetail,
   };
-}
-
-function expireTasksAtDeadline(
-  tasks: MigrationTask[],
-  now: number,
-): MigrationTask[] {
-  let changed = false;
-  const next = tasks.map((task) => {
-    if (task.state === "expired") return task;
-    const expiry = new Date(task.expiresAt).getTime();
-    if (!Number.isFinite(expiry) || now < expiry) return task;
-    changed = true;
-    return {
-      ...task,
-      state: "expired" as const,
-      message: "迁移环境已过期，内容和产物无法继续访问。",
-      canModify: false,
-      canUpload: false,
-      canAnswer: false,
-      canConfirm: false,
-      canStop: false,
-      artifact: {
-        state: "none",
-        previewReady: false,
-        downloadReady: false,
-        deployReady: false,
-      },
-    };
-  });
-  return changed ? next : tasks;
 }
 
 function upsertTask(
@@ -371,19 +471,20 @@ function isTextMime(mimeType: string, path: string): boolean {
 }
 
 function AnalysisSummary({ analysis }: { analysis: MigrationAnalysis }) {
+  const { t } = useTranslation("migrations");
   return (
     <div className="migration-analysis">
       <Markdown text={analysis.summary} allowRawHtml={false} />
       <div className="migration-analysis__facts">
         {analysis.recommended ? (
           <section>
-            <h3>建议迁移方式</h3>
-            <strong>{FRAMEWORK_LABELS[analysis.recommended.framework]}</strong>
+            <h3>{t("analysis.recommended")}</h3>
+            <strong>{frameworkLabel(analysis.recommended.framework)}</strong>
             <p>{analysis.recommended.reason}</p>
           </section>
         ) : null}
         <section>
-          <h3>迁移范围</h3>
+          <h3>{t("analysis.scope")}</h3>
           <ul>
             {analysis.boundary.include.map((item) => (
               <li key={item}>{item}</li>
@@ -392,7 +493,7 @@ function AnalysisSummary({ analysis }: { analysis: MigrationAnalysis }) {
         </section>
         {analysis.boundary.exclude.length > 0 ? (
           <section>
-            <h3>不在本次范围</h3>
+            <h3>{t("analysis.excluded")}</h3>
             <ul>
               {analysis.boundary.exclude.map((item) => (
                 <li key={item}>{item}</li>
@@ -403,12 +504,14 @@ function AnalysisSummary({ analysis }: { analysis: MigrationAnalysis }) {
       </div>
       {analysis.frameworks[0]?.evidence.length ? (
         <details className="migration-analysis__evidence">
-          <summary>查看分析证据</summary>
+          <summary>{t("analysis.viewEvidence")}</summary>
           <ul>
             {analysis.frameworks.flatMap((candidate) =>
               candidate.evidence.map((item) => (
                 <li key={`${candidate.id}:${item.path}:${item.line}`}>
-                  <code>{item.path}:{item.line}</code>
+                  <code>
+                    {item.path}:{item.line}
+                  </code>
                   <span>{item.reason}</span>
                 </li>
               )),
@@ -425,7 +528,7 @@ function AnalysisSummary({ analysis }: { analysis: MigrationAnalysis }) {
       ) : null}
       {analysis.assumptions.length > 0 ? (
         <details className="migration-analysis__evidence">
-          <summary>查看关键假设</summary>
+          <summary>{t("analysis.viewAssumptions")}</summary>
           <ul>
             {analysis.assumptions.map((assumption) => (
               <li key={assumption}>{assumption}</li>
@@ -437,70 +540,55 @@ function AnalysisSummary({ analysis }: { analysis: MigrationAnalysis }) {
   );
 }
 
-function migrationActivityBlock(item: MigrationActivityItem): Block | null {
-  if (item.kind === "reasoning" && item.detail) {
-    return {
-      kind: "thinking",
-      text: item.detail,
-      done: item.status !== "running",
-    };
-  }
-  if (item.kind === "message" && item.detail) {
-    return { kind: "text", text: item.detail };
-  }
-  return null;
-}
-
 function MigrationActivityFeed({
   activity,
   loading,
   error,
   analyzing,
+  status,
 }: {
   activity: MigrationActivity | null;
   loading: boolean;
   error: string;
   analyzing: boolean;
+  status: string;
 }) {
+  const { t } = useTranslation("migrations");
   const items = activity?.items ?? [];
+  const blocks = migrationActivityBlocks(items);
+  // A closing turn keeps working after the task has settled, so the feed is still
+  // live whenever Codex still has a running item.
+  const streaming =
+    !activity?.complete || items.some((item) => item.status === "running");
 
   return (
-    <section className="migration-activity" aria-label="Codex 执行动态">
+    <section
+      className="migration-activity"
+      aria-label={t("activity.ariaLabel")}
+    >
       <div className="migration-activity__heading">
         <span
           className={`migration-activity__marker${activity?.complete ? " is-complete" : ""}`}
           aria-hidden="true"
         />
-        <strong>Codex 执行动态</strong>
+        <strong>{t("activity.title")}</strong>
       </div>
-      {items.length > 0 ? (
+      {blocks.length > 0 ? (
         <div className="migration-activity__stream">
-          {items.map((item) => {
-            const block = migrationActivityBlock(item);
-            return block ? (
-              <Blocks
-                key={item.id}
-                blocks={[block]}
-                onAction={ignoreMigrationAction}
-              />
-            ) : (
-              <div
-                className="migration-activity__status"
-                data-status={item.status}
-                key={item.id}
-              >
-                <span className="migration-activity__marker" aria-hidden="true" />
-                <span>
-                  <strong>{item.title}</strong>
-                  {item.detail ? <small>{item.detail}</small> : null}
-                </span>
-              </div>
-            );
-          })}
+          {/* The intelligent build's stream: tool calls fold into expandable process rows. */}
+          <Blocks
+            blocks={blocks}
+            groupProcess
+            streaming={streaming}
+            liveStatus={status}
+            onAction={ignoreMigrationAction}
+          />
         </div>
       ) : loading || !activity?.complete ? (
         <TextShimmer>
-          {analyzing ? "Codex 正在开始分析…" : "Codex 正在开始迁移…"}
+          {analyzing
+            ? t("activity.startingAnalysis")
+            : t("activity.startingMigration")}
         </TextShimmer>
       ) : null}
       {error ? (
@@ -519,10 +607,9 @@ function ArtifactBrowser({
   task: MigrationTask;
   artifact: MigrationArtifact;
 }) {
+  const { t, i18n: translation } = useTranslation("migrations");
   const [query, setQuery] = useState("");
-  const [activePath, setActivePath] = useState(
-    artifact.files[0]?.path ?? "",
-  );
+  const [activePath, setActivePath] = useState(artifact.files[0]?.path ?? "");
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const activeFile =
     artifact.files.find((file) => file.path === activePath) ??
@@ -543,18 +630,14 @@ function ArtifactBrowser({
       setPreview({
         path: activeFile.path,
         loading: false,
-        error: "该文件超过 2 MiB，请下载完整产物后查看。",
+        error: t("artifact.fileTooLarge"),
       });
       return;
     }
     const controller = new AbortController();
     let objectUrl = "";
     setPreview({ path: activeFile.path, loading: true });
-    void getMigrationArtifactFile(
-      task.id,
-      activeFile.path,
-      controller.signal,
-    )
+    void getMigrationArtifactFile(task.id, activeFile.path, controller.signal)
       .then(async ({ blob, mimeType }) => {
         if (controller.signal.aborted) return;
         if (mimeType.startsWith("image/")) {
@@ -579,7 +662,7 @@ function ArtifactBrowser({
         setPreview({
           path: activeFile.path,
           loading: false,
-          error: "该文件不支持在线预览，请下载完整产物后查看。",
+          error: t("artifact.unsupportedPreview"),
         });
       })
       .catch((cause: unknown) => {
@@ -594,17 +677,17 @@ function ArtifactBrowser({
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [activeFile, task.id]);
+  }, [activeFile, task.id, t, translation.resolvedLanguage]);
 
   return (
     <div className="migration-artifact-browser">
-      <aside aria-label="迁移产物文件">
+      <aside aria-label={t("artifact.filesAria")}>
         <label className="migration-artifact-browser__search">
-          <span className="sr-only">搜索产物文件</span>
+          <span className="sr-only">{t("artifact.searchAria")}</span>
           <input
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="搜索文件"
+            placeholder={t("artifact.searchPlaceholder")}
           />
         </label>
         <div className="migration-artifact-browser__files">
@@ -624,20 +707,22 @@ function ArtifactBrowser({
         </div>
         {artifact.files.length > filteredFiles.length ? (
           <p className="migration-artifact-browser__limit">
-            仅展示前 {MAX_VISIBLE_FILES} 项，请搜索具体文件。
+            {t("artifact.limit", { count: MAX_VISIBLE_FILES })}
           </p>
         ) : null}
       </aside>
       <section>
         <header>
-          <span title={activeFile?.path}>{activeFile?.path || "未选择文件"}</span>
+          <span title={activeFile?.path}>
+            {activeFile?.path || t("artifact.noSelection")}
+          </span>
           {activeFile ? <small>{formatBytes(activeFile.size)}</small> : null}
         </header>
         <div className="migration-artifact-browser__preview">
           {!activeFile ? (
-            <p>暂无可预览文件。</p>
+            <p>{t("artifact.noPreview")}</p>
           ) : preview?.path !== activeFile.path || preview.loading ? (
-            <TextShimmer>正在读取产物文件…</TextShimmer>
+            <TextShimmer>{t("artifact.loadingFile")}</TextShimmer>
           ) : preview.error ? (
             <p role="status">{preview.error}</p>
           ) : preview.imageUrl ? (
@@ -664,30 +749,72 @@ export function MigrationWorkspace({
   onDeploymentStarted,
   onDeploymentComplete,
   initialDeployRegion = defaultCloudRegion(cloudProvider),
+  projectCapabilities,
+  projectCapabilitiesLoading,
+  optimizationPreparationStage,
+  optimizationError,
+  onOptimizeVersion,
+  onCancelOptimization,
+  onDownloadSavedVersion,
+  onDeploySavedVersion,
+  initialPage = "new",
+  initialProjectId = "",
 }: MigrationWorkspaceProps) {
+  const { t, i18n } = useTranslation("migrations");
+  const locale = i18n.resolvedLanguage || i18n.language;
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const migrationTabRef = useRef<HTMLButtonElement>(null);
+  const evaluationTabRef = useRef<HTMLButtonElement>(null);
   const preparedAnalysisRef = useRef("");
+  const evaluationDraftTaskRef = useRef("");
+  const taskEventCursorRef = useRef({ taskId: "", seq: 0 });
   const transferAbortRef = useRef<AbortController | null>(null);
-  const [capability, setCapability] =
-    useState<MigrationCapabilities | null>(null);
+  const evaluationReportAbortRef = useRef<AbortController | null>(null);
+  const [capability, setCapability] = useState<MigrationCapabilities | null>(
+    null,
+  );
   const [tasks, setTasks] = useState<MigrationTask[]>([]);
+  const [page, setPage] = useState<"new" | "projects">(initialPage);
+  const [focusedProjectId, setFocusedProjectId] = useState(initialProjectId);
   const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [activeTaskTab, setActiveTaskTab] = useState<"migration" | "evaluation">(
+    "migration",
+  );
   const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState("");
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState("");
+  const [modelsReloadKey, setModelsReloadKey] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [capabilityError, setCapabilityError] = useState("");
+  const [loadKey, setLoadKey] = useState(0);
+  const [showAllTasks, setShowAllTasks] = useState(false);
   const [action, setAction] = useState<
-    "create" | "upload" | "answer" | "confirm" | "stop" | "download" | ""
+    | "create"
+    | "upload"
+    | "answer"
+    | "input"
+    | "confirm"
+    | "stop"
+    | "download"
+    | ""
   >("");
   const [error, setError] = useState("");
   const [pollError, setPollError] = useState("");
   const [pollErrorRetryable, setPollErrorRetryable] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [createStartedAt, setCreateStartedAt] = useState<number | null>(null);
-  const [framework, setFramework] =
-    useState<MigrationFramework>("langchain");
+  const [framework, setFramework] = useState<MigrationFramework>("langchain");
   const [entry, setEntry] = useState("");
   const [appName, setAppName] = useState("");
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  // Answers for questions asked inside the running analysis turn.  They are kept
+  // apart from the needs_input answers: the two cards are mutually exclusive and
+  // carry different payloads.
+  const [inputAnswers, setInputAnswers] = useState<Record<string, string>>({});
   const [artifact, setArtifact] = useState<MigrationArtifact | null>(null);
   const [artifactError, setArtifactError] = useState("");
   const [artifactErrorRetryable, setArtifactErrorRetryable] = useState(false);
@@ -702,7 +829,91 @@ export function MigrationWorkspace({
   const [deploymentEnvValues, setDeploymentEnvValues] = useState<
     Record<string, string>
   >({});
+  const [evaluationDraft, setEvaluationDraft] =
+    useState<MigrationEvaluationDraft>(createMigrationEvaluationDraft);
+  const [evaluationErrors, setEvaluationErrors] = useState<
+    Record<string, string>
+  >({});
+  const [evaluationAction, setEvaluationAction] = useState<
+    "dataset" | "resume" | "retry" | "download" | ""
+  >("");
+  const [evaluationDatasetSaveError, setEvaluationDatasetSaveError] = useState<{
+    taskId: string;
+    message: string;
+  } | null>(null);
+  const [evaluationDraftLoadingTaskId, setEvaluationDraftLoadingTaskId] =
+    useState("");
+  const [evaluationDraftLoadError, setEvaluationDraftLoadError] = useState<{
+    taskId: string;
+    message: string;
+  } | null>(null);
+  const [evaluationDraftReloadKey, setEvaluationDraftReloadKey] = useState(0);
+  const [evaluationReport, setEvaluationReport] = useState<string | null>(null);
+  const [evaluationReportLoading, setEvaluationReportLoading] = useState(false);
+  const [evaluationReportError, setEvaluationReportError] = useState("");
+  const [evaluationActionError, setEvaluationActionError] = useState("");
   const task = selectedTask(tasks, selectedTaskId);
+  const taskEnvironmentExpired = task
+    ? isMigrationEnvironmentExpired(task, now)
+    : false;
+  const hasPollableTasks = tasks.some(
+    (item) =>
+      !isMigrationEnvironmentExpired(item, now) &&
+      (isActiveState(item.state) || isEvaluationPollingState(item)),
+  );
+  const maxSourceBytes = capability?.maxUploadBytes ?? MAX_SOURCE_BYTES;
+  const maxSourceSizeLabel = formatByteLimit(maxSourceBytes);
+  const unsupportedMigrationModelIds = useMemo(
+    () => new Set(capability?.unsupportedModelIds ?? []),
+    [capability?.unsupportedModelIds],
+  );
+  const selectableModels = useMemo(
+    () =>
+      models.filter((model) =>
+        isSelectableMigrationModel(model, unsupportedMigrationModelIds),
+      ),
+    [models, unsupportedMigrationModelIds],
+  );
+  const composerModelId = task?.modelId || selectedModelId;
+  const modelSelectOptions = useMemo(() => {
+    const options = selectableModels.map((model) => ({
+      value: model.id,
+      label: model.displayName,
+      description: [
+        model.id,
+        model.vendorName,
+        model.lifecycleStatus === "Retiring" ? t("model.retiring") : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    }));
+    const fallbackId = (
+      task?.modelId ||
+      selectedModelId ||
+      capability?.model?.id ||
+      ""
+    ).trim();
+    const preservesExistingTaskModel =
+      Boolean(task?.modelId) && task?.modelId === fallbackId;
+    if (
+      fallbackId &&
+      preservesExistingTaskModel &&
+      !options.some((option) => option.value === fallbackId)
+    ) {
+      options.unshift({
+        value: fallbackId,
+        label: fallbackId,
+        description: t("model.currentDefault"),
+      });
+    }
+    return options;
+  }, [
+    capability?.model?.id,
+    selectableModels,
+    selectedModelId,
+    task?.modelId,
+    t,
+  ]);
   const createElapsedSeconds = createStartedAt
     ? Math.max(0, Math.floor((now - createStartedAt) / 1_000))
     : 0;
@@ -760,29 +971,110 @@ export function MigrationWorkspace({
     }
   }
 
+  function updateTaskEvaluation(
+    taskId: string,
+    evaluation: NonNullable<MigrationTask["evaluation"]>,
+  ) {
+    setTasks((current) =>
+      current.map((item) =>
+        item.id === taskId
+          ? {
+              ...item,
+              evaluation: { ...item.evaluation, ...evaluation },
+            }
+          : item,
+      ),
+    );
+  }
+
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
-    setError("");
-    void Promise.all([
+    setLoadError("");
+    setCapabilityError("");
+    void Promise.allSettled([
       getMigrationCapabilities(controller.signal),
       listMigrationTasks(controller.signal),
     ])
-      .then(([nextCapability, nextTasks]) => {
+      .then(([capabilityResult, taskResult]) => {
         if (controller.signal.aborted) return;
-        setCapability(nextCapability);
-        setTasks(nextTasks);
-      })
-      .catch((cause: unknown) => {
-        if (!controller.signal.aborted) {
-          setError(cause instanceof Error ? cause.message : String(cause));
+        if (capabilityResult.status === "fulfilled") {
+          setCapability(capabilityResult.value);
+        } else {
+          setCapabilityError(
+            capabilityResult.reason instanceof Error
+              ? capabilityResult.reason.message
+              : String(capabilityResult.reason),
+          );
+        }
+        if (taskResult.status === "fulfilled") {
+          setTasks(taskResult.value);
+        } else {
+          setLoadError(
+            taskResult.reason instanceof Error
+              ? taskResult.reason.message
+              : String(taskResult.reason),
+          );
         }
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, []);
+  }, [loadKey]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setModelsLoading(true);
+    setModelsError("");
+    void listModelOptions({
+      signal: controller.signal,
+      refresh: modelsReloadKey > 0,
+      scope: "development",
+    })
+      .then((response) => {
+        if (controller.signal.aborted) return;
+        setModels(response.models);
+      })
+      .catch((cause: unknown) => {
+        if (!controller.signal.aborted) {
+          setModelsError(
+            cause instanceof Error ? cause.message : t("model.loadError"),
+          );
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setModelsLoading(false);
+      });
+    return () => controller.abort();
+  }, [cloudProvider, modelsReloadKey, t]);
+
+  useEffect(() => {
+    if (
+      !capability ||
+      task ||
+      modelsLoading ||
+      modelsError ||
+      selectableModels.length === 0
+    ) {
+      return;
+    }
+    if (selectableModels.some((model) => model.id === selectedModelId)) return;
+    const configuredModelId = capability.model?.id.trim() || "";
+    const defaultModelId =
+      configuredModelId &&
+      selectableModels.some((model) => model.id === configuredModelId)
+        ? configuredModelId
+        : selectableModels[0]?.id || "";
+    if (defaultModelId) setSelectedModelId(defaultModelId);
+  }, [
+    capability,
+    modelsError,
+    modelsLoading,
+    selectableModels,
+    selectedModelId,
+    task,
+  ]);
 
   useEffect(
     () => () => {
@@ -794,15 +1086,13 @@ export function MigrationWorkspace({
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      const currentNow = Date.now();
-      setNow(currentNow);
-      setTasks((current) => expireTasksAtDeadline(current, currentNow));
+      setNow(Date.now());
     }, 1_000);
     return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
-    if (!tasks.some((item) => isActiveState(item.state))) return;
+    if (!hasPollableTasks || action === "confirm") return;
     const controller = new AbortController();
     const timer = window.setInterval(() => {
       void listMigrationTasks(controller.signal)
@@ -826,92 +1116,96 @@ export function MigrationWorkspace({
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [tasks.some((item) => isActiveState(item.state))]);
+  }, [action, hasPollableTasks]);
 
   useEffect(() => {
-    if (!task || !isActiveState(task.state)) return;
+    if (action === "confirm" || !task || taskEnvironmentExpired) return;
+    if (
+      !shouldShowCodexActivity(task) &&
+      !isActiveState(task.state) &&
+      task.persistence?.state !== "saving" &&
+      !isEvaluationPollingState(task)
+    )
+      return;
     const controller = new AbortController();
-    let timer: number | undefined;
-    const poll = async () => {
-      try {
-        const next = await getMigrationTask(task.id, controller.signal);
+    // Task detail and activity are one snapshot stream now, so the page stops polling
+    // both.  The effect restarts whenever the server-side settlement rule can change;
+    // the cursor keeps those restarts cheap by resuming instead of replaying.
+    const resume =
+      taskEventCursorRef.current.taskId === task.id
+        ? taskEventCursorRef.current.seq
+        : 0;
+    setActivityLoading(activity === null && shouldShowCodexActivity(task));
+    void observeMigrationTask({
+      taskId: task.id,
+      signal: controller.signal,
+      after: resume,
+      onEvent: (event) => {
         if (controller.signal.aborted) return;
-        setTasks((current) => upsertTask(current, next));
+        taskEventCursorRef.current = { taskId: task.id, seq: event.seq };
+        if (event.kind === "error") {
+          setActivityLoading(false);
+          // A frame without code or message says the task is readable again.
+          const cleared = !event.code && !event.message;
+          setPollError(cleared ? "" : event.message || t("activity.loadError"));
+          setPollErrorRetryable(cleared ? false : event.retryable);
+          return;
+        }
         setPollError("");
         setPollErrorRetryable(false);
-        if (isActiveState(next.state)) {
-          timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
+        if (event.kind === "task") {
+          setTasks((current) => upsertTask(current, event.task));
+          return;
         }
-      } catch (cause) {
+        if (event.kind === "activity") {
+          setActivity(event.activity);
+          setActivityError("");
+          setActivityLoading(false);
+          return;
+        }
+        setActivityLoading(false);
+      },
+      onConnection: (message) => {
         if (controller.signal.aborted) return;
-        setPollError(cause instanceof Error ? cause.message : String(cause));
-        setPollErrorRetryable(
-          cause instanceof MigrationApiError && cause.retryable,
-        );
-        if (cause instanceof MigrationApiError && cause.retryable) {
-          timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
-        }
-      }
-    };
-    timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
-    return () => {
-      controller.abort();
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [task?.id, task?.state]);
+        setPollError(message);
+        setPollErrorRetryable(false);
+      },
+    }).catch((cause: unknown) => {
+      if (controller.signal.aborted) return;
+      setActivityLoading(false);
+      setPollError(cause instanceof Error ? cause.message : String(cause));
+      setPollErrorRetryable(cause instanceof MigrationApiError && cause.retryable);
+    });
+    return () => controller.abort();
+  }, [
+    action,
+    task?.id,
+    task?.state,
+    task?.analysisRef?.sha256,
+    task?.confirmation?.framework,
+    task?.persistence?.state,
+    task?.evaluation?.state,
+    taskEnvironmentExpired,
+    t,
+  ]);
 
   useEffect(() => {
     const conversation = conversationRef.current;
     if (!conversation) return;
-    conversation.scrollTop = conversation.scrollHeight;
+    conversation.scrollTop =
+      activeTaskTab === "evaluation" ? 0 : conversation.scrollHeight;
     handleConversationScroll();
-  }, [selectedTaskId, conversationRef, handleConversationScroll]);
+  }, [activeTaskTab, selectedTaskId, conversationRef, handleConversationScroll]);
+
+  useEffect(() => {
+    setActiveTaskTab("migration");
+  }, [selectedTaskId]);
 
   useEffect(() => {
     setActivity(null);
     setActivityError("");
     setActivityLoading(false);
-    if (!task || !shouldShowCodexActivity(task)) {
-      return;
-    }
-
-    const controller = new AbortController();
-    let timer: number | undefined;
-    const poll = async () => {
-      setActivityLoading(true);
-      try {
-        const next = await getMigrationActivity(task.id, controller.signal);
-        if (controller.signal.aborted) return;
-        setActivity(next);
-        setActivityError("");
-        if (!next.complete && isActiveState(task.state)) {
-          timer = window.setTimeout(() => void poll(), ACTIVITY_POLL_INTERVAL_MS);
-        }
-      } catch (cause) {
-        if (controller.signal.aborted) return;
-        setActivityError("暂时无法读取 Codex 执行动态，不影响当前任务。");
-        if (
-          isActiveState(task.state) &&
-          cause instanceof MigrationApiError &&
-          cause.retryable
-        ) {
-          timer = window.setTimeout(() => void poll(), ACTIVITY_POLL_INTERVAL_MS);
-        }
-      } finally {
-        if (!controller.signal.aborted) setActivityLoading(false);
-      }
-    };
-    void poll();
-    return () => {
-      controller.abort();
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [
-    task?.id,
-    task?.state,
-    task?.analysisRef?.sha256,
-    task?.confirmation?.framework,
-  ]);
+  }, [task?.id]);
 
   useEffect(() => {
     if (
@@ -939,7 +1233,7 @@ export function MigrationWorkspace({
     setArtifactErrorRetryable(false);
     setDeploymentOpen(false);
     setDeploymentEnvValues({});
-    if (!task?.artifact.previewReady) return;
+    if (!task?.artifact.previewReady || taskEnvironmentExpired) return;
     const controller = new AbortController();
     void getMigrationArtifact(task.id, controller.signal)
       .then((next) => {
@@ -956,7 +1250,95 @@ export function MigrationWorkspace({
         }
       });
     return () => controller.abort();
-  }, [task?.id, task?.artifact.previewReady, artifactReload]);
+  }, [
+    task?.id,
+    task?.artifact.previewReady,
+    taskEnvironmentExpired,
+    artifactReload,
+  ]);
+
+  useEffect(() => {
+    setEvaluationErrors({});
+    if (!task?.evaluation?.enabled) {
+      evaluationDraftTaskRef.current = "";
+      setEvaluationDraftLoadingTaskId("");
+      setEvaluationDraftLoadError(null);
+      setEvaluationDraft(createMigrationEvaluationDraft());
+      return;
+    }
+    if (
+      !needsEvaluationDraftHydration(
+        task.id,
+        task.evaluation.enabled,
+        evaluationDraftTaskRef.current,
+      )
+    )
+      return;
+    evaluationDraftTaskRef.current = task.id;
+    const draft = createMigrationEvaluationDraft();
+    const fallbackDraft: MigrationEvaluationDraft = {
+      ...draft,
+      enabled: true,
+      preset: task.evaluation.preset ?? "standard",
+      dimensions: task.evaluation.dimensions?.length
+        ? [...task.evaluation.dimensions]
+        : draft.dimensions,
+    };
+    setEvaluationDraft(fallbackDraft);
+    setEvaluationDraftLoadingTaskId(task.id);
+    setEvaluationDraftLoadError(null);
+    const controller = new AbortController();
+    void getMigrationEvaluationDataset(task.id, controller.signal)
+      .then((dataset) => {
+        if (controller.signal.aborted) return;
+        if (!dataset.locked) {
+          if (task.state !== "awaiting_upload") {
+            recordEvaluationDatasetSaveFailure(
+              task.id,
+              new Error(t("evaluation.dataset.missing")),
+            );
+          }
+          return;
+        }
+        if (!dataset.asset) {
+          throw new Error(t("evaluation.dataset.invalidLockResponse"));
+        }
+        setEvaluationDraft(
+          evaluationDraftFromDataset(dataset, task.evaluation!),
+        );
+        applySavedEvaluationDataset(task.id, dataset);
+      })
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted) return;
+        setEvaluationDraftLoadError({
+          taskId: task.id,
+          message: cause instanceof Error ? cause.message : String(cause),
+        });
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setEvaluationDraftLoadingTaskId("");
+      });
+    return () => controller.abort();
+  }, [task?.id, task?.evaluation?.enabled, evaluationDraftReloadKey]);
+
+  useEffect(() => {
+    evaluationReportAbortRef.current?.abort();
+    evaluationReportAbortRef.current = null;
+    setEvaluationReport(null);
+    setEvaluationReportError("");
+    setEvaluationActionError("");
+    setEvaluationReportLoading(false);
+  }, [
+    task?.id,
+    task?.evaluation?.report?.versionId,
+  ]);
+
+  useEffect(
+    () => () => {
+      evaluationReportAbortRef.current?.abort();
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!artifact) return;
@@ -976,25 +1358,22 @@ export function MigrationWorkspace({
     if (!file) return;
     if (!file.name.toLowerCase().endsWith(".zip")) {
       setSourceFile(null);
-      setError("请选择 .zip 格式的本地项目文件。");
+      setError(t("upload.zipOnly"));
       return;
     }
-    if (
-      file.name.length > 255 ||
-      /[/\\\u0000-\u001f]/.test(file.name)
-    ) {
+    if (file.name.length > 255 || /[/\\\u0000-\u001f]/.test(file.name)) {
       setSourceFile(null);
-      setError("ZIP 文件名无效，请重命名后重新选择。");
+      setError(t("upload.invalidName"));
       return;
     }
-    if (file.size > MAX_SOURCE_BYTES) {
+    if (file.size > maxSourceBytes) {
       setSourceFile(null);
-      setError("项目 ZIP 不能超过 50 MiB。");
+      setError(t("upload.tooLarge", { size: maxSourceSizeLabel }));
       return;
     }
     if (file.size === 0) {
       setSourceFile(null);
-      setError("项目 ZIP 不能为空。");
+      setError(t("upload.empty"));
       return;
     }
     setSourceFile(file);
@@ -1006,8 +1385,89 @@ export function MigrationWorkspace({
     selectFile(file);
   }
 
+  function validateEvaluationDraft(): boolean {
+    const unavailableMessage =
+      evaluationDraft.enabled && !capability?.evaluation?.available
+        ? capability?.evaluation?.reason || t("evaluation.setup.unavailable")
+        : "";
+    const validation = validateMigrationEvaluationDraft(
+      evaluationDraft,
+      unavailableMessage,
+      (key, options) => t(key, options),
+    );
+    setEvaluationErrors(validation.errors);
+    return validation.valid;
+  }
+
+  async function saveEvaluationDataset(
+    taskId: string,
+    signal: AbortSignal,
+  ): Promise<MigrationEvaluationDataset> {
+    const dataset = await putMigrationEvaluationDataset(
+      taskId,
+      evaluationCasesFromDraft(evaluationDraft),
+      signal,
+    );
+    if (!dataset.locked || !dataset.asset) {
+      throw new Error(t("evaluation.dataset.invalidLockResponse"));
+    }
+    return dataset;
+  }
+
+  function applySavedEvaluationDataset(
+    taskId: string,
+    dataset: MigrationEvaluationDataset,
+  ) {
+    if (!dataset.asset) return;
+    setTasks((current) =>
+      current.map((item) => {
+        if (item.id !== taskId || !item.evaluation?.enabled) return item;
+        return {
+          ...item,
+          evaluation: {
+            ...item.evaluation,
+            state:
+              item.evaluation.state === "waiting_dataset"
+                ? "pending"
+                : item.evaluation.state,
+            message:
+              item.evaluation.state === "waiting_dataset"
+                ? t("evaluation.state.pending")
+                : item.evaluation.message,
+            dataset: dataset.asset,
+          },
+        };
+      }),
+    );
+    setEvaluationDatasetSaveError((current) =>
+      current?.taskId === taskId ? null : current,
+    );
+  }
+
+  function recordEvaluationDatasetSaveFailure(taskId: string, cause: unknown) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    setEvaluationDatasetSaveError({ taskId, message });
+    setTasks((current) =>
+      current.map((item) =>
+        item.id === taskId && item.evaluation?.enabled
+          ? {
+              ...item,
+              evaluation: {
+                ...item.evaluation,
+                state: "waiting_dataset",
+                message: t("evaluation.dataset.saveWarning"),
+                canResume: false,
+                canRetry: false,
+              },
+            }
+          : item,
+      ),
+    );
+  }
+
   async function createAndUpload() {
     if (!sourceFile || action || transferAbortRef.current) return;
+    if (!validateEvaluationDraft()) return;
     const controller = new AbortController();
     transferAbortRef.current = controller;
     const isCurrent = () =>
@@ -1021,20 +1481,40 @@ export function MigrationWorkspace({
         taskId: createdTaskId,
         sourceFileName: sourceFile.name,
         instruction: "",
+        modelId: selectedModelId || undefined,
+        evaluation: evaluationDraft.enabled
+          ? {
+              enabled: true,
+              preset: evaluationDraft.preset,
+              locale: resolveSupportedLocale(locale) ?? DEFAULT_LOCALE,
+              ...(evaluationDraft.preset === "custom"
+                ? { dimensions: evaluationDraft.dimensions }
+                : {}),
+            }
+          : undefined,
         signal: controller.signal,
       });
       if (!isCurrent()) return;
       setTasks((current) => upsertTask(current, created));
+      evaluationDraftTaskRef.current = created.id;
       setSelectedTaskId(created.id);
       setAction("upload");
       setCreateStartedAt(null);
-      const uploaded = await uploadMigrationSource(
-        created.id,
-        sourceFile,
-        controller.signal,
-      );
+      const [uploadResult, datasetResult] = await Promise.allSettled([
+        uploadMigrationSource(created.id, sourceFile, controller.signal),
+        evaluationDraft.enabled
+          ? saveEvaluationDataset(created.id, controller.signal)
+          : Promise.resolve(null),
+      ]);
       if (!isCurrent()) return;
+      if (uploadResult.status === "rejected") throw uploadResult.reason;
+      const uploaded = uploadResult.value;
       setTasks((current) => upsertTask(current, uploaded));
+      if (datasetResult.status === "fulfilled" && datasetResult.value) {
+        applySavedEvaluationDataset(created.id, datasetResult.value);
+      } else if (datasetResult.status === "rejected") {
+        recordEvaluationDatasetSaveFailure(created.id, datasetResult.reason);
+      }
       setSourceFile(null);
     } catch (cause) {
       if (!isCurrent()) return;
@@ -1068,6 +1548,9 @@ export function MigrationWorkspace({
     if (!task?.canUpload || !sourceFile || action || transferAbortRef.current) {
       return;
     }
+    if (task.evaluation?.enabled && !task.evaluation.dataset) {
+      if (!validateEvaluationDraft()) return;
+    }
     const controller = new AbortController();
     transferAbortRef.current = controller;
     const isCurrent = () =>
@@ -1075,13 +1558,21 @@ export function MigrationWorkspace({
     setAction("upload");
     setError("");
     try {
-      const uploaded = await uploadMigrationSource(
-        task.id,
-        sourceFile,
-        controller.signal,
-      );
+      const [uploadResult, datasetResult] = await Promise.allSettled([
+        uploadMigrationSource(task.id, sourceFile, controller.signal),
+        task.evaluation?.enabled && !task.evaluation.dataset
+          ? saveEvaluationDataset(task.id, controller.signal)
+          : Promise.resolve(null),
+      ]);
       if (!isCurrent()) return;
+      if (uploadResult.status === "rejected") throw uploadResult.reason;
+      const uploaded = uploadResult.value;
       setTasks((current) => upsertTask(current, uploaded));
+      if (datasetResult.status === "fulfilled" && datasetResult.value) {
+        applySavedEvaluationDataset(task.id, datasetResult.value);
+      } else if (datasetResult.status === "rejected") {
+        recordEvaluationDatasetSaveFailure(task.id, datasetResult.reason);
+      }
       setSourceFile(null);
     } catch (cause) {
       if (!isCurrent()) return;
@@ -1133,6 +1624,44 @@ export function MigrationWorkspace({
       requiredQuestionsAnswered,
   );
 
+  // The card follows a live question, not the state: a delivery turn asks after the delivery has already settled.
+  const pendingInput = task?.pendingInput;
+  const pendingInputAnswered = (pendingInput?.questions ?? []).every(
+    (question) => (inputAnswers[question.id] || "").trim().length > 0,
+  );
+  const canSubmitInput = Boolean(pendingInput && pendingInputAnswered && !action);
+
+  // Every question set is a new one, so the previous draft must not leak into it.
+  const pendingInputId = pendingInput?.id;
+  useEffect(() => {
+    setInputAnswers({});
+  }, [pendingInputId]);
+
+  async function submitInput() {
+    if (!task || !pendingInput || !canSubmitInput) return;
+    setAction("input");
+    setError("");
+    try {
+      const next = await submitMigrationAnalysisInput({
+        taskId: task.id,
+        requestId: pendingInput.id,
+        answers: Object.fromEntries(
+          pendingInput.questions.map((question) => [
+            question.id,
+            (inputAnswers[question.id] || "").trim(),
+          ]),
+        ),
+      });
+      setTasks((current) => upsertTask(current, next));
+    } catch (cause) {
+      const authoritative = await reconcileTaskState(task.id);
+      if (authoritative && !authoritative.pendingInput) return;
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setAction("");
+    }
+  }
+
   async function submitAnswers() {
     if (!task?.analysisRef || !canSubmitAnswers) return;
     setAction("answer");
@@ -1157,14 +1686,29 @@ export function MigrationWorkspace({
 
   async function confirmMigration() {
     if (!task?.analysisRef || !canConfirm) return;
+    const confirmedEntry = STRUCTURED_FRAMEWORKS.has(framework)
+      ? entry.trim()
+      : null;
+    const confirmedAppName = appName.trim();
     setAction("confirm");
     setError("");
+    setTasks((current) =>
+      upsertTask(
+        current,
+        migrationStartingTask(
+          task,
+          framework,
+          confirmedEntry,
+          confirmedAppName,
+        ),
+      ),
+    );
     try {
       const next = await confirmMigrationTask({
         taskId: task.id,
         framework,
-        entry: STRUCTURED_FRAMEWORKS.has(framework) ? entry.trim() : undefined,
-        appName: appName.trim(),
+        entry: confirmedEntry || undefined,
+        appName: confirmedAppName,
         instruction: "",
         analysisAttempt: task.analysisRef.attempt,
         analysisSha256: task.analysisRef.sha256,
@@ -1181,7 +1725,7 @@ export function MigrationWorkspace({
   }
 
   async function stopTask() {
-    if (!task?.canStop || action) return;
+    if (!task?.canStop || taskEnvironmentExpired || action) return;
     setAction("stop");
     setError("");
     try {
@@ -1201,7 +1745,8 @@ export function MigrationWorkspace({
   }
 
   async function downloadArtifact() {
-    if (!task?.artifact.downloadReady || action) return;
+    if (!task?.artifact.downloadReady || taskEnvironmentExpired || action)
+      return;
     setAction("download");
     setError("");
     try {
@@ -1213,7 +1758,110 @@ export function MigrationWorkspace({
     }
   }
 
+  async function resumeEvaluation(environment: Record<string, string>) {
+    if (!task?.evaluation?.canResume || evaluationAction) return;
+    setEvaluationAction("resume");
+    setEvaluationActionError("");
+    try {
+      const evaluation = await resumeMigrationEvaluation(task.id, environment);
+      updateTaskEvaluation(task.id, evaluation);
+    } catch (cause) {
+      setEvaluationActionError(
+        cause instanceof Error ? cause.message : String(cause),
+      );
+      await reconcileTaskState(task.id, false);
+    } finally {
+      setEvaluationAction("");
+    }
+  }
+
+  async function retryEvaluation() {
+    if (!task?.evaluation?.canRetry || evaluationAction) return;
+    setEvaluationAction("retry");
+    setEvaluationActionError("");
+    try {
+      const evaluation = await retryMigrationEvaluation(task.id);
+      updateTaskEvaluation(task.id, evaluation);
+    } catch (cause) {
+      setEvaluationActionError(
+        cause instanceof Error ? cause.message : String(cause),
+      );
+      await reconcileTaskState(task.id, false);
+    } finally {
+      setEvaluationAction("");
+    }
+  }
+
+  async function retryEvaluationDatasetSave() {
+    if (!task?.evaluation?.enabled || evaluationAction) return;
+    if (!validateEvaluationDraft()) return;
+    const controller = new AbortController();
+    setEvaluationAction("dataset");
+    try {
+      const dataset = await saveEvaluationDataset(task.id, controller.signal);
+      applySavedEvaluationDataset(task.id, dataset);
+    } catch (cause) {
+      recordEvaluationDatasetSaveFailure(task.id, cause);
+    } finally {
+      setEvaluationAction("");
+    }
+  }
+
+  async function loadEvaluationReport() {
+    if (
+      !task?.evaluation?.report?.viewReady ||
+      task.evaluation.state !== "completed" ||
+      evaluationReportLoading ||
+      evaluationReport
+    )
+      return;
+    evaluationReportAbortRef.current?.abort();
+    const controller = new AbortController();
+    evaluationReportAbortRef.current = controller;
+    setEvaluationReportLoading(true);
+    setEvaluationReportError("");
+    try {
+      const report = await getMigrationEvaluationReport(
+        task.id,
+        task.evaluation.report.versionId,
+        controller.signal,
+      );
+      if (!controller.signal.aborted) setEvaluationReport(report);
+    } catch (cause) {
+      if (!controller.signal.aborted) {
+        setEvaluationReportError(
+          cause instanceof Error ? cause.message : String(cause),
+        );
+      }
+    } finally {
+      if (evaluationReportAbortRef.current === controller) {
+        evaluationReportAbortRef.current = null;
+        setEvaluationReportLoading(false);
+      }
+    }
+  }
+
+  async function downloadEvaluationReport() {
+    if (!task?.evaluation?.report?.downloadReady || evaluationAction) return;
+    setEvaluationAction("download");
+    setEvaluationActionError("");
+    try {
+      await downloadMigrationEvaluationReport(
+        task.id,
+        task.evaluation.report.versionId,
+      );
+    } catch (cause) {
+      setEvaluationActionError(
+        cause instanceof Error ? cause.message : String(cause),
+      );
+    } finally {
+      setEvaluationAction("");
+    }
+  }
+
   function startNewMigration() {
+    setPage("new");
+    setFocusedProjectId("");
     setSelectedTaskId("");
     setSourceFile(null);
     setError("");
@@ -1224,6 +1872,23 @@ export function MigrationWorkspace({
     setArtifactErrorRetryable(false);
     setDeploymentOpen(false);
     setStopConfirmOpen(false);
+    evaluationDraftTaskRef.current = "";
+    setEvaluationDraft(createMigrationEvaluationDraft());
+    setEvaluationErrors({});
+    setEvaluationAction("");
+    setEvaluationDatasetSaveError(null);
+    setEvaluationDraftLoadingTaskId("");
+    setEvaluationDraftLoadError(null);
+    setEvaluationDraftReloadKey(0);
+    setEvaluationReport(null);
+    setEvaluationReportError("");
+    setEvaluationActionError("");
+    const configuredModelId = capability?.model?.id.trim() || "";
+    setSelectedModelId(
+      selectableModels.some((model) => model.id === configuredModelId)
+        ? configuredModelId
+        : selectableModels[0]?.id || "",
+    );
   }
 
   const deploymentProject: AgentProject | null = artifact
@@ -1254,7 +1919,7 @@ export function MigrationWorkspace({
             key,
             required: true,
             comment: key,
-            placeholder: `请输入 ${key}`,
+            placeholder: t("deployment.requiredPlaceholder", { key }),
           })),
         ...artifact.environment.optional
           .filter(isMigrationRuntimeEnvironmentKey)
@@ -1262,7 +1927,7 @@ export function MigrationWorkspace({
             key,
             required: false,
             comment: key,
-            placeholder: `可选：${key}`,
+            placeholder: t("deployment.optionalPlaceholder", { key }),
           })),
       ]
     : [];
@@ -1272,7 +1937,7 @@ export function MigrationWorkspace({
     onStage?: (stage: DeployStage) => void,
     options?: Parameters<typeof deployAgentkitProject>[3],
   ) {
-    if (!task || !artifact) throw new Error("迁移产物尚未准备完成。");
+    if (!task || !artifact) throw new Error(t("deployment.notReady"));
     const runtimeNetwork =
       network && network.mode !== "public"
         ? {
@@ -1326,22 +1991,22 @@ export function MigrationWorkspace({
             aiAssisted: true,
           }}
           onBack={() => setDeploymentOpen(false)}
-          backLabel="返回迁移结果"
+          backLabel={t("deployment.back")}
           deploymentPrimaryPane={
             <section className="migration-deployment-summary">
-              <strong>迁移产物</strong>
+              <strong>{t("artifact.title")}</strong>
               <span>{task.sourceFileName}</span>
               <dl>
                 <div>
-                  <dt>迁移方式</dt>
+                  <dt>{t("confirmation.framework")}</dt>
                   <dd>{artifact.migration.framework}</dd>
                 </div>
                 <div>
-                  <dt>启动文件</dt>
+                  <dt>{t("artifact.startupFile")}</dt>
                   <dd>{artifact.startup.module}</dd>
                 </div>
                 <div>
-                  <dt>文件数</dt>
+                  <dt>{t("artifact.fileCountLabel")}</dt>
                   <dd>{artifact.files.length}</dd>
                 </div>
               </dl>
@@ -1354,509 +2019,32 @@ export function MigrationWorkspace({
 
   const composerFile = sourceFile;
   const composerBusy = action === "create" || action === "upload";
-  const showComposer = !task || task.canUpload;
+  const isHome = page === "new" && !task && action !== "create";
+  const navigationBusy = composerBusy || action === "confirm" || action === "answer" || action === "input" || action === "stop" || Boolean(evaluationAction);
+  const showComposer = !task || (task.canUpload && !taskEnvironmentExpired);
   const expiryCopy = task ? migrationExpiryCopy(task, now) : null;
+  const hasEvaluationTab = Boolean(task?.evaluation?.enabled);
+  const evaluationDatasetSaveFailed =
+    evaluationDatasetSaveError?.taskId === task?.id;
+  const evaluationSettingsLocked = Boolean(
+    task?.evaluation?.enabled &&
+      evaluationSettingsAreLocked(
+        task.state,
+        Boolean(task.evaluation.dataset),
+        evaluationDatasetSaveFailed,
+      ),
+  );
+  const evaluationDraftLoading = Boolean(
+    task?.evaluation?.enabled &&
+      (evaluationDraftLoadingTaskId === task.id ||
+        evaluationDraftTaskRef.current !== task.id),
+  );
+  const currentEvaluationDraftLoadError =
+    evaluationDraftLoadError?.taskId === task?.id
+      ? evaluationDraftLoadError
+      : null;
 
-  return (
-    <>
-      <section className="migration-workspace">
-        <aside className="migration-history">
-          <header>
-            <button
-              type="button"
-              className="migration-icon-button"
-              onClick={onBack}
-              aria-label="返回添加 Agent"
-              title="返回"
-            >
-              <BackIcon />
-            </button>
-            <h1>从存量迁移</h1>
-          </header>
-          <button
-            type="button"
-            className="migration-new-button"
-            onClick={startNewMigration}
-            disabled={composerBusy}
-          >
-            <PlusIcon />
-            <span>新建迁移</span>
-          </button>
-          <nav aria-label="迁移会话">
-            {loading ? (
-              <TextShimmer>正在读取迁移会话…</TextShimmer>
-            ) : tasks.length === 0 ? (
-              <p className="migration-history__empty">暂无迁移会话</p>
-            ) : (
-              tasks.map((item) => (
-                <button
-                  type="button"
-                  key={item.id}
-                  className={item.id === selectedTaskId ? "is-active" : ""}
-                  disabled={composerBusy}
-                  onClick={() => {
-                    setSelectedTaskId(item.id);
-                    setError("");
-                    setPollError("");
-                    setPollErrorRetryable(false);
-                  }}
-                >
-                  <span>{sourceStem(item.sourceFileName)}</span>
-                  <small>
-                    <span data-state={item.state}>{stateLabel(item.state)}</span>
-                    <time>{formatDate(item.createdAt)}</time>
-                  </small>
-                </button>
-              ))
-            )}
-          </nav>
-        </aside>
-
-        <main className="migration-main">
-          <header className="migration-main__header">
-            <div>
-              <h2>
-                {task ? sourceStem(task.sourceFileName) : "迁移存量 Agent 项目"}
-              </h2>
-              <p>
-                {task
-                  ? taskDisplayMessage(task)
-                  : "上传本地项目 ZIP，Codex 将先进行只读分析，再由你确认迁移方式。"}
-              </p>
-            </div>
-            {task ? (
-              <div className="migration-main__header-actions">
-                {task?.canStop ? (
-                  <button
-                    type="button"
-                    className="migration-stop-button"
-                    onClick={() => setStopConfirmOpen(true)}
-                    disabled={Boolean(action)}
-                  >
-                    {action === "stop" ? "正在终止…" : "终止迁移"}
-                  </button>
-                ) : null}
-                {expiryCopy ? (
-                  <div className="migration-ttl" aria-live="off">
-                    <strong>{expiryCopy.title}</strong>
-                    <small>{expiryCopy.detail}</small>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </header>
-
-          <div
-            className="migration-conversation"
-            role="log"
-            aria-live="polite"
-            ref={conversationRef}
-            onScroll={handleConversationScroll}
-          >
-          {!capability?.enabled && !loading ? (
-            <div className="migration-system-state is-error" role="alert">
-              <strong>迁移能力暂不可用</strong>
-              <p>{capability?.reason || "Dev Sandbox 暂不可用，请联系管理员检查配置。"}</p>
-            </div>
-          ) : null}
-
-          {!task ? (
-            <>
-              <article className="migration-turn is-assistant">
-                <div className="migration-assistant-mark">AI</div>
-                <div>
-                  <p>
-                    请提供本地项目 ZIP。上传后我会识别框架、入口和迁移边界，
-                    并在执行实际迁移前请你确认迁移方式。
-                  </p>
-                  <small>仅支持本地 ZIP，最大 50 MiB；迁移环境从创建起保留 1 小时。</small>
-                </div>
-              </article>
-              {action === "create" && sourceFile ? (
-                <>
-                  <article className="migration-turn is-user">
-                    <div className="migration-user-message">
-                      <span className="migration-file-chip">
-                        <FileIcon />
-                        <span title={sourceFile.name}>{sourceFile.name}</span>
-                      </span>
-                    </div>
-                  </article>
-                  <article className="migration-turn is-assistant">
-                    <div className="migration-assistant-mark">AI</div>
-                    <div className="migration-assistant-content">
-                      <MigrationTransferProgress stage="session" />
-                      <TextShimmer as="strong">
-                        正在创建 Dev Sandbox
-                      </TextShimmer>
-                      <p className="migration-running-note">
-                        正在初始化迁移工作目录，并检查 AgentKit CLI、Codex 和迁移能力。环境就绪后将自动上传项目。
-                      </p>
-                      <small>
-                        已等待 {formatElapsedTime(createElapsedSeconds)}
-                      </small>
-                    </div>
-                  </article>
-                </>
-              ) : null}
-            </>
-          ) : (
-            <>
-              <article className="migration-turn is-user">
-                <div className="migration-user-message">
-                  <span className="migration-file-chip">
-                    <FileIcon />
-                    <span title={task.sourceFileName}>{task.sourceFileName}</span>
-                  </span>
-                  {task.instruction ? <p>{task.instruction}</p> : null}
-                </div>
-              </article>
-
-              <article className="migration-turn is-assistant">
-                <div className="migration-assistant-mark">AI</div>
-                <div className="migration-assistant-content">
-                  {action === "upload" ? (
-                    <>
-                      <MigrationTransferProgress stage="upload" />
-                      <p className="migration-running-note">
-                        ZIP 上传完成后将自动开始只读分析。
-                      </p>
-                    </>
-                  ) : task.state === "analyzing" ? (
-                    <>
-                      <MigrationTransferProgress stage="analysis" />
-                      <p className="migration-running-note">
-                        Codex 正在识别框架、入口和迁移边界，不会执行实际迁移。
-                      </p>
-                    </>
-                  ) : isActiveState(task.state) ? (
-                    <>
-                      <TextShimmer>{taskDisplayMessage(task)}</TextShimmer>
-                      <p className="migration-running-note">
-                        迁移执行中不能修改附件或迁移方式。你可以等待当前任务结束，或主动终止。
-                      </p>
-                    </>
-                  ) : task.state === "needs_input" && task.analysis ? (
-                    <>
-                      <p>{task.analysis.summary}</p>
-                      <p>
-                        只读分析已暂停。请仅回答下面列出的问题，提交后会在同一
-                        迁移环境中重新分析，不会开始实际迁移。
-                      </p>
-                      {task.analysis.frameworks[0]?.evidence.length ? (
-                        <details className="migration-analysis__evidence">
-                          <summary>查看源码证据</summary>
-                          <ul>
-                            {task.analysis.frameworks.flatMap((candidate) =>
-                              candidate.evidence.map((item) => (
-                                <li
-                                  key={`${candidate.id}:${item.path}:${item.line}`}
-                                >
-                                  <code>{item.path}:{item.line}</code>
-                                  <span>{item.reason}</span>
-                                </li>
-                              )),
-                            )}
-                          </ul>
-                        </details>
-                      ) : null}
-                    </>
-                  ) : task.state === "analysis_ready" && task.analysis ? (
-                    <>
-                      <p>只读分析已完成。请检查建议，并确认最终迁移方式。</p>
-                      <AnalysisSummary analysis={task.analysis} />
-                    </>
-                  ) : task.state === "awaiting_upload" ? (
-                    <p>迁移环境已创建，请重新选择本地 ZIP 继续上传。</p>
-                  ) : task.state === "expired" ? (
-                    <div className="migration-expired">
-                      <strong>迁移环境已过期</strong>
-                      <p>
-                        迁移内容和产物已无法预览、下载或部署。如已完成 Runtime 部署，可返回智能体页面继续使用。
-                      </p>
-                    </div>
-                  ) : task.state === "failed" ? (
-                    task.error?.code === "MIGRATION_ANALYSIS_UNSUPPORTED" &&
-                    task.analysis ? (
-                      <div className="migration-system-state is-error">
-                        <strong>当前 ZIP 暂时无法迁移</strong>
-                        <Markdown text={task.analysis.summary} allowRawHtml={false} />
-                        {task.analysis.warnings.length > 0 ? (
-                          <ul>
-                            {task.analysis.warnings.map((warning) => (
-                              <li key={warning}>{warning}</li>
-                            ))}
-                          </ul>
-                        ) : null}
-                        <p>请按提示整理项目后，新建迁移并重新上传。</p>
-                      </div>
-                    ) : (
-                      <div className="migration-system-state is-error">
-                        <strong>迁移未完成</strong>
-                        <p>{task.message}</p>
-                      </div>
-                    )
-                  ) : task.state === "cancelled" ? (
-                    <p>当前迁移已终止。你可以新建迁移并重新上传项目。</p>
-                  ) : (
-                    <p>{taskDisplayMessage(task)}</p>
-                  )}
-                  {shouldShowCodexActivity(task) &&
-                  (activityLoading || activity?.available || activityError) ? (
-                    <MigrationActivityFeed
-                      activity={activity}
-                      loading={activityLoading}
-                      error={activityError}
-                      analyzing={task.state === "analyzing"}
-                    />
-                  ) : null}
-                </div>
-              </article>
-            </>
-          )}
-
-          {task?.state === "needs_input" && task.analysis ? (
-            <section
-              className="migration-confirmation"
-              aria-label="补充项目分析信息"
-            >
-              <div className="migration-confirmation__heading">
-                <strong>补充分析所需信息</strong>
-                <span>附件保持锁定，提交后仅继续只读分析</span>
-              </div>
-              {task.analysis.questions.map((question) => (
-                <label className="migration-field" key={question.id}>
-                  <span>
-                    {question.prompt}
-                    {question.required ? <b aria-hidden="true">*</b> : null}
-                  </span>
-                  <textarea
-                    value={answers[question.id] || ""}
-                    maxLength={4_000}
-                    required={question.required}
-                    aria-required={question.required}
-                    onChange={(event) => {
-                      const value = event.currentTarget.value;
-                      setAnswers((current) => ({
-                        ...current,
-                        [question.id]: value,
-                      }));
-                    }}
-                    disabled={Boolean(action)}
-                  />
-                </label>
-              ))}
-              <div className="migration-confirmation__actions">
-                <button
-                  type="button"
-                  className="migration-primary-button"
-                  onClick={() => void submitAnswers()}
-                  disabled={!canSubmitAnswers}
-                >
-                  {action === "answer" ? "正在继续分析…" : "提交并继续分析"}
-                </button>
-              </div>
-            </section>
-          ) : null}
-
-          {task?.state === "analysis_ready" && task.analysis ? (
-            <section
-              className="migration-confirmation"
-              aria-label="确认迁移方式"
-            >
-              <div className="migration-confirmation__heading">
-                <strong>确认迁移方式</strong>
-                <span>确认后才会执行实际迁移</span>
-              </div>
-              <div className="migration-confirmation__grid">
-                <NewChatCompactSelect
-                  label="迁移方式"
-                  value={framework}
-                  options={(capability?.frameworks ?? []).map((item) => ({
-                    value: item,
-                    label: FRAMEWORK_LABELS[item],
-                  }))}
-                  onChange={(value) => {
-                    const next = value as MigrationFramework;
-                    setFramework(next);
-                    const candidate = task.analysis?.entries.find(
-                      (item) => item.framework === next,
-                    );
-                    setEntry(candidate?.value || "");
-                  }}
-                  placeholder="选择迁移方式"
-                  disabled={Boolean(action)}
-                />
-                <label className="migration-field">
-                  <span>
-                    Agent 名称<b aria-hidden="true">*</b>
-                  </span>
-                  <input
-                    value={appName}
-                    onChange={(event) => setAppName(event.currentTarget.value)}
-                    maxLength={63}
-                    required
-                    disabled={Boolean(action)}
-                    aria-invalid={Boolean(confirmationNameError)}
-                    aria-required="true"
-                  />
-                  {confirmationNameError ? (
-                    <small role="alert">{confirmationNameError}</small>
-                  ) : null}
-                </label>
-                {STRUCTURED_FRAMEWORKS.has(framework) ? (
-                  entryOptions.length > 0 ? (
-                    <NewChatCompactSelect
-                      label="项目入口"
-                      value={entry}
-                      options={entryOptions}
-                      onChange={setEntry}
-                      placeholder="选择项目入口"
-                      disabled={Boolean(action)}
-                    />
-                  ) : (
-                    <label className="migration-field">
-                      <span>
-                        项目入口<b aria-hidden="true">*</b>
-                      </span>
-                      <input
-                        value={entry}
-                        onChange={(event) => setEntry(event.currentTarget.value)}
-                        placeholder="例如 agent.py:agent"
-                        maxLength={512}
-                        required
-                        disabled={Boolean(action)}
-                        aria-required="true"
-                      />
-                    </label>
-                  )
-                ) : null}
-              </div>
-              <p className="migration-running-note">
-                点击“确认并开始迁移”即确认上述迁移范围、排除项和关键假设。
-              </p>
-              <div className="migration-confirmation__actions">
-                <button
-                  type="button"
-                  className="migration-primary-button"
-                  onClick={() => void confirmMigration()}
-                  disabled={!canConfirm}
-                >
-                  {action === "confirm" ? "正在启动迁移…" : "确认并开始迁移"}
-                </button>
-              </div>
-            </section>
-          ) : null}
-
-          {task && isTerminalState(task.state) && task.artifact.previewReady ? (
-            <section className="migration-result">
-              <header>
-                <div>
-                  <strong>迁移产物</strong>
-                  <span>
-                    {task.artifact.deployReady
-                      ? "产物可预览、下载和部署。运行效果取决于源项目和部署环境变量；迁移环境过期后产物将无法访问。"
-                      : "产物可预览和下载，但当前交付状态不支持部署；迁移环境过期后产物将无法访问。"}
-                  </span>
-                </div>
-                <div className="migration-result__actions">
-                  <button
-                    type="button"
-                    onClick={() => void downloadArtifact()}
-                    disabled={!task.artifact.downloadReady || Boolean(action)}
-                  >
-                    <DownloadIcon />
-                    <span>{action === "download" ? "下载中…" : "下载 ZIP"}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="is-primary"
-                    onClick={() => setDeploymentOpen(true)}
-                    disabled={!task.artifact.deployReady || !artifact}
-                    title={
-                      task.artifact.deployReady
-                        ? "部署迁移产物"
-                        : "当前交付状态不支持部署"
-                    }
-                  >
-                    <DeployIcon />
-                    <span>部署到 Runtime</span>
-                  </button>
-                </div>
-              </header>
-              {artifactError ? (
-                <div className="migration-system-state is-error" role="alert">
-                  <p>{artifactError}</p>
-                  {artifactErrorRetryable ? (
-                    <button
-                      type="button"
-                      className="migration-retry-button"
-                      onClick={() => {
-                        setArtifactError("");
-                        setArtifactErrorRetryable(false);
-                        setArtifactReload((current) => current + 1);
-                      }}
-                    >
-                      重新读取
-                    </button>
-                  ) : null}
-                </div>
-              ) : artifact ? (
-                <>
-                  <div className="migration-result__summary">
-                    <span>{artifact.files.length} 个文件</span>
-                    <span>CLI {artifact.cli.version}</span>
-                    <span>启动文件 {artifact.startup.module}</span>
-                    <span>{verificationLabel(artifact.verification.status)}</span>
-                  </div>
-                  <ArtifactBrowser task={task} artifact={artifact} />
-                </>
-              ) : (
-                <TextShimmer>正在读取迁移产物…</TextShimmer>
-              )}
-            </section>
-          ) : null}
-
-          {pollError ? (
-            <div className="migration-inline-error" role="alert">
-              <span>{pollError}</span>
-              {pollErrorRetryable ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!task) return;
-                    setPollError("");
-                    setPollErrorRetryable(false);
-                    void getMigrationTask(task.id)
-                      .then((next) =>
-                        setTasks((current) => upsertTask(current, next)),
-                      )
-                      .catch((cause: unknown) => {
-                        setPollError(
-                          cause instanceof Error ? cause.message : String(cause),
-                        );
-                        setPollErrorRetryable(
-                          cause instanceof MigrationApiError && cause.retryable,
-                        );
-                      });
-                  }}
-                >
-                  刷新状态
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-          {error ? (
-            <div className="migration-inline-error" role="alert">
-              <span>{error}</span>
-              <button type="button" onClick={() => setError("")} aria-label="关闭错误提示">
-                <CloseIcon />
-              </button>
-            </div>
-          ) : null}
-          </div>
-
-          {showComposer && capability?.enabled ? (
+  const composer = activeTaskTab === "migration" && showComposer && capability?.enabled ? (
             <div className="migration-composer">
               <div
                 className={`migration-composer__box${dragging ? " is-dragging" : ""}`}
@@ -1889,31 +2077,53 @@ export function MigrationWorkspace({
                 {composerFile ? (
                   <div className="migration-composer__file">
                     <FileIcon />
-                    <span>{composerFile.name}</span>
+                    <span title={composerFile.name}>{composerFile.name}</span>
                     <small>{formatBytes(composerFile.size)}</small>
                     <button
                       type="button"
                       onClick={() => setSourceFile(null)}
-                      aria-label="移除项目 ZIP"
+                      aria-label={t("upload.removeAria")}
                       disabled={composerBusy}
                     >
                       <CloseIcon />
                     </button>
                   </div>
                 ) : (
-                  <p>{task ? "重新选择项目 ZIP" : "选择或拖入本地项目 ZIP"}</p>
+                  <div className="migration-upload-prompt">
+                    <UploadIcon />
+                    <p>{task ? t("upload.reselectPrompt") : t("upload.selectPrompt")}</p>
+                    <small>{t("upload.sizeHint", { size: maxSourceSizeLabel })}</small>
+                  </div>
                 )}
               </div>
               <div className="migration-composer__actions">
-                <button
-                  type="button"
-                  className="migration-attach-button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={composerBusy}
-                >
-                  <UploadIcon />
-                  <span>{sourceFile ? "重新选择" : "选择 ZIP"}</span>
-                </button>
+                <div className="migration-composer__tools">
+                  <button
+                    type="button"
+                    className="migration-attach-button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={composerBusy}
+                  >
+                    <UploadIcon />
+                    <span>{sourceFile ? t("upload.reselect") : t("upload.selectZip")}</span>
+                  </button>
+                  <div className="migration-composer__model-select">
+                    <NewChatCompactSelect
+                      label={t("model.label")}
+                      value={composerModelId}
+                      options={modelSelectOptions}
+                      onChange={setSelectedModelId}
+                      placeholder={t("model.placeholder")}
+                      searchable
+                      loading={modelsLoading}
+                      error={modelsError}
+                      disabled={composerBusy || Boolean(task)}
+                      onRetry={() =>
+                        setModelsReloadKey((current) => current + 1)
+                      }
+                    />
+                  </div>
+                </div>
                 <button
                   type="button"
                   className="migration-confirm-upload-button"
@@ -1922,30 +2132,891 @@ export function MigrationWorkspace({
                   }
                   disabled={!sourceFile || composerBusy}
                 >
-                  {task ? "继续上传" : "开始迁移"}
+                  {composerBusy ? t("upload.uploading") : task ? t("upload.continue") : t("upload.start")}
                 </button>
               </div>
+              <MigrationEvaluationSetup
+                value={evaluationDraft}
+                onChange={(value) => {
+                  setEvaluationDraft(value);
+                  setEvaluationErrors({});
+                }}
+                capability={capability.evaluation}
+                disabled={composerBusy}
+                configLocked={Boolean(task)}
+                locked={Boolean(task?.evaluation?.dataset)}
+                errors={evaluationErrors}
+              />
               <input
                 ref={fileInputRef}
                 type="file"
                 accept=".zip,application/zip"
                 onChange={handleFileChange}
-                aria-label="选择本地项目 ZIP"
+                aria-label={t("upload.inputAria")}
                 disabled={composerBusy}
               />
               </div>
               <p>
-                迁移环境从创建完成起保留 1 小时，过期后产物无法预览、下载或部署。
+                {t("upload.retention")}
+              </p>
+            </div>
+          ) : null;
+
+  return (
+    <>
+      <section className="migration-workspace">
+        <header className="migration-workspace__nav">
+          <div className="migration-workspace__location">
+            <button type="button" className="migration-new-button"
+              onClick={isHome ? onBack : startNewMigration} disabled={navigationBusy}>
+              <BackIcon />
+              <span>{isHome ? t("common.back") : t("workspace.backToHome")}</span>
+            </button>
+            <h1>{page === "projects" ? t("projects.title") : t("workspace.title")}</h1>
+          </div>
+          <nav aria-label={t("workspace.navigation")}>
+            {!isHome ? (
+              <button type="button" className="migration-new-button"
+                onClick={startNewMigration} disabled={navigationBusy}>
+                <PlusIcon /><span>{t("workspace.newMigration")}</span>
+              </button>
+            ) : null}
+            {page !== "projects" ? (
+              <button type="button" className="migration-new-button"
+                onClick={() => { setFocusedProjectId(""); setPage("projects"); }}
+                disabled={navigationBusy}>
+                <FileIcon /><span>{t("projects.title")}</span>
+              </button>
+            ) : null}
+          </nav>
+        </header>
+
+        {page === "projects" ? (
+          <MigratedProjectsPage
+            capabilities={projectCapabilities}
+            capabilitiesLoading={projectCapabilitiesLoading}
+            preparationStage={optimizationPreparationStage}
+            optimizationError={optimizationError}
+            initialProjectId={focusedProjectId}
+            onOptimize={onOptimizeVersion}
+            onCancelOptimization={onCancelOptimization}
+            onDownload={onDownloadSavedVersion}
+            onDeploy={onDeploySavedVersion}
+          />
+        ) : isHome ? (
+          <main className="migration-home">
+            <div className="migration-home__content">
+              <header className="migration-home__heading">
+                <h2>{t("workspace.heading")}</h2>
+                <p>{t("workspace.intro")}</p>
+              </header>
+              {loading ? <TextShimmer>{t("workspace.loadingSessions")}</TextShimmer> : null}
+              {loadError ? (
+                <div className="migration-inline-error" role="alert">
+                  <span>{localeCompatibleBackendText(loadError, locale) || t("errors.loadFailed")}</span>
+                  <button type="button" disabled={loading} onClick={() => setLoadKey((key) => key + 1)}>{t("actions.reload")}</button>
+                </div>
+              ) : null}
+              {capabilityError ? (
+                <div className="migration-inline-error" role="alert">
+                  <span>{localeCompatibleBackendText(capabilityError, locale) || t("errors.loadFailed")}</span>
+                  <button type="button" disabled={loading} onClick={() => setLoadKey((key) => key + 1)}>{t("actions.reload")}</button>
+                </div>
+              ) : null}
+              {capability && !capability.enabled ? (
+                <div className="migration-system-state is-error" role="alert">
+                  <strong>{t("capability.unavailable")}</strong>
+                  <p>{localeCompatibleBackendText(capability.reason, locale) || t("capability.defaultReason")}</p>
+                </div>
+              ) : null}
+              {composer}
+              {error ? (
+                <div className="migration-inline-error" role="alert">
+                  <span>{localeCompatibleBackendText(error, locale) || t("errors.loadFailed")}</span>
+                  <button type="button" onClick={() => setError("")} aria-label={t("errors.closeAria")}><CloseIcon /></button>
+                </div>
+              ) : null}
+              <section className="migration-history" aria-labelledby="migration-recent-heading">
+                <header>
+                  <h2 id="migration-recent-heading">{t("workspace.recent")}</h2>
+                  {tasks.length > 5 ? (
+                    <button type="button" className="migration-new-button"
+                      aria-expanded={showAllTasks} aria-controls="migration-recent-list"
+                      onClick={() => setShowAllTasks((value) => !value)}>
+                      {t(showAllTasks ? "workspace.showLess" : "workspace.showMore")}
+                    </button>
+                  ) : null}
+                </header>
+                {pollError ? (
+                  <div className="migration-inline-error" role="alert">
+                    <span>{localeCompatibleBackendText(pollError, locale) || t("errors.refreshFailed")}</span>
+                    {pollErrorRetryable ? <button type="button" onClick={() => void reconcileTaskList()}>{t("actions.refreshStatus")}</button> : null}
+                  </div>
+                ) : null}
+                {!loading && !loadError && tasks.length === 0 ? <p className="migration-history__empty">{t("workspace.noSessions")}</p> : null}
+                {tasks.length > 0 ? (
+                  <table id="migration-recent-list">
+                    <thead><tr>
+                      <th scope="col">{t("workspace.projectName")}</th>
+                      <th scope="col">{t("workspace.status")}</th>
+                      <th scope="col">{t("workspace.createdAt")}</th>
+                      <th scope="col">{t("workspace.actions")}</th>
+                    </tr></thead>
+                    <tbody>{(showAllTasks ? tasks : tasks.slice(0, 5)).map((item) => {
+                      const status = migrationHistoryStatus(item);
+                      const environmentExpired = isMigrationEnvironmentExpired(item, now);
+                      const statusLabel = migrationText(status.labelKey);
+                      return (
+                        <tr key={item.id}>
+                          <th scope="row"><span title={sourceStem(item.sourceFileName)}>{sourceStem(item.sourceFileName)}</span></th>
+                          <td><span className="migration-history__status">
+                            <span className="migration-history__status-label" data-tone={status.tone} title={statusLabel}>{statusLabel}</span>
+                            {environmentExpired ? <span className="migration-history__expiry-badge">{t("historyStatus.environmentExpired")}</span> : null}
+                          </span></td>
+                          <td><time>{formatDate(item.createdAt)}</time></td>
+                          <td><button type="button" className="migration-new-button"
+                            aria-label={t("workspace.openTask", { name: sourceStem(item.sourceFileName) })}
+                            onClick={() => {
+                              setSelectedTaskId(item.id);
+                              setSourceFile(null);
+                              setError("");
+                            }}>
+                            {t(!environmentExpired && (item.canAnswer || item.canConfirm || item.canUpload) ? "workspace.continueTask" : "workspace.viewTask")}
+                          </button></td>
+                        </tr>
+                      );
+                    })}</tbody>
+                  </table>
+                ) : null}
+              </section>
+            </div>
+          </main>
+        ) : (
+          <main className="migration-main">
+            <div className="migration-main__top">
+            <header className="migration-main__header">
+            <div>
+              <h2>
+                {task ? sourceStem(task.sourceFileName) : t("workspace.heading")}
+              </h2>
+              <p>
+                {task
+                  ? taskDisplayMessage(task)
+                  : t("workspace.intro")}
+              </p>
+            </div>
+            {task ? (
+              <div className="migration-main__header-actions">
+                {task?.canStop && !taskEnvironmentExpired ? (
+                  <button
+                    type="button"
+                    className="migration-stop-button"
+                    onClick={() => setStopConfirmOpen(true)}
+                    disabled={Boolean(action)}
+                  >
+                    {action === "stop" ? t("actions.stopping") : t("actions.stop")}
+                  </button>
+                ) : null}
+                {expiryCopy ? (
+                  <div className="migration-ttl" aria-live="off">
+                    <strong>{expiryCopy.title}</strong>
+                    <small>{expiryCopy.detail}</small>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            </header>
+
+            {hasEvaluationTab && task ? (
+              <nav
+                className="migration-task-tabs"
+                role="tablist"
+                aria-label={t("evaluation.tabs.label")}
+              >
+                <button
+                  ref={migrationTabRef}
+                  id="migration-task-tab"
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTaskTab === "migration"}
+                  aria-controls="migration-task-panel"
+                  tabIndex={activeTaskTab === "migration" ? 0 : -1}
+                  className={activeTaskTab === "migration" ? "is-active" : ""}
+                  onClick={() => setActiveTaskTab("migration")}
+                  onKeyDown={(event) => {
+                    if (event.key !== "ArrowRight") return;
+                    event.preventDefault();
+                    setActiveTaskTab("evaluation");
+                    evaluationTabRef.current?.focus();
+                  }}
+                >
+                  {t("evaluation.tabs.migration")}
+                </button>
+                <button
+                  ref={evaluationTabRef}
+                  id="evaluation-task-tab"
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTaskTab === "evaluation"}
+                  aria-controls="evaluation-task-panel"
+                  tabIndex={activeTaskTab === "evaluation" ? 0 : -1}
+                  className={activeTaskTab === "evaluation" ? "is-active" : ""}
+                  onClick={() => setActiveTaskTab("evaluation")}
+                  onKeyDown={(event) => {
+                    if (event.key !== "ArrowLeft") return;
+                    event.preventDefault();
+                    setActiveTaskTab("migration");
+                    migrationTabRef.current?.focus();
+                  }}
+                >
+                  <span>{t("evaluation.tabs.evaluation")}</span>
+                  <small>{t(evaluationTabStatusKey(task))}</small>
+                </button>
+              </nav>
+            ) : null}
+            </div>
+
+          <div
+            id={activeTaskTab === "evaluation" ? "evaluation-task-panel" : "migration-task-panel"}
+            className={`migration-conversation${activeTaskTab === "evaluation" ? " is-evaluation" : ""}`}
+            role={hasEvaluationTab ? "tabpanel" : "log"}
+            aria-labelledby={
+              hasEvaluationTab
+                ? activeTaskTab === "evaluation"
+                  ? "evaluation-task-tab"
+                  : "migration-task-tab"
+                : undefined
+            }
+            aria-live={activeTaskTab === "migration" ? "polite" : undefined}
+            ref={conversationRef}
+            onScroll={handleConversationScroll}
+          >
+          {activeTaskTab === "migration" ? (
+            <>
+          {!capability?.enabled && !loading ? (
+            <div className="migration-system-state is-error" role="alert">
+              <strong>{t("capability.unavailable")}</strong>
+              <p>
+                {localeCompatibleBackendText(capability?.reason, locale)
+                  || localeCompatibleBackendText(capabilityError, locale)
+                  || t("capability.defaultReason")}
               </p>
             </div>
           ) : null}
-        </main>
+
+          {!task ? (
+            <>
+              {action === "create" && sourceFile ? (
+                <>
+                  <article className="migration-turn is-user">
+                    <div className="migration-user-message">
+                      <span className="migration-file-chip">
+                        <FileIcon />
+                        <span title={sourceFile.name}>{sourceFile.name}</span>
+                      </span>
+                    </div>
+                  </article>
+                  <article className="migration-turn is-assistant">
+                    <div className="migration-assistant-mark">AI</div>
+                    <div className="migration-assistant-content">
+                      <MigrationTransferProgress stage="session" />
+                      <TextShimmer as="strong">
+                        {t("conversation.creatingSandbox")}
+                      </TextShimmer>
+                      <p className="migration-running-note">
+                        {t("conversation.initializing")}
+                      </p>
+                      <small>
+                        {t("conversation.elapsed", { duration: formatElapsedTime(createElapsedSeconds) })}
+                      </small>
+                    </div>
+                  </article>
+                </>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <article className="migration-turn is-user">
+                <div className="migration-user-message">
+                  <span className="migration-file-chip">
+                    <FileIcon />
+                    <span title={task.sourceFileName}>{task.sourceFileName}</span>
+                  </span>
+                  {task.instruction ? <p>{task.instruction}</p> : null}
+                </div>
+              </article>
+
+              <article className="migration-turn is-assistant">
+                <div className="migration-assistant-mark">AI</div>
+                <div className="migration-assistant-content">
+                  {action === "upload" ? (
+                    <>
+                      <MigrationTransferProgress stage="upload" />
+                      <p className="migration-running-note">
+                        {t("conversation.uploadThenAnalyze")}
+                      </p>
+                    </>
+                  ) : task.state === "analyzing" ? (
+                    <>
+                      <MigrationTransferProgress stage="analysis" />
+                      <p className="migration-running-note">
+                        {t("conversation.analyzing")}
+                      </p>
+                    </>
+                  ) : isActiveState(task.state) ? (
+                    <>
+                      <TextShimmer>{taskDisplayMessage(task)}</TextShimmer>
+                      <p className="migration-running-note">
+                        {t("conversation.migrationLocked")}
+                      </p>
+                    </>
+                  ) : task.state === "needs_input" && task.analysis ? (
+                    <>
+                      <p>{task.analysis.summary}</p>
+                      <p>{t("conversation.analysisPaused")}</p>
+                      {task.analysis.frameworks[0]?.evidence.length ? (
+                        <details className="migration-analysis__evidence">
+                          <summary>{t("analysis.viewSourceEvidence")}</summary>
+                          <ul>
+                            {task.analysis.frameworks.flatMap((candidate) =>
+                              candidate.evidence.map((item) => (
+                                <li
+                                  key={`${candidate.id}:${item.path}:${item.line}`}
+                                >
+                                  <code>{item.path}:{item.line}</code>
+                                  <span>{item.reason}</span>
+                                </li>
+                              )),
+                            )}
+                          </ul>
+                        </details>
+                      ) : null}
+                    </>
+                  ) : task.state === "analysis_ready" && task.analysis ? (
+                    <>
+                      <p>{t("conversation.analysisComplete")}</p>
+                      <AnalysisSummary analysis={task.analysis} />
+                    </>
+                  ) : task.state === "awaiting_upload" ? (
+                    <p>{t("conversation.awaitingUpload")}</p>
+                  ) : task.state === "expired" ? (
+                    <div className="migration-expired">
+                      <strong>{t("conversation.expiredTitle")}</strong>
+                      <p>{t("conversation.expiredDescription")}</p>
+                    </div>
+                  ) : task.state === "failed" ? (
+                    task.error?.code === "MIGRATION_ANALYSIS_UNSUPPORTED" &&
+                    task.analysis ? (
+                      <div className="migration-system-state is-error">
+                        <strong>{t("conversation.unsupportedTitle")}</strong>
+                        <Markdown text={task.analysis.summary} allowRawHtml={false} />
+                        {task.analysis.warnings.length > 0 ? (
+                          <ul>
+                            {task.analysis.warnings.map((warning) => (
+                              <li key={warning}>{warning}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        <p>{t("conversation.unsupportedHint")}</p>
+                      </div>
+                    ) : (
+                      <div className="migration-system-state is-error">
+                        <strong>{t("conversation.failedTitle")}</strong>
+                        <p>{task.message}</p>
+                      </div>
+                    )
+                  ) : task.state === "cancelled" ? (
+                    <p>{t("conversation.cancelled")}</p>
+                  ) : (
+                    <p>{taskDisplayMessage(task)}</p>
+                  )}
+                  {shouldShowCodexActivity(task) &&
+                  (activityLoading || activity?.available || activityError) ? (
+                    <MigrationActivityFeed
+                      activity={activity}
+                      loading={activityLoading}
+                      error={activityError}
+                      analyzing={task.state === "analyzing"}
+                      status={migrationLiveStatus(task)}
+                    />
+                  ) : null}
+                </div>
+              </article>
+            </>
+          )}
+
+          {pendingInput ? (
+            <section
+              className="migration-confirmation"
+              aria-label={t("pendingInput.ariaLabel")}
+            >
+              <div className="migration-confirmation__heading">
+                <strong>{t("pendingInput.title")}</strong>
+                <span>{t("pendingInput.description")}</span>
+              </div>
+              {pendingInput.questions.map((question) => {
+                const selected = inputAnswers[question.id] || "";
+                const chosen = question.options.some(
+                  (option) => option.label === selected,
+                );
+                return (
+                  <div className="migration-question" key={question.id}>
+                    <span className="migration-question__header">
+                      {question.header}
+                    </span>
+                    <p className="migration-question__prompt">
+                      {question.question}
+                    </p>
+                    {question.options.length > 0 ? (
+                      <div
+                        className="migration-question__options"
+                        role="radiogroup"
+                        aria-label={question.header}
+                      >
+                        {question.options.map((option) => (
+                          <label
+                            className={
+                              "migration-question__option" +
+                              (selected === option.label ? " is-selected" : "")
+                            }
+                            key={option.label}
+                          >
+                            <input
+                              type="radio"
+                              name={`${pendingInput.id}:${question.id}`}
+                              checked={selected === option.label}
+                              onChange={() => {
+                                setInputAnswers((current) => ({
+                                  ...current,
+                                  [question.id]: option.label,
+                                }));
+                              }}
+                              disabled={Boolean(action)}
+                            />
+                            <span>
+                              <strong>{option.label}</strong>
+                              <em>{option.description}</em>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    ) : null}
+                    <label className="migration-question__other">
+                      <span>{t("pendingInput.other")}</span>
+                      <textarea
+                        value={chosen ? "" : selected}
+                        placeholder={t("pendingInput.otherPlaceholder")}
+                        maxLength={4_000}
+                        aria-label={`${question.header} ${t("pendingInput.other")}`}
+                        onChange={(event) => {
+                          const value = event.currentTarget.value;
+                          setInputAnswers((current) => ({
+                            ...current,
+                            [question.id]: value,
+                          }));
+                        }}
+                        disabled={Boolean(action)}
+                      />
+                    </label>
+                  </div>
+                );
+              })}
+              <div className="migration-confirmation__actions">
+                <button
+                  type="button"
+                  className="migration-primary-button"
+                  onClick={() => void submitInput()}
+                  disabled={!canSubmitInput}
+                >
+                  {action === "input"
+                    ? t("pendingInput.submitting")
+                    : t("pendingInput.submit")}
+                </button>
+              </div>
+            </section>
+          ) : null}
+
+          {task?.state === "needs_input" && task.analysis ? (
+            <section
+              className="migration-confirmation"
+              aria-label={t("questions.ariaLabel")}
+            >
+              <div className="migration-confirmation__heading">
+                <strong>{t("questions.title")}</strong>
+                <span>{t("questions.description")}</span>
+              </div>
+              {task.analysis.questions.map((question) => (
+                <label className="migration-field" key={question.id}>
+                  <span>
+                    {question.prompt}
+                    {question.required ? <b aria-hidden="true">*</b> : null}
+                  </span>
+                  <textarea
+                    value={answers[question.id] || ""}
+                    maxLength={4_000}
+                    required={question.required}
+                    aria-required={question.required}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      setAnswers((current) => ({
+                        ...current,
+                        [question.id]: value,
+                      }));
+                    }}
+                    disabled={Boolean(action)}
+                  />
+                </label>
+              ))}
+              <div className="migration-confirmation__actions">
+                <button
+                  type="button"
+                  className="migration-primary-button"
+                  onClick={() => void submitAnswers()}
+                  disabled={!canSubmitAnswers}
+                >
+                  {action === "answer" ? t("questions.submitting") : t("questions.submit")}
+                </button>
+              </div>
+            </section>
+          ) : null}
+
+          {task?.state === "analysis_ready" && task.analysis ? (
+            <section
+              className="migration-confirmation"
+              aria-label={t("confirmation.ariaLabel")}
+            >
+              <div className="migration-confirmation__heading">
+                <strong>{t("confirmation.title")}</strong>
+              </div>
+              <div className="migration-confirmation__grid">
+                <div className="migration-confirmation__row">
+                  <span>{t("confirmation.framework")}</span>
+                  <NewChatCompactSelect
+                    hideLabel
+                    label={t("confirmation.framework")}
+                    value={framework}
+                    options={(capability?.frameworks ?? []).map((item) => ({
+                      value: item,
+                      label: frameworkLabel(item),
+                    }))}
+                    onChange={(value) => {
+                      const next = value as MigrationFramework;
+                      setFramework(next);
+                      const candidate = task.analysis?.entries.find(
+                        (item) => item.framework === next,
+                      );
+                      setEntry(candidate?.value || "");
+                    }}
+                    placeholder={t("confirmation.frameworkPlaceholder")}
+                    disabled={Boolean(action)}
+                  />
+                </div>
+                <label className="migration-field migration-confirmation__row">
+                  <span>
+                    {t("confirmation.agentName")}<b aria-hidden="true">*</b>
+                  </span>
+                  <input
+                    value={appName}
+                    onChange={(event) => setAppName(event.currentTarget.value)}
+                    maxLength={63}
+                    required
+                    disabled={Boolean(action)}
+                    aria-invalid={Boolean(confirmationNameError)}
+                    aria-required="true"
+                  />
+                  {confirmationNameError ? (
+                    <small role="alert">{confirmationNameError}</small>
+                  ) : null}
+                </label>
+                {STRUCTURED_FRAMEWORKS.has(framework) ? (
+                  entryOptions.length > 0 ? (
+                    <div className="migration-confirmation__row">
+                      <span>{t("confirmation.entry")}</span>
+                      <NewChatCompactSelect
+                        hideLabel
+                        label={t("confirmation.entry")}
+                        value={entry}
+                        options={entryOptions}
+                        onChange={setEntry}
+                        placeholder={t("confirmation.entryPlaceholder")}
+                        disabled={Boolean(action)}
+                      />
+                    </div>
+                  ) : (
+                    <label className="migration-field migration-confirmation__row">
+                      <span>
+                        {t("confirmation.entry")}<b aria-hidden="true">*</b>
+                      </span>
+                      <input
+                        value={entry}
+                        onChange={(event) => setEntry(event.currentTarget.value)}
+                        placeholder={t("confirmation.entryExample")}
+                        maxLength={512}
+                        required
+                        disabled={Boolean(action)}
+                        aria-required="true"
+                      />
+                    </label>
+                  )
+                ) : null}
+              </div>
+              <div className="migration-confirmation__footer">
+                <p className="migration-confirmation__consent">
+                  {t("confirmation.consent")}
+                </p>
+                <div className="migration-confirmation__actions">
+                  <button
+                    type="button"
+                    className="migration-primary-button"
+                    onClick={() => void confirmMigration()}
+                    disabled={!canConfirm}
+                  >
+                    {action === "confirm" ? t("confirmation.starting") : t("confirmation.start")}
+                  </button>
+                </div>
+              </div>
+            </section>
+          ) : null}
+
+          {task &&
+          isTerminalState(task.state) &&
+          ((task.artifact.previewReady && !taskEnvironmentExpired) ||
+            task.persistence?.state === "saved") ? (
+            <section className="migration-result">
+              <header>
+                <div>
+                  <strong>{t("artifact.title")}</strong>
+                  <span>
+                    {task.persistence?.state === "saved"
+                      ? t("artifact.saved")
+                      : task.persistence?.state === "saving"
+                        ? t("artifact.saving")
+                        : task.artifact.deployReady
+                          ? t("artifact.deployReady")
+                          : t("artifact.deployUnavailable")}
+                  </span>
+                </div>
+                <div className="migration-result__actions">
+                  {task.persistence?.state === "saved" ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFocusedProjectId(task.persistence?.projectId ?? "");
+                        setPage("projects");
+                      }}
+                    >
+                      <span>{t("artifact.viewProjects")}</span>
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => void downloadArtifact()}
+                    disabled={
+                      taskEnvironmentExpired ||
+                      !task.artifact.downloadReady ||
+                      Boolean(action)
+                    }
+                  >
+                    <DownloadIcon />
+                    <span>{action === "download" ? t("artifact.downloading") : t("artifact.downloadZip")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="is-primary"
+                    onClick={() => setDeploymentOpen(true)}
+                    disabled={
+                      taskEnvironmentExpired ||
+                      !task.artifact.deployReady ||
+                      !artifact
+                    }
+                    title={
+                      taskEnvironmentExpired
+                        ? t("expiry.ended")
+                        : task.artifact.deployReady
+                        ? t("artifact.deployTitle")
+                        : t("artifact.deployUnavailableTitle")
+                    }
+                  >
+                    <DeployIcon />
+                    <span>{t("artifact.deployRuntime")}</span>
+                  </button>
+                </div>
+              </header>
+              {task.persistence
+                && ["failed", "unavailable"].includes(task.persistence.state) ? (
+                <div className="migration-system-state is-error" role="alert">
+                  <p>{task.persistence.message}</p>
+                </div>
+              ) : null}
+              {taskEnvironmentExpired ? (
+                <div className="migration-system-state">
+                  <p>
+                    {task.persistence?.state === "saved"
+                      ? t("expiry.savedAvailable")
+                      : t("expiry.unavailable")}
+                  </p>
+                </div>
+              ) : artifactError ? (
+                <div className="migration-system-state is-error" role="alert">
+                  <p>{artifactError}</p>
+                  {artifactErrorRetryable ? (
+                    <button
+                      type="button"
+                      className="migration-retry-button"
+                      onClick={() => {
+                        setArtifactError("");
+                        setArtifactErrorRetryable(false);
+                        setArtifactReload((current) => current + 1);
+                      }}
+                    >
+                      {t("actions.reload")}
+                    </button>
+                  ) : null}
+                </div>
+              ) : artifact ? (
+                <>
+                  <div className="migration-result__summary">
+                    <span>{t("artifact.fileCount", { count: artifact.files.length })}</span>
+                    <span>CLI {artifact.cli.version}</span>
+                    <span>{t("artifact.startup", { module: artifact.startup.module })}</span>
+                    <span>{verificationLabel(artifact.verification.status)}</span>
+                  </div>
+                  <ArtifactBrowser task={task} artifact={artifact} />
+                </>
+              ) : (
+                <TextShimmer>{t("artifact.loading")}</TextShimmer>
+              )}
+            </section>
+          ) : null}
+
+            </>
+          ) : task?.evaluation?.enabled ? (
+            <div className="migration-evaluation-tab">
+              {evaluationDraftLoading ? (
+                <div className="migration-system-state" role="status">
+                  <TextShimmer>
+                    {t("evaluation.dataset.loadingSettings")}
+                  </TextShimmer>
+                </div>
+              ) : currentEvaluationDraftLoadError ? (
+                <div className="migration-inline-error" role="alert">
+                  <span>
+                    {t("evaluation.dataset.loadSettingsFailed")} {currentEvaluationDraftLoadError.message}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      evaluationDraftTaskRef.current = "";
+                      setEvaluationDraftReloadKey((current) => current + 1);
+                    }}
+                  >
+                    {t("evaluation.dataset.retryLoadSettings")}
+                  </button>
+                </div>
+              ) : (
+                <MigrationEvaluationSetup
+                  value={evaluationDraft}
+                  onChange={(value) => {
+                    setEvaluationDraft(value);
+                    setEvaluationErrors({});
+                  }}
+                  capability={capability?.evaluation}
+                  disabled={Boolean(evaluationAction || action)}
+                  configLocked
+                  locked={evaluationSettingsLocked}
+                  compact
+                  errors={evaluationErrors}
+                />
+              )}
+              {evaluationDatasetSaveError?.taskId === task.id ? (
+                <div className="migration-inline-error" role="alert">
+                  <span>
+                    {t("evaluation.dataset.saveWarning")} {evaluationDatasetSaveError.message}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void retryEvaluationDatasetSave()}
+                    disabled={evaluationAction === "dataset"}
+                  >
+                    {evaluationAction === "dataset"
+                      ? t("evaluation.dataset.saving")
+                      : t("evaluation.dataset.retrySave")}
+                  </button>
+                </div>
+              ) : null}
+              <MigrationEvaluationResult
+                taskId={task.id}
+                evaluation={task.evaluation}
+                report={evaluationReport}
+                reportLoading={evaluationReportLoading}
+                reportError={evaluationReportError}
+                actionError={evaluationActionError}
+                busy={Boolean(evaluationAction)}
+                reportDownloading={evaluationAction === "download"}
+                onResume={(environment) => void resumeEvaluation(environment)}
+                onRetry={retryEvaluation}
+                onLoadReport={() => void loadEvaluationReport()}
+                onDownloadReport={() => void downloadEvaluationReport()}
+              />
+            </div>
+          ) : null}
+
+          {pollError ? (
+            <div className="migration-inline-error" role="alert">
+              <span>
+                {localeCompatibleBackendText(pollError, locale)
+                  || t("errors.refreshFailed")}
+              </span>
+              {pollErrorRetryable ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!task) return;
+                    setPollError("");
+                    setPollErrorRetryable(false);
+                    void getMigrationTask(task.id)
+                      .then((next) =>
+                        setTasks((current) => upsertTask(current, next)),
+                      )
+                      .catch((cause: unknown) => {
+                        setPollError(
+                          cause instanceof Error ? cause.message : String(cause),
+                        );
+                        setPollErrorRetryable(
+                          cause instanceof MigrationApiError && cause.retryable,
+                        );
+                      });
+                  }}
+                >
+                  {t("actions.refreshStatus")}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          {error ? (
+            <div className="migration-inline-error" role="alert">
+              <span>
+                {localeCompatibleBackendText(error, locale)
+                  || t("errors.loadFailed")}
+              </span>
+              <button type="button" onClick={() => setError("")} aria-label={t("errors.closeAria")}>
+                <CloseIcon />
+              </button>
+            </div>
+          ) : null}
+          </div>
+
+          {composer}
+          </main>
+        )}
       </section>
       {stopConfirmOpen && task ? (
         <StudioConfirmDialog
-          title="终止当前迁移？"
-          description="终止后，当前分析或迁移进程将停止，已执行的步骤不会继续。"
-          confirmLabel={action === "stop" ? "正在终止…" : "终止迁移"}
+          title={t("stopDialog.title")}
+          description={t("stopDialog.description")}
+          confirmLabel={
+            action === "stop" ? t("actions.stopping") : t("actions.stop")
+          }
           variant="danger"
           busy={action === "stop"}
           onCancel={() => setStopConfirmOpen(false)}

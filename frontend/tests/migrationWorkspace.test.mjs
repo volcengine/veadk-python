@@ -11,12 +11,36 @@ const stylesUrl = new URL(
   "../src/migrations/MigrationWorkspace.css",
   import.meta.url,
 );
+const evaluationUrl = new URL(
+  "../src/migrations/MigrationEvaluation.tsx",
+  import.meta.url,
+);
+const evaluationStylesUrl = new URL(
+  "../src/migrations/MigrationEvaluation.css",
+  import.meta.url,
+);
+const activityBlocksUrl = new URL(
+  "../src/migrations/migrationActivityBlocks.ts",
+  import.meta.url,
+);
 const deploymentEnvironmentUrl = new URL(
   "../src/migrations/deploymentEnvironment.ts",
   import.meta.url,
 );
+const migratedProjectsUrl = new URL(
+  "../src/migrations/MigratedProjectsPage.tsx",
+  import.meta.url,
+);
 const iconsUrl = new URL(
   "../src/migrations/MigrationIcons.tsx",
+  import.meta.url,
+);
+const zhResourceUrl = new URL(
+  "../src/i18n/resources/zh-CN/migrations.json",
+  import.meta.url,
+);
+const enResourceUrl = new URL(
+  "../src/i18n/resources/en-US/migrations.json",
   import.meta.url,
 );
 const appSource = readFileSync(
@@ -29,6 +53,7 @@ test("exposes a typed migration API with bounded transfer requests", () => {
   const source = readFileSync(apiUrl, "utf8");
 
   assert.match(source, /const API_ROOT = "\/web\/agent-migrations"/);
+  assert.match(source, /unsupportedModelIds\?: string\[\]/);
   assert.match(source, /export type MigrationFramework/);
   assert.match(source, /export interface MigrationTask/);
   assert.match(source, /export async function getMigrationCapabilities/);
@@ -40,30 +65,211 @@ test("exposes a typed migration API with bounded transfer requests", () => {
   assert.match(source, /export async function getMigrationActivity/);
   assert.match(source, /export async function getMigrationArtifact/);
   assert.match(source, /export async function downloadMigrationArtifact/);
+  assert.match(source, /export async function putMigrationEvaluationDataset/);
+  assert.match(source, /export async function getMigrationEvaluation/);
+  assert.match(source, /export async function getMigrationEvaluationReport/);
+  assert.match(source, /export async function downloadMigrationEvaluationReport/);
+  assert.match(source, /export async function resumeMigrationEvaluation/);
+  assert.match(source, /export async function retryMigrationEvaluation/);
   assert.match(source, /TRANSFER_REQUEST_TIMEOUT_MS/);
   assert.match(source, /withAuth/);
   assert.match(source, /withLocalUser/);
 });
 
+test("configures migration effect evaluation in a drawer with direct user-facing copy", () => {
+  const workspace = readFileSync(workspaceUrl, "utf8");
+  const evaluation = readFileSync(evaluationUrl, "utf8");
+  const styles = readFileSync(evaluationStylesUrl, "utf8");
+  const zhResource = JSON.parse(readFileSync(zhResourceUrl, "utf8"));
+  const enResource = JSON.parse(readFileSync(enResourceUrl, "utf8"));
+
+  assert.match(evaluation, /enabled: false/);
+  assert.match(evaluation, /userInput: ""/);
+  assert.match(evaluation, /expectedOutcome: ""/);
+  assert.match(evaluation, /criteria: \[\]/);
+  assert.doesNotMatch(evaluation, /EvaluationDraftMessage/);
+  assert.doesNotMatch(evaluation, /evaluation\.case\.priorConversation/);
+  assert.doesNotMatch(evaluation, /evaluation\.case\.addMessage/);
+  assert.doesNotMatch(evaluation, /expectedTools|期望工具/);
+  assert.match(evaluation, /t\("evaluation\.case\.userInput"\)/);
+  assert.match(evaluation, /role="switch"/);
+  assert.match(evaluation, /role="dialog"/);
+  assert.match(evaluation, /aria-modal="true"/);
+  assert.match(evaluation, /migration-evaluation-drawer/);
+  assert.match(evaluation, /migration-evaluation-drawer__toolbar/);
+  assert.match(evaluation, /<fieldset className="migration-evaluation-advanced">/);
+  assert.doesNotMatch(
+    evaluation,
+    /<details className="migration-evaluation-advanced">/,
+  );
+  assert.ok(
+    evaluation.indexOf('className="migration-evaluation-advanced"') <
+      evaluation.indexOf('className="migration-evaluation-cases"'),
+    "evaluation method should appear before the question list",
+  );
+  assert.doesNotMatch(evaluation, /migration-evaluation-editor__actions/);
+  assert.match(evaluation, /event\.key === "Escape"/);
+  assert.match(evaluation, /cancelAnimationFrame\(focusFrame\)/);
+  assert.match(evaluation, /onCloseRef/);
+  assert.match(evaluation, /previousFocus/);
+  assert.match(evaluation, /crypto\.randomUUID\(\)/);
+  assert.match(evaluation, /priorMessages: \[\]/);
+  assert.match(evaluation, /MigrationEvaluationResult/);
+  assert.match(evaluation, /EvaluationExecutionProgress/);
+  assert.match(evaluation, /evaluation\.execution\.executingDetail/);
+  assert.match(evaluation, /type="text"/);
+  assert.doesNotMatch(evaluation, /type="password"/);
+  assert.match(evaluation, /environment\?\.optional/);
+  assert.match(evaluation, /srcDoc=\{report \?\? ""\}/);
+  assert.match(evaluation, /sandbox=""/);
+  assert.match(evaluation, /evaluation\.result\.viewReport/);
+  assert.match(evaluation, /reportOpen/);
+  assert.match(evaluation, /onLoadReport/);
+  assert.match(evaluation, /onDownloadReport/);
+  assert.doesNotMatch(evaluation, /from "lucide-react"/);
+  assert.doesNotMatch(evaluation, />[↑↓×]</);
+  assert.doesNotMatch(evaluation, /[\p{Script=Han}]/u);
+
+  const createFlow = workspace.slice(
+    workspace.indexOf("async function createAndUpload"),
+    workspace.indexOf("async function uploadExistingTask"),
+  );
+  assert.ok(
+    createFlow.indexOf("createMigrationTask") <
+      createFlow.indexOf("Promise.allSettled"),
+  );
+  assert.match(
+    createFlow,
+    /Promise\.allSettled\(\[[\s\S]*?uploadMigrationSource[\s\S]*?saveEvaluationDataset/,
+  );
+  const datasetSaveFlow = workspace.slice(
+    workspace.indexOf("async function saveEvaluationDataset"),
+    workspace.indexOf("function applySavedEvaluationDataset"),
+  );
+  assert.doesNotMatch(datasetSaveFlow, /getMigrationTask/);
+  assert.match(workspace, /recordEvaluationDatasetSaveFailure/);
+  assert.match(workspace, /retryEvaluationDatasetSave/);
+  assert.match(workspace, /evaluation\.dataset\.retrySave/);
+  const datasetHydrationEffect = workspace.slice(
+    workspace.indexOf("setEvaluationErrors({});"),
+    workspace.indexOf("setEvaluationReport(null)"),
+  );
+  assert.match(datasetHydrationEffect, /getMigrationEvaluationDataset/);
+  assert.doesNotMatch(
+    datasetHydrationEffect,
+    /if \(!task\.evaluation\.dataset\)/,
+    "opening an evaluation task must load its saved cases even when polling omits the dataset summary",
+  );
+  assert.match(workspace, /evaluationDraftLoadingTaskId/);
+  assert.match(workspace, /evaluation\.dataset\.loadingSettings/);
+  assert.match(workspace, /evaluationSettingsLocked/);
+  assert.match(workspace, /"preparing"/);
+  assert.match(workspace, /"aggregating"/);
+  assert.doesNotMatch(workspace, /"retrying"|"cleaning"/);
+  assert.match(workspace, /<MigrationEvaluationSetup/);
+  assert.match(workspace, /<MigrationEvaluationResult/);
+  assert.match(workspace, /role="tablist"/);
+  assert.match(workspace, /role=\{hasEvaluationTab \? "tabpanel" : "log"\}/);
+  assert.match(workspace, /evaluation\.tabs\.migration/);
+  assert.match(workspace, /evaluation\.tabs\.evaluation/);
+  assert.match(workspace, /isEvaluationPollingState/);
+  assert.match(workspace, /resumeMigrationEvaluation/);
+  assert.match(workspace, /retryMigrationEvaluation/);
+  assert.match(workspace, /downloadMigrationEvaluationReport/);
+  assert.match(workspace, /async function loadEvaluationReport/);
+  assert.match(
+    workspace,
+    /onLoadReport=\{\(\) => void loadEvaluationReport\(\)\}/,
+  );
+  const reportResetEffect = workspace.slice(
+    workspace.indexOf("setEvaluationReport(null)"),
+    workspace.indexOf("setEvaluationReport(null)") + 900,
+  );
+  assert.doesNotMatch(reportResetEffect, /getMigrationEvaluationReport/);
+  assert.match(styles, /@media \(max-width: 760px\)/);
+  assert.equal(zhResource.evaluation.setup.casesTitle, "评测用例");
+  assert.equal(enResource.evaluation.setup.casesTitle, "Evaluation cases");
+  assert.equal(zhResource.evaluation.case.userInput, "用户输入");
+  assert.equal(zhResource.evaluation.case.criteria, "必须满足的要求（可选）");
+  assert.equal(
+    enResource.evaluation.result.evidenceSource.user_criteria,
+    "Provided requirements",
+  );
+  assert.doesNotMatch(
+    JSON.stringify(zhResource.evaluation),
+    /用户会怎么问|真实用户问题|历史对话|前置对话|评测问题|个问题|问题结果/,
+  );
+  assert.match(zhResource.evaluation.result.scoreScale, /0–100/);
+});
+
 test("enables the existing migration entry and renders its workspace", () => {
   assert.match(
     appSource,
-    /type CreateView = "custom" \| "package" \| "migration" \| null/,
+    /type CreateView = "custom" \| "deepseek" \| "package" \| "migration" \| "workspace" \| null/,
   );
   assert.match(
     appSource,
-    /return v === "package" \|\| v === "migration" \? v : null/,
+    /return v === "package" \|\| v === "migration" \|\| v === "deepseek" \? v : null/,
   );
   assert.match(
     appSource,
-    /key: "migration"[\s\S]*?title: "从存量迁移"[\s\S]*?onClick: \(\) => \{[\s\S]*?setCreateView\("migration"\)/,
+    /key: "migration"[\s\S]*?title: t\("addAgent\.migrate\.title"\)[\s\S]*?onClick: \(\) => \{[\s\S]*?setCreateView\("migration"\)/,
   );
-  assert.doesNotMatch(
-    appSource,
-    /key: "migration"[\s\S]*?status: "敬请期待"[\s\S]*?disabled: true/,
-  );
+  assert.doesNotMatch(appSource, /key: "migration"[\s\S]*?disabled: true/);
   assert.match(appSource, /visibleCreateView === "migration"/);
   assert.match(appSource, /<MigrationWorkspace/);
+});
+
+test("keeps new migration and migrated projects as parallel workspace pages", () => {
+  const source = readFileSync(workspaceUrl, "utf8");
+  const projects = readFileSync(migratedProjectsUrl, "utf8");
+
+  assert.match(source, /initialPage = "new"/);
+  assert.match(source, /useState<"new" \| "projects">\(initialPage\)/);
+  assert.match(source, /useState\(initialProjectId\)/);
+  assert.match(source, /t\("workspace\.newMigration"\)/);
+  assert.match(source, /t\("projects\.title"\)/);
+  assert.match(source, /t\("workspace\.recent"\)/);
+  assert.match(
+    source,
+    /className="migration-workspace__nav"[\s\S]*?t\("workspace\.backToHome"\)[\s\S]*?t\("workspace\.newMigration"\)/,
+  );
+  assert.match(source, /page === "projects" \? \(/);
+  assert.match(source, /<MigratedProjectsPage/);
+  assert.match(source, /task\.persistence\?\.state === "saved"/);
+  assert.match(source, /t\("artifact\.viewProjects"\)/);
+  assert.match(projects, /origin="migration"/);
+  assert.match(projects, /title=\{t\("projects\.libraryTitle"\)\}/);
+  assert.match(projects, /onSelectBaseVersion=\{setOptimizationBase\}/);
+  assert.match(projects, /<IntelligentOptimizationDialog/);
+  assert.match(projects, /onCreate=\{onOptimize\}/);
+  assert.match(projects, /onDownload=\{onDownload\}/);
+  assert.match(projects, /onDeploy=\{onDeploy\}/);
+  assert.match(source, /migrationTaskId: task\.id/);
+  assert.match(
+    appSource,
+    /onDeploySavedVersion=\{\(delivery\) => \{[\s\S]*?setIntelligentDeployment\(delivery\)/,
+  );
+  assert.match(
+    appSource,
+    /initialPage=\{migrationProjectReturn \? "projects" : "new"\}/,
+  );
+  assert.match(
+    appSource,
+    /onOptimizeVersion=\{\(goal, modelId, base\) =>[\s\S]*?startIntelligentDevelopment\([\s\S]*?goal,[\s\S]*?modelId,[\s\S]*?base,[\s\S]*?\{ projectId: base\.projectId \}/,
+  );
+  const migrationWorkspaceBlock =
+    appSource.match(
+      /visibleCreateView === "migration" \? \(([\s\S]*?)\) : turns\.length === 0/,
+    )?.[1] ?? "";
+  assert.doesNotMatch(
+    migrationWorkspaceBlock,
+    /setCreateView\("intelligent"\)/,
+  );
+  assert.match(
+    appSource,
+    /function returnToIntelligentCreate\(\)[\s\S]*?migrationProjectReturn[\s\S]*?setCreateView\("migration"\)/,
+  );
 });
 
 test("implements the confirmed migration lifecycle as a desktop chat workspace", () => {
@@ -72,36 +278,74 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.equal(existsSync(iconsUrl), true);
   const source = readFileSync(workspaceUrl, "utf8");
   const styles = readFileSync(stylesUrl, "utf8");
+  const activityBlocks = readFileSync(activityBlocksUrl, "utf8");
   const deploymentEnvironment = readFileSync(deploymentEnvironmentUrl, "utf8");
+  const zhResource = readFileSync(zhResourceUrl, "utf8");
+  const enResource = readFileSync(enResourceUrl, "utf8");
 
   assert.doesNotMatch(source, /from "lucide-react"/);
   assert.match(source, /from "\.\/MigrationIcons"/);
-  assert.match(source, /const MAX_SOURCE_BYTES = 50 \* 1024 \* 1024/);
+  assert.match(source, /const MAX_SOURCE_BYTES = 20 \* 1024 \* 1024/);
+  assert.match(source, /capability\?\.maxUploadBytes \?\? MAX_SOURCE_BYTES/);
   assert.match(source, /accept="\.zip,application\/zip"/);
   assert.match(source, /\.toLowerCase\(\)/);
   assert.match(
     source,
     /\/\^\[a-z0-9\]\(\?:\[a-z0-9-\]\{0,61\}\[a-z0-9\]\)\?\$\//,
   );
-  assert.match(source, /只能包含小写字母、数字和连字符/);
+  assert.match(source, /migrationText\("validation\.agentNameInvalid"\)/);
   assert.match(source, /TextShimmer/);
   assert.match(source, /listMigrationTasks/);
   assert.match(source, /getMigrationTask/);
   assert.match(source, /confirmMigrationTask/);
+  const confirmMigration = source.match(
+    /async function confirmMigration\(\) \{[\s\S]*?\n  \}\n\n  async function stopTask/,
+  )?.[0];
+  assert.ok(confirmMigration);
+  assert.ok(
+    confirmMigration.indexOf("migrationStartingTask") <
+      confirmMigration.indexOf("await confirmMigrationTask"),
+    "the workspace should enter the migration phase before launch confirmation returns",
+  );
+  assert.match(
+    confirmMigration,
+    /catch \(cause\) \{[\s\S]*?await reconcileTaskState\(task\.id\)[\s\S]*?authoritative\.state !== "analysis_ready"[\s\S]*?setError/,
+    "a failed launch should restore the authoritative task before surfacing the error",
+  );
+  assert.match(source, /function migrationStartingTask/);
+  assert.match(source, /state: "migrating"/);
+  assert.match(source, /canConfirm: false/);
+  assert.match(source, /canStop: false/);
+  assert.match(
+    source,
+    /if \(!hasPollableTasks \|\| action === "confirm"\) return;/,
+  );
+  assert.match(
+    source,
+    /if \([\s\S]*?action === "confirm"[\s\S]*?!task \|\|[\s\S]*?taskEnvironmentExpired/,
+  );
   assert.match(source, /stopMigrationTask/);
-  assert.match(source, /getMigrationActivity/);
+  // Detail state and the activity feed arrive on one Server-Sent Events stream: the
+  // page no longer polls either endpoint itself.
+  assert.match(source, /observeMigrationTask/);
+  assert.match(
+    source,
+    /observeMigrationTask\(\{[\s\S]*?taskId: task\.id[\s\S]*?signal: controller\.signal/,
+  );
+  assert.doesNotMatch(source, /getMigrationActivity/);
+  assert.doesNotMatch(source, /ACTIVITY_POLL_INTERVAL_MS/);
   assert.match(source, /function MigrationActivityFeed/);
   assert.match(source, /import \{ Blocks \} from "\.\.\/ui\/Blocks"/);
   assert.match(source, /useStickToBottom<HTMLDivElement>/);
-  assert.match(source, /kind: "thinking"/);
-  assert.match(source, /kind: "text"/);
-  assert.match(source, /Codex 执行动态/);
-  assert.match(source, /暂时无法读取 Codex 执行动态，不影响当前任务/);
+  assert.match(activityBlocks, /kind: "thinking"/);
+  assert.match(activityBlocks, /kind: "text"/);
+  assert.match(source, /t\("activity\.title"\)/);
+  assert.match(source, /t\("activity\.loadError"\)/);
   assert.match(source, /function shouldShowCodexActivity/);
   assert.match(source, /task\.state === "analyzing"/);
-  assert.match(source, /Codex 正在开始分析/);
-  assert.match(source, /当前 ZIP 暂时无法迁移/);
-  assert.match(source, /按提示整理项目后，新建迁移并重新上传/);
+  assert.match(source, /t\("activity\.startingAnalysis"\)/);
+  assert.match(source, /t\("conversation\.unsupportedTitle"\)/);
+  assert.match(source, /t\("conversation\.unsupportedHint"\)/);
   assert.match(source, /downloadMigrationArtifact/);
   assert.match(source, /task\.canUpload/);
   assert.match(source, /task\?\.canConfirm/);
@@ -111,18 +355,22 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.match(source, /async function reconcileTaskList/);
   assert.match(source, /crypto\.randomUUID\(\)/);
   assert.match(source, /taskId/);
-  assert.match(source, /const transferAbortRef = useRef<AbortController \| null>\(null\)/);
+  assert.match(
+    source,
+    /const transferAbortRef = useRef<AbortController \| null>\(null\)/,
+  );
   assert.match(source, /if \(transferAbortRef\.current\) return/);
-  assert.match(source, /createMigrationTask\(\{[\s\S]*?signal: controller\.signal/);
+  assert.match(
+    source,
+    /createMigrationTask\(\{[\s\S]*?signal: controller\.signal/,
+  );
   assert.match(source, /uploadMigrationSource\([\s\S]*?controller\.signal/);
+  assert.match(source, /const navigationBusy = composerBusy \|\|/);
   assert.match(
     source,
-    /className="migration-new-button"[\s\S]*?disabled=\{composerBusy\}/,
+    /className="migration-new-button"[\s\S]*?disabled=\{navigationBusy\}/,
   );
-  assert.match(
-    source,
-    /className=\{item\.id === selectedTaskId \? "is-active" : ""\}[\s\S]*?disabled=\{composerBusy\}/,
-  );
+  assert.match(source, /setSelectedTaskId\(item\.id\)/);
   assert.match(source, /type="file"[\s\S]*?disabled=\{composerBusy\}/);
   assert.match(
     source,
@@ -133,13 +381,19 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
     /setAnswers\(\(current\) => \(\{[\s\S]*?\[question\.id\]: event\.currentTarget\.value/,
   );
   assert.match(source, /artifactErrorRetryable/);
-  assert.match(source, /重新读取/);
-  assert.match(source, /function expireTasksAtDeadline/);
-  assert.match(source, /setTasks\(\(current\) => expireTasksAtDeadline/);
+  assert.match(source, /t\("actions\.reload"\)/);
+  assert.doesNotMatch(source, /function expireTasksAtDeadline/);
+  assert.doesNotMatch(source, /state: "expired" as const/);
+  assert.match(source, /migrationHistoryStatus\(item\)/);
+  assert.match(source, /isMigrationEnvironmentExpired\(item,/);
+  assert.match(source, /className="migration-history__status-label"/);
+  assert.match(source, /className="migration-history__expiry-badge"/);
+  assert.match(source, /t\("historyStatus\.environmentExpired"\)/);
   assert.match(source, /function migrationExpiryCopy/);
-  assert.match(source, /迁移环境将在 \$\{minutes\} 分 \$\{seconds\} 秒后过期/);
-  assert.match(source, /过期后无法查看会话，也无法预览、下载或部署产物/);
-  assert.match(source, /会话和产物已无法访问/);
+  assert.match(source, /migrationText\("expiry\.countdown"/);
+  assert.match(source, /migrationText\("expiry\.savedUnaffected"\)/);
+  assert.match(source, /migrationText\("expiry\.savingUnaffected"\)/);
+  assert.match(source, /migrationText\("expiry\.savedAvailable"\)/);
   assert.doesNotMatch(source, /剩余 \$\{minutes\}:/);
   assert.match(
     source,
@@ -152,19 +406,21 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
     source,
     /artifact\.files\.map\(\(file\) => \(\{[\s\S]*?content: ""/,
   );
-  assert.match(source, /迁移环境已过期，内容和产物无法继续访问/);
+  assert.doesNotMatch(
+    styles,
+    /data-state="expired"[\s\S]*?var\(--destructive\)/,
+  );
+  assert.match(styles, /\.migration-history__expiry-badge/);
   assert.match(source, /function taskDisplayMessage/);
-  assert.match(source, /迁移产物已生成，请查看迁移提示/);
+  assert.match(source, /migrationText\("task\.readyWithWarnings"\)/);
   assert.match(
     source,
     /task\.state === "failed"[\s\S]*?<p>\{task\.message\}<\/p>/,
   );
-  assert.match(
-    source,
-    /产物可预览、下载和部署。运行效果取决于源项目和部署环境变量/,
-  );
-  assert.match(source, /产物校验未完成/);
-  assert.match(source, /迁移执行中不能修改附件或迁移方式/);
+  assert.match(source, /t\("artifact\.saved"\)/);
+  assert.match(source, /t\("upload\.retention"\)/);
+  assert.match(source, /migrationText\("verification\.degraded"\)/);
+  assert.match(source, /t\("conversation\.migrationLocked"\)/);
   assert.doesNotMatch(source, /const \[instruction, setInstruction\]/);
   assert.doesNotMatch(
     source,
@@ -187,7 +443,10 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.match(source, /requiredSecretEnv=\{deploymentSecretEnv\}/);
   assert.match(deploymentEnvironment, /MODEL_AGENT_API_KEY/);
   assert.match(deploymentEnvironment, /isMigrationRuntimeEnvironmentKey/);
-  assert.match(source, /migrationDeploymentEnvDefaults\(artifact, cloudProvider\)/);
+  assert.match(
+    source,
+    /migrationDeploymentEnvDefaults\(artifact, cloudProvider\)/,
+  );
   assert.match(
     source,
     /artifact\.environment\.required[\s\S]*?\.filter\(isMigrationRuntimeEnvironmentKey\)/,
@@ -196,24 +455,48 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
     source,
     /artifact\.environment\.optional[\s\S]*?\.filter\(isMigrationRuntimeEnvironmentKey\)/,
   );
+  assert.match(source, /options=\{\(capability\?\.frameworks \?\? \[\]\)\.map/);
+  assert.match(source, /any: "framework\.any"/);
+  assert.match(source, /className="migration-confirm-upload-button"/);
   assert.match(
     source,
-    /options=\{\(capability\?\.frameworks \?\? \[\]\)\.map/,
+    /task \? t\("upload\.continue"\) : t\("upload\.start"\)/,
   );
-  assert.match(source, /any: "Any（通用迁移）"/);
-  assert.match(source, /className="migration-confirm-upload-button"/);
-  assert.match(source, /\{task \? "继续上传" : "开始迁移"\}/);
+  assert.match(source, /listModelOptions\(\{/);
+  assert.match(
+    source,
+    /listModelOptions\(\{[\s\S]*?scope: "development"/,
+  );
+  assert.match(
+    source,
+    /<NewChatCompactSelect[\s\S]*?label=\{t\("model\.label"\)\}[\s\S]*?searchable[\s\S]*?disabled=\{composerBusy \|\| Boolean\(task\)\}/,
+  );
+  assert.match(
+    source,
+    /createMigrationTask\(\{[\s\S]*?modelId: selectedModelId \|\| undefined/,
+  );
+  assert.match(
+    source,
+    /evaluation: evaluationDraft\.enabled[\s\S]*?locale: resolveSupportedLocale\(locale\) \?\? DEFAULT_LOCALE/,
+  );
+  assert.match(
+    source,
+    /model\.available \|\| model\.lifecycleStatus === "Retiring"/,
+  );
+  assert.match(source, /!unsupportedModelIds\.has\(model\.id\)/);
+  assert.doesNotMatch(source, /listModelApiKeys|revealModelApiKey/);
+  assert.match(styles, /\.migration-composer__model-select/);
   assert.match(source, /function MigrationTransferProgress/);
   assert.match(source, /className="migration-transfer-progress__marker"/);
-  assert.match(source, /创建迁移环境/);
-  assert.match(source, /上传项目/);
-  assert.match(source, /分析项目/);
-  assert.match(source, /正在创建 Dev Sandbox/);
+  assert.match(source, /t\("transfer\.session"\)/);
+  assert.match(source, /t\("transfer\.upload"\)/);
+  assert.match(source, /t\("transfer\.analysis"\)/);
+  assert.match(source, /t\("conversation\.creatingSandbox"\)/);
+  assert.match(source, /t\("conversation\.initializing"\)/);
   assert.match(
     source,
-    /正在初始化迁移工作目录，并检查 AgentKit CLI、Codex 和迁移能力。环境就绪后将自动上传项目。/,
+    /t\(\s*"conversation\.elapsed",\s*\{\s*duration: formatElapsedTime\(createElapsedSeconds\),?\s*\},?\s*\)/,
   );
-  assert.match(source, /已等待 \{formatElapsedTime\(createElapsedSeconds\)\}/);
   assert.match(
     source,
     /action === "create" && sourceFile[\s\S]*?migration-turn is-user[\s\S]*?sourceFile\.name/,
@@ -221,15 +504,18 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.match(source, /role="status"/);
   assert.match(
     source,
-    /className="migration-main__header-actions"[\s\S]*?task\?\.canStop[\s\S]*?终止迁移/,
+    /className="migration-main__header-actions"[\s\S]*?task\?\.canStop[\s\S]*?t\("actions\.stop"\)/,
   );
   assert.doesNotMatch(source, /className="migration-running-actions"/);
-  assert.match(source, /role="log"/);
-  assert.match(source, /aria-live="polite"/);
+  assert.match(source, /role=\{hasEvaluationTab \? "tabpanel" : "log"\}/);
+  assert.match(source, /aria-live=\{activeTaskTab === "migration" \? "polite" : undefined\}/);
   assert.match(source, /ProjectPreview/);
   assert.match(source, /StudioConfirmDialog/);
   assert.doesNotMatch(source, /window\.confirm/);
-  assert.match(styles, /\.migration-workspace\s*\{[\s\S]*?grid-template-columns/);
+  assert.match(
+    styles,
+    /\.migration-workspace\s*\{[\s\S]*?grid-template-columns/,
+  );
   assert.match(
     styles,
     /@media \(max-width: 1120px\)[\s\S]*?\.migration-artifact-browser\s*\{[\s\S]*?grid-template-rows:/,
@@ -249,4 +535,178 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.match(styles, /\.migration-activity/);
   assert.match(styles, /\.migration-activity__marker/);
   assert.doesNotMatch(styles, /\.migration-transfer-progress > div > span/);
+  assert.doesNotMatch(source, /[\p{Script=Han}]/u);
+  assert.match(zhResource, /"workspace"/);
+  assert.match(zhResource, /"从存量迁移"/);
+  assert.match(enResource, /"Migrate existing project"/);
+});
+
+test("renders Codex migration events through one shared block stream", () => {
+  const source = readFileSync(workspaceUrl, "utf8");
+  const styles = readFileSync(stylesUrl, "utf8");
+  const activityBlocks = readFileSync(activityBlocksUrl, "utf8");
+
+  assert.match(source, /import \{ migrationActivityBlocks \}/);
+  assert.match(activityBlocks, /function migrationActivityBlocks/);
+  assert.match(activityBlocks, /kind: "plan"/);
+  assert.match(activityBlocks, /kind: "tool"/);
+  assert.match(source, /<Blocks[\s\S]*?blocks=\{blocks\}/);
+  assert.match(
+    source,
+    /<Blocks[\s\S]*?groupProcess[\s\S]*?streaming=\{streaming\}[\s\S]*?liveStatus=\{status\}/,
+    "the Codex output renders as the intelligent build's grouped process stream",
+  );
+  assert.match(
+    source,
+    /const streaming =\s*!activity\?\.complete \|\| items\.some\(\(item\) => item\.status === "running"\)/,
+    "a closing turn keeps the stream live after the task has settled",
+  );
+  assert.match(
+    source,
+    /status=\{migrationLiveStatus\(task\)\}/,
+    "the process header reports what Codex is doing, like the intelligent build's",
+  );
+  assert.doesNotMatch(source, /migration-activity__status/);
+  assert.doesNotMatch(styles, /\.migration-activity__status/);
+});
+
+test("preserves Codex activity while the same migration advances", () => {
+  const source = readFileSync(workspaceUrl, "utf8");
+
+  assert.match(
+    source,
+    /useEffect\(\(\) => \{\s*setActivity\(null\);\s*setActivityError\(""\);\s*setActivityLoading\(false\);\s*\}, \[task\?\.id\]\);/,
+  );
+
+  const pollingEffect = source.slice(
+    source.indexOf("if (!task || !shouldShowCodexActivity(task))"),
+    source.indexOf("const analysisKey ="),
+  );
+  assert.doesNotMatch(pollingEffect, /setActivity\(null\)/);
+});
+
+test("migration home exposes upload and recent tasks without a navigation sidebar", () => {
+  const source = readFileSync(workspaceUrl, "utf8");
+  const styles = readFileSync(stylesUrl, "utf8");
+  assert.doesNotMatch(source, /<aside className="migration-history"/);
+  assert.match(source, /className="migration-workspace__nav"/);
+  assert.match(source, /aria-labelledby="migration-recent-heading"/);
+  assert.match(source, /tasks\.slice\(0, 5\)/);
+  assert.match(source, /t\("workspace\.backToHome"\)/);
+  assert.match(source, /aria-expanded=\{showAllTasks\}/);
+  assert.match(source, /"workspace\.showMore"/);
+  assert.match(source, /"workspace\.showLess"/);
+  assert.match(source, /disabled=\{!sourceFile \|\| composerBusy\}/);
+  assert.match(source, /onClick=\{isHome \? onBack : startNewMigration\}/);
+  assert.match(styles, /\.migration-home\s*\{/);
+  const startNewMigration = source.slice(
+    source.indexOf("function startNewMigration"),
+    source.indexOf("const composer"),
+  );
+  assert.doesNotMatch(startNewMigration, /stopMigrationTask|deleteMigrationTask/);
+});
+
+test("loads migration capabilities and sessions independently", () => {
+  const source = readFileSync(workspaceUrl, "utf8");
+  assert.match(source, /Promise\.allSettled\(\[\s*getMigrationCapabilities/);
+  assert.doesNotMatch(source, /Promise\.all\(\[\s*getMigrationCapabilities/);
+  assert.match(source, /const \[capabilityError, setCapabilityError\]/);
+  assert.match(source, /setLoadError\(/);
+  assert.match(source, /localeCompatibleBackendText\(capabilityError, locale\)/);
+  const retries = source.match(
+    /disabled=\{loading\} onClick=\{\(\) => setLoadKey\(\(key\) => key \+ 1\)\}/g,
+  );
+  assert.ok(
+    retries && retries.length >= 2,
+    "both the capability and the session failure paths must offer a retry",
+  );
+});
+
+test("confirmation card keeps labels beside bounded single-column controls", () => {
+  const source = readFileSync(workspaceUrl, "utf8");
+  const styles = readFileSync(stylesUrl, "utf8");
+  const card = source.slice(
+    source.indexOf('className="migration-confirmation"'),
+    source.indexOf('className="migration-result"'),
+  );
+  assert.equal(
+    (card.match(/className="migration-confirmation__row"/g) || []).length,
+    2,
+    "the method and entry selects render as plain label/control rows",
+  );
+  assert.equal(
+    (card.match(/className="migration-field migration-confirmation__row"/g) || []).length,
+    2,
+    "the name and entry rows wrap their inputs as labelled rows",
+  );
+  assert.equal(
+    (card.match(/hideLabel/g) || []).length,
+    2,
+    "both selects render their label outside the control",
+  );
+  assert.match(card, /className="migration-confirmation__footer"/);
+  assert.match(card, /className="migration-confirmation__consent"/);
+  assert.doesNotMatch(
+    card,
+    /confirmation\.description/,
+    "the card title stands alone; the removed subtitle must not come back",
+  );
+  assert.doesNotMatch(card, /migration-running-note/);
+
+  assert.match(styles, /\.migration-confirmation__grid\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\)/);
+  assert.match(
+    styles,
+    /\.migration-confirmation \.migration-confirmation__row\s*\{[^}]*max-width: 640px;[^}]*grid-template-columns: 112px minmax\(0, 1fr\);/,
+    "confirmation rows bound the label column and cap the row width",
+  );
+  assert.match(styles, /\.migration-confirmation__row > small\s*\{[^}]*grid-column: 2;/);
+  assert.match(styles, /\.migration-confirmation__footer\s*\{[^}]*display: flex;[^}]*justify-content: space-between;/);
+  assert.match(
+    styles,
+    /\.migration-confirmation \.migration-confirmation__row \{ grid-template-columns: minmax\(0, 1fr\); gap: 6px; \}/,
+    "narrow screens stack the label above the control",
+  );
+});
+
+test("answers the questions of a running analysis without re-running it", () => {
+  const source = readFileSync(workspaceUrl, "utf8");
+  const api = readFileSync(apiUrl, "utf8");
+  const styles = readFileSync(stylesUrl, "utf8");
+  const zhQuestions = JSON.parse(readFileSync(zhResourceUrl, "utf8")).pendingInput;
+  const enQuestions = JSON.parse(readFileSync(enResourceUrl, "utf8")).pendingInput;
+
+  // 卡片跟着活着的提问走，不跟着状态走：交付收尾回合提问时任务已经落定。
+  assert.match(source, /const pendingInput = task\?\.pendingInput;/);
+  assert.doesNotMatch(source, /task\?\.state === "analyzing" \? task\.pendingInput/);
+  assert.match(source, /submitMigrationAnalysisInput\(\{/);
+  assert.match(source, /requestId: pendingInput\.id/);
+  assert.match(source, /className="migration-question__options"/);
+  assert.match(source, /role="radiogroup"/);
+  assert.match(source, /t\("pendingInput\.other"\)/);
+  assert.match(source, /disabled=\{!canSubmitInput\}/);
+  assert.match(
+    source,
+    /catch \(cause\) \{[\s\S]*?await reconcileTaskState\(task\.id\)[\s\S]*?!authoritative\.pendingInput[\s\S]*?setError/,
+    "a failed answer should restore the authoritative task before surfacing the error",
+  );
+  const submitInput =
+    source.match(/async function submitInput\(\) \{[\s\S]*?\n  \}\n/)?.[0] ?? "";
+  assert.ok(submitInput, "the in-turn answers need their own submit path");
+  assert.match(submitInput, /submitMigrationAnalysisInput\(/);
+  assert.doesNotMatch(
+    submitInput,
+    /submitMigrationAnalysisAnswers\(/,
+    "the in-turn card must not fall back to the needs_input re-run",
+  );
+  assert.match(api, /`\/tasks\/\$\{encodeURIComponent\(args\.taskId\)\}\/input`/);
+
+  assert.match(styles, /\.migration-question__option\.is-selected/);
+  assert.match(styles, /\.migration-question__other textarea/);
+
+  assert.deepEqual(Object.keys(zhQuestions).sort(), Object.keys(enQuestions).sort());
+  for (const key of Object.keys(zhQuestions)) {
+    assert.equal(typeof enQuestions[key], "string");
+    assert.ok(enQuestions[key].length > 0);
+    assert.ok(zhQuestions[key].length > 0);
+  }
 });

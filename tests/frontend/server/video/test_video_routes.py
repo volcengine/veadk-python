@@ -69,7 +69,7 @@ async def test_reference_video_pixel_validation_is_returned_as_bad_request(
     monkeypatch.setattr(subprocess, "run", probe)
     repository = VideoAssetRepository(
         MediaService(  # type: ignore[arg-type]
-            SimpleNamespace(),
+            SimpleNamespace(),  # pyright: ignore[reportArgumentType]
             max_file_bytes=1024 * 1024,
         )
     )
@@ -259,6 +259,97 @@ async def test_text_to_video_route_flow_and_owner_guard(
         assert expired_response.json()["status"] == "failed"
         assert "已过期" in expired_response.json()["error"]
         assert len(seen_requests) == 5
+    finally:
+        await client.aclose()
+        await upstream_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+async def test_failed_video_task_returns_complete_provider_error(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: Literal["volcengine", "byteplus"],
+) -> None:
+    monkeypatch.setenv("MODEL_AGENT_API_KEY", "test-model-key")
+    monkeypatch.delenv("MODEL_VIDEO_API_KEY", raising=False)
+    monkeypatch.setenv("VEADK_VIDEO_ASSET_STORAGE", "local")
+    provider_error = {
+        "code": "OutputTextSensitiveContentDetected",
+        "message": "The request was blocked by the provider copyright policy.",
+        "request_id": f"{provider}-request-id",
+        "details": {
+            "category": "copyright",
+            "authorization": "Bearer provider-secret-token",
+            "review_url": "https://provider.example/review?id=private-signature",
+        },
+    }
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith(
+            "/contents/generations/tasks"
+        ):
+            return httpx.Response(200, json={"id": f"{provider}-failed-task"})
+        if request.method == "GET" and request.url.path.endswith(
+            f"/contents/generations/tasks/{provider}-failed-task"
+        ):
+            return httpx.Response(
+                200,
+                json={
+                    "id": f"{provider}-failed-task",
+                    "status": "failed",
+                    "error": provider_error,
+                },
+            )
+        raise AssertionError(
+            f"Unexpected upstream request: {request.method} {request.url}"
+        )
+
+    upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+    service = build_video_service(
+        provider=provider,
+        resolve_credentials=lambda: (_ for _ in ()).throw(
+            AssertionError("AK/SK lookup is unnecessary with an explicit model key")
+        ),
+        http_client=upstream_client,
+    )
+    app = FastAPI()
+    mount_video_routes(
+        app,
+        service=service,
+        identity_resolver=lambda _: "alice",
+    )
+    client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    )
+    try:
+        create_response = await client.post(
+            "/web/video/tasks",
+            json={
+                "enhancedPrompt": "A dog becomes a superhero in an instant.",
+                "resolvedTaskMode": "text_to_video",
+                "ratio": "16:9",
+                "resolution": "720p",
+                "durationSeconds": 8,
+            },
+        )
+        assert create_response.status_code == 202
+
+        status_response = await client.get(f"/web/video/tasks/{provider}-failed-task")
+        assert status_response.status_code == 200
+        assert status_response.json()["status"] == "failed"
+        assert status_response.json()["error"] == json.dumps(
+            {
+                **provider_error,
+                "details": {
+                    "category": "copyright",
+                    "authorization": "[REDACTED]",
+                    "review_url": "https://provider.example/review?[REDACTED]",
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
     finally:
         await client.aclose()
         await upstream_client.aclose()

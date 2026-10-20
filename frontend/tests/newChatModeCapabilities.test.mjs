@@ -16,7 +16,7 @@ const capabilitySource = readFileSync(
   "utf8",
 );
 
-test("loads built-in Sandbox, Skill, and Harness capabilities independently", () => {
+test("loads built-in Sandbox, Skill, and Studio BFF capabilities independently", () => {
   assert.match(capabilitySource, /\/web\/sandbox\/capabilities/);
   assert.match(capabilitySource, /\/web\/\$\{kind\}\/capabilities/);
   assert.match(capabilitySource, /export async function getSandboxCapability/);
@@ -27,19 +27,12 @@ test("loads built-in Sandbox, Skill, and Harness capabilities independently", ()
   assert.match(appSource, /getSandboxAgentCapability\("deepseek-harness"\)/);
   assert.match(appSource, /getSkillWorkbenchCapability/);
   assert.match(appSource, /Promise\.allSettled/);
-  assert.match(appSource, /listSessionBuiltinTools\(agentId\)/);
-  assert.match(
-    appSource,
-    /harnessEnabled:\s*!!agentId && harnessResult\.status === "fulfilled"/,
-  );
+  assert.match(appSource, /getRuntimeStudioToolCapabilities/);
+  assert.match(appSource, /studioToolCapabilities\?\.tools\.map\(\(tool\) => tool\.id\)/);
   assert.match(appSource, /newChatCapabilities\.agentId === appName/);
-  assert.match(
-    appSource,
-    /agentId \? listSessionBuiltinTools\(agentId\) : Promise\.resolve<string\[\]>\(\[\]\)/,
-    "an empty Agent selection still checks global modes without probing Harness",
-  );
+  assert.doesNotMatch(appSource, /listSessionBuiltinTools|harnessResult/);
   assert.match(appSource, /ready:\s*true/);
-  assert.match(appSource, /正在检查 Agent 能力/);
+  assert.match(appSource, /loading\.agentCapabilities/);
   assert.match(appSource, /temporaryEnabled/);
   assert.match(appSource, /deepseekHarnessEnabled/);
   assert.match(appSource, /skillCustomizationEnabled/);
@@ -50,7 +43,7 @@ test("loads built-in Sandbox, Skill, and Harness capabilities independently", ()
   );
   assert.match(
     appSource,
-    /const refreshCurrentAgentAndStartNewChat[\s\S]*?await probeNewChatCapabilities\(id\)[\s\S]*?setAppName\(id\)[\s\S]*?startNewChat\(\)/,
+    /const refreshCurrentAgentAndStartNewChat[\s\S]*?probeNewChatCapabilities\(id\)[\s\S]*?loadHydratedSessions\(id, userId\)[\s\S]*?setNewChatCapabilities\(capabilities\)[\s\S]*?startNewChat\(\)[\s\S]*?setAppName\(id\)/,
   );
   assert.match(appSource, /newChatCapabilitiesCacheRef/);
 });
@@ -62,7 +55,7 @@ test("disables built-in Agents until configured", () => {
   assert.match(composerSource, /deepseekHarnessEnabled=\{deepseekHarnessEnabled\}/);
   assert.match(selectorSource, /temporaryEnabled\?: boolean/);
   assert.match(selectorSource, /deepseekHarnessEnabled\?: boolean/);
-  assert.match(selectorSource, /管理员未配置/);
+  assert.match(selectorSource, /t\("mode\.notConfigured"\)/);
   assert.match(selectorSource, /if \(temporaryEnabled === true \|\| deepseekHarnessEnabled === true\) return true/);
   assert.match(selectorSource, /return modeEnabled\(mode\) !== true/);
   assert.match(selectorSource, /if \(modeDisabled\(mode\)\) return/);

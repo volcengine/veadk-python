@@ -1,7 +1,14 @@
+import { SandboxSpinnerIcon } from "./ui/icons/SandboxControlIcons";
+import { useDevelopmentRun } from "./create/useDevelopmentRun";
+import { developmentRunStatus } from "./create/developmentPresentation";
+import { DevelopmentTaskNotice, type DevelopmentTaskSnapshot } from "./create/DevelopmentTaskNotice";
+import { UserManagement } from "./users/UserManagement";
+import { SandboxFileContext } from "./ui/SandboxFileLink";
 import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEventHandler,
@@ -16,8 +23,8 @@ import {
   Loader2,
 } from "lucide-react";
 import { motion } from "motion/react";
+import { useTranslation } from "react-i18next";
 import {
-  addSessionCapability,
   clearMessageFeedbackCache,
   createSession,
   DEFAULT_STUDIO_ACCESS,
@@ -29,17 +36,29 @@ import {
   downloadArtifact,
   previewArtifact,
   getAgentInfo,
+  getTurnControl,
   getAutomaticEvaluationStatuses,
+  getMpaSessionExecutionConfig,
+  getMpaAgentOperation,
   getSessionTrace,
-  getSessionCapabilities,
   getSession,
   getStudioAccess,
+  getRuntimeStudioToolCapabilities,
+  getRuntimeMcpCredentials,
   getRuntimes,
+  isMpaRuntimeApp,
+  isMpaA2aRuntimeApp,
   listApps,
-  listSessionBuiltinTools,
+  listEnvironments,
+  listWorkspaces,
+  listModelOptions,
+  listActiveMpaAgentOperations,
   listSessions,
-  removeSessionCapability,
+  prepareSessionEnvironmentMounts,
+  runSseIncompleteResponseError,
   runSSE,
+  controlTurn,
+  continueTurnSSE,
   refreshAgentFeedbackCases,
   submitIssueFeedback,
   submitMessageFeedback,
@@ -48,21 +67,30 @@ import {
   getUiConfig,
   type AdkEvent,
   type AgentInfo,
+  type AutomaticEvaluationStatusesResponse,
   type AgentNode,
   type AgentTarget,
   type AgentFeedbackCase,
   type AdkSession,
-  type AddSessionCapability,
   type Attachment,
   type FrontendInvocation,
   type CloudRuntime,
   type MessageFeedbackRating,
+  type MpaSessionExecutionConfig,
+  type MpaAgentOperation,
   type SiteBranding,
-  type SessionCapabilities,
+  type RuntimeStudioToolCapabilities,
+  type SessionEnvironmentMountSelection,
   type StudioAccess,
+  type StudioEnvironment,
+  type StudioWorkspace,
+  type TurnControlState,
+  TurnControlConflictError,
   type UiConfig,
   type UiFeatures,
 } from "./adk/client";
+import type { RuntimeLogTarget } from "./adk/runtimeLogs";
+import type { SelectedSkill } from "./create/skills/types";
 import {
   addTokenUsage,
   aggregateTokenUsage,
@@ -76,34 +104,46 @@ import {
   type IssueFeedbackIssue,
   type IssueFeedbackModule,
 } from "./adk/issueFeedback";
-import { requiresSessionCapabilityRunner } from "./adk/sessionCapabilities";
 import {
-  applyEvent,
-  emptyAcc,
+  createAssistantEventProjector,
   eventsToTurns,
   sessionTitle,
+  shouldShowEmptyAssistantResponse,
+  upsertProjectedAssistantTurn,
   type Block,
+  type IntelligentDevelopmentReleaseRef,
   type Turn,
   type TurnActivityDetail,
 } from "./blocks";
+import { reconcilePersistedTranscript } from "./transcriptReconcile";
+import { i18n } from "./i18n";
+import { buildTranscriptRows, groupMpaTranscriptTurns } from "./transcriptRows";
 import { Sidebar, type SidebarPage } from "./ui/Sidebar";
-import { AgentInfoPanel } from "./ui/AgentTopology";
+import { MpaAgentInfoRail } from "./ui/mpa-agent-info/MpaAgentInfoRail";
 import type { SkillCenterWorkspaceLaunch } from "./ui/SkillCenter";
 import { LibraryView, type LibraryTab } from "./ui/LibraryView";
 import { AddAgentKitView } from "./ui/AddAgentKit";
-import { AgentWorkspace } from "./ui/AgentWorkspace";
+import { AgentWorkspace, type MpaProfileEditTarget } from "./ui/AgentWorkspace";
 import {
   MyAgents,
   invalidateRuntimeAgentCache,
   type AgentType,
   type MyAgentCardData,
 } from "./ui/MyAgents";
+import { EnvironmentCenter } from "./ui/EnvironmentCenter";
+import { WorkspaceCenter } from "./ui/WorkspaceCenter";
 import { Applications, type ApplicationId } from "./ui/Applications";
-import { getAutomation } from "./automations/registry";
+import { CronJobs } from "./cronjobs/CronJobs";
 import { SystemInfo } from "./ui/SystemInfo";
+import { DeveloperResources } from "./ui/DeveloperResources";
+import { ReviewCenter } from "./reviews/ReviewCenter";
 import { GitHubIntegration } from "./ui/GitHubIntegration";
+import { GitLabIntegration } from "./ui/GitLabIntegration";
 import { FeishuBotIntegration } from "./automations/feishu/FeishuBotIntegration";
 import { CodingAgentsIntegration } from "./automations/coding-agents/CodingAgentsIntegration";
+import type { AutomationCategoryId } from "./automations/types";
+import { MpaChannelsAutomation } from "./automations/mpa-channels/MpaChannelsAutomation";
+import { WebsiteIntegration } from "./automations/website-integration/WebsiteIntegration";
 import { SearchView } from "./ui/Search";
 import {
   formatStudioDocumentTitle,
@@ -121,20 +161,44 @@ import {
 } from "./adk/connections";
 import { defaultCloudRegion, formatCloudRegion } from "./adk/cloudProvider";
 import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
+import { RuntimeArtifacts } from "./runtime-artifacts/RuntimeArtifacts";
 import { Composer } from "./ui/Composer";
 import { InvocationChips } from "./ui/InvocationChips";
 import { MediaGroup } from "./ui/Media";
 import { StackCards } from "./ui/AddAgentMenu";
+import {
+  IntelligentCreate,
+  type IntelligentCreateBaseVersion,
+  type IntelligentDevelopmentCapabilities,
+  type IntelligentPreparationStage,
+} from "./create/IntelligentCreate";
+import { IntelligentDeployment } from "./create/IntelligentDeployment";
 import { CustomCreate } from "./create/CustomCreate";
+import { AgentCreationModePicker } from "./create/AgentCreationModePicker";
+import { NativeConfigPage } from "./create/deepseek/NativeConfigPage";
+import { createNativeDraft } from "./create/deepseek/nativeConfig";
+import { WorkspaceCreate, WorkspaceCreateIcon } from "./create/WorkspaceCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
 import { MigrationWorkspace } from "./migrations/MigrationWorkspace";
 import type { AgentDraft } from "./create/types";
+import {
+  configuredMcpEnvKeys,
+  hydrateMcpCredentialValues,
+} from "./create/mcpAuth";
 import {
   hydrateRuntimeModelSelection,
   isRuntimeModelSelectionEnv,
 } from "./create/modelSource";
 import {
+  classifyRuntimeModelSources,
+  hydrateA2aRegistryFromRuntime,
+  modelConfigurationFromRuntime,
+  modelNameFromRuntime,
+  runtimeAgentDraftFromCloud,
+} from "./create/runtimeModelName";
+import {
   loadWorkspaceDrafts,
+  workspaceAgentCreationMode,
   workspaceDraftsKey,
   writeWorkspaceDrafts,
   type WorkspaceAgentDraft,
@@ -153,6 +217,8 @@ import {
   NEW_CHAT_TASK_TOOLS,
 } from "./ui/new-chat-modes/taskTools";
 import {
+  intelligentDevelopmentErrorMessage,
+  intelligentDevelopmentClient,
   sandboxClient,
   type SandboxApproval,
   type SandboxApprovalDecision,
@@ -166,6 +232,13 @@ import {
   type SandboxThreadSummary,
   type SandboxToolLaunch,
 } from "./adk/sandbox";
+import {
+  downloadIntelligentDevelopmentRelease,
+  fetchIntelligentDevelopmentRelease,
+  fetchIntelligentDevelopmentProjectRelease,
+  fetchIntelligentDevelopmentVersions,
+  fetchIntelligentDevelopmentVersionSource,
+} from "./adk/intelligentDevelopment";
 import {
   getSandboxAgentCapability,
   getSandboxCapability,
@@ -191,6 +264,7 @@ import {
   type VideoTaskEvent,
 } from "./ui/new-chat-modes/video-task";
 import { NewChatVideoTaskDialog } from "./ui/new-chat-modes/NewChatVideoTaskDialog";
+import { AgentKitCliDialog } from "./ui/AgentKitCliDialog";
 import {
   SandboxLaunchDialog,
   type SandboxLaunchState,
@@ -255,15 +329,27 @@ function issueFeedbackModuleForPage(page: string): IssueFeedbackModule {
   return "other";
 }
 
+function isOptionalStudioStorageUnavailable(cause: unknown): boolean {
+  const message = cause instanceof Error ? cause.message : String(cause ?? "");
+  return message.includes("HTTP 503") && (
+    message.includes("未配置持久化存储") ||
+    message.includes("storage is not configured")
+  );
+}
+
 interface NewChatCapabilitiesState {
   agentId?: string;
   ready?: boolean;
-  harnessEnabled?: boolean;
-  builtinTools?: string[];
   temporaryEnabled?: boolean;
   deepseekHarnessEnabled?: boolean;
   sandboxEndpointExportEnabled?: boolean;
   skillCustomizationEnabled?: boolean;
+}
+
+interface PreparedAgentSelection {
+  agentId: string;
+  userId: string;
+  automaticEvaluationStatuses?: AutomaticEvaluationStatusesResponse;
 }
 
 async function probeNewChatCapabilities(
@@ -273,18 +359,14 @@ async function probeNewChatCapabilities(
     sandboxResult,
     deepseekHarnessResult,
     skillResult,
-    harnessResult,
   ] = await Promise.allSettled([
     getSandboxCapability(),
     getSandboxAgentCapability("deepseek-harness"),
     getSkillWorkbenchCapability(),
-    agentId ? listSessionBuiltinTools(agentId) : Promise.resolve<string[]>([]),
   ]);
   return {
     agentId,
     ready: true,
-    harnessEnabled: !!agentId && harnessResult.status === "fulfilled",
-    builtinTools: harnessResult.status === "fulfilled" ? harnessResult.value : [],
     temporaryEnabled:
       sandboxResult.status === "fulfilled" && sandboxResult.value.enabled,
     deepseekHarnessEnabled:
@@ -298,8 +380,64 @@ async function probeNewChatCapabilities(
   };
 }
 
-type CreateView = "custom" | "package" | "migration" | null;
+async function loadHydratedSessions(
+  appName: string,
+  userId: string,
+): Promise<AdkSession[]> {
+  const list = await listSessions(appName, userId);
+  if (isMpaRuntimeApp(appName)) return list;
+  const results = await Promise.allSettled(
+    list.map((session) =>
+      session.events?.length
+        ? Promise.resolve(session)
+        : getSession(appName, userId, session.id),
+    ),
+  );
+  const failed = results.find(
+    (result) =>
+      result.status === "rejected" &&
+      !/get session failed:\s*404\b/i.test(String(result.reason)),
+  );
+  if (failed?.status === "rejected") throw failed.reason;
+  return results.flatMap((result) =>
+    result.status === "fulfilled" ? [result.value] : [],
+  );
+}
+
+type CreateView = "custom" | "deepseek" | "package" | "migration" | "workspace" | null;
+type AppView = CreateView | "intelligent";
 type CustomCreateMode = "custom" | "yaml_import";
+type StudioPageId =
+  | "new-chat"
+  | "conversation"
+  | "sandbox"
+  | "create"
+  | "library"
+  | "search"
+  | "applications"
+  | "cronjobs"
+  | "agents"
+  | "workspaces"
+  | "environments"
+  | "agent-detail"
+  | "sandbox-agent-detail"
+  | "sandbox-agent-workspace"
+  | "developer-resources"
+  | "review-center"
+  | "feedback"
+  | "users";
+type StudioStackPage =
+  | "users"
+  | "system-info"
+  | "agent-detail"
+  | "sandbox-agent-detail"
+  | "developer-resources"
+  | "review-center";
+
+interface StudioPageStackEntry {
+  page: StudioStackPage;
+  returnTo: StudioPageId;
+}
 
 // Persist the last view so a page refresh restores where the user was.
 const LS = { app: "veadk.appName", view: "veadk.view", session: "veadk.sessionId" } as const;
@@ -307,11 +445,136 @@ const DRAFT_AUTOSAVE_DELAY_MS = 600;
 const AUTO_EVALUATION_RUNNING_POLL_MS = 1_000;
 const AUTO_EVALUATION_RETRY_POLL_MS = 5_000;
 const AUTO_EVALUATION_MIN_PENDING_POLL_MS = 500;
-const EMPTY_STRING_SET: Set<string> = new Set<string>();
-const EMPTY_STRING_ARR: string[] = [];
+const ENVIRONMENT_STUDIO_TOOL_IDS = [
+  "list_envs",
+  "get_env_manifest",
+  "execute_in_sandbox",
+  "delegate_to_codex_sandbox",
+] as const;
+const SESSION_ENVIRONMENT_STORAGE_KEY = "veadk.sessionEnvironmentMounts.v1";
+const SESSION_SKILL_STORAGE_KEY = "veadk.sessionSkillMounts.v1";
+
+interface StoredSessionEnvironmentState {
+  mounts: Record<string, SessionEnvironmentMountSelection[]>;
+  workspaceIds: Record<string, string[]>;
+}
+
+function emptyStoredSessionEnvironmentState(): StoredSessionEnvironmentState {
+  return { mounts: {}, workspaceIds: {} };
+}
+
+function loadStoredSessionEnvironmentState(): StoredSessionEnvironmentState {
+  if (typeof localStorage === "undefined") {
+    return emptyStoredSessionEnvironmentState();
+  }
+  try {
+    const raw = JSON.parse(
+      localStorage.getItem(SESSION_ENVIRONMENT_STORAGE_KEY) ?? "{}",
+    ) as Record<string, unknown>;
+    const readRecord = <T,>(
+      value: unknown,
+      readItems: (value: unknown) => T[],
+    ): Record<string, T[]> => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+      return Object.fromEntries(
+        Object.entries(value)
+          .slice(-200)
+          .map(([key, items]) => [key, readItems(items)]),
+      );
+    };
+    const mounts = readRecord(raw.mounts, (value) => {
+      if (!Array.isArray(value)) return [];
+      return value.slice(0, 20).flatMap((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+        const candidate = item as Record<string, unknown>;
+        if (
+          typeof candidate.environment_id !== "string" ||
+          typeof candidate.environment_version_id !== "string" ||
+          (candidate.mount_instance_id !== undefined &&
+            typeof candidate.mount_instance_id !== "string")
+        ) return [];
+        return [{
+          environment_id: candidate.environment_id,
+          environment_version_id: candidate.environment_version_id,
+          ...(candidate.mount_instance_id
+            ? { mount_instance_id: candidate.mount_instance_id }
+            : {}),
+        }];
+      });
+    });
+    const workspaceIds = readRecord(raw.workspaceIds, (value) =>
+      Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === "string").slice(0, 20)
+        : [],
+    );
+    return { mounts, workspaceIds };
+  } catch {
+    return emptyStoredSessionEnvironmentState();
+  }
+}
+
+function persistSessionEnvironmentState(
+  mounts: Record<string, SessionEnvironmentMountSelection[]>,
+  workspaceIds: Record<string, string[]>,
+) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(
+      SESSION_ENVIRONMENT_STORAGE_KEY,
+      JSON.stringify({ mounts, workspaceIds }),
+    );
+  } catch {
+    // Storage can be unavailable in private or quota-restricted browsers.
+  }
+}
+
+function loadStoredSessionSkills(): Record<string, SelectedSkill[]> {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    const raw = JSON.parse(localStorage.getItem(SESSION_SKILL_STORAGE_KEY) ?? "{}");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    return Object.fromEntries(
+      Object.entries(raw as Record<string, unknown>).slice(-200).map(([key, value]) => [
+        key,
+        Array.isArray(value)
+          ? value.slice(0, 20).filter((item): item is SelectedSkill => (
+              Boolean(item)
+              && typeof item === "object"
+              && !Array.isArray(item)
+              && (item as SelectedSkill).source === "skillspace"
+              && typeof (item as SelectedSkill).name === "string"
+              && typeof (item as SelectedSkill).folder === "string"
+              && typeof (item as SelectedSkill).skillSpaceId === "string"
+              && typeof (item as SelectedSkill).skillId === "string"
+              && typeof (item as SelectedSkill).version === "string"
+            ))
+          : [],
+      ]),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function persistSessionSkills(skills: Record<string, SelectedSkill[]>) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(SESSION_SKILL_STORAGE_KEY, JSON.stringify(skills));
+  } catch {
+    // Storage can be unavailable in private or quota-restricted browsers.
+  }
+}
 
 function emptyInvocation(): FrontendInvocation {
   return { skills: [] };
+}
+
+function studioToolSelectionKey(
+  appName: string,
+  userId: string,
+  sessionId: string,
+): string {
+  return `${appName}\u0000${userId}\u0000${sessionId}`;
 }
 
 async function loadSandboxThreadHistory(
@@ -383,6 +646,24 @@ function findAgentNode(node: AgentNode, name: string): AgentNode | undefined {
   return undefined;
 }
 
+function displayAgentName(name: string): string {
+  return name.replace(/__[0-9a-f]{10}(?:__.*)?$/i, "");
+}
+
+function assistantTurnIsStreaming(
+  turn: Turn,
+  index: number,
+  turnCount: number,
+  conversationBusy: boolean,
+  presentingStream: boolean,
+): boolean {
+  return turn.meta?.streaming === true || (
+    turn.meta?.streaming !== false &&
+    index === turnCount - 1 &&
+    (conversationBusy || presentingStream)
+  );
+}
+
 function mentionableDescendants(node: AgentNode): AgentTarget[] {
   const targets: AgentTarget[] = [];
   for (const child of node.children) {
@@ -398,12 +679,13 @@ function mentionableDescendants(node: AgentNode): AgentTarget[] {
   return targets;
 }
 
-function loadView(): CreateView {
+function loadView(): AppView {
   const v = typeof localStorage !== "undefined" ? localStorage.getItem(LS.view) : null;
-  if (["menu", "intelligent", "custom", "template", "workflow"].includes(v ?? "")) {
+  if (v === "intelligent") return v;
+  if (["menu", "custom", "template", "workflow"].includes(v ?? "")) {
     return "custom";
   }
-  return v === "package" || v === "migration" ? v : null;
+  return v === "package" || v === "migration" || v === "deepseek" ? v : null;
 }
 import { TraceDrawer } from "./ui/TraceDrawer";
 import { LoginPage } from "./ui/LoginPage";
@@ -418,6 +700,8 @@ import {
 } from "./ui/responseAnnotation";
 import { PlatformFeedback } from "./ui/PlatformFeedback";
 import { Markdown } from "./ui/Markdown";
+import { withAuth } from "./adk/auth";
+import { withLocalUser } from "./adk/identity";
 import {
   clearLocalUser,
   logout,
@@ -434,6 +718,7 @@ import {
 import {
   beginAgentConnect,
   beginAgentMessage,
+  beginAgentSourceDownload,
   beginSandboxCreate,
   classifyTelemetryError,
   identifyTelemetryUser,
@@ -548,7 +833,7 @@ function TraceIcon() {
 /** Format an epoch-seconds timestamp as Beijing (Asia/Shanghai) time. */
 function fmtTime(ts?: number): string {
   if (!ts) return "";
-  return new Date(ts * 1000).toLocaleString("zh-CN", {
+  return new Date(ts * 1000).toLocaleString(i18n.resolvedLanguage ?? i18n.language, {
     timeZone: "Asia/Shanghai",
     hour12: false,
     month: "2-digit",
@@ -593,6 +878,7 @@ function turnHasVisibleContent(turn: Turn): boolean {
     if (b.kind === "text") return b.text.trim().length > 0;
     if (b.kind === "attachment") return b.files.length > 0;
     if (b.kind === "artifact") return b.files.length > 0;
+    if (b.kind === "delivery" || b.kind === "turn-summary") return true;
     if (b.kind === "tool") return !(b.name === A2UI_TOOL_NAME && b.done);
     if (b.kind === "agent-transfer") return false;
     if (b.kind === "a2ui") return buildSurfaces(b.messages).some((s) => s.components[s.rootId]);
@@ -620,12 +906,12 @@ function runOAuthPopup(authUri: string): Promise<string> {
       // Invalid URLs are rejected with unsupported schemes below.
     }
     if (protocol !== "http:" && protocol !== "https:") {
-      reject(new Error("授权链接不是 http/https 地址，已阻止打开。"));
+      reject(new Error(appText("oauth.unsupportedUrl")));
       return;
     }
     const popup = window.open(authUri, "veadk_oauth", "width=520,height=720");
     if (!popup) {
-      reject(new Error("弹窗被拦截，请允许弹窗后重试。"));
+      reject(new Error(appText("oauth.popupBlocked")));
       return;
     }
     let done = false;
@@ -654,14 +940,12 @@ function runOAuthPopup(authUri: string): Promise<string> {
       if (done) return;
       if (popup.closed) {
         cleanup();
-        const pasted = window.prompt(
-          "授权完成后，请粘贴回调页面（浏览器地址栏）的完整 URL：",
-        );
+        const pasted = window.prompt(appText("oauth.pasteCallbackUrl"));
         if (pasted && pasted.trim()) {
           done = true;
           resolve(pasted.trim());
         } else {
-          reject(new Error("授权已取消。"));
+          reject(new Error(appText("oauth.cancelled")));
         }
         return;
       }
@@ -700,7 +984,7 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button
       className="icon-btn"
-      title={copied ? "已复制" : "复制"}
+      title={copied ? appText("actions.copied") : appText("actions.copy")}
       disabled={!text}
       onClick={async () => {
         if (!text) return;
@@ -727,8 +1011,8 @@ function ShareMessageButton({
     <button
       type="button"
       className="icon-btn"
-      aria-label="分享为图片"
-      title="分享为图片"
+      aria-label={appText("actions.exportConversation")}
+      title={appText("actions.exportConversation")}
       onClick={onClick}
     >
       <Share className="icon" aria-hidden="true" />
@@ -740,23 +1024,16 @@ function ShareMessageButton({
 import "./a2ui/components";
 
 
-const GREETINGS = [
-  "今天想做点什么？",
-  "有什么可以帮你的？",
-  "需要我帮你查点什么吗？",
-  "有问题尽管问我",
-  "嗨，我们开始吧",
-  "开始一段新对话吧",
-  "今天想先解决哪件事？",
-  "把你的想法告诉我吧",
-  "我们从哪里开始？",
-  "有什么任务交给我？",
-  "准备好一起推进了吗？",
-  "说说你现在最关心的问题",
-  "今天也一起把事情做好",
-  "我在，随时可以开始",
-];
-const pickGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
+const GREETING_KEYS = Array.from({ length: 14 }, (_, index) => `greetings.${index}`);
+const pickGreetingKey = () => GREETING_KEYS[Math.floor(Math.random() * GREETING_KEYS.length)];
+
+function appText(key: string, options?: Record<string, unknown>): string {
+  return i18n.t(key, { ns: "app", ...options });
+}
+
+function uiText(key: string, options?: Record<string, unknown>): string {
+  return i18n.t(key, { ns: "ui", ...options });
+}
 
 function releaseAttachmentPreviews(items: Attachment[]) {
   for (const item of items) {
@@ -776,38 +1053,37 @@ function browserMimeType(file: File) {
   return "application/octet-stream";
 }
 
-const SANDBOX_MODE_LABELS: Record<SandboxPermissions["sandboxMode"], string> = {
-  "read-only": "只读",
-  "workspace-write": "工作区写入",
-  "danger-full-access": "完全访问",
+const SANDBOX_MODE_LABEL_KEYS: Record<SandboxPermissions["sandboxMode"], string> = {
+  "read-only": "sandbox.mode.readOnly",
+  "workspace-write": "sandbox.mode.workspaceWrite",
+  "danger-full-access": "sandbox.mode.fullAccess",
 };
 
-const SANDBOX_APPROVAL_POLICY_LABELS: Record<
+const SANDBOX_APPROVAL_POLICY_LABEL_KEYS: Record<
   SandboxPermissions["approvalPolicy"],
   string
 > = {
-  untrusted: "仅不可信命令",
-  "on-request": "按需审批",
-  never: "不审批",
+  untrusted: "sandbox.approvalPolicy.untrusted",
+  "on-request": "sandbox.approvalPolicy.onRequest",
+  never: "sandbox.approvalPolicy.never",
 };
 
-const SANDBOX_REVIEWER_LABELS: Record<
+const SANDBOX_REVIEWER_LABEL_KEYS: Record<
   SandboxPermissions["approvalsReviewer"],
   string
 > = {
-  user: "由我审批",
-  auto_review: "自动审查",
+  user: "sandbox.reviewer.user",
+  auto_review: "sandbox.reviewer.autoReview",
 };
 
 function approvalActivityTitle(
   approval: SandboxApproval,
   decision: SandboxApprovalDecision,
 ): string {
-  const subject = approval.kind === "file" ? "文件修改" : "命令执行";
-  if (decision === "accept") return `已允许本次${subject}`;
-  if (decision === "acceptForSession") return `已在本会话中允许${subject}`;
-  if (decision === "decline") return `已拒绝${subject}`;
-  return `已取消${subject}审批`;
+  const subject = appText(
+    approval.kind === "file" ? "approval.subject.file" : "approval.subject.command",
+  );
+  return appText(`approval.decision.${decision}`, { subject });
 }
 
 function approvalActivityDetails(
@@ -815,17 +1091,17 @@ function approvalActivityDetails(
 ): TurnActivityDetail[] {
   const details: TurnActivityDetail[] = [];
   if (approval.command?.trim()) {
-    details.push({ label: "命令", value: approval.command.trim(), code: true });
+    details.push({ label: appText("approval.details.command"), value: approval.command.trim(), code: true });
   }
   if (approval.grantRoot?.trim()) {
     details.push({
-      label: "授权路径",
+      label: appText("approval.details.grantRoot"),
       value: approval.grantRoot.trim(),
       code: true,
     });
   }
   if (approval.cwd?.trim()) {
-    details.push({ label: "执行目录", value: approval.cwd.trim(), code: true });
+    details.push({ label: appText("approval.details.cwd"), value: approval.cwd.trim(), code: true });
   }
   return details;
 }
@@ -909,13 +1185,30 @@ function sessionUsageKey(app: string, session: string): string {
   return `${app}\u0001${session}`;
 }
 
+function lastCompletedEventId(turns: Turn[] | undefined): string | undefined {
+  const value = [...(turns ?? [])]
+    .reverse()
+    .find((turn) => turn.role === "assistant" && turn.meta?.eventId)
+    ?.meta?.eventId;
+  return value?.trim() || undefined;
+}
+
 export default function App() {
+  const { t } = useTranslation("app");
   const [apps, setApps] = useState<string[]>([]);
-  const [appName, setAppName] = useState("");
+  const [appName, setAppName] = useState(() =>
+    typeof localStorage !== "undefined" ? localStorage.getItem(LS.app) || "" : "",
+  );
   const [sessions, setSessions] = useState<AdkSession[]>([]);
-  const [sessionId, setSessionId] = useState("");
+  const [sessionId, setSessionId] = useState(() =>
+    typeof localStorage !== "undefined"
+      ? localStorage.getItem(LS.session) || ""
+      : "",
+  );
   const creatingSessionRef = useRef<Promise<string> | null>(null);
   const sessionRefreshRequestRef = useRef(0);
+  const agentSelectionPreparationRequestRef = useRef(0);
+  const preparedAgentSelectionRef = useRef<PreparedAgentSelection | null>(null);
   const [initializingSession, setInitializingSession] = useState(false);
   const [pendingTurns, setPendingTurns] = useState<Turn[]>([]);
   const [sandboxSession, setSandboxSession] =
@@ -945,6 +1238,17 @@ export default function App() {
   const [sandboxLaunchError, setSandboxLaunchError] = useState("");
   const [sandboxLaunchKind, setSandboxLaunchKind] =
     useState<"codex" | SandboxAgentKind>("codex");
+  const [sandboxLaunchPersistentEnabled, setSandboxLaunchPersistentEnabled] =
+    useState(true);
+  const [sandboxLaunchPersistentReason, setSandboxLaunchPersistentReason] =
+    useState("");
+  const [sandboxLaunchPersistentRequired, setSandboxLaunchPersistentRequired] =
+    useState(false);
+  const [sandboxLaunchStorageMode, setSandboxLaunchStorageMode] =
+    useState<"snapshot" | "disk">("snapshot");
+  const [sandboxLaunchDiskGbDefault, setSandboxLaunchDiskGbDefault] = useState(10);
+  const [sandboxLaunchDiskGbMin, setSandboxLaunchDiskGbMin] = useState(5);
+  const [sandboxLaunchDiskGbMax, setSandboxLaunchDiskGbMax] = useState(100);
   const [sandboxLaunchFromAgents, setSandboxLaunchFromAgents] = useState(false);
   const [sandboxProjectUploadOpen, setSandboxProjectUploadOpen] = useState(false);
   const [sandboxAgentRefreshKey, setSandboxAgentRefreshKey] = useState(0);
@@ -956,6 +1260,9 @@ export default function App() {
   const [sandboxThreadDeleteTarget, setSandboxThreadDeleteTarget] =
     useState<SandboxThreadSummary | null>(null);
   const sandboxLaunchAbortRef = useRef<AbortController | null>(null);
+  const sandboxLaunchCapabilityAbortRef = useRef<AbortController | null>(null);
+  const intelligentCreateAbortRef = useRef<AbortController | null>(null);
+  const intelligentCreateFocusRef = useRef<HTMLElement | null>(null);
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
   const sandboxSessionIdRef = useRef(sandboxSession?.id ?? "");
   const sandboxActiveAssistantTurnIdRef = useRef("");
@@ -963,6 +1270,9 @@ export default function App() {
   const sandboxEndpointCopyTimerRef = useRef<number | undefined>(undefined);
   const sandboxPreviewUrlsRef = useRef<Set<string>>(new Set());
   sandboxSessionIdRef.current = sandboxSession?.id ?? "";
+  useEffect(() => () => {
+    sandboxLaunchCapabilityAbortRef.current?.abort();
+  }, []);
   useEffect(() => () => {
     if (sandboxEndpointCopyTimerRef.current !== undefined) {
       window.clearTimeout(sandboxEndpointCopyTimerRef.current);
@@ -1083,8 +1393,136 @@ export default function App() {
   const [newChatSkillTarget, setNewChatSkillTarget] =
     useState<NewChatSkillTarget | null>(null);
   const [newChatTask, setNewChatTask] = useState<NewChatTask | null>(null);
+  const [intelligentCapabilities, setIntelligentCapabilities] =
+    useState<IntelligentDevelopmentCapabilities | null>(null);
+  const [intelligentCapabilitiesLoading, setIntelligentCapabilitiesLoading] =
+    useState(true);
+  const [intelligentCapabilitiesError, setIntelligentCapabilitiesError] =
+    useState("");
+  const [developmentTaskSnapshot, setDevelopmentTaskSnapshot] = useState<DevelopmentTaskSnapshot>();
+  const [developmentTaskRefreshKey, setDevelopmentTaskRefreshKey] = useState(0);
+  const [intelligentPreparationMessage, setIntelligentPreparationMessage] = useState("");
+  const [intelligentPreparationStage, setIntelligentPreparationStage] =
+    useState<IntelligentPreparationStage | null>(null);
+  const [migrationProjectReturn, setMigrationProjectReturn] = useState<{
+    projectId: string;
+  }>();
+  const [intelligentDeployment, setIntelligentDeploymentState] =
+    useState<IntelligentDevelopmentReleaseRef | null>(null);
+  const setIntelligentDeployment = useCallback(
+    (delivery: IntelligentDevelopmentReleaseRef | null) => {
+      setIntelligentDeploymentState(delivery);
+      const url = new URL(window.location.href);
+      if (delivery) {
+        url.searchParams.set("view", "runtime-deploy");
+        url.searchParams.set("source", "intelligent-development");
+        url.searchParams.set("sessionId", delivery.sessionId);
+        url.searchParams.set("artifactSha256", delivery.artifactSha256);
+        url.searchParams.set(
+          "validationReportSha256",
+          delivery.validationReportSha256,
+        );
+        if (delivery.projectId && delivery.versionId) {
+          url.searchParams.set("projectId", delivery.projectId);
+          url.searchParams.set("versionId", delivery.versionId);
+        } else {
+          url.searchParams.delete("projectId");
+          url.searchParams.delete("versionId");
+        }
+      } else {
+        for (const key of [
+          "view",
+          "source",
+          "sessionId",
+          "artifactSha256",
+          "validationReportSha256",
+          "projectId",
+          "versionId",
+        ]) url.searchParams.delete(key);
+      }
+      window.history.replaceState(null, "", url);
+    },
+    [],
+  );
+  const resolveIntelligentDelivery = useCallback(
+    (delivery: IntelligentDevelopmentReleaseRef) => delivery.projectId && delivery.versionId
+      ? fetchIntelligentDevelopmentProjectRelease(
+          delivery.projectId,
+          delivery.versionId,
+          delivery.sessionId,
+          delivery.artifactSha256,
+          delivery.validationReportSha256,
+        )
+      : fetchIntelligentDevelopmentRelease(
+          delivery.sessionId,
+          delivery.artifactSha256,
+          delivery.validationReportSha256,
+        ),
+    [],
+  );
+  const resolveIntelligentDeliveryComparison = useCallback(
+    async (delivery: IntelligentDevelopmentReleaseRef) => {
+      if (!delivery.projectId || !delivery.versionId || !delivery.parentVersionId) {
+        throw new Error(appText("errors.noOptimizationBaseline"));
+      }
+      const versions = await fetchIntelligentDevelopmentVersions(delivery.projectId);
+      const targetVersion = versions.find(
+        (version) => version.versionId === delivery.versionId,
+      );
+      const baseVersion = versions.find(
+        (version) => version.versionId === delivery.parentVersionId,
+      );
+      if (!targetVersion || !baseVersion) {
+        throw new Error(appText("errors.optimizationVersionMissing"));
+      }
+      const [base, target] = await Promise.all([
+        fetchIntelligentDevelopmentVersionSource(baseVersion),
+        fetchIntelligentDevelopmentVersionSource(targetVersion),
+      ]);
+      return { base, target };
+    },
+    [],
+  );
+  const downloadIntelligentDelivery = useCallback(
+    async (delivery: IntelligentDevelopmentReleaseRef) => {
+      const operation = beginAgentSourceDownload({
+        agentId: delivery.agentName,
+        deployAction: "create",
+        deploySource: "intelligent_development",
+        createMode: "intelligent",
+        aiAssisted: 1,
+      });
+      try {
+        const { blob, filename } = await downloadIntelligentDevelopmentRelease(delivery);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        link.hidden = true;
+        try {
+          document.body.appendChild(link);
+          link.click();
+        } finally {
+          link.remove();
+          window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+        }
+        operation.succeed({
+          fileCount: delivery.fileCount,
+          zipSizeBytes: blob.size,
+        });
+      } catch (cause) {
+        operation.fail({
+          fileCount: delivery.fileCount,
+          ...classifyTelemetryError(cause),
+        });
+        throw cause;
+      }
+    },
+    [],
+  );
   const [videoTask, setVideoTask] = useState<VideoGenerationTask | null>(null);
   const [videoTaskDialogOpen, setVideoTaskDialogOpen] = useState(false);
+  const [agentKitCliOpen, setAgentKitCliOpen] = useState(false);
   const videoTaskRef = useRef<VideoGenerationTask | null>(null);
   const videoTaskAbortRef = useRef<AbortController | null>(null);
   const [newChatCapabilities, setNewChatCapabilities] =
@@ -1096,16 +1534,60 @@ export default function App() {
     newChatCapabilities.ready === true && newChatCapabilities.agentId === appName;
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [invocation, setInvocation] = useState<FrontendInvocation>(emptyInvocation);
+  const [studioToolCapabilities, setStudioToolCapabilities] =
+    useState<RuntimeStudioToolCapabilities | null>(null);
+  const [studioToolsLoading, setStudioToolsLoading] = useState(false);
+  const [selectedCronRuntime, setSelectedCronRuntime] = useState<{
+    runtimeId: string; name: string; region: string;
+  } | undefined>();
+  useEffect(() => setSelectedCronRuntime(undefined), [appName]);
+  const [draftStudioRuntime, setDraftStudioRuntime] = useState<{
+    appName: string;
+    runtimeId: string;
+    mpaInstanceId?: string;
+    name: string;
+    region: string;
+  } | null>(null);
+  const [sessionSkillsBySession] = useState<
+    Record<string, SelectedSkill[]>
+  >(() => loadStoredSessionSkills());
+  useEffect(() => persistSessionSkills(sessionSkillsBySession), [sessionSkillsBySession]);
+  const [sessionEnvironments, setSessionEnvironments] = useState<StudioEnvironment[]>([]);
+  const [sessionWorkspaces, setSessionWorkspaces] = useState<StudioWorkspace[]>([]);
+  const [sessionEnvironmentsLoading, setSessionEnvironmentsLoading] = useState(false);
+  const [sessionEnvironmentsError, setSessionEnvironmentsError] = useState("");
+  const sessionEnvironmentLoadAbortRef = useRef<AbortController | null>(null);
+  const storedSessionEnvironmentState = useRef<StoredSessionEnvironmentState | null>(
+    null,
+  );
+  if (storedSessionEnvironmentState.current === null) {
+    storedSessionEnvironmentState.current = loadStoredSessionEnvironmentState();
+  }
+  const [environmentMountsBySession, setEnvironmentMountsBySession] = useState<
+    Record<string, SessionEnvironmentMountSelection[]>
+  >(() => storedSessionEnvironmentState.current?.mounts ?? {});
+  const [environmentWorkspaceIdsBySession, setEnvironmentWorkspaceIdsBySession] = useState<
+    Record<string, string[]>
+  >(() => storedSessionEnvironmentState.current?.workspaceIds ?? {});
+  useEffect(() => {
+    persistSessionEnvironmentState(
+      environmentMountsBySession,
+      environmentWorkspaceIdsBySession,
+    );
+  }, [environmentMountsBySession, environmentWorkspaceIdsBySession]);
+  const [runtimeLogTargetsBySession, setRuntimeLogTargetsBySession] = useState<
+    Record<string, RuntimeLogTarget>
+  >({});
   const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
+  const [turnControlBySession, setTurnControlBySession] = useState<Record<string, TurnControlState>>({});
+  const turnControlBySessionRef = useRef<Record<string, TurnControlState>>({});
+  const [turnControlBusy, setTurnControlBusy] = useState(false);
+  const [selectedModelBySession, setSelectedModelBySession] = useState<
+    Record<string, string>
+  >({});
   const [agentInfoRefreshKey, setAgentInfoRefreshKey] = useState(0);
+  const agentInfoSelectionRef = useRef("");
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
-  const [sessionCapabilities, setSessionCapabilities] =
-    useState<SessionCapabilities | null>(null);
-  const [sessionCapabilitiesLoading, setSessionCapabilitiesLoading] =
-    useState(false);
-  const [sessionBuiltinTools, setSessionBuiltinTools] = useState<string[]>([]);
-  const [sessionCapabilityMutating, setSessionCapabilityMutating] =
-    useState(false);
   const removedAttachmentIdsRef = useRef<Set<string>>(new Set());
   // Streaming state is PER SESSION so multiple sessions can stream at once
   // (each /run_sse is an independent request). `streamingSids` = which sessions
@@ -1236,7 +1718,7 @@ export default function App() {
       }
 
       if (!current.optimizedPrompt || !current.resolvedMode) {
-        throw new Error("提示词优化结果不完整，请重新优化后再试。");
+        throw new Error(appText("errors.incompletePromptOptimization"));
       }
 
       const created = await createVideoTask({
@@ -1252,18 +1734,25 @@ export default function App() {
         type: "generation_started",
         remoteTaskId: created.taskId,
         generationModel: created.generationModel,
+        startedAt: Date.now(),
       });
       if (!current) return;
 
       while (!controller.signal.aborted) {
         const remote = await getVideoTask(created.taskId, controller.signal);
         if (controller.signal.aborted) return;
+        if (remote.status === "queued" || remote.status === "running") {
+          commitVideoTask(localId, runId, {
+            type: "generation_status_changed",
+            providerStatus: remote.status,
+          });
+        }
         if (remote.status === "failed") {
-          throw new Error(remote.error || "视频生成失败，请稍后重试。");
+          throw new Error(remote.error || appText("errors.videoGenerationFailed"));
         }
         if (remote.status === "succeeded") {
           if (!remote.videoUrl) {
-            throw new Error("视频任务已完成，但服务端未返回预览地址。");
+            throw new Error(appText("errors.videoPreviewMissing"));
           }
           commitVideoTask(localId, runId, {
             type: "generation_succeeded",
@@ -1297,11 +1786,11 @@ export default function App() {
       return;
     }
     if (config.taskMode === "video_editing" && !config.referenceVideo) {
-      setError("视频编辑需要先添加待编辑视频。");
+      setError(appText("errors.videoEditRequiresVideo"));
       return;
     }
     if (config.taskMode === "video_extension" && !config.referenceVideo) {
-      setError("视频续写需要先添加基础视频。");
+      setError(appText("errors.videoExtendRequiresVideo"));
       return;
     }
     if (
@@ -1309,18 +1798,18 @@ export default function App() {
       !config.referenceImage &&
       !config.referenceVideo
     ) {
-      setError("参考素材生视频需要至少添加一项参考图片或参考视频。");
+      setError(appText("errors.videoReferenceRequired"));
       return;
     }
     if (
       config.taskMode === "text_to_video" &&
       (config.referenceImage || config.referenceVideo || config.firstFrame || config.lastFrame)
     ) {
-      setError("文生视频不使用参考素材，请先移除已添加的图片或视频。");
+      setError(appText("errors.textVideoRejectsReferences"));
       return;
     }
     if (config.taskMode === "first_last_frame" && !config.firstFrame) {
-      setError("首尾帧生成需要先添加首帧图片。");
+      setError(appText("errors.firstFrameRequired"));
       return;
     }
     if (
@@ -1328,22 +1817,19 @@ export default function App() {
       config.taskMode !== "auto" &&
       !capabilities.supportedModes.includes(config.taskMode)
     ) {
-      setError("当前平台暂不支持所选视频任务模式。");
+      setError(appText("errors.videoModeUnsupported"));
       return;
     }
     const assets = videoAssetsForConfig(config);
     if (assets.length > 0 && !capabilities.assetStorageAvailable) {
-      setError(
-        capabilities.assetStorageUnavailableReason ||
-          "管理员未配置持久化存储",
-      );
+      setError(appText("errors.persistentStorageNotConfigured"));
       return;
     }
     const oversized = assets.find(
       ({ file }) => capabilities.maxAssetBytes > 0 && file.size > capabilities.maxAssetBytes,
     );
     if (oversized) {
-      setError(`${oversized.file.name} 超出当前平台允许的素材大小。`);
+      setError(appText("errors.mediaTooLarge", { fileName: oversized.file.name }));
       return;
     }
 
@@ -1410,7 +1896,8 @@ export default function App() {
   }, [appName, sessionId]);
   const [traceOpen, setTraceOpen] = useState(false);
   const [traceEndTimeMs, setTraceEndTimeMs] = useState<number>();
-  const [greeting, setGreeting] = useState(pickGreeting);
+  const [greetingKey, setGreetingKey] = useState(pickGreetingKey);
+  const greeting = t(greetingKey);
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [authExpired, setAuthExpired] = useState(false);
   const [authRecoveryChecking, setAuthRecoveryChecking] = useState(false);
@@ -1444,32 +1931,23 @@ export default function App() {
   const [uiConfigLoaded, setUiConfigLoaded] = useState(false);
   const [localMode, setLocalMode] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
-  // The executing sub-agent (ADK event.author) and everyone who emitted this
-  // turn — PER SESSION, so each session's topology highlights its own stream.
-  const [activeAgentBySession, setActiveAgentBySession] = useState<
-    Record<string, string>
-  >({});
-  const [seenAgentsBySession, setSeenAgentsBySession] = useState<
-    Record<string, Set<string>>
-  >({});
-  // The current delegation chain (root → … → executing agent) per session,
-  // built from event.actions.transfer_to_agent / end_of_agent.
-  const [execPathBySession, setExecPathBySession] = useState<
-    Record<string, string[]>
-  >({});
-
   // Everything the view needs for the ACTIVE session, derived from the
   // per-session maps above.
   const busy = streamingSids.has(sessionId);
   const presentingStream = streamPresentationSids.has(sessionId);
   const conversationBusy = busy || initializingSession;
-  const sessionConfigurationBusy = !!sessionId && sessionCapabilitiesLoading;
   const activeConversationBusy = sandboxSession
     ? sandboxBusy
     : conversationBusy;
   const activeConversationPresenting =
     activeConversationBusy || (!sandboxSession && presentingStream);
+  const sandboxClientForSession = sandboxSession?.intelligentDevelopment === true
+    ? intelligentDevelopmentClient
+    : sandboxClient;
   const sandboxCommands = useSandboxCodexCommands({
+    client: sandboxClientForSession,
+    allowSkillSelection: sandboxSession?.intelligentDevelopment !== true,
+    allowThreadManagement: sandboxSession?.intelligentDevelopment !== true,
     session: sandboxSession,
     conversationBusy: sandboxBusy,
     onInputChange: setInput,
@@ -1505,19 +1983,22 @@ export default function App() {
   });
   useEffect(() => {
     const activeSession = sandboxSession;
-    if (!activeSession || !sandboxBusy || sandboxMessageAbortRef.current) return;
+    if (!activeSession || activeSession.intelligentDevelopment || !sandboxBusy || sandboxMessageAbortRef.current) return;
     let stopped = false;
     let timer: number | undefined;
     const controller = new AbortController();
 
     const syncBackgroundTurn = async () => {
       try {
-        const status = await sandboxClient.getStatus(activeSession.id, {
+        const backgroundClient = activeSession.intelligentDevelopment
+          ? intelligentDevelopmentClient
+          : sandboxClient;
+        const status = await backgroundClient.getStatus(activeSession.id, {
           signal: controller.signal,
         });
         if (stopped || sandboxSessionIdRef.current !== activeSession.id) return;
         const snapshot = status.threadId
-          ? await sandboxClient.readThread(activeSession.id, status.threadId, {
+          ? await backgroundClient.readThread(activeSession.id, status.threadId, {
               signal: controller.signal,
             })
           : null;
@@ -1546,12 +2027,17 @@ export default function App() {
         if (!status.busy) {
           const lastMessage = snapshot?.messages[snapshot.messages.length - 1];
           if (lastMessage?.role === "user") {
-            setError("云端 Codex 已结束，但没有生成回复，请重新发送任务。");
+            setError(appText("errors.cloudCodexEmptyReply"));
           }
           return;
         }
       } catch (cause) {
         if ((cause as Error)?.name === "AbortError" || stopped) return;
+        if (activeSession.intelligentDevelopment) {
+          setError(intelligentDevelopmentErrorMessage(cause));
+          timer = window.setTimeout(syncBackgroundTurn, 1500);
+          return;
+        }
         setSandboxBusy(false);
         setSandboxSession((current) =>
           current?.id === activeSession.id ? { ...current, busy: false } : current
@@ -1569,9 +2055,15 @@ export default function App() {
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [sandboxBusy, sandboxSession?.id]);
-  const activeAgent = activeAgentBySession[sessionId] ?? "";
-  const seenAgents = seenAgentsBySession[sessionId] ?? EMPTY_STRING_SET;
-  const execPath = execPathBySession[sessionId] ?? EMPTY_STRING_ARR;
+  const development = useDevelopmentRun({
+    sessionId: sandboxSession?.intelligentDevelopment ? sandboxSession.id : "",
+    ownerId: userId,
+    onTurns: setSandboxTurns,
+    onBusy: (busy) => {
+      setSandboxBusy(busy);
+      setSandboxSession((current) => current?.intelligentDevelopment ? { ...current, busy } : current);
+    },
+  });
   const rootCapabilityNode = agentInfo?.graph;
   const rootAgentNames = [
     agentInfo?.name,
@@ -1594,8 +2086,13 @@ export default function App() {
         tools: [
           ...new Set([
             ...(rootCapabilityNode?.tools ?? agentInfo.tools),
-            ...(sessionCapabilities?.tools.map((tool) => tool.name) ?? []),
-            ...sessionBuiltinTools,
+            ...(sessionId && (
+              environmentMountsBySession[
+                studioToolSelectionKey(appName, userId, sessionId)
+              ] ?? []
+            ).length > 0
+              ? [...ENVIRONMENT_STUDIO_TOOL_IDS]
+              : []),
           ]),
         ],
         skills: rootCapabilityNode?.skills ?? agentInfo.skills,
@@ -1648,42 +2145,8 @@ export default function App() {
     }
   }
 
-  // Apply a stream event's control-flow signals to a session's live state:
-  // author = who's executing now; transfer_to_agent pushes the delegation
-  // chain; end_of_agent / escalate pops it. `author` always wins for highlight.
-  const applyStreamSignals = (sid: string, ev: AdkEvent) => {
-    const who = ev.author && ev.author !== "user" ? ev.author : undefined;
-    if (who) {
-      setActiveAgentBySession((m) => ({ ...m, [sid]: who }));
-      setSeenAgentsBySession((m) => ({
-        ...m,
-        [sid]: new Set(m[sid] ?? []).add(who),
-      }));
-      // Seed the path with the entry (root) agent on the first event.
-      setExecPathBySession((m) =>
-        m[sid]?.length ? m : { ...m, [sid]: [who] },
-      );
-    }
-    const transferTo =
-      ev.actions?.transferToAgent ?? ev.actions?.transfer_to_agent;
-    if (transferTo) {
-      setExecPathBySession((m) => {
-        const cur = m[sid] ?? [];
-        return cur[cur.length - 1] === transferTo
-          ? m
-          : { ...m, [sid]: [...cur, transferTo] };
-      });
-    }
-    const ended =
-      ev.actions?.endOfAgent ?? ev.actions?.end_of_agent ?? ev.actions?.escalate;
-    if (ended) {
-      setExecPathBySession((m) => {
-        const cur = m[sid] ?? [];
-        return cur.length <= 1 ? m : { ...m, [sid]: cur.slice(0, -1) };
-      });
-    }
-  };
-  const [createView, setCreateView] = useState<CreateView>(loadView);
+  const [createView, setCreateView] = useState<AppView>(loadView);
+  const [deepseekDraft, setDeepseekDraft] = useState(createNativeDraft);
   const [deploymentTasks, setDeploymentTasks] = useState<
     DeploymentTaskUpdate[]
   >([]);
@@ -1699,22 +2162,74 @@ export default function App() {
       return next;
     });
   }, []);
+
+  const operationToDeploymentTask = useCallback((
+    operation: MpaAgentOperation,
+  ): DeploymentTaskUpdate => {
+    const succeeded = operation.status === "succeeded";
+    const failed = operation.status === "failed_retryable"
+      || operation.status === "failed_terminal";
+    const startedAt = Date.parse(operation.createdAt ?? operation.updatedAt ?? "");
+    return {
+      id: `mpa-operation:${operation.operationId}`,
+      agentName: operation.mpaInstanceId || operation.runtimeId || operation.operationId,
+      runtimeName: operation.mpaInstanceId || operation.runtimeId || operation.operationId,
+      runtimeId: operation.runtimeId,
+      mpaInstanceId: operation.mpaInstanceId,
+      region: operation.runtimeRegion || "cn-beijing",
+      startedAt: Number.isFinite(startedAt) ? startedAt : Date.now(),
+      status: succeeded ? "success" : failed ? "error" : "running",
+      phase: operation.stage,
+      label: failed
+        ? uiText("agentWorkspace.deploymentFailed")
+        : succeeded
+          ? uiText("agentWorkspace.deployStatus.success")
+          : uiText("agentWorkspace.deployStatus.running"),
+      message: operation.safeErrorCode || undefined,
+      pct: succeeded || failed ? 100 : undefined,
+      mpaProfile: true,
+      mpaSmoke: operation.operationKind === "create",
+      operationId: operation.operationId,
+    };
+  }, []);
+  const recoveredOperationIdsRef = useRef(new Set<string>());
+
   // Whether the server has cloud AK/SK. The agent-creation workbench needs
   // them; assume present until the runtime-config check says otherwise (avoids
   // flashing the notice in the common, configured case).
   const [hasCreds, setHasCreds] = useState(true);
   const [skillCenter, setSkillCenter] = useState(false);
   const [libraryTab, setLibraryTab] = useState<LibraryTab>("skills");
-  const [libraryPageTitle, setLibraryPageTitle] = useState("技能库");
+  const [libraryPageTitleState, setLibraryPageTitleState] = useState<
+    | { kind: "key"; key: string; name?: string }
+    | { kind: "literal"; title: string }
+  >({ kind: "key", key: "titles.skillLibrary" });
+  const libraryPageTitle = libraryPageTitleState.kind === "key"
+    ? t(libraryPageTitleState.key, { name: libraryPageTitleState.name })
+    : libraryPageTitleState.title;
+  const handleLibraryPageTitleChange = useCallback((title: string) => {
+    setLibraryPageTitleState((current) =>
+      current.kind === "literal" && current.title === title
+        ? current
+        : { kind: "literal", title },
+    );
+  }, []);
   const [skillCenterLaunch, setSkillCenterLaunch] =
     useState<SkillCenterWorkspaceLaunch | null>(null);
   const [addAgent, setAddAgent] = useState(false);
   // The "添加 Agent" chooser (two cards: AgentKit / 从 0 快速创建).
   const [addMenu, setAddMenu] = useState(false);
+  const [addMenuSurface, setAddMenuSurface] =
+    useState<"entry" | "traditional">("entry");
+  const [customCreationSurface, setCustomCreationSurface] =
+    useState<"vulcan" | "traditional">("traditional");
   // A draft imported from YAML, used to pre-fill the custom wizard once.
   const [importedDraft, setImportedDraft] = useState<AgentDraft | null>(null);
   const [customCreateMode, setCustomCreateMode] =
     useState<CustomCreateMode>("custom");
+  const [workspaceLandingSection, setWorkspaceLandingSection] = useState<"workspaces" | "environments">("workspaces");
+  const [workspacePreviewOpened, setWorkspacePreviewOpened] = useState(false);
+  const [workspaceCreateRequest, setWorkspaceCreateRequest] = useState(0);
   const [savedAgentDrafts, setSavedAgentDrafts] = useState<WorkspaceAgentDraft[]>([]);
   const savedAgentDraftsRef = useRef<WorkspaceAgentDraft[]>([]);
   const pendingWorkspaceDraftRef = useRef<WorkspaceAgentDraft | null>(null);
@@ -1729,16 +2244,41 @@ export default function App() {
   const [feedbackCaseReturnKind, setFeedbackCaseReturnKind] =
     useState<"good" | "bad">("good");
   const [focusedWorkspaceAgentSection, setFocusedWorkspaceAgentSection] =
-    useState<"basic" | "evaluations">("basic");
+    useState<"basic" | "sessionConfig" | "evaluations">("basic");
   const [focusedWorkspaceCaseKind, setFocusedWorkspaceCaseKind] =
     useState<"good" | "bad">("good");
   const [feedbackTargetEventId, setFeedbackTargetEventId] = useState("");
   const [feedbackCasePreview, setFeedbackCasePreview] =
     useState<AgentFeedbackCase | null>(null);
   const [myAgents, setMyAgents] = useState(false);
-  const [systemInfo, setSystemInfo] = useState(false);
+  const [environmentView, setEnvironmentView] = useState(false);
+  const [workspaceView, setWorkspaceView] = useState(false);
+  const [pageStack, setPageStack] = useState<StudioPageStackEntry[]>([]);
+  const activeStackEntry = pageStack[pageStack.length - 1];
+  const activeStackPage = activeStackEntry?.page;
+  const userManagementView = activeStackPage === "users";
+  const systemInfo = activeStackPage === "system-info";
+  const developerResourcesView = activeStackPage === "developer-resources";
+  const reviewCenterView = activeStackPage === "review-center";
+  const pushStudioPage = useCallback((entry: StudioPageStackEntry) => {
+    setPageStack((current) =>
+      current[current.length - 1]?.page === entry.page
+        ? current
+        : [...current, entry],
+    );
+  }, []);
+  const popStudioPage = useCallback((page: StudioStackPage) => {
+    setPageStack((current) => {
+      if (current[current.length - 1]?.page === page) return current.slice(0, -1);
+      const index = current.findIndex((entry) => entry.page === page);
+      if (index === -1) return current;
+      return current.filter((_, entryIndex) => entryIndex !== index);
+    });
+  }, []);
+  const [applicationsCategory, setApplicationsCategory] = useState<AutomationCategoryId>("development");
   const [applicationsView, setApplicationsView] =
     useState<"catalog" | ApplicationId | null>(null);
+  const [cronJobsView, setCronJobsView] = useState(false);
   // A search result may belong to a different agent; remember it so the
   // agent-switch effect opens it instead of resetting to a fresh chat.
   const pendingOpenRef = useRef<{ app: string; sid: string } | null>(null);
@@ -1755,25 +2295,82 @@ export default function App() {
     null,
   );
   const [libraryRuntimePermissions, setLibraryRuntimePermissions] = useState<
-    Record<string, { canDelete: boolean }>
+    Record<
+      string,
+      {
+        canDelete: boolean;
+        agentCategory?: "general" | "mpa";
+        mpaInstanceId?: string;
+      }
+    >
   >({});
   const [hiddenRuntimeIds, setHiddenRuntimeIds] = useState<Set<string>>(
     () => new Set(),
   );
   const [runtimeUpdateTarget, setRuntimeUpdateTarget] = useState<{
     runtimeId: string;
+    agentCategory?: "general" | "mpa";
+    mpaInstanceId?: string;
     name: string;
     region: string;
     appName?: string;
     currentVersion?: number | null;
+    etag?: string;
+    editMode?: "source-preserving" | "regenerate";
+    mpaProfileOnly?: boolean;
+    configuredMcpEnvKeys?: string[];
+    configuredRuntimeEnvKeys?: string[];
   } | null>(null);
   const [newRuntimeRegion, setNewRuntimeRegion] = useState<string>(
     defaultCloudRegion(cloudProvider),
   );
   const [focusedDeploymentTaskId, setFocusedDeploymentTaskId] = useState("");
+
+  useEffect(() => {
+    if (authStatus !== "authenticated") return;
+    const controller = new AbortController();
+
+    const recover = async (initial: MpaAgentOperation) => {
+      if (recoveredOperationIdsRef.current.has(initial.operationId)) return;
+      recoveredOperationIdsRef.current.add(initial.operationId);
+      let operation = initial;
+      try {
+        while (!controller.signal.aborted) {
+          operation = await getMpaAgentOperation(
+            operation.operationId,
+            controller.signal,
+          );
+          const task = operationToDeploymentTask(operation);
+          updateDeploymentTask(task);
+          if (operation.operationKind === "create") {
+            setFocusedDeploymentTaskId(task.id);
+            setFocusedWorkspaceAgentId("");
+            setManageAgents(true);
+          }
+          if (operation.status !== "active") return;
+          await new Promise((resolve) => window.setTimeout(resolve, 500));
+        }
+      } finally {
+        recoveredOperationIdsRef.current.delete(initial.operationId);
+      }
+    };
+
+    void listActiveMpaAgentOperations()
+      .then((operations) => Promise.all(operations.map(recover)))
+      .catch(() => {
+        // Recovery is best-effort; normal Runtime discovery remains available.
+      });
+    return () => controller.abort();
+  }, [authStatus, operationToDeploymentTask, updateDeploymentTask]);
   const [focusedWorkspaceAgentId, setFocusedWorkspaceAgentId] = useState("");
   const [agentDetailTarget, setAgentDetailTarget] =
     useState<MyAgentCardData | null>(null);
+  const exitAgentDetailContext = useCallback(() => {
+    popStudioPage("agent-detail");
+    setAgentDetailTarget(null);
+    setMyAgents(false);
+    setManageAgents(false);
+  }, [popStudioPage]);
   // Shown when the user clicks the breadcrumb root to leave a create mode;
   // warns that the in-progress draft will be discarded.
   const [confirmLeave, setConfirmLeave] = useState(false);
@@ -1788,7 +2385,7 @@ export default function App() {
         writeWorkspaceDrafts(localStorage, userId, next);
       } catch (cause) {
         setDraftStorageError(
-          cause instanceof Error ? cause.message : "浏览器拒绝保存草稿，请稍后重试。",
+          cause instanceof Error ? cause.message : appText("errors.saveDraftRejected"),
         );
         return false;
       }
@@ -1825,6 +2422,7 @@ export default function App() {
       id: string,
       draft: AgentDraft,
       deploymentTarget?: WorkspaceAgentDraft["deploymentTarget"],
+      creationMode?: WorkspaceAgentDraft["creationMode"],
     ) => {
       if (!id || !userId) return;
       if (
@@ -1838,6 +2436,7 @@ export default function App() {
         draft,
         updatedAt: Date.now(),
         deploymentTarget,
+        creationMode,
       };
       if (workspaceDraftTimerRef.current !== null) {
         window.clearTimeout(workspaceDraftTimerRef.current);
@@ -1921,7 +2520,7 @@ export default function App() {
       setDraftStorageError("");
     } catch (cause) {
       setDraftStorageError(
-        cause instanceof Error ? cause.message : "无法读取本机草稿，请稍后重试。",
+        cause instanceof Error ? cause.message : appText("errors.readDraftFailed"),
       );
     }
     savedAgentDraftsRef.current = nextDrafts;
@@ -1932,6 +2531,11 @@ export default function App() {
     if (createView === "custom" && activeDraft) {
       setEditingDraftId(activeDraft.id);
       setImportedDraft(activeDraft.draft);
+      setCustomCreationSurface(
+        workspaceAgentCreationMode(activeDraft) === "quick"
+          ? "vulcan"
+          : "traditional",
+      );
       setRuntimeUpdateTarget(activeDraft.deploymentTarget ?? null);
     }
     // Restore only when identity changes; later edits are already in state.
@@ -1949,7 +2553,7 @@ export default function App() {
       }
     } catch {
       setDraftStorageError(
-        "浏览器拒绝保存当前草稿位置，请检查站点存储权限后重试。",
+        appText("errors.saveDraftLocationRejected"),
       );
     }
   }, [createView, editingDraftId, userId]);
@@ -1983,8 +2587,14 @@ export default function App() {
     const failures: string[] = [];
     for (const agent of targets) {
       try {
-        if (!agent.region) throw new Error("Runtime 缺少地域信息，无法删除");
-        await deleteRuntime(agent.runtimeId, agent.region);
+        if (!agent.region) throw new Error(appText("errors.runtimeRegionMissingForDelete"));
+        await deleteRuntime(agent.runtimeId, agent.region, {
+          agentCategory: agent.agentCategory,
+          mpaInstanceId:
+            agent.agentCategory === "mpa"
+              ? agent.mpaInstanceId ?? agent.runtimeId
+              : undefined,
+        });
         removeRuntimeConnection(agent.runtimeId);
         deletedRuntimeIds.add(agent.runtimeId);
         deletedAgentIds.add(agent.id);
@@ -2049,8 +2659,7 @@ export default function App() {
         setAddAgent(false);
         setAddMenu(false);
         setSearchView(false);
-        setManageAgents(false);
-        setAgentDetailTarget(null);
+        exitAgentDetailContext();
         setFocusedDeploymentTaskId("");
         setFocusedWorkspaceAgentId("");
         setMyAgents(true);
@@ -2068,10 +2677,16 @@ export default function App() {
 
     if (failures.length > 0) {
       const shown = failures.slice(0, 3).join("；");
-      const suffix = failures.length > 3 ? `；另有 ${failures.length - 3} 个失败` : "";
-      throw new Error(`${failures.length} 个 Agent 删除失败：${shown}${suffix}`);
+      const suffix = failures.length > 3
+        ? appText("errors.additionalAgentDeleteFailures", { count: failures.length - 3 })
+        : "";
+      throw new Error(appText("errors.agentDeleteFailures", {
+        count: failures.length,
+        failures: shown,
+        suffix,
+      }));
     }
-  }, [agentDetailTarget, appName, commitWorkspaceDrafts, connections, userId]);
+  }, [agentDetailTarget, appName, commitWorkspaceDrafts, connections, exitAgentDetailContext, userId]);
 
   const refreshAgentLibrary = useCallback(async () => {
     setAgentLibraryLoading(true);
@@ -2095,7 +2710,11 @@ export default function App() {
         Object.fromEntries(
           runtimes.map((runtime) => [
             runtime.runtimeId,
-            { canDelete: runtime.canDelete },
+            {
+              canDelete: runtime.canDelete,
+              agentCategory: runtime.agentCategory,
+              mpaInstanceId: runtime.mpaInstanceId,
+            },
           ]),
         ),
       );
@@ -2135,14 +2754,13 @@ export default function App() {
   const openDeploymentDetail = useCallback((task: DeploymentTaskUpdate) => {
     setCreateView(null);
     setAddMenu(false);
-    setMyAgents(false);
-    setAgentDetailTarget(null);
+    exitAgentDetailContext();
     setManageAgents(true);
     setFocusedWorkspaceAgentId("");
     setFocusedWorkspaceAgentSection("basic");
     setFocusedDeploymentTaskId(task.id);
     setError("");
-  }, []);
+  }, [exitAgentDetailContext]);
 
   const startDeployment = useCallback((task: DeploymentTaskUpdate) => {
     flushPendingWorkspaceDraft();
@@ -2156,12 +2774,11 @@ export default function App() {
       }));
     }
     updateDeploymentTask(linkedTask);
-    openDeploymentDetail(linkedTask);
-  }, [editingDraftId, flushPendingWorkspaceDraft, openDeploymentDetail, updateDeploymentTask]);
+  }, [editingDraftId, flushPendingWorkspaceDraft, updateDeploymentTask]);
 
   const finishDeployment = useCallback(
     async (result: DeployResult) => {
-      if (!result.runtimeId) throw new Error("部署完成，但未返回 Runtime ID。");
+      if (!result.runtimeId) throw new Error(appText("errors.deploymentRuntimeIdMissing"));
       const completedDraftId = editingDraftId;
       if (completedDraftId) {
         removeWorkspaceDraft(completedDraftId);
@@ -2181,7 +2798,12 @@ export default function App() {
         result.runtimeName,
         result.region ?? fallbackRegion,
         result.version,
-        { waitForReady: true, agentName: result.agentName },
+        {
+          waitForReady: true,
+          agentName: result.agentName,
+          agentCategory: result.mpaOperation ? "mpa" : "general",
+          mpaInstanceId: result.mpaInstanceId,
+        },
       );
       setConnections(loadConnections());
       setAgentInfoRefreshKey((key) => key + 1);
@@ -2209,6 +2831,11 @@ export default function App() {
   const responseAnnotationContextsRef = useRef<
     Map<number, ResponseAnnotationContext>
   >(new Map());
+  const transcriptTurns = useMemo(() => groupMpaTranscriptTurns(
+    turns,
+    isMpaA2aRuntimeApp(appName),
+    activeConversationBusy || presentingStream,
+  ), [turns, appName, connections, activeConversationBusy, presentingStream]);
   const responseAnnotationRuntimeAvailable = connections.some(
     (connection) =>
       Boolean(connection.runtimeId && connection.region) &&
@@ -2216,13 +2843,17 @@ export default function App() {
   );
   useLayoutEffect(() => {
     const contexts = new Map<number, ResponseAnnotationContext>();
-    turns.forEach((turn, index) => {
+    transcriptTurns.forEach((turn, index) => {
       const feedbackEventId = turn.meta?.eventId ?? "";
       const canRate = Boolean(
         responseAnnotationRuntimeAvailable && feedbackEventId && turnText(turn),
       );
-      const turnIsStreaming = index === turns.length - 1 && (
-        activeConversationBusy || presentingStream
+      const turnIsStreaming = assistantTurnIsStreaming(
+        turn,
+        index,
+        transcriptTurns.length,
+        activeConversationBusy,
+        presentingStream,
       );
       contexts.set(index, {
         enabled: Boolean(
@@ -2232,7 +2863,7 @@ export default function App() {
           !turnAwaitingAuth(turn)
         ),
         turn,
-        input: canRate ? previousUserTurnText(turns, index) : "",
+        input: canRate ? previousUserTurnText(transcriptTurns, index) : "",
       });
     });
     responseAnnotationContextsRef.current = contexts;
@@ -2241,7 +2872,7 @@ export default function App() {
     cloudProvider,
     presentingStream,
     responseAnnotationRuntimeAvailable,
-    turns,
+    transcriptTurns,
   ]);
   const openResponseAnnotation = useCallback(() => {
     const selection = window.getSelection();
@@ -2321,6 +2952,10 @@ export default function App() {
     conversationSmoothTimerRef.current = window.setTimeout(() => {
       conversationSmoothScrollRef.current = false;
       conversationSmoothTimerRef.current = null;
+      const current = scrollRef.current;
+      if (current && conversationAutoFollowRef.current) {
+        current.scrollTop = current.scrollHeight;
+      }
     }, 450);
   }, [conversationScrollKey, turns.length]);
   useLayoutEffect(() => {
@@ -2383,7 +3018,10 @@ export default function App() {
         setUserInfo(id.info);
         setLocalMode(!!id.local);
         setAuthStatus(id.status);
-        if (id.status === "authenticated") {
+        if (
+          id.status === "authenticated" &&
+          !localStorage.getItem(LS.session)
+        ) {
           restoredRef.current = true;
           agentSelectionClearedRef.current = true;
           localStorage.removeItem(LS.app);
@@ -2425,7 +3063,7 @@ export default function App() {
     const loginWindow = openLoginWindow();
     if (!loginWindow) {
       authRecoveryActiveRef.current = false;
-      setAuthRecoveryError("登录窗口被浏览器拦截，请允许弹出窗口后重试。");
+      setAuthRecoveryError(appText("errors.loginPopupBlocked"));
       return;
     }
     setAuthRecoveryChecking(true);
@@ -2449,7 +3087,7 @@ export default function App() {
           // The gateway may return its login page until the popup completes.
         }
         if (loginWindow.closed) {
-          setAuthRecoveryError("登录窗口已关闭，请重新登录以继续当前操作。");
+          setAuthRecoveryError(appText("errors.loginPopupClosed"));
           return;
         }
       }
@@ -2464,8 +3102,133 @@ export default function App() {
   }, [localMode, userId]);
 
   useEffect(() => {
+    if (authStatus !== "authenticated" || !userId || intelligentDeployment) return;
+    const query = new URLSearchParams(window.location.search);
+    if (
+      query.get("view") !== "runtime-deploy" ||
+      query.get("source") !== "intelligent-development"
+    ) return;
+    const sessionId = query.get("sessionId") ?? "";
+    const artifactSha256 = query.get("artifactSha256") ?? "";
+    const validationReportSha256 = query.get("validationReportSha256") ?? "";
+    const projectId = query.get("projectId") ?? "";
+    const versionId = query.get("versionId") ?? "";
+    if (!sessionId || !artifactSha256 || !validationReportSha256) return;
+    const controller = new AbortController();
+    const load = projectId && versionId
+      ? fetchIntelligentDevelopmentProjectRelease(
+          projectId,
+          versionId,
+          sessionId,
+          artifactSha256,
+          validationReportSha256,
+          controller.signal,
+        )
+      : fetchIntelligentDevelopmentRelease(
+          sessionId,
+          artifactSha256,
+          validationReportSha256,
+          controller.signal,
+        );
+    void load
+      .then((delivery) => {
+        if (controller.signal.aborted) return;
+        if (!delivery.deployable) {
+          setIntelligentCapabilitiesError(
+            appText("errors.sourceNotReady"),
+          );
+          return;
+        }
+        setIntelligentDeploymentState({
+          ...delivery,
+          validatedAt: delivery.validatedAt || "",
+          gateSummary: delivery.gateSummary || [],
+        });
+      })
+      .catch((cause) => {
+        if (!controller.signal.aborted) {
+          setIntelligentCapabilitiesError(
+            cause instanceof Error ? cause.message : String(cause),
+          );
+        }
+      });
+    return () => controller.abort();
+  }, [authStatus, intelligentDeployment, userId]);
+
+  useEffect(() => {
+    if (!addMenu && !["intelligent", "migration"].includes(createView ?? "")) return;
+    if (authStatus !== "authenticated" || !userId) {
+      setIntelligentCapabilities(null);
+      setIntelligentCapabilitiesError("");
+      setIntelligentCapabilitiesLoading(true);
+      return;
+    }
+    const controller = new AbortController();
+    setIntelligentCapabilitiesLoading(true);
+    setIntelligentCapabilitiesError("");
+    void fetch(withAuth("/web/intelligent-development/capabilities"), {
+      headers: withLocalUser({ Accept: "application/json" }),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(appText("errors.intelligentCapabilityCheckFailed", { status: response.status }));
+        return response.json() as Promise<{
+          enabled?: unknown;
+          reason?: unknown;
+          model?: unknown;
+          projectStorageEnabled?: unknown;
+          projectStorageReason?: unknown;
+        }>;
+      })
+      .then((value) => {
+        if (controller.signal.aborted) return;
+        const capability: IntelligentDevelopmentCapabilities = {
+          enabled: value.enabled === true,
+          reason: typeof value.reason === "string" ? value.reason : "",
+          projectStorageEnabled: value.projectStorageEnabled === true,
+          projectStorageReason: typeof value.projectStorageReason === "string"
+            ? value.projectStorageReason
+            : "",
+        };
+        if (value.model !== undefined) {
+          if (typeof value.model !== "object" || value.model === null) {
+            throw new Error(appText("errors.invalidIntelligentCapability"));
+          }
+          const model = value.model as { configured?: unknown; id?: unknown };
+          if (typeof model.configured === "boolean" && typeof model.id === "string") {
+            capability.model = {
+              configured: model.configured,
+              id: model.id,
+            };
+          } else {
+            throw new Error(appText("errors.invalidIntelligentCapability"));
+          }
+        }
+        setIntelligentCapabilities(capability);
+      })
+      .catch((cause) => {
+        if (!controller.signal.aborted) {
+          setIntelligentCapabilitiesError(
+            cause instanceof Error ? cause.message : String(cause),
+          );
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIntelligentCapabilitiesLoading(false);
+      });
+    return () => controller.abort();
+  }, [addMenu, authStatus, createView, userId]);
+
+  useEffect(() => {
     if (authStatus !== "authenticated" || !userId) {
       setNewChatCapabilities({});
+      return;
+    }
+    const preparedSelection = preparedAgentSelectionRef.current;
+    if (
+      preparedSelection?.agentId === appName &&
+      preparedSelection.userId === userId
+    ) {
       return;
     }
     const cached = newChatCapabilitiesCacheRef.current.get(appName);
@@ -2542,6 +3305,7 @@ export default function App() {
         environment,
         cloudProvider: cfg.provider,
         accountId: studio?.accountId ?? "",
+        accountIdResolutionError: studio?.accountIdResolutionError ?? "",
       });
       trackStudioEntryViewed({ authState: "anonymous" });
       setFeatures(cfg.features);
@@ -2566,7 +3330,7 @@ export default function App() {
     identifyTelemetryUser({
       userUniqueId,
       accountId: access.telemetry.accountId ?? "",
-      userRole: access.role === "admin" ? "admin" : "member",
+      userRole: (access.role === "admin" || access.role === "super_admin") ? "admin" : "member",
       userSource: localMode ? "local" : "sso",
     });
     trackStudioSessionStarted({ agentsSource });
@@ -2596,57 +3360,71 @@ export default function App() {
       setDeploymentTasks([]);
     }
     if (!access.capabilities.manageAgents) setManageAgents(false);
+    if (!access.capabilities.manageUsers) setPageStack((current) => current.filter((entry) => entry.page !== "users"));
+    if (access.role !== "admin" && access.role !== "super_admin") {
+      setPageStack((current) => current.filter((entry) => entry.page !== "review-center"));
+    }
   }, [access]);
 
   let documentTitleTarget: StudioDocumentTitleTarget = { kind: "home" };
   if (authStatus === "authenticated") {
     if (platformFeedbackOrigin !== null) {
-      documentTitleTarget = { kind: "page", title: "问题反馈" };
+      documentTitleTarget = { kind: "page", title: t("titles.issueFeedback") };
+    } else if (userManagementView) {
+      documentTitleTarget = { kind: "page", title: t("title", { ns: "users" }) };
     } else if (systemInfo) {
-      documentTitleTarget = { kind: "page", title: "系统信息" };
+      documentTitleTarget = { kind: "page", title: t("titles.systemInfo") };
+    } else if (reviewCenterView) {
+      documentTitleTarget = { kind: "page", title: t("titles.reviewCenter") };
+    } else if (cronJobsView) {
+      documentTitleTarget = { kind: "page", title: t("titles.cronJobs") };
     } else if (applicationsView) {
       documentTitleTarget = {
         kind: "page",
         title: applicationsView === "catalog"
-          ? "自动化"
-          : getAutomation(applicationsView).name,
+          ? t("titles.automations")
+          : t(`cards.${applicationsView}.name`, { ns: "automations" }),
       };
     } else if (sandboxAgentWorkspace) {
       documentTitleTarget = {
         kind: "page",
-        title: sandboxAgentWorkspace.session.displayName || "智能体",
+        title: sandboxAgentWorkspace.session.displayName || t("titles.agent"),
       };
     } else if (sandboxAgentDetailTarget) {
       documentTitleTarget = {
         kind: "page",
-        title: sandboxAgentDetailTarget.displayName || "智能体",
+        title: sandboxAgentDetailTarget.displayName || t("titles.agent"),
       };
     } else if (myAgents || manageAgents) {
       documentTitleTarget = {
         kind: "page",
-        title: agentDetailTarget?.name || "智能体",
+        title: agentDetailTarget?.name || t("titles.agent"),
       };
     } else if (addMenu) {
-      documentTitleTarget = { kind: "page", title: "创建智能体" };
+      documentTitleTarget = { kind: "page", title: t("titles.createAgent") };
     } else if (searchView) {
-      documentTitleTarget = { kind: "page", title: "搜索" };
+      documentTitleTarget = { kind: "page", title: t("titles.search") };
     } else if (addAgent) {
-      documentTitleTarget = { kind: "page", title: "添加智能体" };
+      documentTitleTarget = { kind: "page", title: t("titles.addAgent") };
     } else if (skillCenter) {
       documentTitleTarget = {
         kind: "page",
-        title: libraryPageTitle || "库",
+        title: libraryPageTitle || t("titles.library"),
       };
     } else if (createView) {
       documentTitleTarget = {
         kind: "page",
         title: createView === "custom"
           ? runtimeUpdateTarget?.name
-            ? `更新 ${runtimeUpdateTarget.name}`
-            : "创建智能体"
+            ? t("titles.updateAgent", { name: runtimeUpdateTarget.name })
+            : t("titles.createAgent")
+          : createView === "deepseek"
+            ? t("deepseek:pageTitle")
           : createView === "package"
-            ? "从代码包添加"
-            : "迁移智能体",
+            ? t("titles.addFromPackage")
+            : createView === "workspace"
+              ? t("titles.codeProjects")
+              : t("titles.migrateAgent"),
       };
     } else if (sandboxSession) {
       const activeThread = sandboxCommands.threads.find(
@@ -2660,8 +3438,9 @@ export default function App() {
       };
     } else if (sessionId) {
       const activeSession = sessions.find((session) => session.id === sessionId);
-      const activeSessionTitle = sessionTitle(activeSession?.events);
-      documentTitleTarget = activeSessionTitle === "新会话"
+      const newSessionTitle = t("titles.newConversation");
+      const activeSessionTitle = sessionTitle(activeSession?.events, newSessionTitle);
+      documentTitleTarget = activeSessionTitle === newSessionTitle
         ? { kind: "home" }
         : { kind: "conversation", title: activeSessionTitle };
     }
@@ -2788,57 +3567,41 @@ export default function App() {
     }
   }, [appName]);
   useEffect(() => {
-    let cancelled = false;
-    setSessionCapabilities(null);
-    setSessionBuiltinTools([]);
-    if (myAgents || agentDetailTarget || !appName || !userId || !sessionId) {
-      setSessionCapabilitiesLoading(false);
+    const preparedSelection = preparedAgentSelectionRef.current;
+    if (
+      preparedSelection?.agentId === appName &&
+      preparedSelection.userId === userId
+    ) {
+      agentInfoSelectionRef.current = appName;
+      setCapabilitiesLoading(false);
       return;
     }
-    setSessionCapabilitiesLoading(true);
-    getSessionCapabilities(appName, userId, sessionId)
-      .then((capabilities) => {
-        if (cancelled) return;
-        setSessionCapabilities(capabilities);
-        void listSessionBuiltinTools(appName)
-          .then((tools) => {
-            if (!cancelled) setSessionBuiltinTools(tools);
-          })
-          .catch(() => {
-            if (!cancelled) setSessionBuiltinTools([]);
-          });
-      })
-      .catch(() => {
-        if (!cancelled) setSessionCapabilities(null);
-      })
-      .finally(() => {
-        if (!cancelled) setSessionCapabilitiesLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [agentDetailTarget, appName, myAgents, userId, sessionId]);
-  useEffect(() => {
     let cancelled = false;
-    setAgentInfo(null);
+    const controller = new AbortController();
+    if (agentInfoSelectionRef.current !== appName) setAgentInfo(null);
+    agentInfoSelectionRef.current = appName;
     setInvocation(emptyInvocation());
     if (authStatus !== "authenticated" || myAgents || agentDetailTarget || !appName) {
       setCapabilitiesLoading(false);
       return;
     }
     setCapabilitiesLoading(true);
-    getAgentInfo(appName)
+    getAgentInfo(appName, controller.signal)
       .then((info) => {
         if (!cancelled) setAgentInfo(info);
       })
       .catch(() => {
-        if (!cancelled) setAgentInfo(null);
+        if (!cancelled) setAgentInfo(current => current?.agentCategory === "mpa" ? {
+          ...current,
+          mpa: {agentsMd: null, agentsMdStatus: "error", skillSpaces: [], skillSpacesStatus: "error"},
+        } : null);
       })
       .finally(() => {
         if (!cancelled) setCapabilitiesLoading(false);
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [agentDetailTarget, appName, agentInfoRefreshKey, authStatus, myAgents]);
   useEffect(() => {
@@ -2887,6 +3650,38 @@ export default function App() {
         );
       }
 
+      function applyStatuses(response: AutomaticEvaluationStatusesResponse) {
+        const nextEvaluating = new Set(
+          response.items
+            .filter((status) => status.state === "running")
+            .map((status) => status.sessionId),
+        );
+        setEvaluatingSids((current) => {
+          if (
+            current.size === nextEvaluating.size &&
+            [...nextEvaluating].every((sid) => current.has(sid))
+          ) {
+            return current;
+          }
+          return nextEvaluating;
+        });
+
+        if (nextEvaluating.size > 0) {
+          schedulePoll(AUTO_EVALUATION_RUNNING_POLL_MS);
+          return;
+        }
+        const pendingDueTimes = response.items
+          .filter((status) => status.state === "pending")
+          .map((status) => Date.parse(status.dueAt))
+          .filter(Number.isFinite);
+        if (pendingDueTimes.length > 0) {
+          schedulePoll(Math.max(
+            AUTO_EVALUATION_MIN_PENDING_POLL_MS,
+            Math.min(...pendingDueTimes) - Date.now(),
+          ));
+        }
+      }
+
       async function poll() {
         const generation = ++requestGeneration;
         try {
@@ -2897,36 +3692,7 @@ export default function App() {
             userId,
           });
           if (disposed || generation !== requestGeneration) return;
-
-          const nextEvaluating = new Set(
-            response.items
-              .filter((status) => status.state === "running")
-              .map((status) => status.sessionId),
-          );
-          setEvaluatingSids((current) => {
-            if (
-              current.size === nextEvaluating.size &&
-              [...nextEvaluating].every((sid) => current.has(sid))
-            ) {
-              return current;
-            }
-            return nextEvaluating;
-          });
-
-          if (nextEvaluating.size > 0) {
-            schedulePoll(AUTO_EVALUATION_RUNNING_POLL_MS);
-            return;
-          }
-          const pendingDueTimes = response.items
-            .filter((status) => status.state === "pending")
-            .map((status) => Date.parse(status.dueAt))
-            .filter(Number.isFinite);
-          if (pendingDueTimes.length > 0) {
-            schedulePoll(Math.max(
-              AUTO_EVALUATION_MIN_PENDING_POLL_MS,
-              Math.min(...pendingDueTimes) - Date.now(),
-            ));
-          }
+          applyStatuses(response);
         } catch {
           if (!disposed && generation === requestGeneration) {
             schedulePoll(AUTO_EVALUATION_RETRY_POLL_MS);
@@ -2939,7 +3705,19 @@ export default function App() {
         void poll();
       };
       automaticEvaluationStatusRefreshRef.current = refresh;
-      refresh();
+      const preparedSelection = preparedAgentSelectionRef.current;
+      if (
+        preparedSelection?.agentId === appName &&
+        preparedSelection.userId === userId
+      ) {
+        if (preparedSelection.automaticEvaluationStatuses) {
+          applyStatuses(preparedSelection.automaticEvaluationStatuses);
+        } else {
+          schedulePoll(AUTO_EVALUATION_RETRY_POLL_MS);
+        }
+      } else {
+        refresh();
+      }
 
       return () => {
         disposed = true;
@@ -2954,6 +3732,13 @@ export default function App() {
   );
   // Abort the in-flight stream when the whole view unmounts.
   useEffect(
+    () => () => {
+      agentSelectionPreparationRequestRef.current += 1;
+      preparedAgentSelectionRef.current = null;
+    },
+    [],
+  );
+  useEffect(
     () => () => streamAbortsRef.current.forEach((c) => c.abort()),
     [],
   );
@@ -2966,6 +3751,7 @@ export default function App() {
   useEffect(
     () => () => {
       sandboxLaunchAbortRef.current?.abort();
+      intelligentCreateAbortRef.current?.abort();
       sandboxMessageAbortRef.current?.abort();
     },
     [],
@@ -2976,6 +3762,14 @@ export default function App() {
   // exists and we weren't on a create view); otherwise start a fresh chat.
   useEffect(() => {
     if (myAgents || agentDetailTarget || sandboxSession || !appName || !userId) {
+      return;
+    }
+    const preparedSelection = preparedAgentSelectionRef.current;
+    if (
+      preparedSelection?.agentId === appName &&
+      preparedSelection.userId === userId
+    ) {
+      preparedAgentSelectionRef.current = null;
       return;
     }
     let cancelled = false;
@@ -3020,41 +3814,57 @@ export default function App() {
     }
   }
 
+  function commitHydratedSessions(app: string, hydrated: AdkSession[]) {
+    setTokenUsageBySession((current) => {
+      const next = { ...current };
+      for (const session of hydrated) {
+        next[sessionUsageKey(app, session.id)] = aggregateTokenUsage(
+          session.events ?? [],
+        );
+      }
+      return next;
+    });
+    setSessions(hydrated);
+  }
+
   async function refreshSessions(app: string): Promise<AdkSession[]> {
     const request = sessionRefreshRequestRef.current + 1;
     sessionRefreshRequestRef.current = request;
     try {
-      const list = await listSessions(app, userId);
-      // Hydrate events so the sidebar can show a title per session.
-      const results = await Promise.allSettled(
-        list.map((s) =>
-          s.events?.length ? Promise.resolve(s) : getSession(app, userId, s.id),
-        ),
-      );
-      const failed = results.find(
-        (result) =>
-          result.status === "rejected" &&
-          !/get session failed:\s*404\b/i.test(String(result.reason)),
-      );
-      if (failed?.status === "rejected") throw failed.reason;
-      const hydrated = results.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
-      );
+      const hydrated = await loadHydratedSessions(app, userId);
       if (sessionRefreshRequestRef.current !== request) return hydrated;
-      setTokenUsageBySession((current) => {
-        const next = { ...current };
-        for (const session of hydrated) {
-          next[sessionUsageKey(app, session.id)] = aggregateTokenUsage(
-            session.events ?? [],
-          );
-        }
-        return next;
-      });
-      setSessions(hydrated);
+      commitHydratedSessions(app, hydrated);
       return hydrated;
     } catch (e) {
       if (sessionRefreshRequestRef.current === request) setError(String(e));
       return [];
+    }
+  }
+
+  async function refreshSessionTranscript(
+    app: string,
+    sid: string,
+    expectedEventId: string,
+  ): Promise<void> {
+    try {
+      const session = await getSession(app, userId, sid);
+      const nextTurns = eventsToTurns(session.events ?? [], session.state, {
+        mpaA2a: isMpaA2aRuntimeApp(app),
+      });
+      setTurnsBySession((current) => {
+        const existing = current[sid] ?? [];
+        const reconciled = reconcilePersistedTranscript(
+          existing,
+          nextTurns,
+          expectedEventId,
+        );
+        return reconciled === existing
+          ? current
+          : { ...current, [sid]: reconciled };
+      });
+    } catch {
+      // Live SSE remains the primary display path. This is only a best-effort
+      // reconciliation against the Runtime's persisted transcript after done.
     }
   }
 
@@ -3067,11 +3877,42 @@ export default function App() {
     setSandboxLaunchError("");
     setSandboxLaunchState("confirm");
     setSandboxLaunchKind(kind);
+    setSandboxLaunchPersistentEnabled(false);
+    setSandboxLaunchPersistentReason(appText("sandbox.checkingPersistence"));
+    setSandboxLaunchPersistentRequired(false);
+    setSandboxLaunchStorageMode("snapshot");
+    setSandboxLaunchDiskGbDefault(10);
+    setSandboxLaunchDiskGbMin(5);
+    setSandboxLaunchDiskGbMax(100);
+    sandboxLaunchCapabilityAbortRef.current?.abort();
+    const controller = new AbortController();
+    sandboxLaunchCapabilityAbortRef.current = controller;
+    const capabilityRequest = kind === "codex"
+      ? getSandboxCapability(controller.signal)
+      : getSandboxAgentCapability(kind, controller.signal);
+    void capabilityRequest
+      .then((capability) => {
+        if (controller.signal.aborted) return;
+        setSandboxLaunchPersistentEnabled(capability.persistentEnabled === true);
+        setSandboxLaunchPersistentReason(capability.persistentReason ?? "");
+        setSandboxLaunchPersistentRequired(capability.persistentRequired === true);
+        setSandboxLaunchStorageMode(capability.storageMode ?? "snapshot");
+        setSandboxLaunchDiskGbDefault(capability.diskGbDefault ?? 10);
+        setSandboxLaunchDiskGbMin(capability.diskGbMin ?? 5);
+        setSandboxLaunchDiskGbMax(capability.diskGbMax ?? 100);
+      })
+      .catch((cause) => {
+        if ((cause as Error)?.name === "AbortError") return;
+        setSandboxLaunchPersistentEnabled(false);
+        setSandboxLaunchPersistentReason(appText("sandbox.persistenceUnknown"));
+      });
     setSandboxLaunchFromAgents(fromAgents);
     setSandboxLaunchOpen(true);
   }
 
   function cancelSandboxLaunch() {
+    sandboxLaunchCapabilityAbortRef.current?.abort();
+    sandboxLaunchCapabilityAbortRef.current = null;
     sandboxLaunchAbortRef.current?.abort();
     sandboxLaunchAbortRef.current = null;
     setSandboxLaunchOpen(false);
@@ -3086,7 +3927,11 @@ export default function App() {
     }
   }
 
-  async function launchSandboxSession(displayName: string, persistent: boolean) {
+  async function launchSandboxSession(
+    displayName: string,
+    persistent: boolean,
+    diskGb?: number,
+  ) {
     sandboxLaunchAbortRef.current?.abort();
     const controller = new AbortController();
     sandboxLaunchAbortRef.current = controller;
@@ -3101,11 +3946,13 @@ export default function App() {
         ? await sandboxClient.startSession({
             displayName,
             persistent,
+            diskGb,
             signal: controller.signal,
           })
         : await sandboxClient.startAgentSession(sandboxLaunchKind, {
             displayName,
             persistent,
+            diskGb,
             signal: controller.signal,
           });
       if (sandboxLaunchAbortRef.current !== controller) {
@@ -3198,6 +4045,45 @@ export default function App() {
     }
   }
 
+  function activateIntelligentDevelopmentSession(
+    connected: SandboxSessionInfo,
+    restoredTurns: Turn[],
+  ) {
+    viewSidRef.current = "";
+    setSessionId("");
+    setPendingTurns([]);
+    setInput("");
+    setInvocation(emptyInvocation());
+    discardDraftAttachments(attachments);
+    setAttachments([]);
+    releaseAllSandboxPreviews();
+    setSandboxTurns(restoredTurns);
+    sandboxSessionIdRef.current = connected.id;
+    setSandboxSession(connected);
+    setSandboxBusy(connected.busy);
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    setAgentDetailTarget(null);
+    setMyAgents(false);
+    setPageStack([]);
+    setApplicationsView(null);
+    setCronJobsView(false);
+    setSandboxAgentDetailTarget(null);
+    setSandboxAgentWorkspace(null);
+  }
+
+  async function openIntelligentDevelopmentTask(id: string, signal: AbortSignal) {
+    const connected = await intelligentDevelopmentClient.connectSession(id, { signal });
+    if (signal.aborted) return;
+    setError("");
+    setMigrationProjectReturn(undefined);
+    activateIntelligentDevelopmentSession(connected, []);
+  }
+
   async function openSandboxAgent(
     resource: SandboxAgentResource,
     source: AgentConnectSource = "my_agents",
@@ -3242,6 +4128,7 @@ export default function App() {
           setSandboxSession(connected);
         }
         setSandboxBusy(connected.busy);
+        popStudioPage("sandbox-agent-detail");
         setSandboxAgentDetailTarget(null);
         setSandboxAgentWorkspace(null);
         setMyAgents(false);
@@ -3255,6 +4142,7 @@ export default function App() {
       operation.succeed({
         sandboxStatus: telemetrySandboxStatus(workspace.session.status),
       });
+      popStudioPage("sandbox-agent-detail");
       setSandboxAgentWorkspace(workspace);
       setSandboxAgentDetailTarget(null);
       setMyAgents(false);
@@ -3275,17 +4163,71 @@ export default function App() {
         resource.id === sessionId,
     );
     if (!session) {
-      throw new Error("云端 Codex Session 暂未出现在列表中，请稍后重试。");
+      throw new Error(appText("errors.cloudCodexSessionMissing"));
     }
     await openSandboxAgent(session, "my_agents");
     setSandboxProjectUploadOpen(false);
   }
 
+  async function openCodexSandboxSession(sessionId: string, source: AgentConnectSource = "my_agents") {
+    setError("");
+    const operation = beginAgentConnect({
+      targetId: String(sessionId),
+      agentKind: "codex",
+      connectSource: source,
+    });
+    try {
+      const connected = await sandboxClient.connectSession(sessionId);
+      const snapshot = await loadSandboxThreadHistory(connected);
+      operation.succeed({
+        sandboxStatus: telemetrySandboxStatus(connected.status),
+      });
+      viewSidRef.current = "";
+      setSessionId("");
+      setPendingTurns([]);
+      setInput("");
+      setInvocation(emptyInvocation());
+      releaseAllSandboxPreviews();
+      if (snapshot) {
+        setSandboxTurns(sandboxSnapshotTurnsForStatus(snapshot, connected.busy));
+        setSandboxSession({
+          ...connected,
+          threadId: snapshot.threadId,
+          cwd: snapshot.cwd ?? connected.cwd,
+          workspaceLocked: snapshot.workspaceLocked,
+          permissions: snapshot.permissions,
+          ...(snapshot.model ? { model: snapshot.model } : {}),
+        });
+      } else {
+        setSandboxTurns([]);
+        setSandboxSession(connected);
+      }
+      setSandboxBusy(connected.busy);
+      setCreateView(null);
+      setSkillCenter(false);
+      setAddAgent(false);
+      setAddMenu(false);
+      setSearchView(false);
+      setManageAgents(false);
+      setAgentDetailTarget(null);
+      setMyAgents(false);
+      setApplicationsView(null);
+      setCronJobsView(false);
+      setSandboxAgentDetailTarget(null);
+      setSandboxAgentWorkspace(null);
+    } catch (cause) {
+      operation.fail(classifyTelemetryError(cause));
+      setError(cause instanceof Error ? cause.message : String(cause));
+      throw cause;
+    }
+  }
+
   function openSandboxAgentDetails(session: SandboxAgentResource) {
     setMyAgentsActiveType(session.toolName);
+    pushStudioPage({ page: "sandbox-agent-detail", returnTo: "agents" });
     setSandboxAgentDetailTarget(session);
     setSandboxAgentWorkspace(null);
-    setMyAgents(false);
+    setMyAgents(true);
     setManageAgents(false);
     setError("");
   }
@@ -3302,6 +4244,7 @@ export default function App() {
       }
     }
     setMyAgentsActiveType(session.toolName);
+    popStudioPage("sandbox-agent-detail");
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
     setSandboxAgentRefreshKey((current) => current + 1);
@@ -3315,7 +4258,7 @@ export default function App() {
     if (deleted) setSandboxThreadDeleteTarget(null);
   }
 
-  function exitSandboxSession() {
+  function exitSandboxSession(closeRemote = true) {
     sandboxMessageAbortRef.current?.abort();
     sandboxMessageAbortRef.current = null;
     sandboxSessionIdRef.current = "";
@@ -3344,8 +4287,11 @@ export default function App() {
     sandboxUploadRunRef.current += 1;
     const closingSession = sandboxSession;
     setSandboxSession(null);
-    if (closingSession) {
-      void sandboxClient
+    if (closingSession && closeRemote && !closingSession.intelligentDevelopment) {
+      const closingClient = closingSession.intelligentDevelopment
+        ? intelligentDevelopmentClient
+        : sandboxClient;
+      void closingClient
         .closeSession(closingSession.id)
         .catch((closeError) => setError(String(closeError)));
     }
@@ -3360,8 +4306,8 @@ export default function App() {
     setSandboxToolLoading(true);
     try {
       const launch = kind === "terminal"
-        ? await sandboxClient.launchTerminal(activeSession.id)
-        : await sandboxClient.launchBrowser(activeSession.id);
+        ? await sandboxClientForSession.launchTerminal(activeSession.id)
+        : await sandboxClientForSession.launchBrowser(activeSession.id);
       setSandboxToolLaunch(launch);
     } catch (cause) {
       setSandboxToolError(
@@ -3379,7 +4325,7 @@ export default function App() {
     setError("");
     try {
       if (!navigator.clipboard?.writeText) {
-        throw new Error("当前浏览器不支持写入剪贴板。");
+        throw new Error(appText("errors.clipboardUnsupported"));
       }
       const exported = await sandboxClient.getEndpoint(activeSession.id);
       await navigator.clipboard.writeText(exported.endpoint);
@@ -3405,7 +4351,7 @@ export default function App() {
     setSandboxSettingsBusy(true);
     setSandboxSettingsError("");
     try {
-      const permissions = await sandboxClient.updatePermissions(
+      const permissions = await sandboxClientForSession.updatePermissions(
         activeSession.id,
         value,
       );
@@ -3416,23 +4362,25 @@ export default function App() {
       );
       appendSandboxActivity(
         activeSession.id,
-        "已更新当前 Sandbox Session 的 Codex 权限",
+        appText("sandbox.permissionsUpdated"),
         [
           {
-            label: "沙箱模式",
-            value: SANDBOX_MODE_LABELS[permissions.sandboxMode],
+            label: appText("sandbox.labels.mode"),
+            value: appText(SANDBOX_MODE_LABEL_KEYS[permissions.sandboxMode]),
           },
           {
-            label: "审批策略",
-            value: SANDBOX_APPROVAL_POLICY_LABELS[permissions.approvalPolicy],
+            label: appText("sandbox.labels.approvalPolicy"),
+            value: appText(SANDBOX_APPROVAL_POLICY_LABEL_KEYS[permissions.approvalPolicy]),
           },
           {
-            label: "审批方式",
-            value: SANDBOX_REVIEWER_LABELS[permissions.approvalsReviewer],
+            label: appText("sandbox.labels.reviewer"),
+            value: appText(SANDBOX_REVIEWER_LABEL_KEYS[permissions.approvalsReviewer]),
           },
           {
-            label: "网络访问",
-            value: permissions.networkAccess ? "允许" : "关闭",
+            label: appText("sandbox.labels.networkAccess"),
+            value: appText(
+              permissions.networkAccess ? "sandbox.network.allowed" : "sandbox.network.disabled",
+            ),
           },
         ],
       );
@@ -3451,8 +4399,8 @@ export default function App() {
   const browseSandboxDirectories = useCallback(
     async (path: string) => {
       const activeSessionId = sandboxSession?.id;
-      if (!activeSessionId) throw new Error("当前没有已连接的 Sandbox。");
-      return sandboxClient.listDirectories(activeSessionId, path);
+      if (!activeSessionId) throw new Error(appText("errors.noConnectedSandbox"));
+      return sandboxClientForSession.listDirectories(activeSessionId, path);
     },
     [sandboxSession?.id],
   );
@@ -3467,7 +4415,7 @@ export default function App() {
     setSandboxSettingsBusy(true);
     setSandboxSettingsError("");
     try {
-      const applied = await sandboxClient.updateWorkspace(
+      const applied = await sandboxClientForSession.updateWorkspace(
         activeSession.id,
         cwd,
       );
@@ -3479,8 +4427,8 @@ export default function App() {
       sandboxCommands.invalidateSkills();
       appendSandboxActivity(
         activeSession.id,
-        "已更新工作空间",
-        [{ label: "工作目录", value: applied, code: true }],
+        appText("sandbox.workspaceUpdated"),
+        [{ label: appText("sandbox.labels.workingDirectory"), value: applied, code: true }],
       );
       if (sandboxSessionIdRef.current === activeSession.id) {
         setSandboxWorkspaceOpen(false);
@@ -3503,7 +4451,7 @@ export default function App() {
     setSandboxApprovalBusy(true);
     setSandboxApprovalError("");
     try {
-      await sandboxClient.resolveApproval(
+      await sandboxClientForSession.resolveApproval(
         activeSession.id,
         activeApproval.id,
         decision,
@@ -3551,7 +4499,7 @@ export default function App() {
       const uploadResults = await Promise.all(
         drafts.map(async ({ file, attachment }) => {
           try {
-            const uploaded = await sandboxClient.uploadFile(
+            const uploaded = await sandboxClientForSession.uploadFile(
               activeSession.id,
               file,
             );
@@ -3598,10 +4546,12 @@ export default function App() {
         appendSandboxActivity(
           activeSession.id,
           uploadedFiles.length === 1
-            ? "已上传文件到 Sandbox"
-            : `已上传 ${uploadedFiles.length} 个文件到 Sandbox`,
+            ? appText("sandbox.fileUploaded")
+            : appText("sandbox.filesUploaded", { count: uploadedFiles.length }),
           uploadedFiles.map((uploaded, index) => ({
-            label: uploadedFiles.length === 1 ? "文件" : `文件 ${index + 1}`,
+            label: uploadedFiles.length === 1
+              ? appText("sandbox.labels.file")
+              : appText("sandbox.labels.fileNumber", { number: index + 1 }),
             value: uploaded.path,
             code: true,
           })),
@@ -3626,21 +4576,39 @@ export default function App() {
   }
 
   function stopSandboxGeneration() {
-    const activeSessionId = sandboxSession?.id;
-    sandboxMessageAbortRef.current?.abort();
-    if (activeSessionId) {
-      void sandboxClient
-        .interruptSession(activeSessionId)
-        .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+    const controller = sandboxMessageAbortRef.current;
+    const activeSession = sandboxSession;
+    if (activeSession?.intelligentDevelopment) {
+      void development.stop();
+      return;
     }
+    if (!controller) return;
+    controller.abort();
+    if (activeSession) {
+      void sandboxClient.interruptSession(activeSession.id).catch((cause) => {
+        if (sandboxSessionIdRef.current === activeSession.id) {
+          setError(cause instanceof Error ? cause.message : String(cause));
+        }
+      });
+    }
+  }
+
+  function requestIntelligentNavigation(action: () => void) {
+    action();
   }
 
   async function sendSandboxMessage(
     text: string,
     messageAttachments: Attachment[] = [],
     selectedSkills: SandboxSkill[] = [],
+    activeSessionOverride?: SandboxSessionInfo,
   ) {
-    const activeSession = sandboxSession;
+    const activeSession = activeSessionOverride ?? sandboxSession;
+    if (activeSession?.intelligentDevelopment) {
+      const accepted = await development.submit(text.trim(), activeSession.id);
+      if (accepted) setInput((current) => current === text ? "" : current);
+      return;
+    }
     const readyAttachments = messageAttachments.filter(
       (attachment) => attachment.status === "ready" && attachment.uri,
     );
@@ -3697,7 +4665,7 @@ export default function App() {
     const prompt = uploadedPaths.length > 0
       ? [
           visiblePrompt,
-          "以下文件已上传到当前 Sandbox 工作空间，请在任务中使用：",
+          appText("sandbox.uploadedFilesPrompt"),
           ...uploadedPaths.map((path) => `- ${path}`),
         ].filter(Boolean).join("\n\n")
       : visiblePrompt;
@@ -3723,8 +4691,9 @@ export default function App() {
         ? { ...current, busy: true, workspaceLocked: true }
         : current,
     );
+    const activeClient = sandboxClient;
     try {
-      const reply = await sandboxClient.sendMessage(
+      const reply = await activeClient.sendMessage(
         {
           sessionId: activeSession.id,
           text: prompt,
@@ -3837,41 +4806,32 @@ export default function App() {
       if (sandboxMessageAbortRef.current !== controller) {
         return;
       }
-      setSandboxTurns((current) =>
-        current.filter(
-          (turn) =>
-            turn.meta?.localId !== userTurnId &&
-            turn.meta?.localId !== assistantTurnId,
-        ),
-      );
       setInput(text);
       setAttachments(messageAttachments);
       sandboxCommands.setSelectedSkills(selectedSkills);
-      setError(
-        `内置智能体发送失败：${
-          messageError instanceof Error
-            ? messageError.message
-            : String(messageError)
-          }`,
-      );
       try {
-        const settings = await sandboxClient.getSettings(activeSession.id);
+        const status = await activeClient.getStatus(activeSession.id);
         setSandboxSession((current) =>
           current?.id === activeSession.id
-            ? { ...current, ...settings }
+            ? { ...current, ...status }
             : current,
         );
       } catch {
         // Keep the optimistic lock when the connection itself is unavailable.
       }
+      setError(appText("errors.builtinAgentSendFailed", {
+        message: messageError instanceof Error
+          ? messageError.message
+          : String(messageError),
+      }));
     } finally {
       if (sandboxMessageAbortRef.current === controller) {
         sandboxMessageAbortRef.current = null;
         if (sandboxActiveAssistantTurnIdRef.current === assistantTurnId) {
           sandboxActiveAssistantTurnIdRef.current = "";
         }
-        setSandboxBusy(false);
         setSandboxApproval(null);
+        setSandboxBusy(false);
         setSandboxSession((current) =>
           current?.id === activeSession.id
             ? { ...current, busy: false }
@@ -3882,7 +4842,14 @@ export default function App() {
   }
 
   async function submitSandboxInput(value: string) {
-    if (await sandboxCommands.executeSlash(value)) return;
+    if (sandboxSession?.intelligentDevelopment) {
+      await sendSandboxMessage(value);
+      return;
+    }
+    if (
+      !sandboxSession?.intelligentDevelopment &&
+      await sandboxCommands.executeSlash(value)
+    ) return;
     if (!sandboxSession || sandboxBusy || sandboxCommands.commandBusy) return;
     const messageAttachments = attachments;
     const selectedSkills = sandboxCommands.selectedSkills;
@@ -3898,7 +4865,7 @@ export default function App() {
   function startNewChat() {
     exitSandboxSession();
     setError("");
-    setGreeting(pickGreeting());
+    setGreetingKey(pickGreetingKey());
     setNewChatMode("agent");
     setNewChatTask(null);
     setNewChatSkillTarget(null);
@@ -3907,14 +4874,23 @@ export default function App() {
       : "";
     viewSidRef.current = "";
     setSessionId("");
-    setSessionCapabilities(null);
-    setSessionBuiltinTools([]);
     setInitializingSession(false);
     setPendingTurns([]);
     setInvocation(emptyInvocation());
     discardDraftAttachments(attachments);
     setAttachments([]);
     if (abandonedSession) void abandonDraftSession(abandonedSession);
+  }
+
+  function returnToIntelligentCreate() {
+    startNewChat();
+    setIntelligentDeployment(null);
+    setAddMenu(false);
+    if (migrationProjectReturn) {
+      setCreateView("migration");
+      return;
+    }
+    setCreateView("intelligent");
   }
 
   function clearSelectedAgentAfterRemoval() {
@@ -3929,6 +4905,8 @@ export default function App() {
   }
 
   function openNewChat() {
+    cancelIntelligentPreparation();
+    setIntelligentDeployment(null);
     setPlatformFeedbackOrigin(null);
     setCreateView(null);
     setSkillCenter(false);
@@ -3941,9 +4919,89 @@ export default function App() {
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
     setMyAgents(false);
-    setSystemInfo(false);
+    setWorkspaceView(false);
+    setEnvironmentView(false);
+    setPageStack([]);
     setApplicationsView(null);
+    setCronJobsView(false);
     startNewChat();
+  }
+
+  function cancelIntelligentPreparation() {
+    intelligentCreateAbortRef.current?.abort();
+    intelligentCreateAbortRef.current = null;
+    setIntelligentPreparationStage(null);
+    const trigger = intelligentCreateFocusRef.current;
+    intelligentCreateFocusRef.current = null;
+    requestAnimationFrame(() => {
+      if (trigger?.isConnected && trigger.getClientRects().length) trigger.focus();
+    });
+  }
+
+  async function startIntelligentDevelopment(
+    goal: string,
+    modelId: string,
+    baseVersion?: IntelligentCreateBaseVersion,
+    returnTarget?: { projectId: string },
+  ) {
+    if (intelligentPreparationStage) return;
+    intelligentCreateAbortRef.current?.abort();
+    const controller = new AbortController();
+    intelligentCreateAbortRef.current = controller;
+    intelligentCreateFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement : null;
+    setIntelligentPreparationMessage(goal);
+    setIntelligentPreparationStage("preparing");
+    setIntelligentCapabilitiesError("");
+    try {
+      const created = await intelligentDevelopmentClient.startSession({
+        displayName: baseVersion?.projectName ?? goal.slice(0, 40),
+        modelId,
+        ...(baseVersion
+          ? {
+              projectId: baseVersion.projectId,
+              baseVersionId: baseVersion.versionId,
+            }
+          : {}),
+        signal: controller.signal,
+      });
+      if (
+        controller.signal.aborted ||
+        intelligentCreateAbortRef.current !== controller
+      ) return;
+      setIntelligentPreparationStage("starting");
+      const connected = await intelligentDevelopmentClient.connectSession(
+        created.id,
+        { signal: controller.signal },
+      );
+      if (
+        controller.signal.aborted ||
+        intelligentCreateAbortRef.current !== controller
+      ) return;
+      if (returnTarget) setMigrationProjectReturn(returnTarget);
+      activateIntelligentDevelopmentSession(connected, development.prepare(goal, connected.id));
+      intelligentCreateAbortRef.current = null;
+      intelligentCreateFocusRef.current = null;
+      setIntelligentPreparationStage(null);
+      await sendSandboxMessage(goal, [], [], connected);
+    } catch (cause) {
+      if (
+        !controller.signal.aborted
+        && intelligentCreateAbortRef.current === controller
+        && (cause as Error)?.name !== "AbortError"
+      ) {
+        setIntelligentCapabilitiesError(
+          cause instanceof Error
+            ? cause.message
+            : appText("errors.intelligentSessionCreateFailed"),
+        );
+      }
+    } finally {
+      if (intelligentCreateAbortRef.current === controller) {
+        intelligentCreateAbortRef.current = null;
+        setIntelligentPreparationStage(null);
+      }
+    }
   }
 
   async function removeSession(id: string) {
@@ -3981,7 +5039,7 @@ export default function App() {
 
   async function pickSession(id: string) {
     if (sandboxSession) exitSandboxSession();
-    if (id === sessionId) return;
+    if (id === sessionId && turnsBySession[id] !== undefined) return;
     viewSidRef.current = id;
     setError("");
     setInitializingSession(false);
@@ -3989,8 +5047,6 @@ export default function App() {
     setNewChatMode("agent");
     setNewChatTask(null);
     setInvocation(emptyInvocation());
-    setSessionCapabilities(null);
-    setSessionBuiltinTools([]);
     setSessionId(id);
     // Already have this session's turns (it's cached, or streaming in the
     // background)? Show them instantly and let any live stream keep updating —
@@ -3999,7 +5055,9 @@ export default function App() {
     setLoadingSession(true);
     try {
       const s = await getSession(appName, userId, id);
-      setTurnsFor(id, eventsToTurns(s.events ?? [], s.state));
+      setTurnsFor(id, eventsToTurns(s.events ?? [], s.state, {
+        mpaA2a: isMpaA2aRuntimeApp(appName),
+      }));
       setTokenUsageBySession((current) => ({
         ...current,
         [sessionUsageKey(appName, id)]: aggregateTokenUsage(s.events ?? []),
@@ -4013,7 +5071,7 @@ export default function App() {
 
   async function openFeedbackCaseInStudio(item: AgentFeedbackCase) {
     if (!item.sessionId || !item.messageId) {
-      setError("这条案例缺少会话定位信息，无法跳转。");
+      setError(appText("errors.evaluationCaseSessionMissing"));
       return;
     }
     setSearchView(false);
@@ -4021,7 +5079,7 @@ export default function App() {
     setAddAgent(false);
     setAddMenu(false);
     setSkillCenter(false);
-    setManageAgents(false);
+    exitAgentDetailContext();
     setFeedbackCaseReturnAgentId(appName);
     setFeedbackCaseReturnKind(item.kind);
     setFeedbackTargetEventId(item.messageId);
@@ -4143,48 +5201,6 @@ export default function App() {
     }
   }
 
-  async function addCapability(capability: AddSessionCapability): Promise<boolean> {
-    if (!appName || !userId || !sessionId || !sessionCapabilities) return false;
-    setSessionCapabilityMutating(true);
-    setError("");
-    try {
-      const updated = await addSessionCapability(
-        appName,
-        userId,
-        sessionId,
-        capability,
-        sessionCapabilities.revision,
-      );
-      setSessionCapabilities(updated);
-      return true;
-    } catch (e) {
-      setError(String(e));
-      return false;
-    } finally {
-      setSessionCapabilityMutating(false);
-    }
-  }
-
-  async function removeCapability(capabilityId: string) {
-    if (!appName || !userId || !sessionId || !sessionCapabilities) return;
-    setSessionCapabilityMutating(true);
-    setError("");
-    try {
-      const updated = await removeSessionCapability(
-        appName,
-        userId,
-        sessionId,
-        capabilityId,
-        sessionCapabilities.revision,
-      );
-      setSessionCapabilities(updated);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setSessionCapabilityMutating(false);
-    }
-  }
-
   async function addFiles(files: FileList | File[]) {
     setError("");
     let sid: string;
@@ -4230,23 +5246,209 @@ export default function App() {
     );
   }
 
+  const activeTurnControl = sessionId ? turnControlBySession[sessionId] ?? null : null;
+  const activeTurnIsControllable = Boolean(
+    activeTurnControl?.allowedActions.length
+    || ["running", "pausing", "paused", "resuming", "interrupting", "cancelling"]
+      .includes(activeTurnControl?.state ?? ""),
+  );
+
+  function commitFinishedAssistantTurns(
+    sid: string,
+    eventProjector: ReturnType<typeof createAssistantEventProjector>,
+  ): { hasVisibleContent: boolean; eventId: string } {
+    let hasVisibleContent = false;
+    let eventId = "";
+    for (const unfinished of eventProjector.finish()) {
+      if (turnHasVisibleContent(unfinished)) {
+        hasVisibleContent = true;
+        eventId = unfinished.meta?.eventId ?? eventId;
+      }
+      setTurnsFor(sid, (turns) =>
+        upsertProjectedAssistantTurn(turns, unfinished),
+      );
+    }
+    return { hasVisibleContent, eventId };
+  }
+
+  async function streamTurnContinuation(sid: string, control: TurnControlState) {
+    const ctrl = new AbortController();
+    streamAbortsRef.current.set(sid, ctrl);
+    setStreaming(sid, true);
+    setTurnControlBySession((current) => {
+      if (!current[sid]) return current;
+      const next = { ...current };
+      delete next[sid];
+      return next;
+    });
+    const nextTurnControls = { ...turnControlBySessionRef.current };
+    delete nextTurnControls[sid];
+    turnControlBySessionRef.current = nextTurnControls;
+    startStreamPresentation(sid);
+    viewSidRef.current = sid;
+    const eventProjector = createAssistantEventProjector(
+      `${sid}-continue-${crypto.randomUUID()}`,
+      undefined,
+      { mpaA2a: isMpaA2aRuntimeApp(appName) },
+    );
+    let streamFailed = false;
+    try {
+      let finalEventId = "";
+      let hasCompletedReply = false;
+      for await (const event of continueTurnSSE({
+        appName,
+        sessionId: sid,
+        taskId: control.taskId,
+        expectedGeneration: control.generation,
+        idempotencyKey: `mpa-continue:${control.taskId}:${control.generation}`,
+        lastEventId: lastCompletedEventId(turnsBySession[sid]),
+        signal: ctrl.signal,
+        onRuntimeContext: (context) => {
+          setRuntimeLogTargetsBySession((current) => ({
+            ...current,
+            [`${appName}\n${sid}`]: context,
+          }));
+        },
+      })) {
+        if (ctrl.signal.aborted) break;
+        const errMsg = event.error ?? event.errorMessage ?? event.error_message;
+        if (typeof errMsg === "string" && errMsg) {
+          streamFailed = true;
+          if (viewSidRef.current === sid) setError(errMsg);
+          break;
+        }
+        addTokenUsageFor(appName, sid, event);
+        const projection = eventProjector.project(event);
+        if (projection.ignored) continue;
+        if (
+          projection.completed &&
+          turnHasVisibleContent(projection.turn)
+        ) {
+          hasCompletedReply = true;
+          finalEventId = projection.turn.meta?.eventId ?? finalEventId;
+        }
+        setTurnsFor(sid, (turns) =>
+          upsertProjectedAssistantTurn(turns, projection.turn),
+        );
+      }
+      const finalized = commitFinishedAssistantTurns(sid, eventProjector);
+      hasCompletedReply = hasCompletedReply || finalized.hasVisibleContent;
+      finalEventId = finalized.eventId || finalEventId;
+      if (!ctrl.signal.aborted && !streamFailed && !hasCompletedReply) {
+        streamFailed = true;
+        if (viewSidRef.current === sid) {
+          setError(runSseIncompleteResponseError());
+        }
+      }
+      void refreshSessions(appName);
+      if (!ctrl.signal.aborted && !streamFailed && finalEventId) {
+        void refreshSessionTranscript(appName, sid, finalEventId);
+      }
+      if (!ctrl.signal.aborted && !streamFailed && finalEventId) {
+        automaticEvaluationStatusRefreshRef.current();
+      }
+    } catch (e) {
+      streamFailed = true;
+      if (
+        (e as Error)?.name !== "AbortError" &&
+        !ctrl.signal.aborted &&
+        viewSidRef.current === sid
+      ) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      commitFinishedAssistantTurns(sid, eventProjector);
+      if (streamAbortsRef.current.get(sid) === ctrl) {
+        streamAbortsRef.current.delete(sid);
+        setStreaming(sid, false);
+        finishStreamPresentation(sid);
+      }
+    }
+  }
+
+  async function applyTurnControl(action: "pause" | "resume") {
+    if (!sessionId || !appName || !activeTurnControl) return;
+    setTurnControlBusy(true);
+    try {
+      const next = await controlTurn(
+        appName, sessionId, action, activeTurnControl.generation,
+      );
+      if (action === "resume" && next.resumeDisposition === "new_turn_required") {
+        streamAbortsRef.current.get(sessionId)?.abort();
+        await streamTurnContinuation(sessionId, next);
+        return;
+      }
+      setTurnControlBySession((current) => ({ ...current, [sessionId]: next }));
+      turnControlBySessionRef.current = {
+        ...turnControlBySessionRef.current,
+        [sessionId]: next,
+      };
+    } catch (cause) {
+      if (cause instanceof TurnControlConflictError) {
+        const next = cause.authoritativeState;
+        setTurnControlBySession((current) => ({ ...current, [sessionId]: next }));
+        turnControlBySessionRef.current = {
+          ...turnControlBySessionRef.current,
+          [sessionId]: next,
+        };
+        return;
+      }
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setTurnControlBusy(false);
+    }
+  }
+
   async function send(
     text: string,
     atts: Attachment[] = [],
     selectedInvocation: FrontendInvocation = emptyInvocation(),
     messageSource: AgentMessageSource = "composer",
+    selectedPlatformTools?: readonly string[],
+    allowWhileBusy = false,
   ) {
     // `busy` here = the CURRENT session is already streaming (can't double-send
     // to it). Other sessions can stream concurrently.
     if (
       (!text.trim() && atts.length === 0) ||
-      conversationBusy ||
-      sessionConfigurationBusy ||
+      (!allowWhileBusy && conversationBusy) ||
       !appName ||
       !userId
     ) return;
+    const selectableModels = agentInfo?.selectableModels ?? [];
+    const modelSelectionKey = sessionId || `new:${appName}`;
+    const selectedModel = selectedModelBySession[modelSelectionKey] || "";
+    const requestedModel = selectableModels.length > 1
+      ? selectableModels.includes(selectedModel)
+        ? selectedModel
+        : agentInfo?.model || selectableModels[0] || ""
+      : "";
+    const mountedSkillInvocation = {
+      ...selectedInvocation,
+      skills: [
+        ...selectedInvocation.skills,
+        ...(agentInfo?.agentCategory === "mpa" ? [] : selectedSessionSkills).map((skill) => ({
+          name: skill.name,
+          description: skill.description ?? "",
+          skillSpaceId: skill.skillSpaceId,
+          skillId: skill.skillId,
+          version: skill.version,
+        })),
+      ].filter((skill, index, values) => (
+        values.findIndex((candidate) => candidate.name === skill.name) === index
+      )),
+    };
     setError("");
     const createsSession = !sessionId;
+    let platformTools = [...(selectedPlatformTools ?? environmentStudioToolIds)];
+    const environmentMounts = createsSession
+      ? []
+      : environmentMountsBySession[
+          studioToolSelectionKey(appName, userId, sessionId)
+        ] ?? [];
+    if (environmentMounts.length > 0 && studioToolRuntime) {
+      platformTools = [...new Set([...platformTools, ...ENVIRONMENT_STUDIO_TOOL_IDS])];
+    }
     const sessionState = createsSession ? "new" : "existing";
     const trackRuntimeMessage = Boolean(currentRuntime);
     const messageOperation = currentRuntime
@@ -4260,8 +5462,8 @@ export default function App() {
       : null;
 
     const userBlocks: Turn["blocks"] = [];
-    if (selectedInvocation.skills.length > 0 || selectedInvocation.targetAgent) {
-      userBlocks.push({ kind: "invocation", value: selectedInvocation });
+    if (mountedSkillInvocation.skills.length > 0 || mountedSkillInvocation.targetAgent) {
+      userBlocks.push({ kind: "invocation", value: mountedSkillInvocation });
     }
     if (atts.length)
       userBlocks.push({
@@ -4276,9 +5478,17 @@ export default function App() {
         })),
       });
     if (text.trim()) userBlocks.push({ kind: "text", text });
+    const optimisticAssistantTurn: Turn = {
+      role: "assistant",
+      blocks: [],
+      meta: {
+        localId: `pending-${crypto.randomUUID()}`,
+        streaming: true,
+      },
+    };
     const optimisticTurns: Turn[] = [
       { role: "user", blocks: userBlocks, meta: { ts: Date.now() / 1000 } },
-      { role: "assistant", blocks: [] },
+      optimisticAssistantTurn,
     ];
     if (createsSession) {
       setPendingTurns(optimisticTurns);
@@ -4306,31 +5516,18 @@ export default function App() {
       return;
     }
 
-    let runWithSessionCapabilities = requiresSessionCapabilityRunner(
-      sessionCapabilities,
-    );
     if (selectedTask) {
-      try {
-        let updated = await getSessionCapabilities(appName, userId, sid);
-        const optionalTools = NEW_CHAT_TASK_OPTIONAL_TOOLS[selectedTask].filter(
-          (toolName) => newChatCapabilities.builtinTools?.includes(toolName),
-        );
-        for (const toolName of [
-          ...NEW_CHAT_TASK_TOOLS[selectedTask],
-          ...optionalTools,
-        ]) {
-          if (updated.tools.some((tool) => tool.name === toolName)) continue;
-          updated = await addSessionCapability(
-              appName,
-              userId,
-              sid,
-              { kind: "tool", name: toolName },
-              updated.revision,
-            );
-        }
-        setSessionCapabilities(updated);
-        runWithSessionCapabilities = requiresSessionCapabilityRunner(updated);
-      } catch (e) {
+      const requiredTools = NEW_CHAT_TASK_TOOLS[selectedTask];
+      const agentTools = new Set(agentInfo?.tools ?? []);
+      const availableStudioToolIds = new Set(
+        studioToolCapabilities?.tools.map((tool) => tool.id) ?? [],
+      );
+      const availableTools = new Set([
+        ...agentTools,
+        ...(studioToolRuntime ? availableStudioToolIds : []),
+      ]);
+      const missingTools = requiredTools.filter((tool) => !availableTools.has(tool));
+      if (missingTools.length > 0) {
         if (createsSession) {
           setPendingTurns([]);
           setInitializingSession(false);
@@ -4341,11 +5538,23 @@ export default function App() {
           messageOperation?.fail({
             sessionId: String(sid),
             failedPhase: "mount_task_capabilities",
-            ...classifyTelemetryError(e),
+            ...classifyTelemetryError(
+              `missing Studio tools: ${missingTools.join(", ")}`,
+            ),
           });
         }
-        setError(`任务能力挂载失败：${String(e)}`);
+        setError(appText("errors.agentToolsMissing", { tools: missingTools.join(", ") }));
         return;
+      }
+      if (studioToolRuntime) {
+        const optionalTools = NEW_CHAT_TASK_OPTIONAL_TOOLS[selectedTask].filter(
+          (toolName) => availableStudioToolIds.has(toolName) && !agentTools.has(toolName),
+        );
+        platformTools = [...new Set([
+          ...platformTools,
+          ...requiredTools.filter((toolName) => !agentTools.has(toolName)),
+          ...optionalTools,
+        ])];
       }
     }
 
@@ -4355,6 +5564,13 @@ export default function App() {
     if (createsSession) {
       viewSidRef.current = sid;
       setSessionId(sid);
+      if (requestedModel && createsSession) {
+        setSelectedModelBySession((current) => ({
+          ...current,
+          [sid]: requestedModel,
+          [modelSelectionKey]: "",
+        }));
+      }
       setPendingTurns([]);
       setInitializingSession(false);
     }
@@ -4363,31 +5579,53 @@ export default function App() {
     const ctrl = new AbortController();
     streamAbortsRef.current.set(sid, ctrl);
     setStreaming(sid, true);
+    if (agentInfo?.turnLifecycleControl && currentRuntime) {
+      setTurnControlBySession((current) => {
+        if (!current[sid]) return current;
+        const next = { ...current };
+        delete next[sid];
+        return next;
+      });
+      const nextTurnControls = { ...turnControlBySessionRef.current };
+      delete nextTurnControls[sid];
+      turnControlBySessionRef.current = nextTurnControls;
+    }
     startStreamPresentation(sid);
     viewSidRef.current = sid;
 
-    setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
-    setSeenAgentsBySession((m) => ({ ...m, [sid]: new Set() }));
-    setExecPathBySession((m) => ({ ...m, [sid]: [] }));
-
+    const eventProjector = createAssistantEventProjector(
+      `${sid}-${crypto.randomUUID()}`,
+      optimisticAssistantTurn,
+      { mpaA2a: isMpaA2aRuntimeApp(appName) },
+    );
+    let streamFailed = false;
+    let streamError: unknown = null;
     try {
-      let acc = emptyAcc();
-      let currentStreamAuthor = "";
-      let tokens = 0;
-      let ts = Date.now() / 1000;
-      let eventId = "";
-      let invocationId = "";
-      let streamFailed = false;
-      let streamError: unknown = null;
+      const mpaRunConfig = await resolveMpaRunConfig(sid, ctrl.signal);
+      let finalEventId = "";
+      let hasCompletedReply = false;
       for await (const event of runSSE({
         appName,
         userId,
         sessionId: sid,
         text,
+        modelId: requestedModel,
+        idempotencyKey: mpaRunConfig?.idempotencyKey,
+        executionConfigVersion: mpaRunConfig?.executionConfigVersion,
+        lastEventId: lastCompletedEventId(turnsBySession[sid]),
         attachments: atts,
-        invocation: selectedInvocation,
+        invocation: mountedSkillInvocation,
+        platformTools: studioToolRuntime ? platformTools : undefined,
+        environmentMounts: studioToolRuntime && environmentMounts.length > 0
+          ? environmentMounts
+          : undefined,
         signal: ctrl.signal,
-        sessionCapabilities: runWithSessionCapabilities,
+        onRuntimeContext: (context) => {
+          setRuntimeLogTargetsBySession((current) => ({
+            ...current,
+            [`${appName}\n${sid}`]: context,
+          }));
+        },
       })) {
         if (ctrl.signal.aborted) break;
         const errMsg = event.error ?? event.errorMessage ?? event.error_message;
@@ -4397,46 +5635,34 @@ export default function App() {
           if (viewSidRef.current === sid) setError(errMsg);
           break;
         }
-        // Live topology: author + transfer/end signals, keyed by session.
-        applyStreamSignals(sid, event);
-        const eventAuthor = event.author && event.author !== "user"
-          ? event.author
-          : "";
-        if (eventAuthor && eventAuthor !== currentStreamAuthor) {
-          currentStreamAuthor = eventAuthor;
-          acc = emptyAcc();
-        }
-        acc = applyEvent(acc, event);
-        const usage = event.usageMetadata ?? event.usage_metadata;
         addTokenUsageFor(appName, sid, event);
-        if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
-        if (event.timestamp) ts = event.timestamp;
-        if (event.id) eventId = event.id;
-        const nextInvocationId = event.invocationId ?? event.invocation_id;
-        if (nextInvocationId) invocationId = nextInvocationId;
-        const blocks = acc.blocks;
-        const meta = {
-          author: currentStreamAuthor || undefined,
-          tokens: tokens || undefined,
-          ts,
-          eventId: eventId || undefined,
-          invocationId: invocationId || undefined,
-        };
-        setTurnsFor(sid, (t) => {
-          const next = t.slice();
-          const last = next[next.length - 1];
-          if (
-            last?.role === "assistant" &&
-            (!last.meta?.author || last.meta.author === currentStreamAuthor)
-          ) {
-            next[next.length - 1] = { ...last, blocks, meta };
-          } else {
-            next.push({ role: "assistant", blocks, meta });
-          }
-          return next;
-        });
+        const projection = eventProjector.project(event);
+        if (projection.ignored) continue;
+        if (
+          projection.completed &&
+          turnHasVisibleContent(projection.turn)
+        ) {
+          hasCompletedReply = true;
+          finalEventId = projection.turn.meta?.eventId ?? finalEventId;
+        }
+        setTurnsFor(sid, (turns) =>
+          upsertProjectedAssistantTurn(turns, projection.turn),
+        );
+      }
+      const finalized = commitFinishedAssistantTurns(sid, eventProjector);
+      hasCompletedReply = hasCompletedReply || finalized.hasVisibleContent;
+      finalEventId = finalized.eventId || finalEventId;
+      if (!ctrl.signal.aborted && !streamFailed && !hasCompletedReply) {
+        streamFailed = true;
+        streamError = runSseIncompleteResponseError();
+        if (viewSidRef.current === sid) {
+          setError(runSseIncompleteResponseError());
+        }
       }
       void refreshSessions(appName);
+      if (!ctrl.signal.aborted && !streamFailed && finalEventId) {
+        void refreshSessionTranscript(appName, sid, finalEventId);
+      }
       if (trackRuntimeMessage && ctrl.signal.aborted) {
         messageOperation?.fail({
           sessionId: String(sid),
@@ -4454,10 +5680,12 @@ export default function App() {
           messageOperation?.succeed({ sessionId: String(sid) });
         }
       }
-      if (!ctrl.signal.aborted && !streamFailed && eventId) {
+      if (!ctrl.signal.aborted && !streamFailed && finalEventId) {
         automaticEvaluationStatusRefreshRef.current();
       }
     } catch (e) {
+      streamFailed = true;
+      streamError = e;
       if (trackRuntimeMessage) {
         messageOperation?.fail({
           sessionId: String(sid),
@@ -4472,14 +5700,23 @@ export default function App() {
         !ctrl.signal.aborted &&
         viewSidRef.current === sid
       ) {
-        setError(String(e));
+        setError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      if (streamAbortsRef.current.get(sid) === ctrl) streamAbortsRef.current.delete(sid);
-      setStreaming(sid, false);
-      finishStreamPresentation(sid);
-      setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
-      setExecPathBySession((m) => ({ ...m, [sid]: [] }));
+      commitFinishedAssistantTurns(sid, eventProjector);
+      if (
+        !ctrl.signal.aborted &&
+        streamFailed &&
+        viewSidRef.current === sid &&
+        text.trim()
+      ) {
+        setInput((current) => current.trim() ? current : text);
+      }
+      if (streamAbortsRef.current.get(sid) === ctrl) {
+        streamAbortsRef.current.delete(sid);
+        setStreaming(sid, false);
+        finishStreamPresentation(sid);
+      }
     }
   }
 
@@ -4504,8 +5741,8 @@ export default function App() {
    *  exchanges the code for a token and resumes the paused tool call. The
    *  continuation streams into the same assistant turn. */
   async function onAuth(block: Extract<Block, { kind: "auth" }>) {
-    if (!block.authUri) throw new Error("事件中没有授权地址。");
-    if (!appName || !userId || !sessionId) throw new Error("会话尚未就绪。");
+    if (!block.authUri) throw new Error(appText("errors.oauthUrlMissing"));
+    if (!appName || !userId || !sessionId) throw new Error(appText("errors.sessionNotReady"));
     const sid = sessionId;
     const callbackUrl = await runOAuthPopup(block.authUri);
     const response = withAuthResponseUri(block.authConfig, callbackUrl);
@@ -4535,15 +5772,23 @@ export default function App() {
     streamAbortsRef.current.set(sid, ctrl);
     setStreaming(sid, true);
     startStreamPresentation(sid);
+    let streamFailed = false;
+    const environmentMounts = environmentMountsBySession[
+      studioToolSelectionKey(appName, userId, sid)
+    ] ?? [];
+    const resumedPlatformTools = environmentMounts.length > 0
+      ? [...ENVIRONMENT_STUDIO_TOOL_IDS]
+      : [];
+    const eventProjector = createAssistantEventProjector(
+      `${sid}-${crypto.randomUUID()}`,
+      lastTurn?.role === "assistant"
+        ? { ...lastTurn, blocks: base }
+        : undefined,
+      { mpaA2a: isMpaA2aRuntimeApp(appName) },
+    );
     try {
-      let acc = emptyAcc();
-      let currentStreamAuthor = lastTurn?.meta?.author ?? "";
-      let currentBase = base;
-      let tokens = 0;
-      let ts = Date.now() / 1000;
-      let eventId = lastTurn?.meta?.eventId ?? "";
-      let invocationId = lastTurn?.meta?.invocationId ?? "";
-      let streamFailed = false;
+      let finalEventId = "";
+      let hasCompletedReply = false;
       for await (const event of runSSE({
         appName,
         userId,
@@ -4552,8 +5797,18 @@ export default function App() {
         functionResponses: [
           { id: block.callId, name: "adk_request_credential", response },
         ],
+        lastEventId: lastCompletedEventId(turnsBySession[sid]),
+        platformTools: studioToolRuntime ? resumedPlatformTools : undefined,
+        environmentMounts: studioToolRuntime && environmentMounts.length > 0
+          ? environmentMounts
+          : undefined,
         signal: ctrl.signal,
-        sessionCapabilities: requiresSessionCapabilityRunner(sessionCapabilities),
+        onRuntimeContext: (context) => {
+          setRuntimeLogTargetsBySession((current) => ({
+            ...current,
+            [`${appName}\n${sid}`]: context,
+          }));
+        },
       })) {
         if (ctrl.signal.aborted) break;
         const errMsg = event.error ?? event.errorMessage ?? event.error_message;
@@ -4562,76 +5817,297 @@ export default function App() {
           if (viewSidRef.current === sid) setError(errMsg);
           break;
         }
-        applyStreamSignals(sid, event);
-        const eventAuthor = event.author && event.author !== "user"
-          ? event.author
-          : "";
-        if (eventAuthor && eventAuthor !== currentStreamAuthor) {
-          currentStreamAuthor = eventAuthor;
-          currentBase = [];
-          acc = emptyAcc();
-        }
-        acc = applyEvent(acc, event);
-        const usage = event.usageMetadata ?? event.usage_metadata;
         addTokenUsageFor(appName, sid, event);
-        if (usage?.totalTokenCount) tokens = usage.totalTokenCount;
-        if (event.timestamp) ts = event.timestamp;
-        if (event.id) eventId = event.id;
-        const nextInvocationId = event.invocationId ?? event.invocation_id;
-        if (nextInvocationId) invocationId = nextInvocationId;
-        const blocks = [...currentBase, ...acc.blocks];
-        setTurnsFor(sid, (t) => {
-          const next = t.slice();
-          const last = next[next.length - 1];
-          const meta = {
-            author: currentStreamAuthor || last?.meta?.author,
-            tokens: tokens || last?.meta?.tokens,
-            ts,
-            eventId: eventId || last?.meta?.eventId,
-            invocationId: invocationId || last?.meta?.invocationId,
-          };
-          if (
-            last?.role === "assistant" &&
-            (!last.meta?.author || last.meta.author === currentStreamAuthor)
-          ) {
-            next[next.length - 1] = {
-              ...last,
-              blocks,
-              meta,
-            };
-          } else {
-            next.push({ role: "assistant", blocks, meta });
-          }
-          return next;
-        });
+        const projection = eventProjector.project(event);
+        if (projection.ignored) continue;
+        if (
+          projection.completed &&
+          turnHasVisibleContent(projection.turn)
+        ) {
+          hasCompletedReply = true;
+          finalEventId = projection.turn.meta?.eventId ?? finalEventId;
+        }
+        setTurnsFor(sid, (turns) =>
+          upsertProjectedAssistantTurn(turns, projection.turn),
+        );
+      }
+      const finalized = commitFinishedAssistantTurns(sid, eventProjector);
+      hasCompletedReply = hasCompletedReply || finalized.hasVisibleContent;
+      finalEventId = finalized.eventId || finalEventId;
+      if (!ctrl.signal.aborted && !streamFailed && !hasCompletedReply) {
+        streamFailed = true;
+        if (viewSidRef.current === sid) {
+          setError(runSseIncompleteResponseError());
+        }
       }
       void refreshSessions(appName);
-      if (!ctrl.signal.aborted && !streamFailed && eventId) {
+      if (!ctrl.signal.aborted && !streamFailed && finalEventId) {
+        void refreshSessionTranscript(appName, sid, finalEventId);
+      }
+      if (!ctrl.signal.aborted && !streamFailed && finalEventId) {
         automaticEvaluationStatusRefreshRef.current();
       }
     } catch (e) {
+      streamFailed = true;
       if (
         (e as Error)?.name !== "AbortError" &&
         !ctrl.signal.aborted &&
         viewSidRef.current === sid
       ) {
-        setError(String(e));
+        setError(e instanceof Error ? e.message : String(e));
       }
     } finally {
+      commitFinishedAssistantTurns(sid, eventProjector);
       if (streamAbortsRef.current.get(sid) === ctrl) streamAbortsRef.current.delete(sid);
       setStreaming(sid, false);
       finishStreamPresentation(sid);
-      setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
-      setExecPathBySession((m) => ({ ...m, [sid]: [] }));
     }
   }
+
+  // Hooks must stay above the authentication returns below. Connection state
+  // may survive an auth transition, so discovery also waits for resolved access.
+  const currentConn = connections.find(
+    (connection) =>
+      connection.runtimeId &&
+      connection.apps.some(
+        (candidate) => remoteAppId(connection.id, candidate) === appName,
+      ),
+  );
+  const currentRuntime =
+    currentConn && currentConn.runtimeId && currentConn.region
+      ? {
+          runtimeId: currentConn.runtimeId,
+          name: currentConn.name,
+          region: currentConn.region,
+        }
+      : undefined;
+  const currentRuntimeId = currentRuntime?.runtimeId ?? "";
+  const currentRuntimeRegion = currentRuntime?.region ?? "";
+  useEffect(() => {
+    if (
+      !sessionId ||
+      !appName ||
+      !currentRuntimeId ||
+      !agentInfo?.turnLifecycleControl
+    ) return;
+    if (!busy && !turnControlBySessionRef.current[sessionId]) return;
+    let cancelled = false;
+    let controlUnavailable = false;
+    const refresh = () => {
+      if (controlUnavailable) return;
+      void getTurnControl(appName, sessionId)
+        .then((state) => {
+          if (!cancelled) {
+            controlUnavailable = false;
+            setTurnControlBySession((current) => (
+              current[sessionId]?.taskId === state.taskId
+              && current[sessionId]?.state === state.state
+              && current[sessionId]?.generation === state.generation
+              && current[sessionId]?.allowedActions.join("\0")
+                === state.allowedActions.join("\0")
+                ? current
+                : { ...current, [sessionId]: state }
+            ));
+            turnControlBySessionRef.current = {
+              ...turnControlBySessionRef.current,
+              [sessionId]: state,
+            };
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            const hadKnownControl = Boolean(turnControlBySessionRef.current[sessionId]);
+            setTurnControlBySession((current) => {
+              const next = { ...current };
+              delete next[sessionId];
+              return next;
+            });
+            const next = { ...turnControlBySessionRef.current };
+            delete next[sessionId];
+            turnControlBySessionRef.current = next;
+            if (!hadKnownControl) controlUnavailable = true;
+          }
+        });
+    };
+    refresh();
+    const timer = window.setInterval(() => {
+      const current = turnControlBySessionRef.current[sessionId];
+      if (current && ["completed", "failed", "rejected", "cancelled", "canceled", "interrupted", "orphaned"].includes(current.state)) return;
+      refresh();
+    }, 1000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [
+    agentInfo?.turnLifecycleControl,
+    appName,
+    busy,
+    currentRuntimeId,
+    currentRuntimeRegion,
+    sessionId,
+  ]);
+  const selectedDraftStudioRuntime =
+    draftStudioRuntime?.appName === appName ? draftStudioRuntime : undefined;
+  // Local Agents execute through this Studio process, so use the synthetic
+  // `local` runtime only for BFF capability discovery. ADK request routing is
+  // still derived from `appName` and therefore remains on the local /run_sse.
+  const studioToolRuntime = currentRuntime ?? selectedDraftStudioRuntime ?? (
+    appName
+      ? {
+          runtimeId: "local",
+          name: "Local Studio",
+          region: defaultCloudRegion(cloudProvider),
+        }
+      : undefined
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    setStudioToolCapabilities(null);
+    setSessionEnvironmentsError("");
+    if (
+      authStatus !== "authenticated" ||
+      !access ||
+      myAgents ||
+      agentDetailTarget ||
+      !studioToolRuntime
+    ) {
+      setStudioToolsLoading(false);
+      return;
+    }
+    setStudioToolsLoading(true);
+    getRuntimeStudioToolCapabilities(
+      studioToolRuntime.runtimeId,
+      studioToolRuntime.region,
+    )
+      .then((capabilities) => {
+        if (!cancelled) setStudioToolCapabilities(capabilities);
+      })
+      .catch((cause) => {
+        if (cancelled) return;
+        setSessionEnvironmentsError(
+          cause instanceof Error ? cause.message : appText("errors.localToolsLoadFailed"),
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setStudioToolsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    access,
+    agentDetailTarget,
+    authStatus,
+    myAgents,
+    studioToolRuntime?.region,
+    studioToolRuntime?.runtimeId,
+  ]);
+
+  const refreshSessionEnvironments = useCallback(async () => {
+    sessionEnvironmentLoadAbortRef.current?.abort();
+    const controller = new AbortController();
+    sessionEnvironmentLoadAbortRef.current = controller;
+    setSessionEnvironmentsLoading(true);
+    setSessionEnvironmentsError("");
+    try {
+      const environmentResults = await Promise.allSettled([
+        listEnvironments(controller.signal),
+        listWorkspaces(controller.signal),
+      ]);
+      if (controller.signal.aborted) return;
+      const items = environmentResults[0].status === "fulfilled"
+        ? environmentResults[0].value
+        : [];
+      const workspaces = environmentResults[1].status === "fulfilled"
+        ? environmentResults[1].value
+        : [];
+      const environmentErrors = environmentResults.flatMap((result) =>
+        result.status === "rejected" &&
+        !isOptionalStudioStorageUnavailable(result.reason)
+          ? [result.reason instanceof Error ? result.reason.message : String(result.reason)]
+          : []
+      );
+      const availableEnvironments = items.filter((environment) =>
+        ["aio-sandbox", "codex-sandbox"].includes(environment.baseEnvironment) &&
+        environment.latestVersion?.status === "available" &&
+        environment.latestVersion.toolStatus === "ready" &&
+        Boolean(environment.latestVersion.toolId)
+      );
+      const availableMountKeys = new Set(availableEnvironments.flatMap((environment) =>
+        environment.latestVersion
+          ? [`${environment.id}\u0000${environment.latestVersion.versionId}`]
+          : []
+      ));
+      const availableWorkspaceIds = new Set(workspaces.map((workspace) => workspace.id));
+
+      // Replace the snapshot instead of merging it so deleted environments and
+      // workspaces disappear from both the picker and existing Session mounts.
+      setSessionEnvironments(availableEnvironments);
+      setSessionWorkspaces(workspaces);
+      setSessionEnvironmentsError(environmentErrors.join("\n"));
+      setEnvironmentMountsBySession((current) => Object.fromEntries(
+        Object.entries(current).map(([key, selections]) => [
+          key,
+          selections.filter((selection) => availableMountKeys.has(
+            `${selection.environment_id}\u0000${selection.environment_version_id}`,
+          )),
+        ]),
+      ));
+      setEnvironmentWorkspaceIdsBySession((current) => Object.fromEntries(
+        Object.entries(current).map(([key, workspaceIds]) => [
+          key,
+          workspaceIds.filter((workspaceId) => availableWorkspaceIds.has(workspaceId)),
+        ]),
+      ));
+    } catch (cause) {
+      if (controller.signal.aborted) return;
+      console.warn("Unable to refresh Studio environments and workspaces", cause);
+      setSessionEnvironmentsError(appText("errors.environmentsLoadFailed"));
+    } finally {
+      if (sessionEnvironmentLoadAbortRef.current === controller) {
+        sessionEnvironmentLoadAbortRef.current = null;
+        setSessionEnvironmentsLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (
+      authStatus !== "authenticated" ||
+      !access ||
+      myAgents ||
+      agentDetailTarget ||
+      !studioToolRuntime
+    ) {
+      sessionEnvironmentLoadAbortRef.current?.abort();
+      sessionEnvironmentLoadAbortRef.current = null;
+      setSessionEnvironments([]);
+      setSessionWorkspaces([]);
+      setSessionEnvironmentsError("");
+      setSessionEnvironmentsLoading(false);
+      return;
+    }
+    void refreshSessionEnvironments();
+    return () => {
+      sessionEnvironmentLoadAbortRef.current?.abort();
+      sessionEnvironmentLoadAbortRef.current = null;
+    };
+  }, [
+    access,
+    agentDetailTarget,
+    authStatus,
+    environmentView,
+    myAgents,
+    refreshSessionEnvironments,
+    studioToolRuntime?.region,
+    studioToolRuntime?.runtimeId,
+  ]);
 
   if (authError) {
     return (
       <div className="boot boot-error">
         <p>{authError}</p>
         <button type="button" onClick={resolveAuth}>
-          重试
+          {t("actions.retry")}
         </button>
       </div>
     );
@@ -4652,12 +6128,13 @@ export default function App() {
     return <div className="boot" />;
   }
 
-  const canCreateAgents = access.capabilities.createAgents;
+  const canCreateRuntimeAgents = access.capabilities.createAgents;
+  const canCreatePersonalAgents = access.capabilities.createPersonalAgents;
   const canManageAgents = access.capabilities.manageAgents;
   const canViewAgentUsage = features.agentUsage && canManageAgents;
-  const visibleCreateView = canCreateAgents ? createView : null;
-  const showAddMenu = canCreateAgents && addMenu;
-  const showAddAgent = canCreateAgents && addAgent;
+  const visibleCreateView = canCreateRuntimeAgents ? createView : null;
+  const showAddMenu = canCreateRuntimeAgents && addMenu;
+  const showAddAgent = canCreateRuntimeAgents && addAgent;
   const showManageAgents = manageAgents && Boolean(
     agentDetailTarget || focusedDeploymentTaskId || focusedWorkspaceAgentId,
   );
@@ -4673,6 +6150,14 @@ export default function App() {
       canDelete: entry.runtimeId
         ? libraryRuntimePermissions[entry.runtimeId]?.canDelete === true
         : false,
+      agentCategory: entry.runtimeId
+        ? entry.agentCategory ??
+          libraryRuntimePermissions[entry.runtimeId]?.agentCategory
+        : entry.agentCategory,
+      mpaInstanceId: entry.runtimeId
+        ? entry.mpaInstanceId ??
+          libraryRuntimePermissions[entry.runtimeId]?.mpaInstanceId
+        : entry.mpaInstanceId,
     }));
   const orderedWorkspaceAgentEntries: AgentEntry[] = (() => {
     if (workspaceAgentEntries.length === 0) return workspaceAgentEntries;
@@ -4689,23 +6174,97 @@ export default function App() {
   const labelOf = (id: string) => agentEntries.find((e) => e.id === id)?.label ?? id;
   // The runtime backing the current selection (if it's a cloud runtime app) —
   // drives the picker's side detail panel.
-  const currentConn = connections.find(
-    (c) => c.runtimeId && c.apps.some((a) => remoteAppId(c.id, a) === appName),
+  const activeStudioToolSelectionKey = sessionId
+    ? studioToolSelectionKey(appName, userId, sessionId)
+    : "";
+  const allStudioToolIds = new Set(
+    studioToolCapabilities?.tools.map((tool) => tool.id) ?? [],
   );
-  const currentRuntime =
-    currentConn && currentConn.runtimeId && currentConn.region
-      ? {
-          runtimeId: currentConn.runtimeId,
-          name: currentConn.name,
-          region: currentConn.region,
-        }
-      : undefined;
+  const selectedEnvironmentMounts = sessionId
+    ? environmentMountsBySession[activeStudioToolSelectionKey] ?? []
+    : [];
+  const canMountSessionEnvironment = ENVIRONMENT_STUDIO_TOOL_IDS.every((toolId) =>
+    allStudioToolIds.has(toolId)
+  );
+  const environmentStudioToolIds = selectedEnvironmentMounts.length > 0 && canMountSessionEnvironment
+    ? [...ENVIRONMENT_STUDIO_TOOL_IDS]
+    : [];
+  const selectedSessionSkills = sessionId
+    ? sessionSkillsBySession[activeStudioToolSelectionKey] ?? []
+    : [];
+  const selectedEnvironmentWorkspaceIds = sessionId
+    ? environmentWorkspaceIdsBySession[activeStudioToolSelectionKey] ?? []
+    : [];
+  const updateSelectedEnvironments = async (
+    selections: SessionEnvironmentMountSelection[],
+    workspaceIds: string[] = [],
+  ): Promise<void> => {
+    if (!sessionId) throw new Error(appText("errors.sessionMissingForMount"));
+    const valid = selections.every((selection) => sessionEnvironments.some((environment) =>
+      environment.id === selection.environment_id &&
+      environment.latestVersion?.versionId === selection.environment_version_id
+    ));
+    if (!valid) throw new Error(appText("errors.environmentExpired"));
+    if (selections.length > 0) {
+      if (!studioToolRuntime) {
+        throw new Error(appText("errors.sandboxRuntimeUnavailable"));
+      }
+      setSessionEnvironmentsError("");
+      try {
+        await prepareSessionEnvironmentMounts({
+          runtimeId: studioToolRuntime.runtimeId,
+          appName,
+          userId,
+          sessionId,
+          environmentMounts: selections,
+        });
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : appText("errors.mountEnvironmentFailed");
+        throw new Error(message);
+      }
+    }
+    setEnvironmentMountsBySession((current) => ({
+      ...current,
+      [activeStudioToolSelectionKey]: selections,
+    }));
+    setEnvironmentWorkspaceIdsBySession((current) => ({
+      ...current,
+      [activeStudioToolSelectionKey]: workspaceIds,
+    }));
+  };
+
+  const sessionEnvironmentsUnavailableReason = sessionEnvironmentsError
+    || (!studioToolsLoading && studioToolCapabilities && !canMountSessionEnvironment
+      ? t("errors.sandboxToolsUnavailable")
+      : "");
   const connectedRuntimeId = currentRuntime?.runtimeId ?? "";
   const currentRuntimeAppName = currentConn
     ? currentConn.apps.find((app) =>
         remoteAppId(currentConn.id, app) === appName
       ) ?? agentInfo?.appName ?? currentConn.apps[0] ?? currentConn.name
     : "";
+  async function resolveMpaRunConfig(
+    sid: string,
+    signal?: AbortSignal,
+  ): Promise<{ idempotencyKey: string; executionConfigVersion: number } | null> {
+    if (
+      !isMpaRuntimeApp(appName) ||
+      !currentConn?.runtimeId ||
+      !currentRuntimeAppName
+    ) {
+      return null;
+    }
+    const config: MpaSessionExecutionConfig = await getMpaSessionExecutionConfig({
+      runtimeId: currentConn.runtimeId,
+      region: currentConn.region ?? defaultCloudRegion(cloudProvider),
+      sessionId: sid,
+      signal,
+    });
+    return {
+      idempotencyKey: `mpa-run:${sid}:${crypto.randomUUID()}`,
+      executionConfigVersion: config.revision,
+    };
+  }
 
   const submitIssueFeedbackForTurn = async (feedback: {
     issues: IssueFeedbackIssue[];
@@ -4713,7 +6272,7 @@ export default function App() {
   }): Promise<void> => {
     const target = issueFeedbackTarget;
     const sid = sessionId;
-    if (!target || !sid) throw new Error("当前会话不可用，请关闭后重试。");
+    if (!target || !sid) throw new Error(appText("errors.sessionUnavailable"));
     const invocationId = target.turn.meta?.invocationId ?? "";
     const sessionTrace = connectedRuntimeId
       ? []
@@ -4786,10 +6345,10 @@ export default function App() {
     const eventId = turn.meta?.eventId;
     const sid = sessionId;
     if (!eventId || !sid || !currentRuntime) {
-      return "当前回复暂不支持加入评测集";
+      return appText("errors.evaluationUnsupportedForReply");
     }
     if (cloudProvider === "byteplus") {
-      return "BytePlus 暂不支持 AgentKit 评测集";
+      return appText("errors.bytePlusEvaluationUnsupported");
     }
     const output = turnText(turn);
     const previousFeedback = turn.meta?.feedback;
@@ -4929,52 +6488,123 @@ export default function App() {
       target.turn,
       "bad",
       target.input,
-      formatResponseAnnotationComment(target.selectedText, note),
+      formatResponseAnnotationComment(target.selectedText, note, {
+        selectedExcerpt: t("conversation:annotation.selectedExcerptLabel"),
+        annotation: t("conversation:annotation.commentLabel"),
+        separator: t("conversation:annotation.commentSeparator"),
+      }),
       false,
     );
     if (errorMessage) throw new Error(errorMessage);
   };
 
-  // Refresh the selected Agent before leaving the current page, then open a
-  // fresh chat. Background streams keep persisting to their original sessions.
+  // Prepare every piece of first-paint Agent data before changing the visible
+  // selection. Background streams keep persisting to their original sessions.
   const refreshCurrentAgentAndStartNewChat = async (id: string) => {
-    setConnections(loadConnections());
-    let capabilities = newChatCapabilitiesCacheRef.current.get(id);
-    if (!capabilities) {
-      capabilities = await probeNewChatCapabilities(id);
-      newChatCapabilitiesCacheRef.current.set(id, capabilities);
-    }
+    const request = agentSelectionPreparationRequestRef.current + 1;
+    agentSelectionPreparationRequestRef.current = request;
+    const nextConnections = loadConnections();
+    const cachedCapabilities = newChatCapabilitiesCacheRef.current.get(id);
+    const evaluationTarget = automaticEvaluationTargetForSelection(
+      nextConnections,
+      id,
+    );
+    const [capabilities, hydratedSessions, nextAgentInfo, evaluationStatuses] =
+      await Promise.all([
+        cachedCapabilities
+          ? Promise.resolve(cachedCapabilities)
+          : probeNewChatCapabilities(id),
+        loadHydratedSessions(id, userId),
+        getAgentInfo(id).catch(() => null),
+        evaluationTarget
+          ? getAutomaticEvaluationStatuses({
+              runtimeId: evaluationTarget.runtimeId,
+              region: evaluationTarget.region,
+              appName: evaluationTarget.appName,
+              userId,
+            }).catch(() => undefined)
+          : Promise.resolve(undefined),
+      ]);
+    if (agentSelectionPreparationRequestRef.current !== request) return;
+
+    const selectionEffectsWillRerun =
+      id !== appName ||
+      myAgents ||
+      agentDetailTarget !== null ||
+      sandboxSession !== null;
+    preparedAgentSelectionRef.current = selectionEffectsWillRerun
+      ? {
+          agentId: id,
+          userId,
+          automaticEvaluationStatuses: evaluationStatuses,
+        }
+      : null;
+    sessionRefreshRequestRef.current += 1;
+    newChatCapabilitiesCacheRef.current.set(id, capabilities);
+    setConnections(nextConnections);
     setNewChatCapabilities(capabilities);
-    setAgentInfoRefreshKey((key) => key + 1);
+    commitHydratedSessions(id, hydratedSessions);
+    agentInfoSelectionRef.current = id;
+    setAgentInfo(nextAgentInfo);
+    setCapabilitiesLoading(false);
+    setEvaluatingSids(new Set(
+      evaluationStatuses?.items
+        .filter((status) => status.state === "running")
+        .map((status) => status.sessionId) ?? [],
+    ));
+    startNewChat();
     setAppName(id);
-    setAgentDetailTarget(null);
+    exitAgentDetailContext();
     setFocusedDeploymentTaskId("");
     setFocusedWorkspaceAgentId("");
-    setMyAgents(false);
-    setManageAgents(false);
     setCreateView(null);
     setSkillCenter(false);
     setAddAgent(false);
     setAddMenu(false);
     setSearchView(false);
-    startNewChat();
+    setIntelligentDeployment(null);
+    setWorkspaceView(false);
+    setEnvironmentView(false);
+  };
+
+  const openIntelligentDeploymentChat = async (agentId: string) => {
+    await refreshCurrentAgentAndStartNewChat(agentId);
   };
 
   const selectAgent = async (id: string) => {
     await refreshCurrentAgentAndStartNewChat(id);
   };
 
-  const openAgentCreateFromMyAgents = (region: string) => {
-    if (!canCreateAgents) {
-      setError("当前账号没有添加 Agent 的权限。");
+  const openAgentCreateFromMyAgents = (
+    region: string,
+    agentCategory: "general" | "mpa" = "general",
+  ) => {
+    if (!canCreateRuntimeAgents) {
+      setError(appText("errors.noCreateAgentPermission"));
       return;
     }
     setMyAgents(false);
     setManageAgents(false);
     setNewRuntimeRegion(region);
     setImportedDraft(null);
-    setCreateView(null);
-    setAddMenu(true);
+    setRuntimeUpdateTarget(null);
+    if (agentCategory === "mpa") {
+      setAddMenu(false);
+      setAddMenuSurface("entry");
+      setCustomCreateMode("custom");
+      setCustomCreationSurface("vulcan");
+      setEditingDraftId(`draft-${Date.now().toString(36)}`);
+      editingDraftBaselineRef.current = null;
+      setCreateView("custom");
+    } else {
+      setEditingDraftId("");
+      editingDraftBaselineRef.current = null;
+      setCreateView(null);
+      setAddMenuSurface("entry");
+      setAddMenu(true);
+    }
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId("");
     setError("");
   };
 
@@ -4982,7 +6612,7 @@ export default function App() {
     agent: MyAgentCardData,
     source: AgentConnectSource,
   ): Promise<string> => {
-    if (!agent.runtime) throw new Error("缺少 Runtime 信息，无法连接智能体。");
+    if (!agent.runtime) throw new Error(appText("errors.runtimeMissingForConnection"));
     const operation = beginAgentConnect({
       targetId: String(agent.runtime.runtimeId),
       agentKind: "runtime",
@@ -4994,6 +6624,10 @@ export default function App() {
         agent.name,
         agent.runtime.region,
         agent.runtime.currentVersion,
+        {
+          agentCategory: agent.agentCategory ?? agent.runtime.agentCategory,
+          mpaInstanceId: agent.runtime.mpaInstanceId,
+        },
       );
       operation.succeed({
         runtimeRegion: agent.runtime.region,
@@ -5008,15 +6642,24 @@ export default function App() {
 
   const connectMyAgent = async (
     agent: MyAgentCardData,
-    options: { rethrow?: boolean; source?: AgentConnectSource } = {},
+    options: {
+      rethrow?: boolean;
+      source?: AgentConnectSource;
+      onConnected?: (agentId: string) => void;
+    } = {},
   ) => {
     if (!agent.runtime) return;
+    // Task reads do not depend on the Runtime's chat/session protocol.
+    setSelectedCronRuntime({
+      runtimeId: agent.runtime.runtimeId, name: agent.name, region: agent.runtime.region,
+    });
     try {
       const agentId = await connectRuntimeForUser(
         agent,
         options.source ?? "my_agents",
       );
       await refreshCurrentAgentAndStartNewChat(agentId);
+      options.onConnected?.(agentId);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       setError(message);
@@ -5026,25 +6669,101 @@ export default function App() {
 
   const openMyAgentDetails = (agent: MyAgentCardData) => {
     if (!agent.runtime) return;
+    pushStudioPage({ page: "agent-detail", returnTo: "agents" });
     setAgentDetailTarget(agent);
     setFocusedDeploymentTaskId("");
     setFocusedWorkspaceAgentId("");
-    setMyAgents(false);
+    setMyAgents(true);
     setManageAgents(true);
+    setError("");
+  };
+
+  const editMpaProfile = (target: MpaProfileEditTarget) => {
+    if (!canManageAgents && !canCreateRuntimeAgents) {
+      setError(appText("errors.noManageAgentPermission"));
+      return;
+    }
+    exitAgentDetailContext();
+    setImportedDraft(target.draft);
+    setCustomCreateMode("custom");
+    setCustomCreationSurface("vulcan");
+    setEditingDraftId(`mpa-profile-${target.runtimeId}`);
+    editingDraftBaselineRef.current = null;
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId("");
+    setRuntimeUpdateTarget({
+      runtimeId: target.runtimeId,
+      agentCategory: "mpa",
+      mpaInstanceId: target.mpaInstanceId,
+      name: target.name,
+      region: target.region,
+      appName: target.appName,
+      currentVersion: target.currentVersion,
+      etag: target.runtimeRevision,
+      editMode: "regenerate",
+      mpaProfileOnly: true,
+      configuredMcpEnvKeys: configuredMcpEnvKeys(target.draft),
+      configuredRuntimeEnvKeys: [],
+    });
+    setCreateView("custom");
+    setError("");
+  };
+
+  const closeAgentDetailPage = () => {
+    exitAgentDetailContext();
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId("");
+    setMyAgents(true);
+    setError("");
+  };
+
+  const closeSandboxAgentDetailPage = () => {
+    popStudioPage("sandbox-agent-detail");
+    setSandboxAgentDetailTarget(null);
+    setSandboxAgentWorkspace(null);
+    setMyAgents(true);
+    setError("");
+  };
+
+  const closeSystemInfoPage = () => {
+    popStudioPage("system-info");
     setError("");
   };
 
   const openSandboxAgentCreate = (
     kind: "codex" | SandboxAgentKind,
   ) => {
-    if (!canCreateAgents) {
-      setError("当前账号没有创建智能体的权限。");
+    if (!canCreatePersonalAgents) {
+      setError(appText("errors.noCreateAgentPermission"));
       return;
     }
     openSandboxLaunch(kind, true);
   };
 
   const openMyAgentsPage = () => {
+    setPlatformFeedbackOrigin(null);
+    if (sandboxSession) exitSandboxSession();
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    setAgentDetailTarget(null);
+    setSandboxAgentDetailTarget(null);
+    setSandboxAgentWorkspace(null);
+    setFocusedDeploymentTaskId("");
+    setFocusedWorkspaceAgentId("");
+    setMyAgents(true);
+    setWorkspaceView(false);
+    setEnvironmentView(false);
+    setPageStack([]);
+    setApplicationsView(null);
+    setCronJobsView(false);
+    setError("");
+  };
+
+  const openWorkspacePage = () => {
     setPlatformFeedbackOrigin(null);
     if (sandboxSession) exitSandboxSession();
     viewSidRef.current = "";
@@ -5060,9 +6779,12 @@ export default function App() {
     setSandboxAgentWorkspace(null);
     setFocusedDeploymentTaskId("");
     setFocusedWorkspaceAgentId("");
-    setMyAgents(true);
-    setSystemInfo(false);
+    setMyAgents(false);
+    setEnvironmentView(false);
+    setWorkspaceView(true);
+    setPageStack([]);
     setApplicationsView(null);
+    setCronJobsView(false);
     setError("");
   };
 
@@ -5081,10 +6803,63 @@ export default function App() {
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
     setMyAgents(false);
-    setSystemInfo(false);
+    setWorkspaceView(false);
+    setEnvironmentView(false);
+    setPageStack([]);
+    setCronJobsView(false);
     setApplicationsView("catalog");
     setError("");
   };
+
+  const openCronJobsPage = () => {
+    setPlatformFeedbackOrigin(null);
+    if (sandboxSession) exitSandboxSession();
+    viewSidRef.current = "";
+    setSessionId("");
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    setAgentDetailTarget(null);
+    setSandboxAgentDetailTarget(null);
+    setSandboxAgentWorkspace(null);
+    setMyAgents(false);
+    setWorkspaceView(false);
+    setEnvironmentView(false);
+    setPageStack([]);
+    setApplicationsView(null);
+    setCronJobsView(true);
+    setError("");
+  };
+
+  const openStandalonePage = (page: "developer-resources" | "review-center") => {
+    if (page === "review-center" && access.role !== "admin" && access.role !== "super_admin") return;
+    setPlatformFeedbackOrigin(null);
+    if (sandboxSession) exitSandboxSession();
+    viewSidRef.current = "";
+    setSessionId("");
+    setCreateView(null);
+    setSkillCenter(false);
+    setAddAgent(false);
+    setAddMenu(false);
+    setSearchView(false);
+    setManageAgents(false);
+    setAgentDetailTarget(null);
+    setSandboxAgentDetailTarget(null);
+    setSandboxAgentWorkspace(null);
+    setMyAgents(false);
+    setWorkspaceView(false);
+    setEnvironmentView(false);
+    setApplicationsView(null);
+    setCronJobsView(false);
+    setPageStack([{ page, returnTo: "new-chat" }]);
+    setError("");
+  };
+
+  const openDeveloperResourcesPage = () => openStandalonePage("developer-resources");
+  const openReviewCenterPage = () => openStandalonePage("review-center");
 
   const talkToWorkspaceAgent = async (agent: AgentEntry) => {
     setFeedbackCaseReturnAgentId("");
@@ -5101,6 +6876,10 @@ export default function App() {
           agent.label,
           agent.region ?? defaultCloudRegion(cloudProvider),
           agent.currentVersion,
+          {
+            agentCategory: agent.agentCategory,
+            mpaInstanceId: agent.mpaInstanceId,
+          },
         );
         operation.succeed({
           runtimeRegion: agent.region,
@@ -5129,30 +6908,81 @@ export default function App() {
         remote: true,
         runtimeApp: detailConnection?.apps[0],
         runtimeId: agentDetailTarget.runtime.runtimeId,
+        mpaInstanceId: agentDetailTarget.runtime.mpaInstanceId,
         region: agentDetailTarget.runtime.region,
         currentVersion: agentDetailTarget.runtime.currentVersion,
+        agentCategory: agentDetailTarget.agentCategory ?? agentDetailTarget.runtime.agentCategory,
         canDelete: agentDetailTarget.runtime.canDelete,
       }
     : null;
 
-  const sidebarActivePage: SidebarPage = platformFeedbackOrigin !== null
-    ? "feedback"
-    : skillCenter
-      ? "library"
-      : systemInfo
-        ? null
-        : applicationsView
-          ? "applications"
-          : searchView
-            ? "search"
-            : myAgents || manageAgents || sandboxAgentDetailTarget || sandboxAgentWorkspace
-              ? "agents"
-              : sessionId || createView || skillCenter || addAgent || addMenu
-                ? null
-                : "new-chat";
+  const currentStudioPage: StudioPageId = userManagementView ? "users" : activeStackPage === "system-info"
+    ? activeStackEntry?.returnTo ?? "new-chat"
+    : developerResourcesView
+      ? "developer-resources"
+    : reviewCenterView
+      ? "review-center"
+    : activeStackPage === "agent-detail" || activeStackPage === "sandbox-agent-detail"
+      ? activeStackPage
+      : platformFeedbackOrigin !== null
+        ? "feedback"
+        : environmentView
+          ? "environments"
+        : workspaceView || visibleCreateView === "workspace"
+          ? "workspaces"
+        : skillCenter
+          ? "library"
+          : cronJobsView
+            ? "cronjobs"
+            : applicationsView
+              ? "applications"
+              : searchView
+                ? "search"
+                : sandboxAgentWorkspace
+                  ? "sandbox-agent-workspace"
+                  : myAgents || manageAgents
+                    ? "agents"
+                    : sandboxSession
+                      ? "sandbox"
+                      : sessionId
+                        ? "conversation"
+                        : createView || addAgent || addMenu
+                          ? "create"
+                          : "new-chat";
+
+  const sidebarActivePage: SidebarPage = userManagementView ? "users" : systemInfo
+    ? null
+    : reviewCenterView
+      ? "review-center"
+    : developerResourcesView
+      ? "developer-resources"
+    : platformFeedbackOrigin !== null
+      ? "feedback"
+      : environmentView
+        ? "environments"
+      : workspaceView || visibleCreateView === "workspace"
+        ? "workspaces"
+      : skillCenter
+        ? "library"
+        : cronJobsView
+          ? "cronjobs"
+          : applicationsView
+            ? "applications"
+            : searchView
+              ? "search"
+              : myAgents || manageAgents || sandboxAgentDetailTarget || sandboxAgentWorkspace
+                ? "agents"
+                : sessionId || sandboxSession || createView || skillCenter || addAgent || addMenu
+                  ? null
+                  : "new-chat";
 
   return (
     <div className="layout">
+      <DevelopmentTaskNotice key={userId} ownerId={userId} sessionId={sandboxSession?.id ?? ""}
+        hideNotices={visibleCreateView === "intelligent"}
+        refreshKey={developmentTaskRefreshKey}
+        onUpdate={setDevelopmentTaskSnapshot}
+        onOpen={openIntelligentDevelopmentTask} />
       <Sidebar
         branding={siteBranding}
         cloudProvider={cloudProvider}
@@ -5163,7 +6993,7 @@ export default function App() {
         activePage={sidebarActivePage}
         streamingSids={streamingSids}
         evaluatingSids={evaluatingSids}
-        sandboxHistory={sandboxSession
+        sandboxHistory={sandboxSession && !sandboxSession.intelligentDevelopment
           ? {
               threads: sandboxCommands.threads,
               currentThreadId: sandboxSession.threadId,
@@ -5176,10 +7006,10 @@ export default function App() {
               onSelect: (threadId) => void sandboxCommands.resumeThread(threadId),
               onLoadMore: () => void sandboxCommands.loadMoreThreads(),
               onDelete: setSandboxThreadDeleteTarget,
-            }
+          }
           : undefined}
-        onNewChat={openNewChat}
-        onSearch={() => {
+        onNewChat={() => requestIntelligentNavigation(openNewChat)}
+        onSearch={() => requestIntelligentNavigation(() => {
           setPlatformFeedbackOrigin(null);
           if (sandboxSession) exitSandboxSession();
           setCreateView(null);
@@ -5191,14 +7021,17 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
-          setSystemInfo(false);
+          setWorkspaceView(false);
+          setEnvironmentView(false);
+          setPageStack([]);
           setApplicationsView(null);
+          setCronJobsView(false);
           setSearchView(true);
           setError("");
-        }}
-        onQuickCreate={() => {
-          if (!canCreateAgents) {
-            setError("当前账号没有添加 Agent 的权限。");
+        })}
+        onQuickCreate={() => requestIntelligentNavigation(() => {
+          if (!canCreateRuntimeAgents) {
+            setError(appText("errors.noCreateAgentPermission"));
             return;
           }
           if (sandboxSession) exitSandboxSession();
@@ -5213,15 +7046,19 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
-          setSystemInfo(false);
+          setWorkspaceView(false);
+          setEnvironmentView(false);
+          setPageStack([]);
           setApplicationsView(null);
+          setCronJobsView(false);
           setCreateView(null);
           setImportedDraft(null);
           setNewRuntimeRegion(defaultCloudRegion(cloudProvider));
+          setAddMenuSurface("entry");
           setAddMenu(true);
           setError("");
-        }}
-        onLibrary={() => {
+        })}
+        onLibrary={() => requestIntelligentNavigation(() => {
           if (sandboxSession) exitSandboxSession();
           setCreateView(null);
           setAddAgent(false);
@@ -5232,17 +7069,20 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
-          setSystemInfo(false);
+          setWorkspaceView(false);
+          setEnvironmentView(false);
+          setPageStack([]);
           setApplicationsView(null);
+          setCronJobsView(false);
           setSkillCenterLaunch(null);
           setLibraryTab("skills");
-          setLibraryPageTitle("技能库");
+          setLibraryPageTitleState({ kind: "key", key: "titles.skillLibrary" });
           setSkillCenter(true);
           setError("");
-        }}
-        onAddAgent={() => {
-          if (!canCreateAgents) {
-            setError("当前账号没有添加 Agent 的权限。");
+        })}
+        onAddAgent={() => requestIntelligentNavigation(() => {
+          if (!canCreateRuntimeAgents) {
+            setError(appText("errors.noCreateAgentPermission"));
             return;
           }
           if (sandboxSession) exitSandboxSession();
@@ -5255,37 +7095,40 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
-          setSystemInfo(false);
+          setWorkspaceView(false);
+          setEnvironmentView(false);
+          setPageStack([]);
           setApplicationsView(null);
+          setCronJobsView(false);
           setSessionId("");
           setAddMenu(false);
           setAddAgent(true);
           setError("");
-        }}
-        onMyAgents={openMyAgentsPage}
-        onApplications={openApplicationsPage}
-        onSystemInfo={() => {
-          setPlatformFeedbackOrigin(null);
+        })}
+        onMyAgents={() => requestIntelligentNavigation(openMyAgentsPage)}
+        onWorkspace={() => requestIntelligentNavigation(openWorkspacePage)}
+        onApplications={() => requestIntelligentNavigation(openApplicationsPage)}
+        onCronJobs={() => requestIntelligentNavigation(openCronJobsPage)}
+        onAgentKitCli={() => setAgentKitCliOpen(true)}
+        onDeveloperResources={() => requestIntelligentNavigation(openDeveloperResourcesPage)}
+        onUserManagement={() => requestIntelligentNavigation(() => {
+          if (!access.capabilities.manageUsers) return;
           if (sandboxSession) exitSandboxSession();
-          viewSidRef.current = "";
-          setSessionId("");
           setCreateView(null);
-          setSkillCenter(false);
-          setAddAgent(false);
-          setAddMenu(false);
-          setSearchView(false);
-          setManageAgents(false);
-          setAgentDetailTarget(null);
-          setSandboxAgentDetailTarget(null);
-          setSandboxAgentWorkspace(null);
-          setMyAgents(false);
-          setApplicationsView(null);
-          setSystemInfo(true);
+          pushStudioPage({ page: "users", returnTo: currentStudioPage });
           setError("");
-        }}
+        })}
+        onReviewCenter={() => requestIntelligentNavigation(openReviewCenterPage)}
+        onSystemInfo={() => requestIntelligentNavigation(() => {
+          pushStudioPage({
+            page: "system-info",
+            returnTo: currentStudioPage,
+          });
+          setError("");
+        })}
         onIssueFeedback={() => {
           if (platformFeedbackOrigin !== null) return;
-          setSystemInfo(false);
+          setPageStack([]);
           setPlatformFeedbackOrigin(
             sidebarActivePage ??
               (sandboxSession
@@ -5296,7 +7139,7 @@ export default function App() {
           );
           setError("");
         }}
-        onPickSession={(id) => {
+        onPickSession={(id) => requestIntelligentNavigation(() => {
           setPlatformFeedbackOrigin(null);
           setCreateView(null);
           setSkillCenter(false);
@@ -5308,11 +7151,14 @@ export default function App() {
           setSandboxAgentDetailTarget(null);
           setSandboxAgentWorkspace(null);
           setMyAgents(false);
-          setSystemInfo(false);
+          setWorkspaceView(false);
+          setEnvironmentView(false);
+          setPageStack([]);
           setApplicationsView(null);
+          setCronJobsView(false);
           setError("");
           pickSession(id);
-        }}
+        })}
         onDeleteSession={removeSession}
         userInfo={userInfo}
         onLogout={onLogout}
@@ -5323,18 +7169,44 @@ export default function App() {
           <div
             className={`composer-slot${sandboxSession ? " sandbox-composer-wrap" : ""}`}
           >
+            {!sandboxSession && currentRuntime && sessionId && !isMpaRuntimeApp(appName) && !isMpaA2aRuntimeApp(appName) && (
+              <div className="runtime-artifact-entry" data-share-image-exclude="true">
+                <RuntimeArtifacts key={`${userId}:${currentRuntime.runtimeId}:${currentRuntime.region}:${currentRuntimeAppName || appName}:${sessionId}`} scope={{
+                  runtimeId: currentRuntime.runtimeId,
+                  region: currentRuntime.region,
+                  appName: currentRuntimeAppName || appName,
+                  sessionId,
+                }} busy={activeConversationBusy} />
+              </div>
+            )}
             {sandboxSession && (
               <SandboxSessionWarning
                 agentName={
-                  sandboxSession.toolName === "codex"
-                    ? "Codex"
-                    : sandboxSession.toolName === "deepseek-harness"
-                      ? "DeepSeek Harness"
-                    : sandboxSession.toolName === "openclaw"
-                      ? "OpenClaw"
-                      : "Hermes"
+                  sandboxSession.intelligentDevelopment
+                    ? t("sandbox.intelligentDevelopment")
+                    : sandboxSession.toolName === "codex"
+                      ? "Codex"
+                      : sandboxSession.toolName === "deepseek-harness"
+                        ? "DeepSeek Harness"
+                        : sandboxSession.toolName === "openclaw"
+                          ? "OpenClaw"
+                          : "Hermes"
                 }
-                onExit={startNewChat}
+                expireAt={
+                  sandboxSession.intelligentDevelopment
+                    ? sandboxSession.expireAt
+                    : undefined
+                }
+                exitLabel={
+                  sandboxSession.intelligentDevelopment
+                    ? t("sandbox.exitDevelopment")
+                    : undefined
+                }
+                onExit={() => requestIntelligentNavigation(
+                  sandboxSession.intelligentDevelopment
+                    ? returnToIntelligentCreate
+                    : startNewChat
+                )}
               />
             )}
             {sandboxSession ? (
@@ -5343,8 +7215,13 @@ export default function App() {
                 value={input}
                 onChange={setInput}
                 onSubmit={(value) => void submitSandboxInput(value)}
-                onStop={sandboxBusy ? stopSandboxGeneration : undefined}
+                onStop={sandboxBusy || development.submitting ? stopSandboxGeneration : undefined}
                 disabled={false}
+                allowSteer={sandboxSession.intelligentDevelopment}
+                sending={sandboxSession.intelligentDevelopment && development.submitting}
+                stopping={sandboxSession.intelligentDevelopment && (development.stopPending || development.run?.state === "stopping")}
+                errorText={sandboxSession.intelligentDevelopment ? development.error : undefined}
+                onResume={sandboxSession.intelligentDevelopment && development.run?.state === "waiting_user" ? () => void development.resume() : undefined}
                 busy={sandboxBusy || sandboxCommands.commandBusy}
                 attachments={attachments}
                 onAddFiles={addSandboxFiles}
@@ -5379,6 +7256,7 @@ export default function App() {
                 selectedSkills={sandboxCommands.selectedSkills}
                 onRequestSkills={() => void sandboxCommands.loadSkills()}
                 onSelectedSkillsChange={sandboxCommands.setSelectedSkills}
+                textOnly={sandboxSession.intelligentDevelopment}
               />
             ) : (
               <Composer
@@ -5412,7 +7290,7 @@ export default function App() {
                   } else {
                     const target = newChatSkillTarget;
                     if (!target) {
-                      setError("请先选择需要优化的 Skill。");
+                      setError(appText("errors.selectSkillToOptimize"));
                       return;
                     }
                     launch = {
@@ -5436,10 +7314,14 @@ export default function App() {
                   setError("");
                   setSkillCenterLaunch(launch);
                   setLibraryTab("skills");
-                  setLibraryPageTitle(
+                  setLibraryPageTitleState(
                     launch.operation === "create"
-                      ? "创建技能"
-                      : `优化 ${launch.source?.name || "技能"}`,
+                      ? { kind: "key", key: "titles.createSkill" }
+                      : {
+                          kind: "key",
+                          key: "titles.optimizeSkill",
+                          name: launch.source?.name || t("titles.skill"),
+                        },
                   );
                   setSkillCenter(true);
                   return;
@@ -5453,10 +7335,16 @@ export default function App() {
                 const selectedInvocation = invocation;
                 setAttachments([]);
                 setInvocation(emptyInvocation());
-                send(text, atts, selectedInvocation);
+                send(
+                  text,
+                  atts,
+                  selectedInvocation,
+                  "composer",
+                  undefined,
+                );
                 releaseAttachmentPreviews(atts);
               }}
-              onStop={busy ? stopCurrentGeneration : undefined}
+              onStop={busy && !agentInfo?.turnLifecycleControl ? stopCurrentGeneration : undefined}
               disabled={
                 sandboxSession
                   ? false
@@ -5481,7 +7369,26 @@ export default function App() {
               agents={sandboxSession ? [] : availableAgents}
               invocation={sandboxSession ? emptyInvocation() : invocation}
               capabilitiesLoading={!sandboxSession && capabilitiesLoading}
-              modelName={agentInfo?.model?.trim() || activeTokenUsage.modelName}
+              modelName={
+                modelNameFromRuntime(agentInfo?.model) || activeTokenUsage.modelName
+              }
+              selectableModels={agentInfo?.selectableModels}
+              selectedModel={
+                agentInfo?.selectableModels?.includes(
+                    selectedModelBySession[sessionId || `new:${appName}`] || "",
+                  )
+                  ? selectedModelBySession[sessionId || `new:${appName}`]
+                  : agentInfo?.model || agentInfo?.selectableModels?.[0] || ""
+              }
+              onSelectedModelChange={(model) => {
+                setSelectedModelBySession((current) => ({
+                  ...current,
+                  [sessionId || `new:${appName}`]: model,
+                }));
+              }}
+              turnControl={activeTurnIsControllable ? activeTurnControl : null}
+              turnControlBusy={turnControlBusy}
+              onTurnControl={(action) => void applyTurnControl(action)}
               tokenUsage={activeTokenUsage}
               systemTokenEstimate={systemTokenEstimate}
               allowAttachments={!sandboxSession}
@@ -5506,34 +7413,62 @@ export default function App() {
                 newChatMode === "agent"
               }
               agentPickerDisabled={!userId || conversationBusy}
-              selectedRuntimeId={currentRuntime?.runtimeId}
+              selectedRuntimeId={studioToolRuntime?.runtimeId}
+              agentsSource={agentsSource}
+              localApps={apps}
               runtimeScope={access.capabilities.runtimeScope}
+              onSelectLocalApp={refreshCurrentAgentAndStartNewChat}
               onSelectRuntime={async (runtime) => {
-                await connectMyAgent(
-                  {
-                    id: runtime.runtimeId,
-                    name: runtime.name,
-                    description: runtime.description?.trim() || "暂无描述",
-                    createdAt: runtime.createdAt ?? "",
-                    specificationLabel: "地域",
-                    specification: formatCloudRegion(
-                      runtime.region,
-                      cloudProvider,
-                    ),
-                    isMine: runtime.isMine,
-                    runtime: {
-                      runtimeId: runtime.runtimeId,
-                      region: runtime.region,
-                      currentVersion: runtime.currentVersion,
-                      canDelete: runtime.canDelete,
+                try {
+                  await connectMyAgent(
+                    {
+                      id: runtime.runtimeId,
+                      name: runtime.name,
+                      description: runtime.description?.trim() || t("common.noDescription"),
+                      createdAt: runtime.createdAt ?? "",
+                      specificationLabel: t("common.region"),
+                      specification: formatCloudRegion(
+                        runtime.region,
+                        cloudProvider,
+                      ),
+                      isMine: runtime.isMine,
+                      agentCategory: runtime.agentCategory,
+                      runtime: {
+                        runtimeId: runtime.runtimeId,
+                        mpaInstanceId: runtime.mpaInstanceId,
+                        region: runtime.region,
+                        currentVersion: runtime.currentVersion,
+                        agentCategory: runtime.agentCategory,
+                        canDelete: runtime.canDelete,
+                      },
                     },
-                  },
-                  { rethrow: true, source: "new_chat_picker" },
-                );
+                    {
+                      rethrow: true,
+                      source: "new_chat_picker",
+                      onConnected: (agentId) => {
+                        setDraftStudioRuntime({
+                          appName: agentId,
+                          runtimeId: runtime.runtimeId,
+                          mpaInstanceId: runtime.mpaInstanceId,
+                          name: runtime.name,
+                          region: runtime.region,
+                        });
+                      },
+                    },
+                  );
+                } catch (cause) {
+                  setDraftStudioRuntime((current) =>
+                    current?.runtimeId === runtime.runtimeId ? null : current,
+                  );
+                  throw cause;
+                }
               }}
               onSelectSandboxSession={(session) =>
                 openSandboxAgent(session, "new_chat_picker")
               }
+              runtimeLogTarget={currentRuntime
+                ? runtimeLogTargetsBySession[`${appName}\n${sessionId}`] ?? currentRuntime
+                : undefined}
               showModeSelector={false}
               onWorkspaceModeChange={(mode) => {
                 setNewChatWorkspaceMode(mode);
@@ -5547,9 +7482,12 @@ export default function App() {
                 newChatCapabilitiesReady &&
                 newChatCapabilities.deepseekHarnessEnabled
               }
-              harnessEnabled={newChatCapabilitiesReady && newChatCapabilities.harnessEnabled}
+              harnessEnabled={
+                studioToolCapabilities?.enabled === true &&
+                studioToolCapabilities.supported === true
+              }
               builtinTools={
-                newChatCapabilitiesReady ? newChatCapabilities.builtinTools : []
+                studioToolCapabilities?.tools.map((tool) => tool.id) ?? []
               }
               onModeChange={(mode) => {
                 if (mode === "temporary" && !newChatCapabilities.temporaryEnabled) return;
@@ -5578,9 +7516,32 @@ export default function App() {
             )}
           </div>
         );
+        const preparation = intelligentPreparationStage ? (
+          <div className="development-preparation">
+            <div className="transcript">
+              <div className="turn turn--user"><div className="bubble"><Markdown text={intelligentPreparationMessage} /></div></div>
+              <div className="turn turn--assistant">
+                <div className="development-preparation__status">
+                  <SandboxSpinnerIcon className="icon spin development-preparation__spinner" />
+                  <div className="development-preparation__message" role="status" aria-live="polite" aria-atomic="true">
+                    <span aria-hidden={intelligentPreparationStage !== "preparing"}>{t("adk:developmentRuns.preparingEnvironment")}</span>
+                    <span aria-hidden={intelligentPreparationStage !== "starting"}>{t("adk:developmentRuns.connectingEnvironment")}</span>
+                  </div>
+                  <button type="button" className="development-preparation__cancel" onClick={cancelIntelligentPreparation}>{t("sandbox:common.cancel")}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null;
         return (
           <section className="main-shell">
-            <main className={`main${sandboxSession ? " is-sandbox-session" : ""}`}>
+            <main
+              className={`main${sandboxSession ? " is-sandbox-session" : ""}${
+                sandboxSession?.intelligentDevelopment
+                  ? " is-intelligent-development"
+                  : ""
+              }`}
+            >
             {error && <div className="error" role="alert">{error}</div>}
             {draftStorageError && (
               <div className="error" role="alert">
@@ -5589,7 +7550,7 @@ export default function App() {
             )}
             {loadingSession && (
               <div className="session-loading">
-                <Loader2 className="icon spin" /> 加载会话…
+                <Loader2 className="icon spin" /> {t("loading.session")}
               </div>
             )}
             {feedbackCaseReturnAgentId &&
@@ -5602,24 +7563,54 @@ export default function App() {
                 <div className="case-return-bar">
                   <button type="button" onClick={returnToFeedbackCases}>
                     <ArrowLeft aria-hidden />
-                    <span>返回评测案例</span>
+                    <span>{t("actions.backToEvaluationCase")}</span>
                   </button>
                 </div>
               )}
 
-            {platformFeedbackOrigin !== null ? (
-              <PlatformFeedback
-                initialModule={issueFeedbackModuleForPage(platformFeedbackOrigin)}
-                onSubmit={submitPlatformIssueFeedback}
+            {workspacePreviewOpened && canCreateRuntimeAgents && (
+              <WorkspaceCreate
+                key={`${userId}-${cloudProvider}`}
+                active={visibleCreateView === "workspace"}
+                createRequest={workspaceCreateRequest}
+                onReturnToProjects={() => { setAddMenu(false); setWorkspaceView(false); setCreateView("workspace"); }}
+                onBack={(section = "workspaces") => {
+                  setCreateView(null);
+                  setWorkspaceLandingSection(section);
+                  setWorkspaceView(true);
+                }}
               />
-            ) : systemInfo ? (
+            )}
+            {userManagementView && access.capabilities.manageUsers ? (
+              <UserManagement onBack={() => popStudioPage("users")} />
+            ) : visibleCreateView === "workspace" ? null : systemInfo ? (
               <SystemInfo
                 version={version}
                 localMode={agentsSource === "local"}
                 role={access?.role ?? "user"}
                 provider={cloudProvider}
                 region={studioRegion || defaultCloudRegion(cloudProvider)}
+                onBack={closeSystemInfoPage}
               />
+            ) : developerResourcesView ? (
+              <DeveloperResources cloudProvider={cloudProvider} />
+            ) : reviewCenterView ? (
+              <ReviewCenter role={access.role} cloudProvider={cloudProvider} onAgentChanged={() => invalidateRuntimeAgentCache()} />
+            ) : platformFeedbackOrigin !== null ? (
+              <PlatformFeedback
+                initialModule={issueFeedbackModuleForPage(platformFeedbackOrigin)}
+                onSubmit={submitPlatformIssueFeedback}
+              />
+            ) : environmentView ? (
+              <EnvironmentCenter cloudProvider={cloudProvider} />
+            ) : workspaceView ? (
+              <WorkspaceCenter cloudProvider={cloudProvider} initialSection={workspaceLandingSection} onProjects={canCreateRuntimeAgents ? () => {
+                setWorkspaceView(false);
+                setWorkspacePreviewOpened(true);
+                setCreateView("workspace");
+              } : undefined} />
+            ) : cronJobsView ? (
+              <CronJobs cloudProvider={cloudProvider} selectedRuntime={selectedCronRuntime ?? currentRuntime ?? selectedDraftStudioRuntime} />
             ) : applicationsView === "coding-agents" ? (
               <CodingAgentsIntegration
                 onBack={() => setApplicationsView("catalog")}
@@ -5628,13 +7619,35 @@ export default function App() {
               <FeishuBotIntegration
                 onBack={() => setApplicationsView("catalog")}
               />
+            ) : applicationsView === "mpa-channels" ? (
+              <MpaChannelsAutomation
+                cloudProvider={cloudProvider}
+                role={access.role}
+                runtimeScope={access.capabilities.runtimeScope}
+                onBack={() => setApplicationsView("catalog")}
+              />
+            ) : applicationsView === "website-integration" ? (
+              <WebsiteIntegration
+                onBack={() => setApplicationsView("catalog")}
+              />
+            ) : applicationsView === "gitlab-review" ? (
+              <GitLabIntegration
+                onBack={() => setApplicationsView("catalog")}
+                onOpenSandboxSession={(id) => {
+                  void openCodexSandboxSession(id);
+                }}
+              />
             ) : applicationsView && applicationsView !== "catalog" ? (
               <GitHubIntegration
                 automation={applicationsView}
+                cloudProvider={cloudProvider}
                 onBack={() => setApplicationsView("catalog")}
+                onOpenSandboxSession={(id) => {
+                  void openCodexSandboxSession(id);
+                }}
               />
             ) : applicationsView === "catalog" ? (
-              <Applications onOpen={setApplicationsView} />
+              <Applications onOpen={setApplicationsView} initialCategory={applicationsCategory} onCategoryChange={setApplicationsCategory} />
             ) : sandboxAgentWorkspace ? (
               <SandboxAgentWorkspace
                 workspace={sandboxAgentWorkspace}
@@ -5643,16 +7656,19 @@ export default function App() {
             ) : sandboxAgentDetailTarget ? (
               <SandboxAgentDetails
                 session={sandboxAgentDetailTarget}
-                onBack={openMyAgentsPage}
+                onBack={closeSandboxAgentDetailPage}
                 onOpen={() =>
                   openSandboxAgent(sandboxAgentDetailTarget, "sandbox_detail")
                 }
                 onDelete={() => deleteSandboxAgent(sandboxAgentDetailTarget)}
               />
-            ) : myAgents ? (
+            ) : myAgents && !showManageAgents ? (
               <MyAgents
                 cloudProvider={cloudProvider}
-                canCreate={canCreateAgents}
+                studioRegion={agentsSource === "local" ? "cn-beijing" : studioRegion}
+                canCreateRuntimeAgents={canCreateRuntimeAgents}
+                canCreatePersonalAgents={canCreatePersonalAgents}
+                canUpdate={canCreateRuntimeAgents || canManageAgents}
                 runtimeScope={access.capabilities.runtimeScope}
                 onCreateAgent={openAgentCreateFromMyAgents}
                 onOpenCodexProjectUpload={() => setSandboxProjectUploadOpen(true)}
@@ -5678,6 +7694,11 @@ export default function App() {
                   setMyAgents(false);
                   setImportedDraft(item.draft);
                   setCustomCreateMode("custom");
+                  setCustomCreationSurface(
+                    workspaceAgentCreationMode(item) === "quick"
+                      ? "vulcan"
+                      : "traditional",
+                  );
                   setEditingDraftId(item.id);
                   editingDraftBaselineRef.current = item;
                   setRuntimeUpdateTarget(item.deploymentTarget ?? null);
@@ -5698,8 +7719,8 @@ export default function App() {
                 agentInfo={agentInfo}
                 agentInfoAgentId={appName}
                 loadingAgentInfo={capabilitiesLoading}
-                canCreate={canCreateAgents}
-                canUpdate={canCreateAgents || canManageAgents}
+                canCreate={canCreateRuntimeAgents}
+                canUpdate={canCreateRuntimeAgents || canManageAgents}
                 canViewUsage={canViewAgentUsage}
                 loadingAgents={agentLibraryLoading}
                 agentsError={agentLibraryError}
@@ -5709,7 +7730,10 @@ export default function App() {
                 focusedAgentSection={focusedWorkspaceAgentSection}
                 focusedCaseKind={focusedWorkspaceCaseKind}
                 feedbackCasePreview={feedbackCasePreview}
+                currentSessionId={sessionId}
+                currentRuntimeId={connectedRuntimeId}
                 detailOnly
+                onBack={closeAgentDetailPage}
                 onRetryAgents={() => void refreshAgentLibrary()}
                 onAgentOrderChange={saveWorkspaceAgentOrder}
                 onDeleteAgents={deleteWorkspaceAgents}
@@ -5719,11 +7743,12 @@ export default function App() {
                 onOpenFeedbackCase={(item) => void openFeedbackCaseInStudio(item)}
                 onFeedbackCasesDeleted={clearDeletedFeedbackCases}
                 onCreateAgent={() => {
-                  if (!canCreateAgents) {
-                    setError("当前账号没有添加 Agent 的权限。");
+                  if (!canCreateRuntimeAgents) {
+                    setError(appText("errors.noCreateAgentPermission"));
                     return;
                   }
-                  setManageAgents(false);
+                  exitAgentDetailContext();
+                  setAddMenuSurface("entry");
                   setAddMenu(true);
                   setCreateView(null);
                   setImportedDraft(null);
@@ -5735,74 +7760,180 @@ export default function App() {
                   setFocusedWorkspaceAgentId("");
                   setError("");
                 }}
-                onUpdateAgent={(nextDraft, capability) => {
-                  if (!canManageAgents && !canCreateAgents) {
-                    setError("当前账号没有管理 Agent 的权限。");
+                onUpdateAgent={async (capability) => {
+                  if (!canManageAgents && !canCreateRuntimeAgents) {
+                    setError(appText("errors.noManageAgentPermission"));
                     return;
                   }
                   if (!capability.canUpdate) {
-                    setError(capability.reason || "当前 Runtime 不支持原地更新。");
+                    setError(capability.reason || appText("errors.runtimeUpdateUnsupported"));
+                    return;
+                  }
+                  if (
+                    capability.recoveryStatus !== "complete" &&
+                    capability.recoveryStatus !== "draft-only"
+                  ) {
+                    setError(
+                      capability.reason ||
+                        appText("errors.runtimeDeploymentConfigUnavailable"),
+                    );
                     return;
                   }
                   if (!capability.runtime.runtimeId) {
-                    setError("仅支持更新已部署的云端智能体。");
+                    setError(appText("errors.onlyCloudAgentUpdatable"));
                     return;
                   }
                   if (!capability.runtime.region) {
-                    setError("Runtime 缺少地域信息，无法更新。");
+                    setError(appText("errors.runtimeRegionMissingForUpdate"));
                     return;
                   }
                   if (!capability.agent?.appName) {
-                    setError("Runtime 缺少智能体名称，无法更新。");
+                    setError(appText("errors.runtimeAgentNameMissing"));
                     return;
                   }
+                  const runtimeAgent = capability.agent;
                   const runtimeEnvValues = Object.fromEntries(
                     capability.runtime.envs
                       .filter(({ key }) => !isRuntimeModelSelectionEnv(key))
                       .map(({ key, value }) => [key, value]),
                   );
-                  const draftEnvValues = Object.fromEntries(
-                    Object.entries(nextDraft.deployment?.envValues ?? {}).filter(
-                      ([key]) => !isRuntimeModelSelectionEnv(key),
-                    ),
+                  const runtimeEnv = new Map(
+                    capability.runtime.envs.map(({ key, value }) => [
+                      key,
+                      value.trim(),
+                    ]),
                   );
-                  const hydratedDraft = hydrateRuntimeModelSelection(
-                    {
-                      ...nextDraft,
-                      deployment: {
-                        ...(nextDraft.deployment ?? { feishuEnabled: false }),
-                        network: capability.runtime.network,
-                        envValues: {
-                          ...runtimeEnvValues,
-                          ...draftEnvValues,
+                  const runtimeDraft = runtimeAgentDraftFromCloud(
+                    runtimeAgent,
+                    cloudProvider,
+                    capability.runtime.configuredEnvKeys,
+                  );
+                  const runtimeModel = modelConfigurationFromRuntime(
+                    runtimeAgent.model,
+                  );
+                  const feishuConfigured =
+                    runtimeDraft.deployment?.feishuEnabled === true ||
+                    (runtimeEnv.has("FEISHU_APP_ID") &&
+                      runtimeEnv.has("FEISHU_APP_SECRET"));
+                  const hydratedDraft = hydrateA2aRegistryFromRuntime(
+                    hydrateRuntimeModelSelection(
+                      {
+                        ...runtimeDraft,
+                        modelProvider:
+                          runtimeModel.modelProvider ||
+                          runtimeEnv.get("MODEL_AGENT_PROVIDER") ||
+                          runtimeDraft.modelProvider,
+                        modelApiBase:
+                          runtimeEnv.get("MODEL_AGENT_API_BASE") ||
+                          runtimeDraft.modelApiBase,
+                        deployment: {
+                          ...(runtimeDraft.deployment ?? {
+                            feishuEnabled: false,
+                          }),
+                          feishuEnabled: feishuConfigured,
+                          network: capability.runtime.network,
+                          envValues: runtimeEnvValues,
+                        },
+                        cloudEnvironment: capability.runtime.environment ?? {
+                          environmentId: "",
+                          environmentVersionId: "",
                         },
                       },
-                    },
+                      capability.runtime.envs,
+                    ),
                     capability.runtime.envs,
                   );
-                  setManageAgents(false);
-                  setImportedDraft(hydratedDraft);
+                  const apiKeyId =
+                    hydratedDraft.deployment?.modelApiKeyId?.trim();
+                  let arkModelIds = new Set<string>();
+                  try {
+                    const response = await listModelOptions({ apiKeyId });
+                    arkModelIds = new Set(
+                      response.models.map((model) => model.id.trim()),
+                    );
+                  } catch {
+                    // If the ModelArk catalog is unavailable, no Runtime model
+                    // can be verified as ModelArk; custom is the safe fallback.
+                  }
+                  const classifiedDraft = classifyRuntimeModelSources(
+                    hydratedDraft,
+                    arkModelIds,
+                  );
+                  let editorDraft = classifiedDraft;
+                  if (configuredMcpEnvKeys(classifiedDraft).length > 0) {
+                    try {
+                      const credentials = await getRuntimeMcpCredentials({
+                        runtimeId: capability.runtime.runtimeId,
+                        region: capability.runtime.region,
+                        appName: capability.agent.appName,
+                        etag: capability.etag,
+                      });
+                      editorDraft = hydrateMcpCredentialValues(
+                        classifiedDraft,
+                        credentials,
+                      );
+                    } catch (credentialError) {
+                      setError(
+                        credentialError instanceof Error
+                          ? credentialError.message
+                          : appText("errors.runtimeDeploymentConfigUnavailable"),
+                      );
+                      return;
+                    }
+                  }
+                  exitAgentDetailContext();
+                  setImportedDraft(editorDraft);
                   setCustomCreateMode("custom");
+                  setCustomCreationSurface(
+                    editorDraft.dynamicAgentDelegation === true
+                      ? "vulcan"
+                      : "traditional",
+                  );
                   const nextDraftId = `runtime-${capability.runtime.runtimeId}`;
                   setEditingDraftId(nextDraftId);
-                  editingDraftBaselineRef.current =
-                    savedAgentDrafts.find((item) => item.id === nextDraftId) ?? null;
+                  editingDraftBaselineRef.current = null;
                   setFocusedDeploymentTaskId("");
                   setFocusedWorkspaceAgentId("");
                   setRuntimeUpdateTarget({
                     runtimeId: capability.runtime.runtimeId,
-                    name: capability.runtime.name || capability.agent.name || nextDraft.name,
+                    agentCategory: [
+                      ...(detailAgentEntry ? [detailAgentEntry] : []),
+                      ...orderedWorkspaceAgentEntries,
+                    ].find((entry) =>
+                      entry.runtimeId === capability.runtime.runtimeId &&
+                      entry.region === capability.runtime.region,
+                    )?.agentCategory ?? "general",
+                    mpaInstanceId: capability.runtime.mpaInstanceId,
+                    name:
+                      capability.runtime.name ||
+                      runtimeAgent.name ||
+                      runtimeDraft.name,
                     region: capability.runtime.region,
                     appName: capability.agent.appName,
                     currentVersion: capability.runtime.currentVersion,
+                    etag: capability.etag,
+                    editMode:
+                      capability.editMode === "source-preserving"
+                        ? "source-preserving"
+                        : "regenerate",
+                    mpaProfileOnly: false,
+                    configuredMcpEnvKeys: configuredMcpEnvKeys(editorDraft),
+                    configuredRuntimeEnvKeys:
+                      capability.runtime.configuredEnvKeys,
                   });
                   setCreateView("custom");
                   setError("");
                 }}
+                onEditMpaProfile={editMpaProfile}
                 onEditDraft={(item) => {
-                  setManageAgents(false);
+                  exitAgentDetailContext();
                   setImportedDraft(item.draft);
                   setCustomCreateMode("custom");
+                  setCustomCreationSurface(
+                    workspaceAgentCreationMode(item) === "quick"
+                      ? "vulcan"
+                      : "traditional",
+                  );
                   setEditingDraftId(item.id);
                   editingDraftBaselineRef.current = item;
                   setRuntimeUpdateTarget(item.deploymentTarget ?? null);
@@ -5812,20 +7943,43 @@ export default function App() {
                   setError("");
                 }}
               />
+            ) : showAddMenu && addMenuSurface === "entry" ? (
+              <AgentCreationModePicker
+                onSelectVulcan={() => {
+                  setAddMenu(false);
+                  setImportedDraft(null);
+                  setCustomCreateMode("custom");
+                  setCustomCreationSurface("vulcan");
+                  setRuntimeUpdateTarget(null);
+                  setFocusedDeploymentTaskId("");
+                  setFocusedWorkspaceAgentId("");
+                  setEditingDraftId(`draft-${Date.now().toString(36)}`);
+                  editingDraftBaselineRef.current = null;
+                  setCreateView("custom");
+                }}
+                onSelectDeepseek={() => {
+                  setAddMenu(false);
+                  setCreateView("deepseek");
+                }}
+                onSelectTraditional={() => {
+                  setAddMenuSurface("traditional");
+                }}
+              />
             ) : showAddMenu ? (
               <StackCards
-                title="您想以哪种方式添加 Agent 来运行？"
-                sub="选择最适合你的方式，下一步即可开始"
+                title={t("addAgent.title")}
+                sub={t("addAgent.subtitle")}
                 cards={[
                   {
                     key: "scratch",
                     icon: ScratchIcon,
-                    title: "从 0 快速创建",
-                    desc: "用智能 / 自定义 / 模板 / 工作流的方式从零创建一个 Agent。",
+                    title: t("addAgent.quickCreate.title"),
+                    desc: t("addAgent.quickCreate.description"),
                     onClick: () => {
                       setAddMenu(false);
                       setImportedDraft(null);
                       setCustomCreateMode("custom");
+                      setCustomCreationSurface("traditional");
                       setRuntimeUpdateTarget(null);
                       setFocusedDeploymentTaskId("");
                       setFocusedWorkspaceAgentId("");
@@ -5835,10 +7989,28 @@ export default function App() {
                     },
                   },
                   {
+                    key: "intelligent",
+                    icon: ScratchIcon,
+                    title: t("addAgent.intelligent.title"),
+                    desc: t("addAgent.intelligent.description"),
+                    onClick: () => {
+                      setIntelligentDeployment(null);
+                      setAddMenu(false);
+                      setImportedDraft(null);
+                      setRuntimeUpdateTarget(null);
+                      setFocusedDeploymentTaskId("");
+                      setFocusedWorkspaceAgentId("");
+                      setEditingDraftId("");
+                      editingDraftBaselineRef.current = null;
+                      setMigrationProjectReturn(undefined);
+                      setCreateView("intelligent");
+                    },
+                  },
+                  {
                     key: "package",
                     icon: PackageIcon,
-                    title: "从代码包添加和部署",
-                    desc: "上传 Agent 项目压缩包，查看代码并直接部署到 AgentKit Runtime。",
+                    title: t("addAgent.package.title"),
+                    desc: t("addAgent.package.description"),
                     onClick: () => {
                       setAddMenu(false);
                       setImportedDraft(null);
@@ -5846,13 +8018,29 @@ export default function App() {
                     },
                   },
                   {
-                    key: "migration",
-                    icon: MigrationIcon,
-                    title: "从存量迁移",
-                    desc: "从您的 LangChain / Dify 等存量项目迁移至 AgentKit Runtime",
+                    key: "workspace",
+                    icon: WorkspaceCreateIcon,
+                    title: t("workspaceProjectEntry.title"),
+                    desc: t("workspaceProjectEntry.description"),
                     onClick: () => {
                       setAddMenu(false);
                       setImportedDraft(null);
+                      setRuntimeUpdateTarget(null);
+                      setWorkspacePreviewOpened(true);
+                      setWorkspaceView(false);
+                      setWorkspaceCreateRequest(value => value + 1);
+                      setCreateView("workspace");
+                    },
+                  },
+                  {
+                    key: "migration",
+                    icon: MigrationIcon,
+                    title: t("addAgent.migrate.title"),
+                    desc: t("addAgent.migrate.description"),
+                    onClick: () => {
+                      setAddMenu(false);
+                      setImportedDraft(null);
+                      setMigrationProjectReturn(undefined);
                       setCreateView("migration");
                     },
                   },
@@ -5879,9 +8067,10 @@ export default function App() {
             ) : skillCenter ? (
               <LibraryView
                 cloudProvider={cloudProvider}
+                studioRegion={studioRegion || defaultCloudRegion(cloudProvider)}
                 activeTab={libraryTab}
                 onTabChange={setLibraryTab}
-                onPageTitleChange={setLibraryPageTitle}
+                onPageTitleChange={handleLibraryPageTitleChange}
                 skillInitialWorkspace={skillCenterLaunch}
                 onSkillInitialWorkspaceConsumed={() => setSkillCenterLaunch(null)}
                 artifactSources={appName
@@ -5900,7 +8089,7 @@ export default function App() {
                 }}
                 onArtifactSourceOpen={openFromSearch}
               />
-            ) : visibleCreateView !== null && !hasCreds ? (
+            ) : visibleCreateView !== null && !["menu", "intelligent"].includes(visibleCreateView) && !hasCreds ? (
               <div
                 style={{
                   display: "flex",
@@ -5915,26 +8104,86 @@ export default function App() {
                 }}
               >
                 <div style={{ fontSize: 18, fontWeight: 600 }}>
-                  需要配置{cloudProvider === "byteplus" ? "BytePlus" : "火山引擎"} AK/SK
+                  {t("credentials.title", {
+                    provider: cloudProvider === "byteplus" ? "BytePlus" : t("providers.volcengine"),
+                  })}
                 </div>
                 <div style={{ maxWidth: 420, lineHeight: 1.6 }}>
-                  智能体工作台需要
-                  {cloudProvider === "byteplus" ? " BytePlus " : " Volcengine "}
-                  凭据才能使用。请在运行环境中设置{" "}
+                  {t("credentials.prefix", {
+                    provider: cloudProvider === "byteplus" ? "BytePlus" : "Volcengine",
+                  })}{" "}
                   <code>
                     {cloudProvider === "byteplus"
                       ? "BYTEPLUS_ACCESS_KEY"
                       : "VOLCENGINE_ACCESS_KEY"}
                   </code>{" "}
-                  与{" "}
+                  {" "}{t("credentials.and")}{" "}
                   <code>
                     {cloudProvider === "byteplus"
                       ? "BYTEPLUS_SECRET_KEY"
                       : "VOLCENGINE_SECRET_KEY"}
                   </code>{" "}
-                  后重试。
+                  {" "}{t("credentials.suffix")}
                 </div>
               </div>
+            ) : intelligentDeployment ? (
+              <IntelligentDeployment
+                delivery={intelligentDeployment}
+                cloudProvider={cloudProvider}
+                initialDeployRegion={newRuntimeRegion}
+                onBack={() => setIntelligentDeployment(null)}
+                onAgentAdded={openIntelligentDeploymentChat}
+                onDeploymentTaskChange={updateDeploymentTask}
+                onDeploymentStarted={startDeployment}
+                onDeploymentComplete={finishDeployment}
+              />
+            ) : visibleCreateView === "intelligent" ? (
+              <>
+              <div className="development-preparation-source" hidden={Boolean(intelligentPreparationStage)}>
+              <IntelligentCreate
+                ownerId={userId}
+                taskSnapshot={developmentTaskSnapshot}
+                onRefreshTasks={() => setDevelopmentTaskRefreshKey(key => key + 1)}
+                onOpenTask={openIntelligentDevelopmentTask}
+                capabilities={intelligentCapabilities}
+                loading={intelligentCapabilitiesLoading}
+                preparationStage={intelligentPreparationStage}
+                error={intelligentCapabilitiesError}
+                onCancel={cancelIntelligentPreparation}
+                onDownload={downloadIntelligentDelivery}
+                onDeploy={setIntelligentDeployment}
+                onBack={() => {
+                  cancelIntelligentPreparation();
+                  setCreateView(null);
+                  setAddMenuSurface("traditional");
+                  setAddMenu(true);
+                }}
+                onCreate={startIntelligentDevelopment}
+              />
+              </div>
+              {preparation}
+              </>
+            ) : visibleCreateView === "deepseek" ? (
+              <NativeConfigPage
+                draft={deepseekDraft}
+                onDraftChange={setDeepseekDraft}
+                cloudProvider={cloudProvider}
+                initialDeployRegion={newRuntimeRegion}
+                onDeploymentTaskChange={updateDeploymentTask}
+                onDeploymentStarted={startDeployment}
+                onDeploymentComplete={(result) => {
+                  invalidateRuntimeAgentCache();
+                  if (result.runtimeId) {
+                    setLibraryRuntimeIds((current) => new Set([...current ?? [], result.runtimeId!]));
+                  }
+                  setAgentInfoRefreshKey((key) => key + 1);
+                }}
+                onBack={() => {
+                  setCreateView(null);
+                  setAddMenuSurface("entry");
+                  setAddMenu(true);
+                }}
+              />
             ) : visibleCreateView === "custom" ? (
               <CustomCreate
                 key={editingDraftId || "custom"}
@@ -5942,6 +8191,12 @@ export default function App() {
                 initialDraft={importedDraft ?? undefined}
                 onBack={() => {
                   setCreateView(null);
+                  setAddMenuSurface(
+                    !importedDraft && !runtimeUpdateTarget &&
+                      customCreationSurface === "vulcan"
+                      ? "entry"
+                      : "traditional",
+                  );
                   setAddMenu(true);
                 }}
                 onCreate={onCreate}
@@ -5949,6 +8204,8 @@ export default function App() {
                 features={features}
                 onDeploymentTaskChange={updateDeploymentTask}
                 createMode={customCreateMode}
+                freshCreationSurface={customCreationSurface}
+                workspaceDraftId={editingDraftId || undefined}
                 deploymentTarget={runtimeUpdateTarget ?? undefined}
                 initialDeployRegion={newRuntimeRegion}
                 onDraftChange={(draft, dirty) => {
@@ -5958,6 +8215,7 @@ export default function App() {
                       editingDraftId,
                       draft,
                       runtimeUpdateTarget ?? undefined,
+                      customCreationSurface === "vulcan" ? "quick" : "traditional",
                     );
                   } else {
                     restoreWorkspaceDraftBaseline(editingDraftId);
@@ -5984,6 +8242,7 @@ export default function App() {
                 cloudProvider={cloudProvider}
                 onBack={() => {
                   setCreateView(null);
+                  setAddMenuSurface("traditional");
                   setAddMenu(true);
                 }}
                 onAgentAdded={onAgentAdded}
@@ -5993,10 +8252,14 @@ export default function App() {
                 initialDeployRegion={newRuntimeRegion}
               />
             ) : visibleCreateView === "migration" ? (
+              <>
+              <div className="development-preparation-source" hidden={Boolean(intelligentPreparationStage)}>
               <MigrationWorkspace
                 cloudProvider={cloudProvider}
                 onBack={() => {
+                  setMigrationProjectReturn(undefined);
                   setCreateView(null);
+                  setAddMenuSurface("traditional");
                   setAddMenu(true);
                 }}
                 onAgentAdded={onAgentAdded}
@@ -6004,10 +8267,34 @@ export default function App() {
                 onDeploymentStarted={startDeployment}
                 onDeploymentComplete={finishDeployment}
                 initialDeployRegion={newRuntimeRegion}
+                projectCapabilities={intelligentCapabilities}
+                projectCapabilitiesLoading={intelligentCapabilitiesLoading}
+                optimizationPreparationStage={intelligentPreparationStage}
+                optimizationError={intelligentCapabilitiesError}
+                initialPage={migrationProjectReturn ? "projects" : "new"}
+                initialProjectId={migrationProjectReturn?.projectId}
+                onOptimizeVersion={(goal, modelId, base) =>
+                  startIntelligentDevelopment(
+                    goal,
+                    modelId,
+                    base,
+                    { projectId: base.projectId },
+                  )}
+                onCancelOptimization={cancelIntelligentPreparation}
+                onDownloadSavedVersion={downloadIntelligentDelivery}
+                onDeploySavedVersion={(delivery) => {
+                  setMigrationProjectReturn({
+                    projectId: delivery.projectId ?? "",
+                  });
+                  setIntelligentDeployment(delivery);
+                }}
               />
+              </div>
+              {preparation}
+              </>
             ) : turns.length === 0 && !newChatCapabilitiesReady ? (
               <div className="session-loading">
-                <Loader2 className="icon spin" /> 正在检查 Agent 能力…
+                <Loader2 className="icon spin" /> {t("loading.agentCapabilities")}
               </div>
             ) : turns.length === 0 ? (
               <div
@@ -6016,10 +8303,10 @@ export default function App() {
               >
                 <div className="welcome-primary">
                   <div className="welcome-heading">
-                    <NewChatFeatureNotice canUpdate={access.role === "admin"} />
+                    <NewChatFeatureNotice canUpdate={access.role === "admin" || access.role === "super_admin"} />
                     <h1 className="welcome-title">
                       {sandboxSession
-                        ? "让灵感自由生长"
+                        ? t("greetings.intelligentDevelopment")
                         : greeting}
                     </h1>
                   </div>
@@ -6035,8 +8322,10 @@ export default function App() {
                   onWheel={onConversationWheel}
                   onTouchMove={onConversationTouchMove}
                 >
-                  {turns.map((turn, i) => {
-            const isLast = i === turns.length - 1;
+                  {buildTranscriptRows(transcriptTurns, rootCapabilityNode).map((row) => {
+            const renderTurn = (i: number) => {
+            const turn = transcriptTurns[i];
+            const isLast = i === transcriptTurns.length - 1;
             if (turn.role === "system") {
               return turn.activity ? (
                 <div
@@ -6058,9 +8347,9 @@ export default function App() {
               const turnInvocation = turn.blocks.find((b) => b.kind === "invocation");
               return (
                 <motion.div
-                  key={i}
+                  key={turn.meta?.localId ?? i}
                   className="turn turn--user"
-                  initial={{ opacity: 0, y: 8 }}
+                  initial={sandboxSession?.intelligentDevelopment ? false : { opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.2, ease: "easeOut" }}
                 >
@@ -6080,6 +8369,7 @@ export default function App() {
                     data-share-image-exclude="true"
                   >
                     {turn.meta?.ts && <span className="meta-text">{fmtTime(turn.meta.ts)}</span>}
+                    {turn.activity && <span className="meta-text" role="status">{turn.activity.title}</span>}
                     <CopyButton text={text} />
                   </div>
                 </motion.div>
@@ -6094,9 +8384,9 @@ export default function App() {
               rootAgentNames.length > 0 &&
               !rootAgentNames.includes(agentAuthor),
             );
-            const agentDisplayName = agentNode?.name || agentAuthor;
+            const agentDisplayName = displayAgentName(agentNode?.name || agentAuthor);
             const agentDescription = agentNode?.description ||
-              (isSubAgent ? "正在执行主 Agent 移交的任务。" : "");
+              (isSubAgent ? t("conversation.subagentDescription") : "");
             if (
               turn.blocks.length > 0 &&
               turn.blocks.every((block) => block.kind === "agent-transfer")
@@ -6105,13 +8395,17 @@ export default function App() {
             const feedbackRating = turn.meta?.feedback?.rating ?? null;
             const feedbackEventId = turn.meta?.eventId ?? "";
             const feedbackPending = feedbackPendingIds.has(feedbackEventId);
+            const turnIsStreaming = assistantTurnIsStreaming(
+              turn,
+              i,
+              transcriptTurns.length,
+              activeConversationBusy,
+              presentingStream,
+            );
             const canRate = Boolean(
               currentRuntime && feedbackEventId && turnText(turn),
             );
-            const feedbackInput = canRate ? previousUserTurnText(turns, i) : "";
-            const turnIsStreaming = isLast && (
-              activeConversationBusy || presentingStream
-            );
+            const feedbackInput = canRate ? previousUserTurnText(transcriptTurns, i) : "";
             const canAnnotate = Boolean(
               canRate &&
               cloudProvider !== "byteplus" &&
@@ -6120,7 +8414,7 @@ export default function App() {
             );
             return (
               <motion.div
-                key={i}
+                key={turn.meta?.localId ?? i}
                 data-share-message-source="true"
                 data-response-annotation-index={i}
                 ref={(node) => {
@@ -6139,9 +8433,9 @@ export default function App() {
                 ].filter(Boolean).join(" ")}
                 tabIndex={canAnnotate ? 0 : undefined}
                 aria-label={canAnnotate
-                  ? "模型回复；选中文字后可添加批注"
+                  ? t("conversation.annotationHint")
                   : undefined}
-                initial={{ opacity: 0, y: 8 }}
+                initial={sandboxSession?.intelligentDevelopment ? false : { opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.2, ease: "easeOut" }}
               >
@@ -6150,7 +8444,7 @@ export default function App() {
                     <div className="subagent-run-label">
                       <span className="subagent-run-handoff">
                         <CornerDownRight />
-                        <span>智能体移交</span>
+                        <span>{t("conversation.agentTransfer")}</span>
                       </span>
                       <span className="subagent-run-title">{agentDisplayName}</span>
                     </div>
@@ -6160,39 +8454,56 @@ export default function App() {
                   </>
                 )}
                 {pending ? (
-                  isLast && activeConversationBusy ? <ThinkingPlaceholder /> : null
+                  turnIsStreaming ? (sandboxSession?.intelligentDevelopment
+                    ? <Blocks blocks={[]} groupProcess streaming liveStatus={development.connection || developmentRunStatus(development.run)} onAction={onAction} />
+                    : <ThinkingPlaceholder a2aStatus={turn.meta?.a2aStatus} />) : null
                 ) : (
                   <>
-                    <Blocks
-                      appName={appName}
-                      blocks={turn.blocks}
-                      streaming={isLast && (activeConversationBusy || presentingStream)}
-                      onStreamFrame={isLast ? followConversationStreamFrame : undefined}
-                      onStreamComplete={
-                        isLast && !activeConversationBusy && presentingStream
-                          ? () => completeStreamPresentation(sessionId)
-                          : undefined
-                      }
-                      onAction={onAction}
-                      onAuth={onAuth}
-                      onArtifactDownload={(filename, version) =>
-                        downloadArtifact(appName, userId, sessionId, filename, version)
-                      }
-                      onArtifactPreview={(filename, version) =>
-                        previewArtifact(appName, userId, sessionId, filename, version)
-                      }
-                    />
-                    {/* Finalized turn that produced no visible answer (e.g. only
-                        thinking + an empty A2UI surface) — show a fallback note. */}
-                    {!(isLast && activeConversationBusy) && !turnHasVisibleContent(turn) && (
-                      <div className="turn-empty">本次没有返回可显示的内容。</div>
+                    <SandboxFileContext.Provider value={{ appName, sessionId }}>
+                      <Blocks
+                        appName={appName}
+                        blocks={turn.blocks}
+                        groupProcess={Boolean(sandboxSession?.intelligentDevelopment)}
+                        liveStatus={sandboxSession?.intelligentDevelopment && isLast
+                          ? (development.connection || (development.run?.phase !== "coding" || development.run?.state !== "running" ? developmentRunStatus(development.run) : "")) : undefined}
+                        streaming={turnIsStreaming}
+                        onStreamFrame={turnIsStreaming ? followConversationStreamFrame : undefined}
+                        onStreamComplete={
+                          isLast && !activeConversationBusy && presentingStream
+                            ? () => completeStreamPresentation(sessionId)
+                            : undefined
+                        }
+                        onAction={onAction}
+                        onAuth={onAuth}
+                        onArtifactDownload={(filename, version) =>
+                          downloadArtifact(appName, userId, sessionId, filename, version)
+                        }
+                        onArtifactPreview={(filename, version) =>
+                          previewArtifact(appName, userId, sessionId, filename, version)
+                        }
+                        onResolveDelivery={resolveIntelligentDelivery}
+                        onResolveDeliveryComparison={resolveIntelligentDeliveryComparison}
+                        onDownloadDelivery={downloadIntelligentDelivery}
+                        onDeployDelivery={setIntelligentDeployment}
+                        onBranchSelect={(branch) => {
+                          setInput(t("conversation.continueBranch", { branch: branch.label }));
+                        }}
+                      />
+                    </SandboxFileContext.Provider>
+                    {/* MPA A2A fragments share one request-level empty notice. */}
+                    {shouldShowEmptyAssistantResponse(transcriptTurns, i, turnHasVisibleContent, {
+                      mpaA2a: isMpaA2aRuntimeApp(appName),
+                      turnIsStreaming,
+                      requestIsStreaming: activeConversationBusy || presentingStream,
+                    }) && (
+                      <div className="turn-empty">{t("conversation.emptyResponse")}</div>
                     )}
                     {/* Hide the actions/timestamp row while this turn is still
                         thinking/streaming or waiting on an OAuth card; reveal it
                         only once the reply is done. */}
-                    {!(isLast && activeConversationBusy) && !turnAwaitingAuth(turn) && (
+                    {!turnIsStreaming && !turnAwaitingAuth(turn) && (
                       <div className="turn-meta" data-share-image-exclude="true">
-                        {sandboxSession && turn.meta?.sandboxUsage ? (
+                        {sandboxSession && !sandboxSession.intelligentDevelopment && turn.meta?.sandboxUsage ? (
                           <SandboxTokenUsageRow usage={turn.meta.sandboxUsage} />
                         ) : null}
                         <div className="turn-actions">
@@ -6205,10 +8516,12 @@ export default function App() {
                                     ? " feedback-btn--good"
                                     : ""
                                 }`}
-                                aria-label="赞"
+                                aria-label={t("feedback.like")}
                                 aria-pressed={feedbackRating === "good"}
                                 aria-busy={feedbackPending}
-                                title={feedbackRating === "good" ? "取消点赞" : "赞"}
+                                title={feedbackRating === "good"
+                                  ? t("feedback.removeLike")
+                                  : t("feedback.like")}
                                 disabled={feedbackPending}
                                 onClick={() => void rateAssistantTurn(
                                   turn,
@@ -6228,10 +8541,12 @@ export default function App() {
                                     ? " feedback-btn--bad"
                                     : ""
                                 }`}
-                                aria-label="踩"
+                                aria-label={t("feedback.dislike")}
                                 aria-pressed={feedbackRating === "bad"}
                                 aria-busy={feedbackPending}
-                                title={feedbackRating === "bad" ? "取消点踩" : "踩"}
+                                title={feedbackRating === "bad"
+                                  ? t("feedback.removeDislike")
+                                  : t("feedback.dislike")}
                                 disabled={feedbackPending}
                                 onClick={() => void rateAssistantTurn(
                                   turn,
@@ -6251,11 +8566,11 @@ export default function App() {
                               <button
                                 type="button"
                                 className="icon-btn"
-                                aria-label="问题反馈"
-                                title="问题反馈"
+                                aria-label={t("feedback.reportIssue")}
+                                title={t("feedback.reportIssue")}
                                 onClick={() => setIssueFeedbackTarget({
                                   turn,
-                                  input: previousUserTurnText(turns, i),
+                                  input: previousUserTurnText(transcriptTurns, i),
                                 })}
                               >
                                 <IssueFeedbackIcon className="icon" />
@@ -6263,7 +8578,7 @@ export default function App() {
                               <button
                                 type="button"
                                 className="icon-btn"
-                                title="Tracing 火焰图"
+                                title={t("feedback.traceFlameGraph")}
                                 onClick={() => {
                                   setTraceEndTimeMs(
                                     turn.meta?.ts ? turn.meta.ts * 1000 : Date.now(),
@@ -6292,22 +8607,46 @@ export default function App() {
                 )}
               </motion.div>
             );
+            };
+            if (row.parallelParent) {
+              return (
+                <div
+                  key={row.key}
+                  className="parallel-turn-group"
+                  data-parallel-agent-count={row.turnIndexes.length}
+                  role="group"
+                  tabIndex={row.turnIndexes.length > 3 ? 0 : undefined}
+                  aria-label={`${displayAgentName(row.parallelParent)} 并行执行结果`}
+                >
+                  {row.turnIndexes.map(renderTurn)}
+                </div>
+              );
+            }
+            return renderTurn(row.turnIndexes[0]);
           })}
                 </div>
-                {!sandboxSession && (
-                  <AgentInfoPanel
-                    appName={appName}
+                {!sandboxSession && agentInfoSelectionRef.current === appName && agentInfo?.agentCategory === "mpa" && (
+                  <MpaAgentInfoRail
+                    key={`${userId}:${appName}`}
                     info={agentInfo}
+                    onRefresh={() => {
+                      preparedAgentSelectionRef.current = null;
+                      setAgentInfoRefreshKey(key => key + 1);
+                    }}
                     loading={capabilitiesLoading}
-                    activeAgent={activeAgent}
-                    seenAgents={seenAgents}
-                    execPath={execPath}
-                    capabilities={sessionCapabilities}
-                    capabilityLoading={sessionCapabilitiesLoading}
-                    capabilityMutating={sessionCapabilityMutating}
-                    builtinTools={sessionBuiltinTools}
-                    onAddCapability={addCapability}
-                    onRemoveCapability={(id) => void removeCapability(id)}
+                    environments={sessionEnvironments}
+                    workspaces={sessionWorkspaces}
+                    selectedEnvironments={selectedEnvironmentMounts}
+                    selectedEnvironmentWorkspaceIds={selectedEnvironmentWorkspaceIds}
+                    environmentsLoading={sessionEnvironmentsLoading || studioToolsLoading}
+                    environmentsDisabled={conversationBusy || !canMountSessionEnvironment}
+                    environmentsError={sessionEnvironmentsUnavailableReason}
+                    onEnvironmentsChange={
+                      studioToolRuntime && sessionId
+                        ? updateSelectedEnvironments
+                        : undefined
+                    }
+                    onEnvironmentsRefresh={refreshSessionEnvironments}
                   />
                 )}
                 <div className="conversation-composer-slot">
@@ -6362,9 +8701,16 @@ export default function App() {
         state={sandboxLaunchState}
         agentKind={sandboxLaunchKind}
         error={sandboxLaunchError}
+        persistentEnabled={sandboxLaunchPersistentEnabled}
+        persistentReason={sandboxLaunchPersistentReason}
+        persistentRequired={sandboxLaunchPersistentRequired}
+        storageMode={sandboxLaunchStorageMode}
+        diskGbDefault={sandboxLaunchDiskGbDefault}
+        diskGbMin={sandboxLaunchDiskGbMin}
+        diskGbMax={sandboxLaunchDiskGbMax}
         onCancel={cancelSandboxLaunch}
-        onConfirm={(displayName, persistent) =>
-          void launchSandboxSession(displayName, persistent)
+        onConfirm={(displayName, persistent, diskGb) =>
+          void launchSandboxSession(displayName, persistent, diskGb)
         }
       />
 
@@ -6377,13 +8723,13 @@ export default function App() {
 
       {sandboxThreadDeleteTarget ? (
         <StudioConfirmDialog
-          title="删除 Codex 历史会话"
-          description={`将删除“${
-            sandboxThreadDeleteTarget.name ||
-            sandboxThreadDeleteTarget.preview ||
-            `Thread ${sandboxThreadDeleteTarget.id.slice(0, 8)}`
-          }”，并从历史会话中移除。`}
-          confirmLabel="确认删除"
+          title={t("dialogs.deleteThread.title")}
+          description={t("dialogs.deleteThread.description", {
+            name: sandboxThreadDeleteTarget.name ||
+              sandboxThreadDeleteTarget.preview ||
+              `Thread ${sandboxThreadDeleteTarget.id.slice(0, 8)}`,
+          })}
+          confirmLabel={t("dialogs.deleteThread.confirm")}
           variant="danger"
           busy={sandboxCommands.threadActionId === sandboxThreadDeleteTarget.id}
           onCancel={() => {
@@ -6397,7 +8743,7 @@ export default function App() {
       {sandboxSession ? (
         <>
           <SandboxToolDialog
-            open={sandboxToolKind !== null}
+            open={!sandboxSession.intelligentDevelopment && sandboxToolKind !== null}
             kind={sandboxToolKind ?? "terminal"}
             launch={sandboxToolLaunch}
             loading={sandboxToolLoading}
@@ -6413,7 +8759,7 @@ export default function App() {
             }}
           />
           <SandboxPermissionsDialog
-            open={sandboxPermissionsOpen}
+            open={!sandboxSession.intelligentDevelopment && sandboxPermissionsOpen}
             value={sandboxSession.permissions}
             busy={sandboxSettingsBusy || sandboxBusy}
             error={sandboxSettingsError}
@@ -6425,7 +8771,7 @@ export default function App() {
             }}
           />
           <SandboxWorkspaceDialog
-            open={sandboxWorkspaceOpen}
+            open={!sandboxSession.intelligentDevelopment && sandboxWorkspaceOpen}
             cwd={sandboxSession.cwd}
             locked={sandboxSession.workspaceLocked}
             busy={sandboxSettingsBusy}
@@ -6439,7 +8785,7 @@ export default function App() {
             }}
           />
           <SandboxThreadsDialog
-            open={sandboxCommands.threadsOpen}
+            open={!sandboxSession.intelligentDevelopment && sandboxCommands.threadsOpen}
             threads={sandboxCommands.threads}
             currentThreadId={sandboxSession.threadId}
             loading={sandboxCommands.threadsLoading}
@@ -6463,6 +8809,11 @@ export default function App() {
         onLogin={() => void recoverAuthentication()}
       />
 
+      <AgentKitCliDialog
+        open={agentKitCliOpen}
+        onClose={() => setAgentKitCliOpen(false)}
+      />
+
       <NewChatVideoTaskDialog
         open={videoTaskDialogOpen}
         task={videoTask}
@@ -6474,22 +8825,23 @@ export default function App() {
       {confirmLeave && (
         <div className="confirm-scrim" onClick={() => setConfirmLeave(false)}>
           <div className="confirm-box" onClick={(e) => e.stopPropagation()}>
-            <div className="confirm-title">返回创建首页？</div>
-            <div className="confirm-text">返回后当前填写的内容将会丢失，确定要返回吗？</div>
+            <div className="confirm-title">{t("dialogs.returnToCreate.title")}</div>
+            <div className="confirm-text">{t("dialogs.returnToCreate.description")}</div>
             <div className="confirm-actions">
               <button className="confirm-btn" onClick={() => setConfirmLeave(false)}>
-                取消
+                {t("actions.cancel")}
               </button>
               <button
                 className="confirm-btn confirm-btn--danger"
                 onClick={() => {
                   setImportedDraft(null);
                   setCreateView(null);
+                  setAddMenuSurface("traditional");
                   setAddMenu(true);
                   setConfirmLeave(false);
                 }}
               >
-                确定返回
+                {t("dialogs.returnToCreate.confirm")}
               </button>
             </div>
           </div>

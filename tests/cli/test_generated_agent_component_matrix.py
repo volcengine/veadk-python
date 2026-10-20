@@ -29,6 +29,7 @@ from veadk.cli.generated_agent_catalog import (
     BackendOption,
     EnvVar,
     ExporterOption,
+    model_env_for_provider,
 )
 from veadk.cli.generated_agent_codegen import (
     A2ARegistryConfig,
@@ -37,6 +38,7 @@ from veadk.cli.generated_agent_codegen import (
     GeneratedProject,
     McpTool,
     MemoryConfig,
+    _VEADK_VERSION,
     debug_runtime_env_from_draft,
     generate_project_from_draft,
 )
@@ -66,7 +68,7 @@ def _assert_python_files_compile(project: GeneratedProject) -> None:
 
 def _veadk_requirement(extras: set[str]) -> str:
     extras_str = f"[{','.join(sorted(extras))}]" if extras else ""
-    return f"veadk-python{extras_str}>=1.0.5"
+    return f"veadk-python{extras_str}=={_VEADK_VERSION}"
 
 
 EXPECTED_LTM_EXTRAS = {
@@ -89,8 +91,15 @@ EXPECTED_KB_EXTRAS = {
 DEFAULT_ARK_DEBUG_ENV = {
     item.key: item.placeholder
     for item in MODEL_ENV
-    if item.key in {"MODEL_AGENT_PROVIDER", "MODEL_AGENT_API_BASE"}
+    if item.key in {"MODEL_AGENT_PROVIDER", "MODEL_AGENT_API_BASE", "MODEL_AGENT_NAME"}
 }
+DEFAULT_ARK_DEBUG_ENV["MODEL_NAME"] = DEFAULT_ARK_DEBUG_ENV["MODEL_AGENT_NAME"]
+BYTEPLUS_ARK_DEBUG_ENV = {
+    item.key: item.placeholder
+    for item in model_env_for_provider("byteplus")
+    if item.key in {"MODEL_AGENT_PROVIDER", "MODEL_AGENT_API_BASE", "MODEL_AGENT_NAME"}
+}
+BYTEPLUS_ARK_DEBUG_ENV["MODEL_NAME"] = BYTEPLUS_ARK_DEBUG_ENV["MODEL_AGENT_NAME"]
 
 
 def test_component_catalog_does_not_request_auto_resolved_credentials() -> None:
@@ -235,6 +244,37 @@ def test_debug_runtime_materializes_nested_a2a_registry_defaults() -> None:
         "REGISTRY_REGION": "cn-beijing",
         "REGISTRY_ENDPOINT": "https://open.volcengineapi.com/",
     }
+
+
+def test_byteplus_a2a_registry_uses_provider_native_defaults() -> None:
+    draft = AgentDraft(
+        name="byteplus-a2a-env",
+        cloudProvider="byteplus",
+        subAgents=[
+            AgentDraft(
+                name="remote-agent",
+                agentType="a2a",
+                a2aRegistry=A2ARegistryConfig(
+                    enabled=True,
+                    registrySpaceId="space-byteplus",
+                ),
+            )
+        ],
+    )
+
+    expected = {
+        "REGISTRY_SPACE_ID": "space-byteplus",
+        "REGISTRY_TOP_K": "3",
+        "REGISTRY_REGION": "ap-southeast-1",
+        "REGISTRY_ENDPOINT": ("https://agentkit.ap-southeast-1.byteplusapi.com/"),
+    }
+    assert debug_runtime_env_from_draft(draft) == {
+        **BYTEPLUS_ARK_DEBUG_ENV,
+        **expected,
+    }
+    env_example = _files(generate_project_from_draft(draft))[".env.example"]
+    for key, value in expected.items():
+        assert f"{key}={value}" in env_example
 
 
 def test_managed_components_keep_only_component_specific_env() -> None:
@@ -390,6 +430,22 @@ def test_openviking_long_term_memory_generates_required_runtime_env() -> None:
     assert "DATABASE_OPENVIKING_MEMORY_POLICY=\n" in files[".env.example"]
     assert "不填写时使用官方默认策略" in files[".env.example"]
     assert files["requirements.txt"].splitlines()[0] == _veadk_requirement(set())
+
+
+def test_viking_long_term_memory_uses_selected_index() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="ltm-viking",
+            memory=MemoryConfig(longTerm=True),
+            longTermBackend="viking",
+            longTermMemoryIndex="existing_memory",
+        )
+    )
+    agent_py = _files(project)["agents/ltm_viking/agent.py"]
+
+    assert 'LongTermMemory(backend="viking", index="existing_memory"' in agent_py
+    assert "'longTermMemoryIndex': 'existing_memory'" in agent_py
+    _assert_python_files_compile(project)
 
 
 @pytest.mark.parametrize("backend", KB_BACKENDS, ids=lambda item: item.id)
@@ -723,5 +779,5 @@ def test_deeply_nested_agent_types_generate_complete_component_project() -> None
     assert 'KnowledgeBase(backend="context_search"' in agent_py
     assert "OpentelemetryTracer()" in agent_py
     assert _env_keys(files[".env.example"]) == expected_env
-    assert "veadk-python[extensions]>=1.0.5" in files["requirements.txt"]
+    assert _veadk_requirement({"extensions"}) in files["requirements.txt"]
     _assert_python_files_compile(project)

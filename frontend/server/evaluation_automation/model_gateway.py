@@ -24,7 +24,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from veadk import Agent, Runner
+from veadk.utils.cloud_provider import cloud_provider_from_env
 
 from .models import (
     AutoEvaluationCase,
@@ -44,7 +44,9 @@ class StructuredEvaluationModels:
     def __init__(self, model_name: str | None = None) -> None:
         self._model_name = model_name or os.getenv(
             "VEADK_STUDIO_EVALUATION_MODEL",
-            DEFAULT_AUTOMATION_MODEL,
+            "seed-2-0-lite-260228"
+            if cloud_provider_from_env() == "byteplus"
+            else DEFAULT_AUTOMATION_MODEL,
         )
 
     async def evaluate(
@@ -115,6 +117,8 @@ customModule 必须为 null。同一模块同一优先级合并为一个 group�
         schema: type[OutputT],
         payload: Any,
     ) -> OutputT:
+        from veadk import Agent, Runner
+
         agent = Agent(
             name=name,
             description="AgentKit Studio evaluation automation.",

@@ -1,32 +1,43 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import ts from "typescript";
+import { build } from "esbuild";
 
 async function loadTypeScriptModule(relativePath) {
-  const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
-  const { outputText } = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
+  const result = await build({
+    entryPoints: [fileURLToPath(new URL(relativePath, import.meta.url))],
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    target: "node20",
+    write: false,
   });
-  const moduleUrl = `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`;
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].contents).toString("base64")}`;
   return import(moduleUrl);
 }
 
 const {
   firstInvalidRuntimeEnv,
   firstMissingRuntimeEnv,
+  missingRuntimeEnvs,
   runtimeEnvConfiguration,
   runtimeEnvDisplayRows,
   runtimeEnvJsonError,
+  runtimeEnvMissingError,
+  runtimeEnvRequirementHint,
+  runtimeDebugEnvVars,
   runtimeEnvVars,
 } = await loadTypeScriptModule("../src/create/deploymentEnv.ts");
 const {
   customModelCredentialRequirements,
   isProviderModelApiBase,
+  missingCustomModelCredentialRequirement,
 } = await loadTypeScriptModule("../src/create/customModelCredentials.ts");
 const {
   A2A_REGISTRY_DEFAULTS,
   A2A_REGISTRY_ENV,
+  a2aRegistryDefaults,
   BUILTIN_TOOLS,
   DEFAULT_KB_BACKEND,
   KB_BACKENDS,
@@ -63,6 +74,10 @@ const codeBrowserStyles = readFileSync(
 );
 const vikingKnowledgebasesSource = readFileSync(
   new URL("../src/create/vikingKnowledgebases.ts", import.meta.url),
+  "utf8",
+);
+const vikingMemoriesSource = readFileSync(
+  new URL("../src/create/vikingMemories.ts", import.meta.url),
   "utf8",
 );
 
@@ -117,9 +132,78 @@ test("derives distinct transient credential names for custom model agents", () =
       "https://ark.cn-beijing.volces.com/api/v3/",
     ),
     [
-      { key: "CUSTOM_MODEL_AGENT_API_KEY", label: "Agent 模型 API Key" },
-      { key: "CUSTOM_MODEL_AGENT_API_KEY_2", label: "Agent 模型 API Key" },
+      { key: "CUSTOM_MODEL_AGENT_API_KEY", label: "Agent model API Key" },
+      { key: "CUSTOM_MODEL_AGENT_API_KEY_2", label: "Agent model API Key" },
     ],
+  );
+});
+
+test("derives transient credential names for cross-provider fallback models", () => {
+  const draft = {
+    name: "Agent",
+    agentType: "llm",
+    modelName: "primary",
+    modelFallbacks: [
+      "same-provider-backup",
+      {
+        modelName: "gpt-4o-mini",
+        modelProvider: "openai",
+        modelApiBase: "https://api.openai.com/v1",
+        modelApiKeyEnv: "OPENAI_BACKUP_API_KEY",
+      },
+    ],
+    subAgents: [],
+  };
+  assert.deepEqual(
+    customModelCredentialRequirements(
+      draft,
+      "https://ark.cn-beijing.volces.com/api/v3/",
+    ),
+    [
+      {
+        key: "OPENAI_BACKUP_API_KEY",
+        label: "Agent fallback model gpt-4o-mini API Key",
+      },
+    ],
+  );
+});
+
+test("finds the first missing transient model credential with its agent path", () => {
+  const draft = {
+    name: "Root",
+    agentType: "sequential",
+    subAgents: [
+      {
+        name: "Worker",
+        agentType: "llm",
+        modelSource: "custom",
+        modelName: "gpt-4o-mini",
+        modelApiBase: "https://api.openai.com/v1",
+        subAgents: [],
+      },
+    ],
+  };
+  assert.deepEqual(
+    missingCustomModelCredentialRequirement(
+      draft,
+      "https://ark.cn-beijing.volces.com/api/v3/",
+      {},
+      [],
+    ),
+    {
+      key: "CUSTOM_MODEL_WORKER_API_KEY",
+      label: "Worker model API Key",
+      path: [0],
+    },
+  );
+  assert.equal(
+    missingCustomModelCredentialRequirement(
+      draft,
+      "https://ark.cn-beijing.volces.com/api/v3/",
+      {},
+      ["CUSTOM_MODEL_WORKER_API_KEY"],
+    ),
+    null,
   );
 });
 
@@ -150,7 +234,11 @@ test("keeps custom model credentials transient on the publish page", () => {
   );
   assert.match(
     projectPreviewSource,
-    /requiredSecretEnv\.map[\s\S]*?type="password"[\s\S]*?仅用于本次发布/,
+    /requiredSecretEnv\.map[\s\S]*?type="password"[\s\S]*?configuredSecret[\s\S]*?"••••••"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /configuredRuntimeEnvKeySet\.has\(env\.key\)/,
   );
   assert.match(projectPreviewSource, /role="alert"/);
   assert.doesNotMatch(customCreateSource, /envValues:\s*customModelCredentials/);
@@ -193,6 +281,63 @@ test("server-managed secrets are displayed but excluded from browser deploy payl
   assert.equal(firstMissingRuntimeEnv(specs, {}), undefined);
 });
 
+test("debug payload restores only explicit MCP secrets hidden by resilience", () => {
+  const specs = [
+    { key: "PUBLIC_SETTING", required: false },
+    {
+      key: "MCP_AGENT_PRIMARY_AUTH_TOKEN",
+      required: false,
+      secret: true,
+      readOnly: true,
+      serverManaged: true,
+      hidden: true,
+    },
+    {
+      key: "MCP_AGENT_SECONDARY_AUTH_TOKEN",
+      required: false,
+      secret: true,
+      readOnly: true,
+      serverManaged: true,
+      hidden: true,
+    },
+    {
+      key: "MODEL_AGENT_API_KEY",
+      required: true,
+      secret: true,
+      readOnly: true,
+      serverManaged: true,
+    },
+  ];
+  const values = {
+    PUBLIC_SETTING: "enabled",
+    MCP_AGENT_PRIMARY_AUTH_TOKEN: "primary-test-secret",
+    MCP_AGENT_SECONDARY_AUTH_TOKEN: "secondary-test-secret",
+    MODEL_AGENT_API_KEY: "must-remain-server-managed",
+  };
+
+  assert.deepEqual(
+    runtimeDebugEnvVars(specs, values, {
+      MCP_AGENT_PRIMARY_AUTH_TOKEN: "primary-test-secret",
+      MCP_AGENT_SECONDARY_AUTH_TOKEN: "secondary-test-secret",
+    }),
+    [
+      { key: "PUBLIC_SETTING", value: "enabled" },
+      {
+        key: "MCP_AGENT_PRIMARY_AUTH_TOKEN",
+        value: "primary-test-secret",
+      },
+      {
+        key: "MCP_AGENT_SECONDARY_AUTH_TOKEN",
+        value: "secondary-test-secret",
+      },
+    ],
+  );
+  assert.match(
+    customCreateSource,
+    /runtimeDebugEnvVars\([\s\S]*?prepareMcpAuth\(draft\)\.envValues/,
+  );
+});
+
 test("defaults knowledgebase creation to VikingDB collections", () => {
   assert.equal(DEFAULT_KB_BACKEND, "viking");
   assert.equal(KB_BACKENDS[0].id, "viking");
@@ -207,8 +352,8 @@ test("filters A2A spaces and Viking knowledgebases locally by name or id", () =>
   assert.equal(localPickerMatches("missing", ["客服中心", "space-123"]), false);
   assert.match(customCreateSource, /filteredSpaces = useMemo/);
   assert.match(customCreateSource, /filteredItems = useMemo/);
-  assert.match(customCreateSource, /搜索 AgentKit 智能体中心/);
-  assert.match(customCreateSource, /搜索 VikingDB 知识库/);
+  assert.match(customCreateSource, /traditional\.resources\.searchAgentKitCenter/);
+  assert.match(customCreateSource, /traditional\.resources\.searchKnowledgeBase/);
 });
 
 test("maps active feature settings to VeADK runtime env rows", () => {
@@ -226,6 +371,32 @@ test("maps active feature settings to VeADK runtime env rows", () => {
     [
       { key: "DATABASE_MYSQL_HOST", value: "mysql.internal" },
       { key: "DATABASE_MYSQL_PASSWORD", value: "secret" },
+    ],
+  );
+});
+
+test("keeps hidden runtime env values out of user-facing rows", () => {
+  const specs = [
+    {
+      key: "DATABASE_VIKINGMEM_PROJECT",
+      required: false,
+      placeholder: "default",
+      hidden: true,
+    },
+    { key: "DATABASE_REDIS_HOST", required: true },
+  ];
+
+  assert.deepEqual(runtimeEnvDisplayRows(specs, {}), [
+    { key: "DATABASE_REDIS_HOST", required: true, value: "" },
+  ]);
+  assert.deepEqual(
+    runtimeEnvVars(specs, {
+      DATABASE_VIKINGMEM_PROJECT: "agent-project",
+      DATABASE_REDIS_HOST: "redis.local",
+    }),
+    [
+      { key: "DATABASE_VIKINGMEM_PROJECT", value: "agent-project" },
+      { key: "DATABASE_REDIS_HOST", value: "redis.local" },
     ],
   );
 });
@@ -280,6 +451,128 @@ test("reports the first missing required runtime setting", () => {
   );
 });
 
+test("explains optimization dependencies and reports every missing runtime setting", () => {
+  const specs = [
+    {
+      key: "MODEL_AGENT_API_KEY",
+      required: true,
+      serverManaged: true,
+      requiredBy: ["上下文治理", "回答校验与修复"],
+    },
+    {
+      key: "MCP_URLS",
+      required: true,
+      requiredBy: ["MCP 稳定性治理"],
+    },
+    {
+      key: "MCP_API_KEY",
+      required: true,
+      requiredBy: ["MCP 稳定性治理"],
+    },
+  ];
+
+  assert.equal(
+    runtimeEnvRequirementHint(specs[0]),
+    "Required by the following optimizations: 上下文治理, 回答校验与修复.",
+  );
+  assert.equal(
+    runtimeEnvMissingError(specs[1]),
+    "Required by the following optimizations: MCP 稳定性治理. Enter MCP_URLS.",
+  );
+  assert.deepEqual(
+    missingRuntimeEnvs(specs, {}).map((spec) => spec.key),
+    ["MCP_URLS", "MCP_API_KEY"],
+  );
+  assert.deepEqual(
+    missingRuntimeEnvs(specs, {
+      MCP_URLS: "https://mcp.example.test/mcp",
+      MCP_API_KEY: "test-key",
+    }),
+    [],
+  );
+  assert.deepEqual(
+    missingRuntimeEnvs(specs, {}, ["MCP_API_KEY"]).map((spec) => spec.key),
+    ["MCP_URLS"],
+  );
+
+  const derivedSpec = {
+    key: "MCP_URLS",
+    required: true,
+    readOnly: true,
+    requiredBy: ["MCP 稳定性治理"],
+    help: "由已添加的 HTTP MCP 工具自动注入。",
+    missingError: "请返回“添加 MCP 工具”补充配置。",
+  };
+  assert.equal(
+    runtimeEnvRequirementHint(derivedSpec),
+    "Required by the following optimizations: MCP 稳定性治理. 由已添加的 HTTP MCP 工具自动注入。",
+  );
+  assert.equal(
+    runtimeEnvMissingError(derivedSpec),
+    "请返回“添加 MCP 工具”补充配置。",
+  );
+});
+
+test("marks missing optimization env inputs invalid and focuses the first error", () => {
+  assert.match(
+    customCreateSource,
+    /requiredBy:\s*modelProxyHarnessOptimizationLabels/,
+  );
+  assert.match(customCreateSource, /resolveMcpGatewayEnv\(/);
+  assert.doesNotMatch(customCreateSource, /key: "MCP_URLS"/);
+  assert.doesNotMatch(customCreateSource, /key: "MCP_API_KEY"/);
+  assert.match(customCreateSource, /const mcpGatewayManaged =/);
+  assert.match(
+    customCreateSource,
+    /key: mcpTool\.authTokenEnv,[\s\S]*?serverManaged: mcpGatewayManaged,[\s\S]*?hidden: mcpGatewayManaged/,
+  );
+  assert.match(
+    customCreateSource,
+    /deploymentTarget \|\| mcpGatewayManaged \? codegenDraft\(draft\) : undefined/,
+  );
+  assert.match(customCreateSource, /mcpSecretValues:/);
+  assert.match(projectPreviewSource, /missingRuntimeEnvs\(/);
+  assert.match(projectPreviewSource, /row\.placeholder \|\|/);
+  assert.match(projectPreviewSource, /setDeploymentEnvErrors\(/);
+  assert.match(projectPreviewSource, /focusDeploymentEnv\(/);
+  assert.match(
+    projectPreviewSource,
+    /aria-invalid=\{Boolean\(fieldError \|\| jsonError\)\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /className="pp-env-error"[\s\S]*?role="alert"[\s\S]*?\{fieldError\}/,
+  );
+});
+
+test("omits Studio-managed MCP values from fields, validation, and public env payload", () => {
+  const specs = [
+    {
+      key: "MCP_TEST_TOOL_AUTH_TOKEN",
+      required: false,
+      secret: true,
+      readOnly: true,
+      serverManaged: true,
+      hidden: true,
+    },
+    {
+      key: "MCP_SERVERS_JSON",
+      required: true,
+      secret: true,
+      readOnly: true,
+      serverManaged: true,
+      hidden: true,
+    },
+  ];
+  const values = {
+    MCP_TEST_TOOL_AUTH_TOKEN: "transient-test-value",
+  };
+
+  assert.deepEqual(runtimeEnvDisplayRows(specs, values), []);
+  assert.deepEqual(missingRuntimeEnvs(specs, values), []);
+  assert.deepEqual(runtimeEnvVars(specs, values), []);
+});
+
 test("uses copyable default runtime values and validates JSON settings", () => {
   const specs = [
     {
@@ -322,13 +615,13 @@ test("uses copyable default runtime values and validates JSON settings", () => {
     runtimeEnvJsonError(specs[1], {
       DATABASE_OPENVIKING_MEMORY_POLICY: "{bad-json",
     }),
-    "JSON 格式不正确",
+    "Invalid JSON format",
   );
   assert.deepEqual(
     firstInvalidRuntimeEnv(specs, {
       DATABASE_OPENVIKING_MEMORY_POLICY: "{bad-json",
     }),
-    { spec: specs[1], error: "JSON 格式不正确" },
+    { spec: specs[1], error: "Invalid JSON format" },
   );
 });
 
@@ -369,6 +662,46 @@ test("declares the Mem0 runtime configuration and database dependency", () => {
     mem0.env.map((env) => env.key),
     ["DATABASE_MEM0_API_KEY", "DATABASE_MEM0_BASE_URL"],
   );
+});
+
+test("declares the VikingDB long-term memory runtime configuration", () => {
+  const viking = LTM_BACKENDS.find((option) => option.id === "viking");
+
+  assert.ok(viking);
+  assert.equal(viking.label, "VikingDB Memory");
+  assert.deepEqual(
+    viking.env.map((env) => [
+      env.key,
+      env.required,
+      env.placeholder ?? "",
+      env.hidden,
+    ]),
+    [
+      ["DATABASE_VIKINGMEM_PROJECT", false, "default", true],
+      ["DATABASE_VIKING_REGION", false, "", true],
+      [
+        "DATABASE_VIKINGMEM_MEMORY_TYPE",
+        false,
+        "sys_event_v1,sys_profile_v1",
+        true,
+      ],
+    ],
+  );
+  assert.deepEqual(runtimeEnvDisplayRows(viking.env, {}), []);
+  assert.deepEqual(
+    runtimeEnvVars(viking.env, {
+      DATABASE_VIKINGMEM_PROJECT: "agent-project",
+      DATABASE_VIKING_REGION: "cn-beijing",
+    }),
+    [
+      { key: "DATABASE_VIKINGMEM_PROJECT", value: "agent-project" },
+      { key: "DATABASE_VIKING_REGION", value: "cn-beijing" },
+    ],
+  );
+  assert.match(vikingMemoriesSource, /\/web\/viking-memories/);
+  assert.match(customCreateSource, /function VikingMemorySelect/);
+  assert.match(customCreateSource, /longTermMemoryIndex:\s*memory\.id/);
+  assert.match(customCreateSource, /DATABASE_VIKINGMEM_PROJECT/);
 });
 
 test("declares the OpenViking long-term memory runtime configuration", () => {
@@ -423,36 +756,43 @@ test("declares the OpenViking long-term memory runtime configuration", () => {
       { key: "DATABASE_OPENVIKING_API_KEY", value: "test-api-key" },
     ],
   );
-  assert.equal(openvikingPolicy?.comment, "记忆策略");
+  assert.equal(openvikingPolicy?.comment, "Memory policy");
   assert.equal(openvikingPolicy?.multiline, true);
   assert.equal(openvikingPolicy?.format, "json");
   assert.match(
     openviking.env.find((env) => env.key === "DATABASE_OPENVIKING_USER_ID")
       ?.help ?? "",
-    /viking:\/\/user\/<此值>\/peers\/<请求用户>\/memories/,
+    /viking:\/\/user\/<this value>\/peers\/<request user>\/memories/,
   );
   assert.equal(
     openvikingPolicy?.help,
-    "记忆的抽取策略和隔离策略,不填写时使用官方默认策略。",
+    "Controls memory extraction and isolation. Leave it blank to use the official default policy.",
   );
   assert.equal(openvikingUrl?.link?.url, openvikingConsoleUrl);
   assert.equal(openvikingApiKey?.link?.url, openvikingConsoleUrl);
   assert.equal(openvikingPolicy?.link?.url, openvikingSessionsDocUrl);
   assert.match(customCreateSource, /className="cw-input cw-env-textarea"/);
-  assert.match(customCreateSource, /runtimeEnvJsonError\(item, values\)/);
+  assert.match(customCreateSource, /runtimeEnvJsonError\(item, values, t\("traditional\.env\.invalidJson"\)\)/);
   assert.match(customCreateSource, /firstInvalidRuntimeEnv\(/);
   assert.match(projectPreviewSource, /className="pp-env-value pp-env-json-value"/);
   assert.match(projectPreviewSource, /runtimeEnvJsonError\(\s*row,/);
   assert.match(projectPreviewSource, /firstInvalidRuntimeEnv\(/);
   assert.match(customCreateSource, /className="cw-env-help"/);
   assert.match(customCreateSource, /className="cw-env-link"/);
-  assert.match(customCreateSource, /title=\{`打开 OpenViking \$\{item\.link\.label\}`\}/);
+  assert.match(customCreateSource, /title=\{t\("traditional\.env\.openOpenViking"/);
   assert.match(customCreateSource, /data-help=\{item\.help\}/);
   assert.match(customCreateSource, /className="cw-env-help-popover"/);
   assert.match(projectPreviewSource, /className="pp-env-help"/);
   assert.match(projectPreviewSource, /className="pp-env-link"/);
-  assert.match(projectPreviewSource, /title=\{`打开 OpenViking \$\{row\.link\.label\}`\}/);
-  assert.match(projectPreviewSource, /data-help=\{row\.help \|\| row\.comment\}/);
+  assert.match(
+    projectPreviewSource,
+    /title=\{t\("projectPreview\.openOpenViking", \{ label: row\.link\.label \}\)\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /const helpText =[\s\S]*?runtimeEnvRequirementHint\(row\)[\s\S]*?row\.help \|\|[\s\S]*?row\.comment/,
+  );
+  assert.match(projectPreviewSource, /data-help=\{helpText\}/);
   assert.match(projectPreviewSource, /className="pp-env-help-popover"/);
   assert.match(projectPreviewStyles, /\.pp-env-key-cell\s*\{/);
   assert.match(projectPreviewStyles, /\.pp-env-help\s*\{/);
@@ -488,7 +828,7 @@ test("declares the OpenViking knowledge runtime configuration", () => {
   assert.match(
     openviking.env.find((env) => env.key === "DATABASE_OPENVIKING_USER_ID")
       ?.help ?? "",
-    /viking:\/\/user\/<此值>\/resources\/<知识库索引>\//,
+    /viking:\/\/user\/<this value>\/resources\/<knowledge base index>\//,
   );
   assert.match(
     openviking.env.find((env) => env.key === "DATABASE_OPENVIKING_TARGET_URI")
@@ -519,7 +859,7 @@ test("declares the OpenViking knowledge runtime configuration", () => {
       },
     ],
   );
-  assert.match(customCreateSource, /OpenViking 资源索引/);
+  assert.match(customCreateSource, /traditional\.env\.openVikingIndex/);
   assert.match(
     customCreateSource,
     /id === "viking"\s*\|\|\s*id === "openviking"/,
@@ -528,10 +868,7 @@ test("declares the OpenViking knowledge runtime configuration", () => {
     customCreateSource,
     /item\.key\s*===\s*"DATABASE_OPENVIKING_USER_ID"[\s\S]*<OpenVikingKnowledgeIndexField/,
   );
-  assert.match(
-    customCreateSource,
-    /默认值：留空[\s\S]*viking:\/\/user\/\{知识库归属 ID，未填则 default\}\/resources\/\{资源索引\}\//,
-  );
+  assert.match(customCreateSource, /traditional\.env\.openVikingIndexHelp/);
 });
 
 test("does not request auto-resolved credentials per component", () => {
@@ -594,18 +931,52 @@ test("shows configured database and Feishu values in the runtime env summary", (
   ]);
 });
 
-test("keeps the generated project stable when only deployment channel settings change", () => {
+test("regenerates the project when deployment channel settings change", () => {
   assert.match(
     customCreateSource,
-    /onFeishuEnabledChange=\{\(feishuEnabled\) => \{[\s\S]*?setDraft\(nextDraft\);/,
+    /onFeishuEnabledChange=\{async \(feishuEnabled\) => \{[\s\S]*?generateAgentProject\([\s\S]*?codegenDraft\(nextDraft\)[\s\S]*?setDraft\(nextDraft\);[\s\S]*?setProject\(generated\);/,
   );
-  assert.doesNotMatch(customCreateSource, /buildPreviewProject/);
   assert.match(
     customCreateSource,
-    /const releaseDraft = releaseVariant[\s\S]*?\.\.\.providerDraft[\s\S]*?generateAgentProject\(codegenDraft\(releaseDraft\)\)/,
+    /const releaseDraft = releaseVariant[\s\S]*?releaseDraftFromDebugVariant\(providerDraft, releaseVariant\)[\s\S]*?generateAgentProject\(codegenDraft\(releaseDraft\)\)/,
   );
   assert.match(projectPreviewSource, /await onFeishuEnabledChange\(!feishuEnabled\)/);
   assert.match(projectPreviewSource, /deploying \|\| feishuUpdating/);
+});
+
+test("restores Feishu credentials into Runtime updates and reuses opaque values", () => {
+  assert.match(
+    projectPreviewSource,
+    /appId=\{deploymentEnvValues\.FEISHU_APP_ID \?\? ""\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /appSecret=\{deploymentEnvValues\.FEISHU_APP_SECRET \?\? ""\}/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /appIdConfigured=\{configuredRuntimeEnvKeySet\.has\([\s\S]*?"FEISHU_APP_ID"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /appSecretConfigured=\{configuredRuntimeEnvKeySet\.has\([\s\S]*?"FEISHU_APP_SECRET"/,
+  );
+  assert.match(
+    customCreateSource,
+    /deploymentEnvValues=\{\{[\s\S]*?\.\.\.providerDraft\.deployment\?\.envValues/,
+  );
+  assert.match(
+    customCreateSource,
+    /const patchDeploymentEnvValues = \(values: Record<string, string>\)[\s\S]*?envValues: \{[\s\S]*?\.\.\.\(current\.deployment\?\.envValues \?\? \{\}\),[\s\S]*?\.\.\.values/,
+  );
+  assert.match(
+    customCreateSource,
+    /onFeishuCredentialsChange=\{\(appId, appSecret\) =>[\s\S]*?patchDeploymentEnvValues\(\{[\s\S]*?FEISHU_APP_ID: appId,[\s\S]*?FEISHU_APP_SECRET: appSecret/,
+  );
+  assert.match(
+    customCreateSource,
+    /removedConfiguredMcpEnvKeys\([\s\S]*?FEISHU_APP_ID[\s\S]*?FEISHU_APP_SECRET/,
+  );
 });
 
 test("normalizes generated project drafts to the selected cloud provider", () => {
@@ -631,8 +1002,8 @@ test("normalizes generated project drafts to the selected cloud provider", () =>
 test("uses concise placeholders for agent names and custom environment variables", () => {
   assert.match(customCreateSource, /placeholder="assistant"/);
   assert.doesNotMatch(customCreateSource, /placeholder="例如：customer_service"/);
-  assert.match(projectPreviewSource, /placeholder="名称"/);
-  assert.match(projectPreviewSource, /placeholder="值"/);
+  assert.match(projectPreviewSource, /placeholder=\{t\("common\.name"\)\}/);
+  assert.match(projectPreviewSource, /placeholder=\{t\("projectPreview\.value"\)\}/);
   assert.doesNotMatch(projectPreviewSource, /placeholder="(?:KEY|VALUE)"/);
 });
 
@@ -655,7 +1026,7 @@ test("materializes A2A registry defaults for deployment env", () => {
   assert.equal(
     A2A_REGISTRY_ENV.find((item) => item.key === "REGISTRY_SPACE_ID")
       ?.placeholder,
-    "请选择智能体中心",
+    "Select an agent center",
   );
   assert.deepEqual(
     runtimeEnvVars(A2A_REGISTRY_ENV, {
@@ -676,7 +1047,7 @@ test("materializes A2A registry defaults for deployment env", () => {
   );
   assert.match(
     customCreateSource,
-    /a2aRegistryEnvValues\(node\.a2aRegistry, \{ includeDefaults: true \}\)/,
+    /a2aRegistryEnvValues\([\s\S]*?node\.a2aRegistry,[\s\S]*?\{ includeDefaults: true \},[\s\S]*?cloudProvider,[\s\S]*?\)/,
   );
   assert.match(
     customCreateSource,
@@ -688,14 +1059,26 @@ test("materializes A2A registry defaults for deployment env", () => {
   );
 });
 
+test("uses BytePlus defaults for an A2A registry child agent", () => {
+  assert.deepEqual(a2aRegistryDefaults("byteplus"), {
+    topK: "3",
+    region: "ap-southeast-1",
+    endpoint: "https://agentkit.ap-southeast-1.byteplusapi.com/",
+  });
+  assert.match(
+    customCreateSource,
+    /region=\{[\s\S]*?node\.a2aRegistry\?\.registryRegion \|\|[\s\S]*?a2aDefaults\.region[\s\S]*?\}/,
+  );
+});
+
 test("summarizes the Agent above the deployment configuration", () => {
   assert.match(customCreateSource, /agentDraft=\{draft\}/);
   assert.match(projectPreviewSource, /className="pp-flow-thumbnail"/);
   assert.match(projectPreviewSource, /<AgentBuildCanvas[\s\S]*?readOnly/);
-  assert.match(projectPreviewSource, /Agent 数量/);
-  assert.match(projectPreviewSource, />\s*导出 YAML\s*</);
+  assert.match(projectPreviewSource, /projectPreview\.agentCount/);
+  assert.match(projectPreviewSource, /projectPreview\.exportYaml/);
   assert.match(projectPreviewSource, /<ProjectCodeBrowser[\s\S]*?pp-artifact-source/);
-  assert.match(projectPreviewSource, />\s*下载源代码\s*</);
+  assert.match(projectPreviewSource, /projectPreview\.downloadSource/);
   assert.match(
     projectPreviewStyles,
     /grid-template-rows:\s*auto auto/,
@@ -723,9 +1106,9 @@ test("keeps artifact actions beside the embedded publish canvas", () => {
     /className={`pp-release-preview\$\{embedded \? " is-embedded" : ""\}`}/,
   );
   assert.match(projectPreviewSource, /\{embedded && artifactActions\}/);
-  assert.match(projectPreviewSource, />\s*导出 YAML\s*</);
-  assert.match(projectPreviewSource, /label="查看源代码"/);
-  assert.match(projectPreviewSource, />\s*下载源代码\s*</);
+  assert.match(projectPreviewSource, /projectPreview\.exportYaml/);
+  assert.match(projectPreviewSource, /label=\{t\("projectPreview\.viewSource"\)\}/);
+  assert.match(projectPreviewSource, /projectPreview\.downloadSource/);
   assert.match(
     projectPreviewStyles,
     /\.pp-release-preview\.is-embedded\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) 132px/,
@@ -756,12 +1139,12 @@ test("enlarges the read-only execution canvas without topology configuration", (
     projectPreviewSource,
     /className="pp-flow-dialog"[\s\S]*?interactivePreview/,
   );
-  assert.match(projectPreviewSource, /只读预览，可缩放与拖动画布/);
+  assert.match(projectPreviewSource, /projectPreview\.flowPreviewHint/);
   assert.doesNotMatch(projectPreviewSource, /pp-topology-pane|inspectedAgent/);
 });
 
 test("uses an unboxed source trigger", () => {
-  assert.match(codeBrowserSource, /<span>\{label\}<\/span>/);
+  assert.match(codeBrowserSource, /<span>\{displayLabel\}<\/span>/);
   assert.match(
     codeBrowserStyles,
     /\.code-browser-trigger\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;/,
@@ -776,6 +1159,6 @@ test("opens generated source in an editable code browser dialog", () => {
   assert.match(codeBrowserSource, /document\.body\.style\.overflow = "hidden"/);
   assert.match(
     codeBrowserStyles,
-    /\.code-browser-dialog\s*\{[\s\S]*?height:\s*min\(720px, 84vh\);/,
+    /\.code-browser-dialog\s*\{[\s\S]*?height:\s*min\(800px, 88vh\);/,
   );
 });

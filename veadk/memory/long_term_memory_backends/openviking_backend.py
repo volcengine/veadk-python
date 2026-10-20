@@ -206,10 +206,10 @@ class OpenVikingLTMBackend(BaseLongTermMemoryBackend):
 
     def _create_session(self, *, client: SyncHTTPClient, session_id: str) -> None:
         try:
-            kwargs: dict[str, Any] = {"session_id": session_id}
+            options: dict[str, Any] = {}
             if self.memory_policy is not None:
-                kwargs["memory_policy"] = self.memory_policy
-            client.create_session(**kwargs)
+                options["memory_policy"] = self.memory_policy
+            client.create_session(session_id=session_id, options=options or None)
         except Exception as e:
             if self._is_existing_session_error(e):
                 logger.debug(f"OpenViking session already exists, continue: {e}")
@@ -245,8 +245,8 @@ class OpenVikingLTMBackend(BaseLongTermMemoryBackend):
             return client.find(
                 query=query,
                 target_uri=target_uri,
-                context_type="memory",
                 limit=top_k,
+                options={"context_type": "memory"},
             )
         finally:
             client.close()

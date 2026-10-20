@@ -60,6 +60,7 @@ class VikingDBMemoryClient(Service):
         ak="",
         sk="",
         sts_token="",
+        api_key="",
         scheme="https",
         connection_timeout=30,
         socket_timeout=30,
@@ -70,7 +71,7 @@ class VikingDBMemoryClient(Service):
             host = host or DEFAULT_BYTEPLUS_VIKING_MEMORY_HOST
         else:
             if not region:
-                region = DEFAULT_VOLCENGINE_REGION
+                region = os.getenv("REGION") or DEFAULT_VOLCENGINE_REGION
             if not host:
                 host = f"api-knowledgebase.mlp.{region}.volces.com"
         env_host = getenv(
@@ -89,6 +90,12 @@ class VikingDBMemoryClient(Service):
                 raise ValueError(
                     "DATABASE_VIKINGMEM_BASE_URL must start with http:// or https://"
                 )
+        if (api_key or "").strip():
+            raise ValueError(
+                "VikingDB memory collection management requires AK/SK or IAM "
+                "credentials. API key auth is only supported by the VikingMem SDK "
+                "for memory operations on existing collections."
+            )
 
         self.service_info = VikingDBMemoryClient.get_service_info(
             host, region, scheme, connection_timeout, socket_timeout
@@ -148,6 +155,16 @@ class VikingDBMemoryClient(Service):
             "GetCollection": ApiInfo(
                 "POST",
                 "/api/memory/collection/info",
+                {},
+                {},
+                {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+            ),
+            "ListCollection": ApiInfo(
+                "POST",
+                "/api/memory/collection/list",
                 {},
                 {},
                 {
@@ -312,6 +329,15 @@ class VikingDBMemoryClient(Service):
     def get_collection(self, collection_name, project="default"):
         params = {"CollectionName": collection_name, "ProjectName": project}
         res = self.json("GetCollection", {}, json.dumps(params))
+        return json.loads(res)
+
+    def list_collections(self, project="default", page_number=1, page_size=100):
+        params = {
+            "ProjectName": project,
+            "PageNumber": page_number,
+            "PageSize": page_size,
+        }
+        res = self.json("ListCollection", {}, json.dumps(params))
         return json.loads(res)
 
     def drop_collection(self, collection_name):

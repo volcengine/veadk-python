@@ -1,20 +1,28 @@
+import { UsersIcon } from "../users/UsersIcon";
 import {
   type CSSProperties,
   type SVGProps,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
 import {
+  Box,
   Info,
   LogOut,
   MoreHorizontal,
-  PanelLeftClose,
-  PanelLeftOpen,
   Plus,
   Trash2,
 } from "lucide-react";
-import { BookOpen } from "@openai/apps-sdk-ui/components/Icon";
+import { Badge } from "@openai/apps-sdk-ui/components/Badge";
+import { BookWrench } from "@openai/apps-sdk-ui/components/Icon";
+import { Clock } from "@openai/apps-sdk-ui/components/Icon";
+import { MarkerCode } from "@openai/apps-sdk-ui/components/Icon";
+import { LoadingIndicator } from "@openai/apps-sdk-ui/components/Indicator";
+import { Menu } from "@openai/apps-sdk-ui/components/Menu";
+import { Tooltip } from "@openai/apps-sdk-ui/components/Tooltip";
+import { useTranslation } from "react-i18next";
 import type {
   AdkSession,
   SiteBranding,
@@ -25,20 +33,77 @@ import type { SandboxThreadSummary } from "../adk/sandbox";
 import { sessionTitle } from "../blocks";
 import { displayName, profilePictureUrl } from "../adk/identity";
 import { SearchButton } from "./Search";
-import { AgentFaceIcon } from "./AgentFaceIcon";
 import { IssueFeedbackIcon } from "./icons/FeedbackIcons";
+import {
+  NewChatIcon,
+  ResourceLibraryIcon,
+  SidebarAgentIcon,
+  SidebarCollapseIcon,
+  SidebarExpandIcon,
+} from "./icons/SidebarIcons";
 import defaultSiteLogo from "../assets/logo.svg";
 import byteplusLogo from "../assets/byteplus.svg";
+import {
+  changeLanguage,
+  DEFAULT_LOCALE,
+  resolveSupportedLocale,
+  SUPPORTED_LOCALES,
+} from "../i18n";
+import "./Sidebar.css";
+import { ReviewIcon } from "./icons/ReviewIcon";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
+
+function ScrollableHistoryTitle({ title }: { title: string }) {
+  const viewportRef = useRef<HTMLSpanElement>(null);
+  const contentRef = useRef<HTMLSpanElement>(null);
+  const [overflowDistance, setOverflowDistance] = useState(0);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    const content = contentRef.current;
+    if (!viewport || !content) return undefined;
+    const updateOverflowDistance = () => {
+      const next = Math.max(0, Math.ceil(content.scrollWidth - viewport.clientWidth));
+      setOverflowDistance((current) => (current === next ? current : next));
+    };
+    updateOverflowDistance();
+    const observer = new ResizeObserver(updateOverflowDistance);
+    observer.observe(viewport);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [title]);
+
+  const scrollDuration = Math.min(12, Math.max(4.8, 3.6 + overflowDistance / 36));
+  const titleStyle = {
+    "--history-title-translate": `-${overflowDistance}px`,
+    "--history-title-duration": `${scrollDuration.toFixed(2)}s`,
+  } as CSSProperties;
+
+  return (
+    <span
+      ref={viewportRef}
+      className={`history-title${overflowDistance > 0 ? " is-overflowing" : ""}`}
+      style={titleStyle}
+    >
+      <span ref={contentRef} className="history-title-text">{title}</span>
+    </span>
+  );
+}
 
 export type SidebarPage =
   | "new-chat"
   | "agents"
+  | "workspaces"
+  | "environments"
   | "library"
+  | "review-center"
   | "applications"
+  | "cronjobs"
   | "search"
+  | "developer-resources"
   | "feedback"
+  | "users"
   | null;
 
 export interface SidebarSandboxHistory {
@@ -73,6 +138,24 @@ function ApplicationsIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+function LanguageIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <circle cx="12" cy="12" r="8.25" />
+      <path d="M3.75 12h16.5M12 3.75c2.1 2.2 3.2 4.95 3.2 8.25S14.1 18.05 12 20.25M12 3.75C9.9 5.95 8.8 8.7 8.8 12s1.1 6.05 3.2 8.25" />
+    </svg>
+  );
+}
+
 export interface SidebarProps {
   branding: SiteBranding;
   cloudProvider: "volcengine" | "byteplus";
@@ -83,7 +166,7 @@ export interface SidebarProps {
   features?: UiFeatures;
   /** Server-derived role and capabilities. */
   access: StudioAccess;
-  /** Session ids that are currently streaming a reply (shows a live dot). */
+  /** Session ids that are currently streaming a reply. */
   streamingSids?: Set<string>;
   /** Session ids whose latest reply is currently being evaluated. */
   evaluatingSids?: Set<string>;
@@ -92,10 +175,16 @@ export interface SidebarProps {
   onSearch: () => void;
   onQuickCreate: () => void;
   onLibrary: () => void;
+  onReviewCenter: () => void;
   onAddAgent: () => void;
   onMyAgents: () => void;
+  onWorkspace: () => void;
   onApplications: () => void;
+  onCronJobs: () => void;
+  onAgentKitCli: () => void;
+  onDeveloperResources: () => void;
   onSystemInfo: () => void;
+  onUserManagement?: () => void;
   onIssueFeedback: () => void;
   onPickSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
@@ -120,83 +209,82 @@ function smokeAvatarStyle(seed: string): CSSProperties {
   } as CSSProperties;
 }
 
-const STUDIO_ROLE_LABELS: Record<StudioAccess["role"], string> = {
-  admin: "管理员",
-  developer: "开发者",
-  user: "普通用户",
+const STUDIO_ROLE_KEYS: Record<StudioAccess["role"], string> = {
+  super_admin: "account.roles.super_admin",
+  admin: "account.roles.admin",
+  developer: "account.roles.developer",
+  user: "account.roles.user",
 };
-
-function StudioRoleBadge({ role }: { role: StudioAccess["role"] }) {
-  const label = STUDIO_ROLE_LABELS[role];
-  return (
-    <span className={`studio-role-badge studio-role-badge--${role}`} title={label}>
-      {label}
-    </span>
-  );
-}
 
 /** Account block pinned at the bottom of the sidebar: avatar + name, with a
  *  popover (opening upward) holding the full identity and account actions. */
 function SidebarUser({
+  activePage,
   access,
   userInfo,
+  onAgentKitCli,
+  onDeveloperResources,
   onSystemInfo,
+  onIssueFeedback,
   onLogout,
-}: Pick<SidebarProps, "access" | "userInfo" | "onSystemInfo" | "onLogout">) {
-  const [open, setOpen] = useState(false);
+}: Pick<
+  SidebarProps,
+  | "activePage"
+  | "access"
+  | "userInfo"
+  | "onAgentKitCli"
+  | "onDeveloperResources"
+  | "onSystemInfo"
+  | "onIssueFeedback"
+  | "onLogout"
+>) {
+  const { t, i18n } = useTranslation(["sidebar", "common"]);
   const [failedAvatarUrl, setFailedAvatarUrl] = useState("");
   if (!userInfo) return null;
-  const name = displayName(userInfo);
-  const email = typeof userInfo.email === "string" ? userInfo.email : "";
-  const initial = (name || "U").slice(0, 1).toUpperCase();
-  const avatarStyle = smokeAvatarStyle(name || email || initial);
+  const name = displayName(userInfo) || t("sidebar:account.defaultUser");
+  const email = typeof userInfo.email === "string" ? userInfo.email.trim() : "";
+  const avatarStyle = smokeAvatarStyle(name);
   const pictureUrl = profilePictureUrl(userInfo);
   const visiblePictureUrl = pictureUrl === failedAvatarUrl ? "" : pictureUrl;
+  const currentLocale =
+    resolveSupportedLocale(i18n.resolvedLanguage ?? i18n.language) ??
+    DEFAULT_LOCALE;
   return (
     <div className="sidebar-user">
-      <button
-        className="sidebar-user-btn"
-        onClick={() => setOpen((o) => !o)}
-        title={email ? `${name}\n${email}` : name}
-      >
-        <span
-          className={`account-avatar${visiblePictureUrl ? " has-image" : ""}`}
-          style={avatarStyle}
-        >
-          {initial}
-          {visiblePictureUrl ? (
-            <img
-              className="account-avatar-image"
-              src={visiblePictureUrl}
-              alt=""
-              aria-hidden="true"
-              referrerPolicy="no-referrer"
-              onError={() => setFailedAvatarUrl(visiblePictureUrl)}
-            />
-          ) : null}
-        </span>
-        <span className="sidebar-user-identity">
-          <span className="sidebar-user-primary">
-            <span className="sidebar-user-name">{name}</span>
-            <StudioRoleBadge role={access.role} />
-          </span>
-          {email && email !== name && (
-            <span className="sidebar-user-email">{email}</span>
-          )}
-        </span>
-      </button>
-      {open && (
-        <>
-          <div className="menu-scrim" onClick={() => setOpen(false)} />
-          <div className="account-pop sidebar-user-pop">
-            <div className="account-head">
+      <div className="sidebar-user-row">
+        <Menu modal>
+          <Menu.Trigger>
+            <button type="button" className="sidebar-user-btn" title={name}>
+              <span
+                className={`account-avatar${visiblePictureUrl ? " has-image" : ""}`}
+                style={avatarStyle}
+                aria-hidden="true"
+              >
+                {visiblePictureUrl ? (
+                  <img
+                    className="account-avatar-image"
+                    src={visiblePictureUrl}
+                    alt=""
+                    aria-hidden="true"
+                    referrerPolicy="no-referrer"
+                    onError={() => setFailedAvatarUrl(visiblePictureUrl)}
+                  />
+                ) : null}
+              </span>
+              <span className="sidebar-user-identity">
+                <span className="sidebar-user-name">{name}</span>
+              </span>
+            </button>
+          </Menu.Trigger>
+          <Menu.Content side="top" align="start" sideOffset={4} minWidth={216}>
+            <div className="account-menu-head">
               <span
                 className={`account-avatar account-avatar--lg${
                   visiblePictureUrl ? " has-image" : ""
                 }`}
                 style={avatarStyle}
+                aria-hidden="true"
               >
-                {initial}
                 {visiblePictureUrl ? (
                   <img
                     className="account-avatar-image"
@@ -211,34 +299,81 @@ function SidebarUser({
               <div className="account-id">
                 <div className="account-name-row">
                   <div className="account-name">{name}</div>
-                  <StudioRoleBadge role={access.role} />
+                  <Badge color="secondary" size="sm" variant="soft" pill>
+                    {t(`sidebar:${STUDIO_ROLE_KEYS[access.role]}`)}
+                  </Badge>
                 </div>
-                {email && email !== name && <div className="account-sub">{email}</div>}
+                {email && email !== name && (
+                  <div className="account-sub">{email}</div>
+                )}
               </div>
             </div>
+            <Menu.Item className="account-menu-action" onSelect={onSystemInfo}>
+              <Info className="icon" aria-hidden="true" />
+              {t("sidebar:account.systemInfo")}
+            </Menu.Item>
+            <Menu.Sub>
+              <Menu.SubTrigger className="account-menu-action">
+                <span className="account-menu-action__label">
+                  <LanguageIcon className="icon" />
+                  {t("sidebar:account.language")}
+                </span>
+              </Menu.SubTrigger>
+              <Menu.SubContent sideOffset={6} minWidth={136}>
+                <Menu.RadioGroup
+                  value={currentLocale}
+                  onChange={(locale) => {
+                    void changeLanguage(locale);
+                  }}
+                  indicatorPosition="end"
+                >
+                  {SUPPORTED_LOCALES.map((locale) => (
+                    <Menu.RadioItem key={locale} value={locale}>
+                      {t(`common:languageNames.${locale}`)}
+                    </Menu.RadioItem>
+                  ))}
+                </Menu.RadioGroup>
+              </Menu.SubContent>
+            </Menu.Sub>
+            <Menu.Item className="account-menu-action" onSelect={onIssueFeedback}>
+              <IssueFeedbackIcon className="icon" />
+              {t("sidebar:account.issueFeedback")}
+            </Menu.Item>
+            <Menu.Item className="account-menu-action" onSelect={onLogout}>
+              <LogOut className="icon" aria-hidden="true" />
+              {t("sidebar:account.logout")}
+            </Menu.Item>
+          </Menu.Content>
+        </Menu>
+        <div
+          className="sidebar-user-shortcuts"
+          aria-label={t("sidebar:account.shortcuts")}
+        >
+          <Tooltip compact content={t("sidebar:account.tryCli")}>
             <button
               type="button"
-              className="account-action"
-              onClick={() => {
-                setOpen(false);
-                onSystemInfo();
-              }}
+              className="sidebar-user-shortcut"
+              onClick={onAgentKitCli}
+              aria-label={t("sidebar:account.tryCli")}
             >
-              <Info className="icon" /> 系统信息
+              <MarkerCode className="icon" />
             </button>
+          </Tooltip>
+          <Tooltip compact content={t("sidebar:account.developerResources")}>
             <button
               type="button"
-              className="account-action"
-              onClick={() => {
-                setOpen(false);
-                onLogout();
-              }}
+              className={`sidebar-user-shortcut${
+                activePage === "developer-resources" ? " is-active" : ""
+              }`}
+              onClick={onDeveloperResources}
+              aria-label={t("sidebar:account.developerResources")}
+              aria-current={activePage === "developer-resources" ? "page" : undefined}
             >
-              <LogOut className="icon" /> 退出登录
+              <BookWrench className="icon" />
             </button>
-          </div>
-        </>
-      )}
+          </Tooltip>
+        </div>
+      </div>
     </div>
   );
 }
@@ -258,30 +393,41 @@ export function Sidebar({
   onSearch,
   onQuickCreate,
   onLibrary,
+  onReviewCenter,
   onAddAgent,
   onMyAgents,
+  onWorkspace,
   onApplications,
+  onCronJobs,
+  onAgentKitCli,
+  onDeveloperResources,
   onSystemInfo,
+  onUserManagement,
   onIssueFeedback,
   onPickSession,
   onDeleteSession,
   userInfo,
   onLogout,
 }: SidebarProps) {
-  // Agent creation still lives outside the main navigation.
+  const { t } = useTranslation("sidebar");
+  // Agent creation remains outside the main navigation.
   void onQuickCreate;
   void onAddAgent;
   // Per-module feature gates; a missing flag defaults to shown.
   const show = (k: keyof NonNullable<typeof features>) => features?.[k] !== false;
+  const canReview = access.role === "admin" || access.role === "super_admin";
+  const canManageUsers = access.capabilities.manageUsers && Boolean(onUserManagement);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const autoCollapsedRef = useRef(
     typeof window !== "undefined" &&
       window.matchMedia(SIDEBAR_AUTO_COLLAPSE_QUERY).matches,
   );
   const [collapsed, setCollapsed] = useState(autoCollapsedRef.current);
-  const sorted = [...sessions].sort(
-    (a, b) => (b.lastUpdateTime ?? 0) - (a.lastUpdateTime ?? 0),
-  );
+  const combinedHistory = sessions.map((session) => ({
+    id: session.id,
+    title: session.title || sessionTitle(session.events, t("history.newConversation")),
+    createdAt: (session.lastUpdateTime ?? 0) * 1_000,
+  })).sort((left, right) => right.createdAt - left.createdAt);
   const toggleCollapsed = () => {
     autoCollapsedRef.current = false;
     setCollapsed((value) => !value);
@@ -314,8 +460,8 @@ export function Sidebar({
             type="button"
             className="brand"
             onClick={onNewChat}
-            aria-label="返回首页"
-            title="返回首页"
+            aria-label={t("navigation.home")}
+            title={t("navigation.home")}
           >
             <img
               className="brand-logo"
@@ -331,84 +477,137 @@ export function Sidebar({
             type="button"
             className="sidebar-collapse-toggle"
             onClick={toggleCollapsed}
-            aria-label={collapsed ? "展开侧边栏" : "收起侧边栏"}
-            title={collapsed ? "展开侧边栏" : "收起侧边栏"}
+            aria-label={collapsed ? t("navigation.expand") : t("navigation.collapse")}
+            title={collapsed ? t("navigation.expand") : t("navigation.collapse")}
           >
             {collapsed ? (
-              <PanelLeftOpen className="icon" />
+              <SidebarExpandIcon className="icon" />
             ) : (
-              <PanelLeftClose className="icon" />
+              <SidebarCollapseIcon className="icon" />
             )}
           </button>
         </div>
-        {show("newChat") && (
+        <nav className="sidebar-nav" aria-label={t("navigation.label")}>
+          {show("newChat") && (
+            <button
+              className={`new-chat new-chat--conversation${
+                activePage === "new-chat" ? " is-active" : ""
+              }`}
+              onClick={onNewChat}
+              aria-label={t("navigation.newChat")}
+              aria-current={activePage === "new-chat" ? "page" : undefined}
+              title={t("navigation.newChat")}
+            >
+              <NewChatIcon className="icon" />
+              <span className="sidebar-nav-label">{t("navigation.newChat")}</span>
+            </button>
+          )}
+          {show("search") && (
+            <SearchButton active={activePage === "search"} onClick={onSearch} />
+          )}
           <button
-            className={`new-chat new-chat--conversation${
-              activePage === "new-chat" ? " is-active" : ""
+            className={`new-chat new-chat--agents${
+              activePage === "agents" ? " is-active" : ""
             }`}
-            onClick={onNewChat}
-            aria-label="新会话"
-            aria-current={activePage === "new-chat" ? "page" : undefined}
-            title="新会话"
+            onClick={onMyAgents}
+            aria-label={t("navigation.agents")}
+            aria-current={activePage === "agents" ? "page" : undefined}
+            title={t("navigation.agents")}
           >
-            <Plus className="icon" />
-            <span className="sidebar-nav-label">新会话</span>
+            <SidebarAgentIcon className="icon" />
+            <span className="sidebar-nav-label">{t("navigation.agents")}</span>
           </button>
-        )}
-        <button
-          className={`new-chat new-chat--agents${
-            activePage === "agents" ? " is-active" : ""
-          }`}
-          onClick={onMyAgents}
-          aria-label="智能体"
-          aria-current={activePage === "agents" ? "page" : undefined}
-          title="智能体"
-        >
-          <AgentFaceIcon />
-          <span className="sidebar-nav-label">智能体</span>
-        </button>
-        <button
-          className={`new-chat new-chat--library${
-            activePage === "library" ? " is-active" : ""
-          }`}
-          onClick={onLibrary}
-          aria-label="库"
-          aria-current={activePage === "library" ? "page" : undefined}
-          title="库"
-        >
-          <BookOpen className="icon" />
-          <span className="sidebar-nav-label">库</span>
-        </button>
-        {show("search") && (
-          <SearchButton active={activePage === "search"} onClick={onSearch} />
-        )}
-        <button
-          className={`new-chat new-chat--applications${
-            activePage === "applications" ? " is-active" : ""
-          }`}
-          onClick={onApplications}
-          aria-label="自动化"
-          aria-current={activePage === "applications" ? "page" : undefined}
-          title="自动化"
-        >
-          <ApplicationsIcon className="icon" />
-          <span className="sidebar-nav-label">自动化</span>
-          <span className="sidebar-beta-badge">Beta</span>
-        </button>
+          <button
+            className={`new-chat new-chat--workspaces${
+              activePage === "workspaces" ? " is-active" : ""
+            }`}
+            onClick={onWorkspace}
+            aria-label={t("navigation.workspaces")}
+            aria-current={activePage === "workspaces" ? "page" : undefined}
+            title={t("navigation.workspaces")}
+          >
+            <Box className="icon" />
+            <span className="sidebar-nav-label">{t("navigation.workspaces")}</span>
+          </button>
+          <button
+            className={`new-chat new-chat--library${
+              activePage === "library" ? " is-active" : ""
+            }`}
+            onClick={onLibrary}
+            aria-label={t("navigation.library")}
+            aria-current={activePage === "library" ? "page" : undefined}
+            title={t("navigation.library")}
+          >
+            <ResourceLibraryIcon className="icon" />
+            <span className="sidebar-nav-label">{t("navigation.library")}</span>
+          </button>
+          <button
+            className={`new-chat new-chat--cronjobs${
+              activePage === "cronjobs" ? " is-active" : ""
+            }`}
+            onClick={onCronJobs}
+            aria-label={t("navigation.cronjobs")}
+            aria-current={activePage === "cronjobs" ? "page" : undefined}
+            title={t("navigation.cronjobs")}
+          >
+            <Clock className="icon" />
+            <span className="sidebar-nav-label">{t("navigation.cronjobs")}</span>
+          </button>
+          <button
+            className={`new-chat new-chat--applications${
+              activePage === "applications" ? " is-active" : ""
+            }`}
+            onClick={onApplications}
+            aria-label={t("navigation.automations")}
+            aria-current={activePage === "applications" ? "page" : undefined}
+            title={t("navigation.automations")}
+          >
+            <ApplicationsIcon className="icon" />
+            <span className="sidebar-nav-label">{t("navigation.automations")}</span>
+          </button>
+        </nav>
+        {canReview || canManageUsers ? (
+          <nav className="sidebar-nav sidebar-nav--administration" aria-label={t("navigation.administration")}>
+            <div className="sidebar-nav-group-title" aria-hidden="true">
+              {t("navigation.administration")}
+            </div>
+            {canReview ? (
+              <button
+                type="button"
+                className={`new-chat new-chat--review-center${activePage === "review-center" ? " is-active" : ""}`}
+                onClick={onReviewCenter}
+                aria-label={t("navigation.reviewCenter")}
+                aria-current={activePage === "review-center" ? "page" : undefined}
+                title={t("navigation.reviewCenter")}
+              >
+                <ReviewIcon className="icon" />
+                <span className="sidebar-nav-label">{t("navigation.reviewCenter")}</span>
+              </button>
+            ) : null}
+            {canManageUsers ? (
+              <button type="button" className={`new-chat${activePage === "users" ? " is-active" : ""}`}
+                onClick={onUserManagement} aria-label={t("navigation.users")}
+                aria-current={activePage === "users" ? "page" : undefined} title={t("navigation.users")}>
+                <UsersIcon className="icon" />
+                <span className="sidebar-nav-label">{t("navigation.users")}</span>
+              </button>
+            ) : null}
+          </nav>
+        ) : null}
       </div>
 
       {show("history") && (
         <div className="sidebar-history">
           <div className="history-head">
-            <span>历史会话</span>
+            <span>{t("history.title")}</span>
             {show("newChat") && (
               <button
                 type="button"
                 className="history-new-chat"
                 onClick={sandboxHistory?.onNew ?? onNewChat}
                 disabled={sandboxHistory?.newDisabled}
-                aria-label="新建会话"
-                title="新建会话"
+                aria-label={t("history.create")}
+                title={t("history.create")}
               >
                 <Plus className="icon" />
               </button>
@@ -419,7 +618,7 @@ export function Sidebar({
               <>
                 {sandboxHistory.loading && sandboxHistory.threads.length === 0 ? (
                   <div className="history-empty" role="status">
-                    正在加载历史会话…
+                    {t("history.loading")}
                   </div>
                 ) : null}
                 {sandboxHistory.error ? (
@@ -430,7 +629,7 @@ export function Sidebar({
                 {!sandboxHistory.loading &&
                 !sandboxHistory.error &&
                 sandboxHistory.threads.length === 0 ? (
-                  <div className="history-empty">暂无会话</div>
+                  <div className="history-empty">{t("history.empty")}</div>
                 ) : null}
                 {sandboxHistory.threads.map((thread) => {
                   const active = thread.id === sandboxHistory.currentThreadId;
@@ -452,16 +651,16 @@ export function Sidebar({
                         title={title}
                         disabled={busy}
                       >
-                        <span className="history-title">{title}</span>
+                        <ScrollableHistoryTitle title={title} />
                         {active ? (
-                          <span className="history-current-badge">当前</span>
+                          <span className="history-current-badge">{t("history.current")}</span>
                         ) : null}
                       </button>
                       <button
                         type="button"
                         className="history-more"
-                        aria-label={`管理历史会话：${title}`}
-                        title="更多"
+                        aria-label={t("history.manage", { title })}
+                        title={t("history.more")}
                         disabled={busy}
                         onClick={() =>
                           setMenuFor((current) =>
@@ -486,7 +685,7 @@ export function Sidebar({
                                 sandboxHistory.onDelete(thread);
                               }}
                             >
-                              <Trash2 className="icon" /> 删除
+                              <Trash2 className="icon" /> {t("history.delete")}
                             </button>
                           </div>
                         </>
@@ -501,67 +700,71 @@ export function Sidebar({
                     disabled={sandboxHistory.loading}
                     onClick={sandboxHistory.onLoadMore}
                   >
-                    {sandboxHistory.loading ? "加载中…" : "加载更多"}
+                    {sandboxHistory.loading
+                      ? t("history.loadingMore")
+                      : t("history.loadMore")}
                   </button>
                 ) : null}
               </>
             ) : (
               <>
-                {sorted.length === 0 && (
-                  <div className="history-empty">暂无会话</div>
-                )}
-                {sorted.map((s) => {
-                  const title = sessionTitle(s.events);
-                  const streaming = streamingSids?.has(s.id) === true;
-                  const evaluating = !streaming && evaluatingSids?.has(s.id) === true;
+                {combinedHistory.length === 0 ? (
+                  <div className="history-empty">{t("history.empty")}</div>
+                ) : null}
+                {combinedHistory.map((item) => {
+                  const active = item.id === currentSessionId;
+                  const streaming = streamingSids?.has(item.id) === true;
+                  const evaluating = !streaming
+                    && evaluatingSids?.has(item.id) === true;
                   return (
                     <div
-                      key={s.id}
-                      className={`history-item ${
-                        s.id === currentSessionId ? "active" : ""
-                      }`}
+                      key={item.id}
+                      className={`history-item ${active ? "active" : ""}`}
                     >
                       <button
                         className="history-item-btn"
-                        onClick={() => onPickSession(s.id)}
-                        aria-current={
-                          s.id === currentSessionId ? "page" : undefined
-                        }
-                        title={title}
+                        onClick={() => onPickSession(item.id)}
+                        aria-current={active ? "page" : undefined}
+                        title={item.title}
                       >
-                        {streaming && (
-                          <span
-                            className="history-streaming"
-                            title="正在生成…"
-                            aria-label="正在生成"
-                          />
-                        )}
-                        <span className="history-title">{title}</span>
+                        <ScrollableHistoryTitle title={item.title} />
                         {evaluating && (
                           <span
                             className="history-evaluating-status"
-                            title="正在自动评测"
+                            title={t("history.evaluatingTitle")}
                           >
                             <span
                               className="history-evaluating"
                               aria-hidden="true"
                             />
-                            评测中
+                            {t("history.evaluating")}
                           </span>
                         )}
                       </button>
-                      <button
-                        type="button"
-                        className="history-more"
-                        aria-label={`管理历史会话：${title}`}
-                        title="更多"
-                        onClick={() =>
-                          setMenuFor((m) => (m === s.id ? null : s.id))
-                        }
-                      >
-                        <MoreHorizontal className="icon" />
-                      </button>
-                      {menuFor === s.id && (
+                      <div className="history-action-slot">
+                        {streaming ? (
+                          <LoadingIndicator
+                            className="history-streaming-indicator"
+                            size={12}
+                            role="status"
+                            aria-label={t("history.generating")}
+                          />
+                        ) : null}
+                        <button
+                          type="button"
+                          className="history-more"
+                          aria-label={t("history.manage", { title: item.title })}
+                          title={t("history.more")}
+                          onClick={() =>
+                            setMenuFor((current) =>
+                              current === item.id ? null : item.id
+                            )
+                          }
+                        >
+                          <MoreHorizontal className="icon" />
+                        </button>
+                      </div>
+                      {menuFor === item.id && (
                         <>
                           <div
                             className="menu-scrim"
@@ -569,13 +772,14 @@ export function Sidebar({
                           />
                           <div className="history-menu">
                             <button
+                              type="button"
                               className="menu-item menu-item--danger"
                               onClick={() => {
                                 setMenuFor(null);
-                                onDeleteSession(s.id);
+                                onDeleteSession(item.id);
                               }}
                             >
-                              <Trash2 className="icon" /> 删除
+                              <Trash2 className="icon" /> {t("history.delete")}
                             </button>
                           </div>
                         </>
@@ -590,23 +794,14 @@ export function Sidebar({
       )}
 
       <div className="sidebar-footer">
-        <button
-          type="button"
-          className={`sidebar-feedback${
-            activePage === "feedback" ? " is-active" : ""
-          }`}
-          onClick={onIssueFeedback}
-          aria-label="问题反馈"
-          aria-current={activePage === "feedback" ? "page" : undefined}
-          title="问题反馈"
-        >
-          <IssueFeedbackIcon className="icon" />
-          <span className="sidebar-nav-label">问题反馈</span>
-        </button>
         <SidebarUser
+          activePage={activePage}
           access={access}
           userInfo={userInfo}
+          onAgentKitCli={onAgentKitCli}
+          onDeveloperResources={onDeveloperResources}
           onSystemInfo={onSystemInfo}
+          onIssueFeedback={onIssueFeedback}
           onLogout={onLogout}
         />
       </div>

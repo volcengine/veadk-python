@@ -27,11 +27,18 @@ import re
 import secrets
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from typing import Annotated, Any, Protocol
 
 from fastapi import File, Request, UploadFile
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 
 from frontend.server.sandbox.tool_sessions import SandboxToolPair
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
@@ -43,6 +50,7 @@ from veadk.cli.agentkit_session_metadata import (
     session_agent_kind,
     session_creator_name,
     session_display_name,
+    session_display_name_metadata_value,
     session_username,
 )
 from veadk.cli.codex_app_server import (
@@ -50,6 +58,9 @@ from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerEvent,
     CodexAppServerSession,
+    CodexAppServerTransportError,
+    CodexAppServerTurnInterruptedError,
+    CodexAppServerTurnTimeoutError,
     CodexDirectoryListing,
     CodexImportedImage,
     CodexImportedMessage,
@@ -73,9 +84,50 @@ from veadk.cli.frontend_sandbox_proxy import (
     terminal_launch_url,
     upload_sandbox_file,
 )
+from veadk.cli.github_app_pr_review import (
+    GitHubAppClient,
+    GitHubAppReviewError,
+    GitHubAppReviewStorageUnavailable,
+    GitHubPullRequestReviewRecord,
+    PageRequest,
+    TosGitHubAppReviewRepositoryStore,
+    create_review_record,
+    github_app_public_config,
+    load_github_app_config,
+    normalize_review_repository,
+    parse_pull_request_event,
+    verify_webhook_signature,
+)
+from veadk.cli.gitlab_app_mr_review import (
+    GITLAB_WEBHOOK_PATH,
+    GitLabAppClient,
+    GitLabAppReviewError,
+    GitLabAppReviewStorageUnavailable,
+    GitLabOAuthClient,
+    GitLabOAuthCredential,
+    GitLabMergeRequestEvent,
+    GitLabMergeRequestReviewRecord,
+    GitLabProject,
+    GitLabAppConfig,
+    GitLabProjectBinding,
+    TosGitLabAppReviewProjectStore,
+    create_oauth_credential,
+    create_review_record as create_gitlab_review_record,
+    gitlab_app_public_config,
+    load_gitlab_app_config,
+    load_gitlab_oauth_config,
+    parse_merge_request_event,
+    parse_merge_request_url,
+    project_key,
+    refreshed_oauth_credential,
+    verify_gitlab_webhook_token,
+)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_GITHUB_REVIEW_DEFAULT_PAGE_SIZE = 10
+_GITHUB_REVIEW_MAX_PAGE_SIZE = 50
 
 STUDIO_SANDBOX_TOOL_NAME = "veadk-studio-codex"
 STUDIO_SANDBOX_TTL_SECONDS = 28_800
@@ -93,11 +145,13 @@ _CODEX_PROJECT_HANDOFF_PAIRING_MIN_TTL_SECONDS = 60
 _CODEX_PROJECT_HANDOFF_PAIRING_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 _CODEX_PROJECT_HANDOFF_PAIRING_LENGTH = 8
 _SANDBOX_AGENT_TOOL_ENVS = {
+    "agentkit-cli": ("SANDBOX_AGENTKIT_CLI_TOOL",),
     "deepseek-harness": (_SANDBOX_CHAT_TOOL_ENV,),
     "openclaw": ("SANDBOX_CHAT_OPENCLAW", "SANDBOX_OPENCLAW_TOOL"),
     "hermes": ("SANDBOX_CHAT_HERMES", "SANDBOX_HERMES_TOOL"),
 }
 _SANDBOX_AGENT_SNAPSHOT_TOOL_ENVS = {
+    "agentkit-cli": "SANDBOX_AGENTKIT_CLI_SNAPSHOT",
     "deepseek-harness": _SANDBOX_CHAT_SNAPSHOT_TOOL_ENV,
     "openclaw": "SANDBOX_CHAT_OPENCLAW_SNAPSHOT",
     "hermes": "SANDBOX_CHAT_HERMES_SNAPSHOT",
@@ -107,7 +161,6 @@ _CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
 _SESSION_NOT_FOUND_CODE = "InvalidResource.NotFound"
 _ACTIVE_SESSION_STATUSES = {"creating", "pending", "running", "ready", "starting"}
 _RESTORABLE_SNAPSHOT_STATUSES = {"completed", "ready", "success", "succeeded"}
-_AUTO_RESUME_SNAPSHOT_CONCURRENCY = 3
 _RESUME_SESSION_ATTEMPTS = 36
 _RESUME_SESSION_INTERVAL_SECONDS = 5
 _SENSITIVE_PATTERN = re.compile(
@@ -127,7 +180,12 @@ _CODEX_PROJECT_HANDOFF_HISTORY_MAX_IMAGE_TOTAL_BYTES = 8 * 1024 * 1024
 _CODEX_PROJECT_HANDOFF_HISTORY_IMAGE_MIME_TYPES = frozenset(
     {"image/png", "image/jpeg", "image/gif", "image/webp"}
 )
+_GITLAB_OAUTH_STATES: dict[str, tuple[str, float]] = {}
+_GITLAB_OAUTH_STATE_TTL_SECONDS = 10 * 60
+_GITLAB_MIN_WEBHOOK_ACCESS_LEVEL = 40
 _CODEX_PROJECT_HANDOFF_CONTINUATION_MAX_CHARACTERS = 20_000
+_GITHUB_PR_REVIEW_CONNECT_ATTEMPTS = 3
+_GITHUB_PR_REVIEW_CONNECT_RETRY_SECONDS = 2.0
 _CODEX_PROJECT_HANDOFF_FIRST_EVENT_TIMEOUT_SECONDS = 120
 _CODEX_PROJECT_HANDOFF_PROGRESS_HEARTBEAT_SECONDS = 15
 _CODEX_PROJECT_HANDOFF_PERMISSIONS = CodexPermissionSettings(
@@ -136,6 +194,74 @@ _CODEX_PROJECT_HANDOFF_PERMISSIONS = CodexPermissionSettings(
     sandbox_mode="danger-full-access",
     network_access=True,
 )
+_SESSION_CREATE_ENV_ALLOWLIST = frozenset(
+    {
+        "AGENTKIT_SANDBOX_MODEL_PROVIDER",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+        "CODEX_BASE_URL",
+        "CODEX_CONFIG_TOML",
+        "CODEX_MODEL",
+        "CODEX_MODEL_CATALOG_JSON",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_PROMPT_DISABLED",
+        "GIT_TERMINAL_PROMPT",
+        "GITLAB_API_BASE",
+        "GITLAB_TOKEN",
+        "MODEL_BASE_URL",
+        "OPENCODE_BASE_URL",
+        "OPENCODE_MODEL",
+    }
+)
+_SESSION_MODEL_ENV_KEYS = frozenset(
+    {
+        "ANTHROPIC_MODEL",
+        "CODEX_MODEL",
+        "OPENCODE_MODEL",
+    }
+)
+_SESSION_CODEX_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+_GITHUB_PULL_REQUEST_URL_RE = re.compile(
+    r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)/?$"
+)
+_REVIEW_DISPLAY_NAME_ELLIPSIS = "..."
+_GITLAB_MR_REVIEW_NOTE_POLL_ATTEMPTS = 24
+_GITLAB_MR_REVIEW_NOTE_POLL_INTERVAL_SECONDS = 5.0
+_GITHUB_PULL_REQUEST_REVIEW_PROMPT = """请评审这个 Pull Request：{pull_request_url}
+
+要求：
+1.你需要遵守GitHub Skill，通过GitHubCLI获取PR信息、diff和必要的上下文
+2.遵守Code-Review Skill的规范，对PR进行CodeReview
+3.GitHub CLI 已通过 GitHub App installation token 授权；禁止执行 gh auth login、禁止请求设备码或浏览器授权。如果 gh 提示需要登录，请直接报告 GitHub App token 不可用或权限不足。
+4.不要修改仓库文件，不要执行破坏性命令。
+5.评审完成后，必须使用 GitHub CLI 将评审结论评论到这个 Pull Request。
+6.执行结束后，请告知我你都进行了哪些操作，给出明确且清晰的反馈"""
+
+
+def _bounded_review_display_name(prefix: str, subject: str) -> str:
+    name = f"{prefix}: {subject}".strip()
+    if len(name) <= STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH:
+        return name
+    limit = STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH - len(prefix) - 2
+    if limit <= len(_REVIEW_DISPLAY_NAME_ELLIPSIS):
+        return name[:STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH]
+    subject_limit = limit - len(_REVIEW_DISPLAY_NAME_ELLIPSIS)
+    head = max(1, subject_limit // 2)
+    tail = max(1, subject_limit - head)
+    shortened = subject[:head] + _REVIEW_DISPLAY_NAME_ELLIPSIS + subject[-tail:]
+    return f"{prefix}: {shortened}"
+
+
+_GITLAB_MERGE_REQUEST_REVIEW_PROMPT = """请评审这个 GitLab Merge Request：{merge_request_url}
+
+要求：
+1.你需要通过 GitLab API 获取 MR 信息、diff refs、changes/diffs 和必要的上下文。
+2.遵守 Code-Review Skill 的规范，对 MR 进行 CodeReview。
+3.GitLab API 已通过 GITLAB_TOKEN 授权，API 地址是 GITLAB_API_BASE；禁止请求浏览器登录或交互式认证。
+4.不要修改仓库文件，不要执行破坏性命令。
+5.评审完成后，必须优先使用 GitLab Discussions API 将可定位问题挂到具体代码行；无法可靠定位到 diff 行的问题，用普通 MR comment 兜底。
+6.执行结束后，请告知我你都进行了哪些操作，给出明确且清晰的反馈"""
 
 
 class SandboxError(RuntimeError):
@@ -196,6 +322,24 @@ class SandboxInvocationError(SandboxError):
     retryable = True
 
 
+class SandboxTransportError(SandboxInvocationError):
+    """The coding agent transport disconnected during a conversation turn."""
+
+    code = "SANDBOX_TRANSPORT_FAILED"
+
+
+class SandboxTurnInterruptedError(SandboxInvocationError):
+    """The coding agent reported an interrupted conversation turn."""
+
+    code = "SANDBOX_TURN_INTERRUPTED"
+
+
+class SandboxTurnTimeoutError(SandboxInvocationError):
+    """The coding agent turn stopped after exceeding its inactivity timeout."""
+
+    code = "SANDBOX_TURN_TIMEOUT"
+
+
 class SandboxCapacityError(SandboxError):
     """Studio has reached its local conversation-bridge limit."""
 
@@ -237,7 +381,7 @@ def _safe_error_message(error: object) -> str:
             next_error = current.__context__
         current = next_error
     raw_message = "\n".join(parts) if parts else str(error).strip()
-    message = _redact_public_text(raw_message, maximum=2_000)
+    message = _redact_public_text(raw_message, maximum=20_000)
     return message or type(error).__name__
 
 
@@ -326,6 +470,11 @@ def _public_event_text(value: object) -> str:
             value.get("text") or value.get("content") or value.get("summary")
         )
     return ""
+
+
+def redact_sandbox_text(value: str) -> str:
+    """Apply the shared credential policy before storing task text."""
+    return _redact_public_text(value, maximum=100_000)
 
 
 def _utc_timestamp(value: int) -> str:
@@ -624,72 +773,61 @@ class SandboxCloudSnapshot:
     created_at: str = ""
     display_name: str = ""
     created_by: str = ""
+    creator_name: str = ""
+    agent_kind: str = ""
 
 
-def _restorable_snapshots(
+def _snapshot_cards(
     sessions: list[SandboxCloudSession],
     snapshots: list[SandboxCloudSnapshot],
 ) -> list[SandboxCloudSnapshot]:
-    active_user_session_ids = {
-        session.user_session_id
-        for session in sessions
-        if session.user_session_id
-        and session.status.lower() in _ACTIVE_SESSION_STATUSES
-    }
-    active_session_ids = {
-        session.instance_id
-        for session in sessions
-        if session.status.lower() in _ACTIVE_SESSION_STATUSES
-    }
-    restorable: list[SandboxCloudSnapshot] = []
+    seen: set[tuple[str, str, str]] = set()
+    for session in sessions:
+        if session.status.lower() in _ACTIVE_SESSION_STATUSES:
+            for identity in (session.instance_id, session.user_session_id):
+                if identity:
+                    seen.add((session.region, session.tool_id, identity))
+    cards: list[SandboxCloudSnapshot] = []
     for snapshot in sorted(snapshots, key=lambda item: item.created_at, reverse=True):
-        if snapshot.status.lower() not in _RESTORABLE_SNAPSHOT_STATUSES:
-            continue
-        if (
-            snapshot.user_session_id
-            and snapshot.user_session_id in active_user_session_ids
-        ):
-            continue
-        if not snapshot.user_session_id and snapshot.session_id in active_session_ids:
-            continue
-        restorable.append(snapshot)
-    return restorable
+        key = _snapshot_key(snapshot)
+        if key not in seen:
+            seen.add(key)
+            cards.append(snapshot)
+    return cards
 
 
-def _request_auto_resume_snapshots(request: Request, *, default: bool = False) -> bool:
-    raw_value = request.query_params.get("autoResumeSnapshots")
-    if raw_value is None:
-        return default
-    return raw_value.strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+def _snapshot_key(snapshot: SandboxCloudSnapshot) -> tuple[str, str, str]:
+    return (
+        snapshot.region,
+        snapshot.tool_id,
+        snapshot.user_session_id or snapshot.session_id or snapshot.snapshot_id,
+    )
 
 
-async def _auto_resume_snapshot_batch(
-    snapshots: list[SandboxCloudSnapshot],
-    resume: Callable[[SandboxCloudSnapshot], Awaitable[SandboxCloudSession]],
-) -> None:
-    if not snapshots:
-        return
-    semaphore = asyncio.Semaphore(_AUTO_RESUME_SNAPSHOT_CONCURRENCY)
-
-    async def _resume(snapshot: SandboxCloudSnapshot) -> None:
-        async with semaphore:
-            try:
-                await resume(snapshot)
-            except Exception as error:
-                logger.warning(
-                    "Failed to auto-resume Sandbox snapshot snapshot_id=%s "
-                    "session_id=%s error_type=%s",
-                    snapshot.snapshot_id,
-                    snapshot.session_id,
-                    type(error).__name__,
+def _snapshot_live_session(
+    snapshot: SandboxCloudSnapshot,
+    sessions: list[SandboxCloudSession],
+) -> SandboxCloudSession | None:
+    return next(
+        (
+            session
+            for session in sessions
+            if session.tool_id == snapshot.tool_id
+            and session.region == snapshot.region
+            and session.status.lower() in _ACTIVE_SESSION_STATUSES
+            and (
+                (
+                    snapshot.user_session_id
+                    and session.user_session_id == snapshot.user_session_id
                 )
-
-    await asyncio.gather(*(_resume(snapshot) for snapshot in snapshots))
+                or (
+                    not snapshot.user_session_id
+                    and session.instance_id == snapshot.session_id
+                )
+            )
+        ),
+        None,
+    )
 
 
 def _session_for_tools(
@@ -748,6 +886,33 @@ class SandboxStreamEvent:
     usage: CodexTokenUsage | None = None
     thread_total: CodexTokenUsage | None = None
     model_context_window: int | None = None
+    item_type: str = ""
+    phase: str = ""
+    duration_ms: int | None = None
+
+
+def public_codex_event(event: CodexAppServerEvent) -> SandboxStreamEvent:
+    """Project native output through the Sandbox surface's redaction boundary."""
+    return SandboxStreamEvent(
+        kind=event.kind,
+        item_type=event.item_type,
+        phase=event.phase,
+        duration_ms=event.duration_ms,
+        item_id=event.item_id,
+        status=event.status,
+        text=_public_event_text(event.text),
+        name=_safe_error_message(event.name),
+        arguments=_safe_public_value(event.arguments),
+        response=_safe_public_value(event.response),
+        approval=_safe_public_value(event.approval.public_dict())
+        if event.approval is not None
+        else None,
+        approval_resolved_id=event.approval_resolved_id,
+        turn_id=event.turn_id,
+        usage=event.usage,
+        thread_total=event.thread_total,
+        model_context_window=event.model_context_window,
+    )
 
 
 class SandboxCodexConnection(Protocol):
@@ -782,7 +947,13 @@ class SandboxCodexConnection(Protocol):
         raise NotImplementedError
 
     async def stream_turn(
-        self, prompt: str, skill_ids: tuple[str, ...] = ()
+        self,
+        prompt: str,
+        skill_ids: tuple[str, ...] = (),
+        *,
+        permissions: CodexPermissionSettings | None = None,
+        timeout_seconds: float | None = None,
+        output_schema: dict[str, object] | None = None,
     ) -> AsyncIterator[CodexAppServerEvent]:
         """Run and stream one turn."""
         if False:
@@ -888,6 +1059,10 @@ class SandboxCodexConnection(Protocol):
 class SandboxCloudGateway(Protocol):
     """AgentKit operations needed by the Studio Session service."""
 
+    async def get_tool(self, tool_id: str) -> Any:
+        """Read one configured Sandbox Tool."""
+        raise NotImplementedError
+
     async def list_sessions(
         self, tool_id: str, username: str | None = None
     ) -> list[SandboxCloudSession]:
@@ -902,6 +1077,10 @@ class SandboxCloudGateway(Protocol):
         """Resolve one existing Session and its private Endpoint."""
         raise NotImplementedError
 
+    async def renew_session(self, session: SandboxCloudSession) -> SandboxCloudSession:
+        """Extend an authorized active environment's lifetime."""
+        raise NotImplementedError
+
     async def create_session(
         self,
         tool_id: str,
@@ -909,6 +1088,7 @@ class SandboxCloudGateway(Protocol):
         username: str = "",
         creator_name: str = "",
         agent_kind: str = "",
+        envs: Mapping[str, str] | None = None,
     ) -> SandboxCloudSession:
         """Create a fresh remote Sandbox session."""
         raise NotImplementedError
@@ -1047,9 +1227,7 @@ class AgentkitSandboxGateway:
         user_session_id = str(getattr(value, "user_session_id", "") or "").strip()
         if not snapshot_id:
             return None
-        display_name = user_session_id or snapshot_id
-        if not display_name:
-            display_name = user_session_id or snapshot_id
+        display_name = session_display_name(value) or user_session_id or snapshot_id
         return SandboxCloudSnapshot(
             tool_id=tool_id,
             snapshot_id=snapshot_id,
@@ -1060,8 +1238,33 @@ class AgentkitSandboxGateway:
             reason=str(getattr(value, "reason", "") or "").strip(),
             created_at=str(getattr(value, "created_at", "") or "").strip(),
             display_name=display_name,
-            created_by="",
+            created_by=session_username(value),
+            creator_name=session_creator_name(value),
+            agent_kind=session_agent_kind(value),
         )
+
+    async def get_tool(self, tool_id: str) -> Any:
+        from agentkit.sdk.tools import types as tools_types
+
+        regions = self._region_candidates or ("",)
+        for index, region in enumerate(regions):
+            try:
+                return await self._call(
+                    "get_tool",
+                    tools_types.GetToolRequest(ToolId=tool_id),
+                    region=region,
+                )
+            except SandboxError:
+                raise
+            except Exception as error:
+                if is_agentkit_resource_not_found(error) and index + 1 < len(regions):
+                    continue
+                if is_agentkit_resource_not_found(error):
+                    _raise_tool_configuration_error(error)
+                raise SandboxProvisioningError(
+                    f"读取 AgentKit Tool 失败：{_safe_error_message(error)}"
+                ) from error
+        raise SandboxProvisioningError("无法在支持的地域读取 AgentKit Tool。")
 
     async def list_sessions(
         self, tool_id: str, username: str | None = None
@@ -1198,6 +1401,31 @@ class AgentkitSandboxGateway:
                 ) from error
         raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
 
+    async def renew_session(self, session: SandboxCloudSession) -> SandboxCloudSession:
+        """Renew an active environment using the control plane's authoritative TTL."""
+        from agentkit.sdk.tools.types import SetSessionTtlRequest
+
+        if not session.expire_at:
+            return session
+        expiry = datetime.fromisoformat(session.expire_at.replace("Z", "+00:00"))
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        if (expiry - datetime.now(timezone.utc)).total_seconds() >= 3600:
+            return session
+        response = await self._call(
+            "set_session_ttl",
+            SetSessionTtlRequest(
+                ToolId=session.tool_id,
+                SessionId=session.instance_id,
+                Ttl=STUDIO_SANDBOX_TTL_SECONDS,
+                TtlUnit="second",
+            ),
+            region=session.region,
+        )
+        if not response.expire_at:
+            raise SandboxProvisioningError("开发环境续期结果无法确认。")
+        return replace(session, expire_at=response.expire_at)
+
     async def create_session(
         self,
         tool_id: str,
@@ -1205,8 +1433,10 @@ class AgentkitSandboxGateway:
         username: str = "",
         creator_name: str = "",
         agent_kind: str = "",
+        envs: Mapping[str, str] | None = None,
     ) -> SandboxCloudSession:
         user_session_id = _build_studio_user_session_id()
+        display_name = session_display_name_metadata_value(display_name)
         regions = self._region_candidates or ("",)
         for index, region in enumerate(regions):
             request = build_create_session_request(
@@ -1217,6 +1447,7 @@ class AgentkitSandboxGateway:
                 username=username,
                 creator_name=creator_name,
                 agent_kind=agent_kind,
+                envs=envs,
             )
             create_task = asyncio.create_task(
                 self._call("create_session", request, region=region)
@@ -1410,7 +1641,7 @@ class AgentkitSandboxGateway:
                         return latest
                     if status in {"failed", "error", "deleted", "expired"}:
                         raise SandboxProvisioningError(
-                            f"AgentKit 快照唤醒失败，当前状态：{latest.status}。"
+                            f"智能体唤醒失败，当前状态：{latest.status}。"
                         )
                 except Exception as error:
                     if not is_agentkit_resource_not_found(error):
@@ -1418,14 +1649,12 @@ class AgentkitSandboxGateway:
                 if attempt + 1 < _RESUME_SESSION_ATTEMPTS:
                     await asyncio.sleep(_RESUME_SESSION_INTERVAL_SECONDS)
             last_status = latest.status if latest is not None else "Unknown"
-            raise SandboxProvisioningError(
-                f"AgentKit 快照唤醒超时，最后状态：{last_status}。"
-            )
+            raise SandboxProvisioningError(f"智能体唤醒超时，最后状态：{last_status}。")
         except SandboxError:
             raise
         except Exception as error:
             raise SandboxProvisioningError(
-                f"唤醒 AgentKit Session 快照失败：{_safe_error_message(error)}"
+                f"唤醒智能体失败：{_safe_error_message(error)}"
             ) from error
 
     async def delete_snapshot(self, snapshot: SandboxCloudSnapshot) -> None:
@@ -1444,7 +1673,7 @@ class AgentkitSandboxGateway:
             if _SESSION_NOT_FOUND_CODE in str(error):
                 return
             raise SandboxProvisioningError(
-                f"删除 AgentKit Session 快照失败：{_safe_error_message(error)}"
+                f"删除智能体失败：{_safe_error_message(error)}"
             ) from error
 
     async def drain(self) -> None:
@@ -1473,11 +1702,14 @@ class SandboxConversationService:
         tool_id: str | None = None,
         snapshot_tool_id: str | None = None,
         agent_kind: str = _SANDBOX_CODEX_AGENT_KIND,
+        managed_tool_spec: Any | None = None,
     ) -> None:
         self._gateway = gateway
         self._configured_tool_id = (tool_id or "").strip()
         self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
         self._agent_kind = agent_kind
+        self._managed_tool_spec = managed_tool_spec
+        self._snapshot_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
         self._sessions: dict[tuple[str, str], SandboxConversation] = {}
         self._registry_lock = asyncio.Lock()
         self._sessions_starting = 0
@@ -1486,13 +1718,25 @@ class SandboxConversationService:
         """Report whether the dedicated Codex Tool is configured."""
         tools = self._tools()
         enabled = bool(tools.configured)
-        return {
+        capability: dict[str, object] = {
             "enabled": enabled,
             "reason": "" if enabled else "管理员未配置",
             "persistentEnabled": bool(tools.persistent),
             "persistentReason": "" if tools.persistent else "管理员未配置快照版 Tool",
             "endpointExportEnabled": _sandbox_endpoint_export_enabled(),
         }
+        if self._managed_tool_spec is not None:
+            capability.update(
+                {
+                    "storageMode": "disk",
+                    "diskGbDefault": int(
+                        getattr(self._managed_tool_spec, "disk_gb", 10) or 10
+                    ),
+                    "diskGbMin": 1,
+                    "diskGbMax": 100,
+                }
+            )
+        return capability
 
     def _tools(self) -> SandboxToolPair:
         return SandboxToolPair(
@@ -1513,6 +1757,10 @@ class SandboxConversationService:
             raise SandboxConfigurationError(f"管理员未配置{detail}Sandbox Tool。")
         return tool_id
 
+    async def get_tool(self, *, persistent: bool = False) -> Any:
+        """Read the configured transient or snapshot Sandbox Tool."""
+        return await self._gateway.get_tool(self._tool_id(persistent=persistent))
+
     async def _cloud_session(self, session_id: str) -> SandboxCloudSession:
         """Find a Session across the configured transient and snapshot Tools."""
         tools = self._tools()
@@ -1532,6 +1780,23 @@ class SandboxConversationService:
                 continue
             return cloud
         raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
+
+    async def owned_cloud_session(
+        self, session_id: str, owner_id: str
+    ) -> SandboxCloudSession:
+        """Resolve fresh control-plane state without requiring a local connection."""
+        cloud = await self._cloud_session(session_id)
+        if not owner_id or cloud.created_by != owner_id:
+            raise SandboxSessionNotFoundError(
+                "AgentKit Session 不存在或不属于当前用户。"
+            )
+        return cloud
+
+    async def renew_owned_session(
+        self, cloud: SandboxCloudSession
+    ) -> SandboxCloudSession:
+        """Renew only an already authorized environment."""
+        return await self._gateway.renew_session(cloud)
 
     async def list_sessions(
         self, owner_id: str, *, is_admin: bool = False
@@ -1564,11 +1829,19 @@ class SandboxConversationService:
     async def list_snapshots(
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSnapshot]:
-        del owner_id
         tools = self._tools()
-        if not is_admin or not tools.persistent:
+        if not tools.persistent:
             return []
-        return await self._gateway.list_snapshots(tools.persistent)
+        snapshots = await self._gateway.list_snapshots(tools.persistent)
+        return [
+            snapshot
+            for snapshot in snapshots
+            if (
+                is_admin
+                or bool(snapshot.created_by and snapshot.created_by == owner_id)
+            )
+            and (not snapshot.agent_kind or snapshot.agent_kind == self._agent_kind)
+        ]
 
     async def list_resources(
         self,
@@ -1581,14 +1854,15 @@ class SandboxConversationService:
             self.list_sessions(owner_id, is_admin=is_admin),
             self.list_snapshots(owner_id, is_admin=is_admin),
         )
-        restorable = _restorable_snapshots(sessions, snapshots)
-        if auto_resume_snapshots and is_admin and restorable:
-            await _auto_resume_snapshot_batch(
-                restorable,
-                self._resume_snapshot,
-            )
-            return await self.list_sessions(owner_id, is_admin=is_admin), []
-        return sessions, restorable
+        # Listing is read-only, including requests from older auto-resume clients.
+        del auto_resume_snapshots
+        cards = _snapshot_cards(sessions, snapshots)
+        active = [
+            session
+            for session in sessions
+            if session.status.lower() in _ACTIVE_SESSION_STATUSES
+        ]
+        return active, cards
 
     async def _resume_snapshot(
         self, snapshot: SandboxCloudSnapshot
@@ -1599,6 +1873,8 @@ class SandboxConversationService:
                 session,
                 display_name=session.display_name or snapshot.display_name,
                 created_by=session.created_by or snapshot.created_by,
+                creator_name=session.creator_name or snapshot.creator_name,
+                agent_kind=session.agent_kind or snapshot.agent_kind,
             ),
             self._tools(),
         )
@@ -1616,8 +1892,17 @@ class SandboxConversationService:
             None,
         )
         if snapshot is None:
-            raise SandboxSessionNotFoundError("智能体快照不存在或不属于当前用户。")
-        return await self._resume_snapshot(snapshot)
+            raise SandboxSessionNotFoundError("智能体不存在或不属于当前用户。")
+        if snapshot.status.lower() not in _RESTORABLE_SNAPSHOT_STATUSES:
+            raise SandboxSessionUnavailableError("该智能体暂时无法唤醒，请稍后重试。")
+        lock = self._snapshot_locks.setdefault(_snapshot_key(snapshot), asyncio.Lock())
+        async with lock:
+            # A retried click must reuse a previous wake that already succeeded.
+            sessions = await self.list_sessions(owner_id, is_admin=is_admin)
+            live = _snapshot_live_session(snapshot, sessions)
+            if live is not None:
+                return live
+            return await self._resume_snapshot(snapshot)
 
     async def delete_snapshot(
         self,
@@ -1632,7 +1917,7 @@ class SandboxConversationService:
             None,
         )
         if snapshot is None:
-            raise SandboxSessionNotFoundError("智能体快照不存在或不属于当前用户。")
+            raise SandboxSessionNotFoundError("智能体不存在或不属于当前用户。")
         await self._gateway.delete_snapshot(snapshot)
 
     async def create(
@@ -1641,6 +1926,7 @@ class SandboxConversationService:
         display_name: object = "",
         creator_name: str = "",
         persistent: object = True,
+        envs: Mapping[str, str] | None = None,
     ) -> SandboxCloudSession:
         """Create a cloud Session without opening a conversation connection."""
         if not isinstance(display_name, str):
@@ -1652,6 +1938,26 @@ class SandboxConversationService:
             )
         if not isinstance(persistent, bool):
             raise SandboxValidationError("persistent 必须是布尔值。")
+        session_envs: dict[str, str] | None = None
+        if envs is not None:
+            if not isinstance(envs, Mapping):
+                raise SandboxValidationError("Session 环境变量格式无效。")
+            session_envs = {}
+            for key, value in envs.items():
+                if key not in _SESSION_CREATE_ENV_ALLOWLIST:
+                    raise SandboxValidationError("Session 环境变量不支持该键。")
+                if not isinstance(value, str):
+                    raise SandboxValidationError("Session 环境变量值必须是文本。")
+                normalized = value.strip()
+                if not normalized:
+                    continue
+                if key in _SESSION_MODEL_ENV_KEYS and not (
+                    _SESSION_CODEX_MODEL_RE.fullmatch(normalized)
+                ):
+                    raise SandboxValidationError("模型 ID 格式无效。")
+                session_envs[key] = normalized
+            if not session_envs:
+                session_envs = None
         tool_id = self._tool_id(persistent=persistent)
         await self.cleanup_expired()
         async with self._registry_lock:
@@ -1667,6 +1973,7 @@ class SandboxConversationService:
                 owner_id,
                 creator_name,
                 self._agent_kind,
+                **({"envs": session_envs} if session_envs else {}),
             )
             authoritative = await self._gateway.get_session(
                 tool_id, created.instance_id
@@ -1754,6 +2061,10 @@ class SandboxConversationService:
         owner_id: str,
         prompt: str,
         skill_ids: tuple[str, ...] = (),
+        *,
+        turn_permissions: CodexPermissionSettings | None = None,
+        turn_timeout_seconds: float | None = None,
+        turn_output_schema: dict[str, object] | None = None,
     ) -> AsyncIterator[SandboxStreamEvent]:
         session = self._owned(session_id, owner_id)
         if session.background_turn is not None and not session.background_turn.done():
@@ -1768,11 +2079,20 @@ class SandboxConversationService:
                     session.pending_prompt = prompt
                     session.pending_prompt_timestamp = int(time.time() * 1_000)
                     try:
-                        events = (
-                            session.codex.stream_turn(prompt, skill_ids)
-                            if skill_ids
-                            else session.codex.stream_turn(prompt)
-                        )
+                        if turn_permissions is None and turn_timeout_seconds is None:
+                            events = (
+                                session.codex.stream_turn(prompt, skill_ids)
+                                if skill_ids
+                                else session.codex.stream_turn(prompt)
+                            )
+                        else:
+                            events = session.codex.stream_turn(
+                                prompt,
+                                skill_ids,
+                                permissions=turn_permissions,
+                                timeout_seconds=turn_timeout_seconds,
+                                output_schema=turn_output_schema,
+                            )
                         async for event in events:
                             if event.kind and listening:
                                 queue.put_nowait(
@@ -1806,6 +2126,19 @@ class SandboxConversationService:
                     finally:
                         session.pending_prompt = ""
                         session.pending_prompt_timestamp = 0
+            except CodexAppServerTurnInterruptedError as error:
+                if listening:
+                    queue.put_nowait(
+                        SandboxTurnInterruptedError(_safe_error_message(error))
+                    )
+            except CodexAppServerTurnTimeoutError as error:
+                if listening:
+                    queue.put_nowait(
+                        SandboxTurnTimeoutError(_safe_error_message(error))
+                    )
+            except CodexAppServerTransportError as error:
+                if listening:
+                    queue.put_nowait(SandboxTransportError(_safe_error_message(error)))
             except CodexAppServerError as error:
                 if listening:
                     queue.put_nowait(SandboxInvocationError(_safe_error_message(error)))
@@ -2365,8 +2698,15 @@ class SandboxAgentSessionService:
         kind: str,
         tool_id: str | None = None,
         snapshot_tool_id: str | None = None,
+        managed_tool_spec: Any | None = None,
         surface_path: str | None = None,
         filter_agent_kind: bool = False,
+        display_name_prefix: str = "",
+        allow_admin_cross_owner: bool = True,
+        terminal_initial_command: str = "",
+        surface_start_command: str = "",
+        surface_ready_path: str = "",
+        unconfigured_message: str = "",
     ) -> None:
         if kind not in _SANDBOX_AGENT_TOOL_ENVS:
             raise ValueError(f"Unsupported Studio sandbox agent kind: {kind}")
@@ -2377,6 +2717,14 @@ class SandboxAgentSessionService:
         self._filter_agent_kind = filter_agent_kind
         self._configured_tool_id = (tool_id or "").strip()
         self._configured_snapshot_tool_id = (snapshot_tool_id or "").strip()
+        self._managed_tool_spec = managed_tool_spec
+        self._snapshot_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
+        self._display_name_prefix = display_name_prefix
+        self._allow_admin_cross_owner = allow_admin_cross_owner
+        self._terminal_initial_command = terminal_initial_command
+        self._surface_start_command = surface_start_command
+        self._surface_ready_path = surface_ready_path
+        self._unconfigured_message = unconfigured_message
         self._workspaces: dict[
             tuple[str, str], tuple[SandboxCloudSession, str, float]
         ] = {}
@@ -2409,12 +2757,24 @@ class SandboxAgentSessionService:
     def capabilities(self) -> dict[str, object]:
         tools = self._tools()
         enabled = bool(tools.configured)
-        return {
+        capability: dict[str, object] = {
             "enabled": enabled,
-            "reason": "" if enabled else "管理员未配置",
+            "reason": "" if enabled else self._unconfigured_message or "管理员未配置",
             "persistentEnabled": bool(tools.persistent),
             "persistentReason": "" if tools.persistent else "管理员未配置快照版 Tool",
         }
+        if self._managed_tool_spec is not None:
+            capability.update(
+                {
+                    "storageMode": "disk",
+                    "diskGbDefault": int(
+                        getattr(self._managed_tool_spec, "disk_gb", 10) or 10
+                    ),
+                    "diskGbMin": 1,
+                    "diskGbMax": 100,
+                }
+            )
+        return capability
 
     async def _cloud_session(self, session_id: str) -> SandboxCloudSession:
         tools = self._tools()
@@ -2469,11 +2829,19 @@ class SandboxAgentSessionService:
     async def list_snapshots(
         self, owner_id: str, *, is_admin: bool = False
     ) -> list[SandboxCloudSnapshot]:
-        del owner_id
         tools = self._tools()
-        if not is_admin or not tools.persistent:
+        if not tools.persistent:
             return []
-        return await self._gateway.list_snapshots(tools.persistent)
+        snapshots = await self._gateway.list_snapshots(tools.persistent)
+        return [
+            snapshot
+            for snapshot in snapshots
+            if (
+                is_admin
+                or bool(snapshot.created_by and snapshot.created_by == owner_id)
+            )
+            and (not snapshot.agent_kind or snapshot.agent_kind == self.kind)
+        ]
 
     async def list_resources(
         self,
@@ -2486,14 +2854,15 @@ class SandboxAgentSessionService:
             self.list_sessions(owner_id, is_admin=is_admin),
             self.list_snapshots(owner_id, is_admin=is_admin),
         )
-        restorable = _restorable_snapshots(sessions, snapshots)
-        if auto_resume_snapshots and is_admin and restorable:
-            await _auto_resume_snapshot_batch(
-                restorable,
-                self._resume_snapshot,
-            )
-            return await self.list_sessions(owner_id, is_admin=is_admin), []
-        return sessions, restorable
+        # Listing is read-only, including requests from older auto-resume clients.
+        del auto_resume_snapshots
+        cards = _snapshot_cards(sessions, snapshots)
+        active = [
+            session
+            for session in sessions
+            if session.status.lower() in _ACTIVE_SESSION_STATUSES
+        ]
+        return active, cards
 
     async def _resume_snapshot(
         self, snapshot: SandboxCloudSnapshot
@@ -2504,6 +2873,8 @@ class SandboxAgentSessionService:
                 session,
                 display_name=session.display_name or snapshot.display_name,
                 created_by=session.created_by or snapshot.created_by,
+                creator_name=session.creator_name or snapshot.creator_name,
+                agent_kind=session.agent_kind or snapshot.agent_kind,
             ),
             self._tools(),
         )
@@ -2521,8 +2892,17 @@ class SandboxAgentSessionService:
             None,
         )
         if snapshot is None:
-            raise SandboxSessionNotFoundError("智能体快照不存在或不属于当前用户。")
-        return await self._resume_snapshot(snapshot)
+            raise SandboxSessionNotFoundError("智能体不存在或不属于当前用户。")
+        if snapshot.status.lower() not in _RESTORABLE_SNAPSHOT_STATUSES:
+            raise SandboxSessionUnavailableError("该智能体暂时无法唤醒，请稍后重试。")
+        lock = self._snapshot_locks.setdefault(_snapshot_key(snapshot), asyncio.Lock())
+        async with lock:
+            # A retried click must reuse a previous wake that already succeeded.
+            sessions = await self.list_sessions(owner_id, is_admin=is_admin)
+            live = _snapshot_live_session(snapshot, sessions)
+            if live is not None:
+                return live
+            return await self._resume_snapshot(snapshot)
 
     async def delete_snapshot(
         self,
@@ -2537,7 +2917,7 @@ class SandboxAgentSessionService:
             None,
         )
         if snapshot is None:
-            raise SandboxSessionNotFoundError("智能体快照不存在或不属于当前用户。")
+            raise SandboxSessionNotFoundError("智能体不存在或不属于当前用户。")
         await self._gateway.delete_snapshot(snapshot)
 
     async def create(
@@ -2683,6 +3063,7 @@ class SandboxAgentSessionService:
 def _public_snapshot(
     snapshot: SandboxCloudSnapshot,
     tool_name: str,
+    owner_id: str | None = None,
 ) -> dict[str, object]:
     status = (
         "Wakeable"
@@ -2697,7 +3078,9 @@ def _public_snapshot(
         "snapshotStatus": snapshot.status,
         "reason": snapshot.reason,
         "createdAt": snapshot.created_at,
-        "createdBy": snapshot.created_by,
+        "createdBy": snapshot.creator_name or snapshot.created_by,
+        "region": snapshot.region,
+        "isMine": bool(owner_id and snapshot.created_by == owner_id),
         "displayName": snapshot.display_name,
         "toolName": tool_name,
     }
@@ -2712,7 +3095,6 @@ def mount_sandbox_agent_routes(
 ) -> None:
     """Mount list/create/open routes for managed agent Sessions."""
     from fastapi import HTTPException
-    from fastapi.responses import JSONResponse
 
     from veadk.cli.frontend_agent_proxy import (
         agent_surface_prefix,
@@ -2751,7 +3133,11 @@ def mount_sandbox_agent_routes(
             },
         )
 
-    def _public_session(session: SandboxCloudSession, kind: str) -> dict[str, object]:
+    def _public_session(
+        session: SandboxCloudSession,
+        kind: str,
+        owner_id: str | None = None,
+    ) -> dict[str, object]:
         return {
             "sessionId": session.instance_id,
             "userSessionId": session.user_session_id,
@@ -2760,6 +3146,8 @@ def mount_sandbox_agent_routes(
             "expireAt": session.expire_at,
             "toolType": session.tool_type,
             "createdBy": session.creator_name or session.created_by,
+            "region": session.region,
+            "isMine": bool(owner_id and session.created_by == owner_id),
             "displayName": session.display_name,
             "toolName": kind,
             "persistent": session.persistent,
@@ -2779,22 +3167,21 @@ def mount_sandbox_agent_routes(
         request: Request,
     ) -> dict[str, object]:
         try:
+            owner_id = owner_resolver(request)
             sessions, snapshots = await _service(kind).list_resources(
-                owner_resolver(request),
+                owner_id,
                 is_admin=_is_admin(request),
-                auto_resume_snapshots=_request_auto_resume_snapshots(
-                    request,
-                    default=True,
-                ),
             )
         except SandboxError as error:
             raise _http_error(error) from error
         result: dict[str, object] = {
-            "sessions": [_public_session(session, kind) for session in sessions]
+            "sessions": [
+                _public_session(session, kind, owner_id) for session in sessions
+            ]
         }
         if snapshots:
             result["snapshots"] = [
-                _public_snapshot(snapshot, kind) for snapshot in snapshots
+                _public_snapshot(snapshot, kind, owner_id) for snapshot in snapshots
             ]
         return result
 
@@ -2825,7 +3212,7 @@ def mount_sandbox_agent_routes(
             )
         except SandboxError as error:
             raise _http_error(error) from error
-        return _public_session(session, kind)
+        return _public_session(session, kind, owner_id)
 
     @app.post("/web/{kind}/snapshots/{snapshot_id}/resume")
     async def _resume_sandbox_agent_snapshot(
@@ -2833,15 +3220,16 @@ def mount_sandbox_agent_routes(
         snapshot_id: str,
         request: Request,
     ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
         try:
             session = await _service(kind).resume_snapshot(
                 snapshot_id,
-                owner_resolver(request),
+                owner_id,
                 is_admin=_is_admin(request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
-        return _public_session(session, kind)
+        return _public_session(session, kind, owner_id)
 
     @app.delete("/web/{kind}/snapshots/{snapshot_id}")
     async def _delete_sandbox_agent_snapshot(
@@ -2866,17 +3254,18 @@ def mount_sandbox_agent_routes(
         request: Request,
     ) -> dict[str, object]:
         service = _service(kind)
+        owner_id = owner_resolver(request)
         try:
             session, token = await service.open(
                 session_id,
-                owner_resolver(request),
+                owner_id,
                 is_admin=_is_admin(request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
         prefix = agent_surface_prefix(kind, session_id, token)
         return {
-            **_public_session(session, kind),
+            **_public_session(session, kind, owner_id),
             "webuiUrl": f"{prefix}{service.surface_path}",
         }
 
@@ -2942,10 +3331,13 @@ def mount_sandbox_routes(
     proxy_target_resolver: Callable[[str, str], SandboxProxyTarget] | None = None,
     admin_resolver: Callable[[Any], bool] | None = None,
     creator_resolver: Callable[[Any], str] | None = None,
+    github_app_review_storage_bucket: str = "",
+    github_app_review_storage_client_factory: Callable[[], Any] | None = None,
+    gitlab_app_review_storage_bucket: str = "",
+    gitlab_app_review_storage_client_factory: Callable[[], Any] | None = None,
 ) -> None:
     """Mount Studio HTTP routes for reusable Sandbox Sessions."""
     from fastapi import HTTPException
-    from fastapi.responses import JSONResponse, StreamingResponse
 
     def _http_error(error: SandboxError) -> HTTPException:
         status_code = 500
@@ -2975,7 +3367,10 @@ def mount_sandbox_routes(
     def _is_admin(request: Request) -> bool:
         return bool(admin_resolver and admin_resolver(request))
 
-    def _public_session(session: SandboxCloudSession) -> dict[str, object]:
+    def _public_session(
+        session: SandboxCloudSession,
+        owner_id: str | None = None,
+    ) -> dict[str, object]:
         return {
             "sessionId": session.instance_id,
             "userSessionId": session.user_session_id,
@@ -2984,6 +3379,8 @@ def mount_sandbox_routes(
             "expireAt": session.expire_at,
             "toolType": session.tool_type,
             "createdBy": session.creator_name or session.created_by,
+            "region": session.region,
+            "isMine": bool(owner_id and session.created_by == owner_id),
             "displayName": session.display_name,
             "persistent": session.persistent,
         }
@@ -3308,22 +3705,19 @@ def mount_sandbox_routes(
     @app.get("/web/sandbox/sessions")
     async def _list_sandbox_sessions(request: Request) -> dict[str, object]:
         try:
+            owner_id = owner_resolver(request)
             sessions, snapshots = await service.list_resources(
-                owner_resolver(request),
+                owner_id,
                 is_admin=_is_admin(request),
-                auto_resume_snapshots=_request_auto_resume_snapshots(
-                    request,
-                    default=True,
-                ),
             )
         except SandboxError as error:
             raise _http_error(error) from error
         result: dict[str, object] = {
-            "sessions": [_public_session(session) for session in sessions]
+            "sessions": [_public_session(session, owner_id) for session in sessions]
         }
         if snapshots:
             result["snapshots"] = [
-                _public_snapshot(snapshot, STUDIO_SANDBOX_TOOL_NAME)
+                _public_snapshot(snapshot, STUDIO_SANDBOX_TOOL_NAME, owner_id)
                 for snapshot in snapshots
             ]
         return result
@@ -3332,29 +3726,1344 @@ def mount_sandbox_routes(
     async def _start_sandbox_session(request: Request) -> dict[str, object]:
         owner_id = owner_resolver(request)
         try:
-            body = await request.body()
-            if body:
-                try:
-                    data = json.loads(body)
-                except (json.JSONDecodeError, UnicodeDecodeError) as error:
-                    raise SandboxValidationError(
-                        "创建智能体的请求不是有效 JSON。"
-                    ) from error
-                if not isinstance(data, dict):
-                    raise SandboxValidationError("创建智能体的请求格式无效。")
-            else:
-                data = {}
+            data = await _request_object(request)
             session = await service.create(
                 owner_id,
                 data.get("displayName", ""),
                 creator_resolver(request) if creator_resolver else owner_id,
                 data.get("persistent", True),
+                envs=data.get("envs") if "envs" in data else None,
             )
         except SandboxError as error:
             raise _http_error(error) from error
         return {
-            **_public_session(session),
+            **_public_session(session, owner_id),
             "toolName": STUDIO_SANDBOX_TOOL_NAME,
+        }
+
+    def _github_app_http_error(
+        error: GitHubAppReviewError,
+        *,
+        status_code: int = 503,
+    ) -> HTTPException:
+        return HTTPException(
+            status_code=status_code,
+            detail={
+                "code": "GITHUB_APP_REVIEW_ERROR",
+                "message": str(error),
+                "retryable": False,
+            },
+        )
+
+    def _gitlab_app_http_error(
+        error: GitLabAppReviewError,
+        *,
+        status_code: int = 503,
+    ) -> HTTPException:
+        return HTTPException(
+            status_code=status_code,
+            detail={
+                "code": "GITLAB_APP_REVIEW_ERROR",
+                "message": str(error),
+                "retryable": False,
+            },
+        )
+
+    def _github_app_review_store() -> TosGitHubAppReviewRepositoryStore | None:
+        bucket = github_app_review_storage_bucket.strip()
+        if not bucket or github_app_review_storage_client_factory is None:
+            return None
+        return TosGitHubAppReviewRepositoryStore(
+            bucket=bucket,
+            client_factory=github_app_review_storage_client_factory,
+        )
+
+    def _gitlab_app_review_store() -> TosGitLabAppReviewProjectStore | None:
+        bucket = gitlab_app_review_storage_bucket.strip()
+        if not bucket or gitlab_app_review_storage_client_factory is None:
+            return None
+        return TosGitLabAppReviewProjectStore(
+            bucket=bucket,
+            client_factory=gitlab_app_review_storage_client_factory,
+        )
+
+    async def _remember_github_review_record(
+        store: TosGitHubAppReviewRepositoryStore,
+        record: GitHubPullRequestReviewRecord,
+    ) -> None:
+        try:
+            await store.append_review_record(record)
+        except GitHubAppReviewError as error:
+            logger.warning("Failed to save GitHub PR review record: %s", error)
+
+    async def _remember_gitlab_review_record(
+        store: TosGitLabAppReviewProjectStore,
+        record: GitLabMergeRequestReviewRecord,
+    ) -> None:
+        try:
+            await store.append_review_record(record)
+        except GitLabAppReviewError as error:
+            logger.warning("Failed to save GitLab MR review record: %s", error)
+
+    async def _github_app_installed_repositories() -> list[dict[str, object]]:
+        config = load_github_app_config()
+        if config is None:
+            raise GitHubAppReviewError("管理员未配置 GitHub App。")
+        client = GitHubAppClient(config)
+        repositories = await client.installed_repositories()
+        store = _github_app_review_store()
+        enabled_repositories: set[str] = set()
+        if store is not None:
+            enabled_repositories = await store.enabled_repositories()
+        enabled_lookup = {repository.casefold() for repository in enabled_repositories}
+        return [
+            repository.to_public_dict(
+                review_enabled=repository.full_name.casefold() in enabled_lookup
+            )
+            for repository in repositories
+        ]
+
+    def _github_review_page_request(request: Request) -> PageRequest:
+        def _int_query(name: str, default: int) -> int:
+            value = request.query_params.get(name)
+            if value is None:
+                return default
+            try:
+                return int(value)
+            except ValueError as error:
+                raise SandboxValidationError(f"{name} 必须是正整数。") from error
+
+        page = _int_query("page", 1)
+        page_size = _int_query("pageSize", _GITHUB_REVIEW_DEFAULT_PAGE_SIZE)
+        if page < 1:
+            raise SandboxValidationError("page 必须是正整数。")
+        if page_size < 1:
+            raise SandboxValidationError("pageSize 必须是正整数。")
+        return PageRequest(
+            page=page,
+            page_size=min(page_size, _GITHUB_REVIEW_MAX_PAGE_SIZE),
+        )
+
+    async def _github_app_installed_repositories_page(
+        page_request: PageRequest,
+        query: str = "",
+    ) -> dict[str, object]:
+        repositories = await _github_app_installed_repositories()
+        keyword = query.strip().casefold()
+        if keyword:
+            repositories = [
+                repository
+                for repository in repositories
+                if keyword in str(repository.get("fullName") or "").casefold()
+                or keyword in str(repository.get("account") or "").casefold()
+            ]
+        start = page_request.offset
+        end = start + page_request.page_size
+        return {
+            "repositories": repositories[start:end],
+            "page": page_request.page,
+            "pageSize": page_request.page_size,
+            "hasNextPage": end < len(repositories),
+        }
+
+    async def _github_app_installation_token_for_pull_request(
+        owner: str,
+        repo: str,
+    ) -> str:
+        config = load_github_app_config()
+        if config is None:
+            raise GitHubAppReviewError("管理员未配置 GitHub App。")
+        client = GitHubAppClient(config)
+        installation_id = await client.repository_installation_id(owner, repo)
+        return await client.installation_token(installation_id)
+
+    async def _create_github_pull_request_review_session(
+        *,
+        owner_id: str,
+        creator_name: str,
+        pull_request_url: str,
+        installation_token: str,
+    ) -> SandboxCloudSession:
+        match = _GITHUB_PULL_REQUEST_URL_RE.fullmatch(pull_request_url)
+        if match is None:
+            raise SandboxValidationError("请输入完整的 GitHub Pull Request URL。")
+        owner, repo, number = match.groups()
+        session = await service.create(
+            owner_id,
+            _bounded_review_display_name("PR Review", f"{owner}/{repo}#{number}"),
+            creator_name,
+            False,
+            envs={
+                "GITHUB_TOKEN": installation_token,
+                "GH_PROMPT_DISABLED": "1",
+                "GIT_TERMINAL_PROMPT": "0",
+            },
+        )
+        await _connect_github_pull_request_review_session(
+            session.instance_id,
+            owner_id,
+        )
+        return session
+
+    async def _connect_github_pull_request_review_session(
+        session_id: str,
+        owner_id: str,
+    ) -> None:
+        last_error: SandboxInvocationError | None = None
+        for attempt in range(_GITHUB_PR_REVIEW_CONNECT_ATTEMPTS):
+            try:
+                await service.connect(session_id, owner_id, is_admin=False)
+                return
+            except SandboxInvocationError as error:
+                last_error = error
+                if attempt + 1 >= _GITHUB_PR_REVIEW_CONNECT_ATTEMPTS:
+                    break
+                logger.info(
+                    "Retrying GitHub PR review sandbox connection for session %s "
+                    "after startup failure: %s",
+                    session_id,
+                    _safe_error_message(error),
+                )
+                await asyncio.sleep(_GITHUB_PR_REVIEW_CONNECT_RETRY_SECONDS)
+        if last_error is not None:
+            raise last_error
+
+    def _schedule_github_pull_request_review_message(
+        *,
+        session_id: str,
+        owner_id: str,
+        pull_request_url: str,
+        store: TosGitHubAppReviewRepositoryStore | None,
+        record_id: str,
+    ) -> None:
+        prompt = _GITHUB_PULL_REQUEST_REVIEW_PROMPT.format(
+            pull_request_url=pull_request_url
+        )
+
+        async def _update_status(status: str, reason: str = "") -> None:
+            if store is None or not record_id:
+                return
+            try:
+                await store.update_review_record_status(
+                    record_id,
+                    status=status,
+                    reason=reason,
+                )
+            except GitHubAppReviewError as error:
+                logger.warning(
+                    "Failed to update GitHub PR review record %s: %s",
+                    record_id,
+                    error,
+                )
+
+        async def _run_review_message() -> None:
+            try:
+                async for _event in service.stream_message(
+                    session_id,
+                    owner_id,
+                    prompt,
+                ):
+                    pass
+                await _update_status("completed")
+            except SandboxError as error:
+                await _update_status("failed", _safe_error_message(error))
+                logger.warning(
+                    "GitHub pull request review message failed for session %s: %s",
+                    session_id,
+                    _safe_error_message(error),
+                )
+
+        asyncio.create_task(_run_review_message())
+
+    async def _gitlab_oauth_credential_for_owner(
+        store: TosGitLabAppReviewProjectStore,
+        owner_id: str,
+    ) -> GitLabOAuthCredential | None:
+        config = load_gitlab_app_config()
+        if config is None:
+            return None
+        credential = await store.oauth_credential_for_owner(owner_id, config.base_url)
+        if credential is None or not credential.expired:
+            return credential
+
+        async def _mark_owner_bindings_invalid(reason: str) -> None:
+            bindings = await store.project_bindings()
+            for binding in bindings.values():
+                if (
+                    binding.credential_type == "oauth"
+                    and binding.credential_owner == owner_id
+                    and binding.credential_id == credential.credential_id
+                ):
+                    await store.update_project_binding_status(
+                        binding.instance_id,
+                        binding.project_id,
+                        status="auth_invalid",
+                        reason=reason,
+                    )
+
+        oauth_config = load_gitlab_oauth_config()
+        if oauth_config is None or not credential.refresh_token:
+            await store.delete_oauth_credential_for_owner(owner_id, config.base_url)
+            await _mark_owner_bindings_invalid("授权无法刷新，请重新连接 GitLab。")
+            raise GitLabAppReviewError("GitLab 授权无法刷新，请重新连接。")
+        try:
+            refreshed = refreshed_oauth_credential(
+                credential,
+                await GitLabOAuthClient(oauth_config).refresh_token(
+                    credential.refresh_token
+                ),
+            )
+        except GitLabAppReviewError:
+            await store.delete_oauth_credential_for_owner(owner_id, config.base_url)
+            await _mark_owner_bindings_invalid("授权已失效，请重新连接 GitLab。")
+            raise GitLabAppReviewError("GitLab 授权已失效，请重新连接。")
+        return await store.save_oauth_credential(refreshed)
+
+    async def _gitlab_config_for_owner(
+        owner_id: str,
+    ) -> tuple[GitLabAppConfig, GitLabOAuthCredential | None, str]:
+        config = load_gitlab_app_config()
+        if config is None:
+            raise GitLabAppReviewError("管理员未配置 GitLab OAuth。")
+        store = _gitlab_app_review_store()
+        if store is not None:
+            credential = await _gitlab_oauth_credential_for_owner(store, owner_id)
+            if credential is not None:
+                return (
+                    replace(
+                        config,
+                        token=credential.access_token,
+                    ),
+                    credential,
+                    "oauth",
+                )
+        raise GitLabAppReviewError("请先连接 GitLab 后再继续。")
+
+    async def _gitlab_config_for_binding(
+        store: TosGitLabAppReviewProjectStore,
+        binding: GitLabProjectBinding,
+    ) -> tuple[GitLabAppConfig, str, str]:
+        config = load_gitlab_app_config()
+        if config is None:
+            raise GitLabAppReviewError("管理员未配置 GitLab OAuth。")
+        credential = await store.oauth_credential(binding.credential_id)
+        if credential is None:
+            await store.update_project_binding_status(
+                binding.instance_id,
+                binding.project_id,
+                status="auth_invalid",
+                reason="授权已失效，请重新连接 GitLab。",
+            )
+            raise GitLabAppReviewError("GitLab 授权已失效，请重新连接。")
+        if credential.expired:
+            oauth_config = load_gitlab_oauth_config()
+            if oauth_config is None or not credential.refresh_token:
+                await store.update_project_binding_status(
+                    binding.instance_id,
+                    binding.project_id,
+                    status="auth_invalid",
+                    reason="授权无法刷新，请重新连接 GitLab。",
+                )
+                raise GitLabAppReviewError("GitLab 授权无法刷新，请重新连接。")
+            try:
+                credential = await store.save_oauth_credential(
+                    refreshed_oauth_credential(
+                        credential,
+                        await GitLabOAuthClient(oauth_config).refresh_token(
+                            credential.refresh_token
+                        ),
+                    )
+                )
+            except GitLabAppReviewError as error:
+                await store.update_project_binding_status(
+                    binding.instance_id,
+                    binding.project_id,
+                    status="auth_invalid",
+                    reason=str(error),
+                )
+                raise
+        return (
+            replace(
+                config,
+                token=credential.access_token,
+            ),
+            credential.owner_id,
+            credential.gitlab_name or credential.gitlab_username or credential.owner_id,
+        )
+
+    async def _gitlab_app_projects(owner_id: str) -> list[dict[str, object]]:
+        config, _, _credential_type = await _gitlab_config_for_owner(owner_id)
+        projects = await GitLabAppClient(config).projects()
+        store = _gitlab_app_review_store()
+        bindings: dict[str, GitLabProjectBinding] = {}
+        if store is not None:
+            bindings = await store.project_bindings()
+        return [
+            project.to_public_dict(
+                review_enabled=(
+                    (
+                        binding := bindings.get(
+                            project_key(project.instance_id, project.project_id)
+                        )
+                    )
+                    is not None
+                    and binding.enabled
+                    and binding.status == "active"
+                ),
+                review_binding=binding,
+            )
+            for project in projects
+        ]
+
+    async def _gitlab_app_projects_page(
+        page_request: PageRequest,
+        owner_id: str,
+        query: str = "",
+    ) -> dict[str, object]:
+        projects = await _gitlab_app_projects(owner_id)
+        keyword = query.strip().casefold()
+        if keyword:
+            projects = [
+                project
+                for project in projects
+                if keyword in str(project.get("pathWithNamespace") or "").casefold()
+                or keyword in str(project.get("namespace") or "").casefold()
+                or keyword in str(project.get("name") or "").casefold()
+            ]
+        start = page_request.offset
+        end = start + page_request.page_size
+        return {
+            "projects": projects[start:end],
+            "page": page_request.page,
+            "pageSize": page_request.page_size,
+            "hasNextPage": end < len(projects),
+        }
+
+    async def _create_gitlab_merge_request_review_session(
+        *,
+        owner_id: str,
+        creator_name: str,
+        config: GitLabAppConfig,
+        project: GitLabProject,
+        merge_request_url: str,
+    ) -> SandboxCloudSession:
+        _, merge_request_iid = parse_merge_request_url(config, merge_request_url)
+        session = await service.create(
+            owner_id,
+            _bounded_review_display_name(
+                "MR Review",
+                f"{project.path_with_namespace}!{merge_request_iid}",
+            ),
+            creator_name,
+            False,
+            envs={
+                "GITLAB_TOKEN": config.token,
+                "GITLAB_API_BASE": config.api_root,
+                "GIT_TERMINAL_PROMPT": "0",
+            },
+        )
+        await _connect_github_pull_request_review_session(
+            session.instance_id,
+            owner_id,
+        )
+        return session
+
+    def _schedule_gitlab_merge_request_review_message(
+        *,
+        session_id: str,
+        owner_id: str,
+        config: GitLabAppConfig,
+        project_id: int,
+        merge_request_iid: int,
+        merge_request_url: str,
+        store: TosGitLabAppReviewProjectStore | None,
+        record_id: str,
+    ) -> None:
+        prompt = _GITLAB_MERGE_REQUEST_REVIEW_PROMPT.format(
+            merge_request_url=merge_request_url
+        )
+        status_finalized = False
+
+        async def _update_status(status: str, reason: str = "") -> None:
+            nonlocal status_finalized
+            if store is None or not record_id:
+                return
+            if status_finalized and status == "failed":
+                return
+            try:
+                updated = await store.update_review_record_status(
+                    record_id,
+                    status=status,
+                    reason=reason,
+                )
+                if updated is not None and status in {"completed", "failed"}:
+                    status_finalized = True
+            except GitLabAppReviewError as error:
+                logger.warning(
+                    "Failed to update GitLab MR review record %s: %s",
+                    record_id,
+                    error,
+                )
+
+        async def _baseline_note_ids() -> set[int]:
+            try:
+                return await GitLabAppClient(config).merge_request_note_ids(
+                    project_id,
+                    merge_request_iid,
+                )
+            except Exception as error:  # noqa: BLE001 - best-effort status shortcut
+                logger.info(
+                    "Failed to read GitLab MR notes before review for session %s: %s",
+                    session_id,
+                    _safe_error_message(error),
+                )
+                return set()
+
+        async def _mark_completed_when_review_note_appears(
+            baseline_note_ids: set[int],
+        ) -> None:
+            if store is None or not record_id:
+                return
+            client = GitLabAppClient(config)
+            for _attempt in range(_GITLAB_MR_REVIEW_NOTE_POLL_ATTEMPTS):
+                if status_finalized:
+                    return
+                await asyncio.sleep(_GITLAB_MR_REVIEW_NOTE_POLL_INTERVAL_SECONDS)
+                try:
+                    note_ids = await client.merge_request_note_ids(
+                        project_id,
+                        merge_request_iid,
+                    )
+                except Exception as error:  # noqa: BLE001 - best-effort status shortcut
+                    logger.info(
+                        "Failed to poll GitLab MR notes for session %s: %s",
+                        session_id,
+                        _safe_error_message(error),
+                    )
+                    continue
+                if note_ids - baseline_note_ids:
+                    await _update_status("completed")
+                    return
+
+        async def _run_review_message() -> None:
+            baseline_note_ids = await _baseline_note_ids()
+            note_watcher = asyncio.create_task(
+                _mark_completed_when_review_note_appears(baseline_note_ids)
+            )
+            try:
+                async for _event in service.stream_message(
+                    session_id,
+                    owner_id,
+                    prompt,
+                ):
+                    pass
+                await _update_status("completed")
+            except SandboxError as error:
+                await _update_status("failed", _safe_error_message(error))
+                logger.warning(
+                    "GitLab merge request review message failed for session %s: %s",
+                    session_id,
+                    _safe_error_message(error),
+                )
+            finally:
+                note_watcher.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await note_watcher
+
+        asyncio.create_task(_run_review_message())
+
+    @app.get("/web/gitlab/app/config")
+    async def _gitlab_app_config(request: Request) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        credential = None
+        store = _gitlab_app_review_store()
+        if store is not None:
+            credential = await _gitlab_oauth_credential_for_owner(store, owner_id)
+        return gitlab_app_public_config(credential=credential)
+
+    def _gitlab_oauth_authorization_url(owner_id: str) -> str:
+        if _gitlab_app_review_store() is None:
+            raise _gitlab_app_http_error(
+                GitLabAppReviewStorageUnavailable(
+                    "管理员未配置 Studio 持久化存储，无法保存 GitLab 授权。"
+                )
+            )
+        oauth_config = load_gitlab_oauth_config()
+        if oauth_config is None:
+            raise _gitlab_app_http_error(
+                GitLabAppReviewError("管理员未配置 GitLab OAuth。")
+            )
+        now = time.monotonic()
+        for state, (_owner, created_at) in list(_GITLAB_OAUTH_STATES.items()):
+            if now - created_at > _GITLAB_OAUTH_STATE_TTL_SECONDS:
+                _GITLAB_OAUTH_STATES.pop(state, None)
+        state = secrets.token_urlsafe(32)
+        _GITLAB_OAUTH_STATES[state] = (owner_id, now)
+        return GitLabOAuthClient(oauth_config).authorization_url(state)
+
+    @app.get("/web/gitlab/oauth/start-url")
+    async def _gitlab_oauth_start_url(request: Request) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        return {"authorizationUrl": _gitlab_oauth_authorization_url(owner_id)}
+
+    @app.get("/web/gitlab/oauth/start")
+    async def _gitlab_oauth_start(request: Request) -> RedirectResponse:
+        owner_id = owner_resolver(request)
+        return RedirectResponse(_gitlab_oauth_authorization_url(owner_id))
+
+    @app.get("/web/gitlab/oauth/callback")
+    async def _gitlab_oauth_callback(request: Request) -> Any:
+        state = request.query_params.get("state", "")
+        code = request.query_params.get("code", "")
+        state_owner = _GITLAB_OAUTH_STATES.pop(state, None)
+        if (
+            state_owner is None
+            or time.monotonic() - state_owner[1] > _GITLAB_OAUTH_STATE_TTL_SECONDS
+        ):
+            return HTMLResponse(
+                "GitLab 授权状态已过期，请回到 Studio 重新连接。", status_code=400
+            )
+        if not code:
+            return HTMLResponse("GitLab 授权失败：缺少授权 code。", status_code=400)
+        store = _gitlab_app_review_store()
+        if store is None:
+            return HTMLResponse(
+                "管理员未配置 Studio 持久化存储，无法保存 GitLab 授权。",
+                status_code=503,
+            )
+        oauth_config = load_gitlab_oauth_config()
+        if oauth_config is None:
+            return HTMLResponse("管理员未配置 GitLab OAuth。", status_code=503)
+        owner_id = state_owner[0]
+        try:
+            oauth_client = GitLabOAuthClient(oauth_config)
+            token_payload = await oauth_client.exchange_code(code)
+            access_token = str(token_payload.get("access_token") or "")
+            user_payload = await oauth_client.current_user(access_token)
+            credential = create_oauth_credential(
+                owner_id=owner_id,
+                base_url=oauth_config.base_url,
+                token_payload=token_payload,
+                user_payload=user_payload,
+            )
+            await store.save_oauth_credential(credential)
+        except GitLabAppReviewError as error:
+            return HTMLResponse(f"GitLab 授权失败：{str(error)}", status_code=502)
+        return RedirectResponse("/?gitlabOAuth=connected")
+
+    @app.post("/web/gitlab/oauth/disconnect")
+    async def _gitlab_oauth_disconnect(request: Request) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        store = _gitlab_app_review_store()
+        if store is None:
+            raise _gitlab_app_http_error(
+                GitLabAppReviewStorageUnavailable(
+                    "管理员未配置 Studio 持久化存储，无法删除 GitLab 授权。"
+                )
+            )
+        config = load_gitlab_app_config()
+        if config is None:
+            return {"status": "disconnected"}
+        await store.delete_oauth_credential_for_owner(owner_id, config.base_url)
+        bindings = await store.project_bindings()
+        for binding in bindings.values():
+            if (
+                binding.credential_owner == owner_id
+                and binding.credential_type == "oauth"
+            ):
+                await store.update_project_binding_status(
+                    binding.instance_id,
+                    binding.project_id,
+                    status="auth_invalid",
+                    reason="用户已断开 GitLab 授权。",
+                )
+        return {"status": "disconnected"}
+
+    @app.get("/web/gitlab/app/projects")
+    async def _gitlab_app_project_list(request: Request) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        try:
+            page_request = _github_review_page_request(request)
+            page_result = await _gitlab_app_projects_page(
+                page_request,
+                owner_id,
+                request.query_params.get("q", ""),
+            )
+        except GitLabAppReviewError as error:
+            raise _gitlab_app_http_error(error) from error
+        except SandboxError as error:
+            raise _http_error(error) from error
+        storage_configured = _gitlab_app_review_store() is not None
+        return {
+            **page_result,
+            "reviewSettingsConfigured": storage_configured,
+            "reviewSettingsReason": ""
+            if storage_configured
+            else "管理员未配置 Studio 持久化存储，无法保存启用评审设置。",
+        }
+
+    @app.put("/web/gitlab/app/review-projects")
+    async def _gitlab_app_review_projects(request: Request) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        store = _gitlab_app_review_store()
+        if store is None:
+            raise _gitlab_app_http_error(
+                GitLabAppReviewStorageUnavailable(
+                    "管理员未配置 Studio 持久化存储，无法保存启用评审设置。"
+                )
+            )
+        try:
+            data = await _request_object(request)
+            project_id = data.get("projectId")
+            review_enabled = data.get("reviewEnabled")
+            if not isinstance(project_id, int) or not isinstance(review_enabled, bool):
+                raise SandboxValidationError("启用评审项目更新格式无效。")
+            config, credential, _credential_type = await _gitlab_config_for_owner(
+                owner_id
+            )
+            if credential is None:
+                raise GitLabAppReviewError("请先连接 GitLab 后再启用自动评审。")
+            client = GitLabAppClient(config)
+            projects = await client.projects()
+            by_id = {project.project_id: project for project in projects}
+            project = by_id.get(project_id)
+            if project is None:
+                raise SandboxValidationError("GitLab App 无法访问该项目。")
+            if not review_enabled:
+                saved = await store.disable_project_binding(
+                    project.instance_id,
+                    project.project_id,
+                )
+            else:
+                if project.access_level < _GITLAB_MIN_WEBHOOK_ACCESS_LEVEL:
+                    raise SandboxValidationError(
+                        "启用自动评审需要 GitLab Maintainer 权限。"
+                    )
+                webhook_id_value = await client.ensure_project_webhook(
+                    project.project_id
+                )
+                webhook_id = (
+                    webhook_id_value if isinstance(webhook_id_value, int) else 0
+                )
+                saved = await store.save_project_binding(
+                    GitLabProjectBinding(
+                        instance_id=project.instance_id,
+                        base_url=project.base_url,
+                        project_id=project.project_id,
+                        path_with_namespace=project.path_with_namespace,
+                        credential_owner=owner_id,
+                        credential_id=credential.credential_id,
+                        credential_type="oauth",
+                        webhook_id=webhook_id,
+                        enabled=True,
+                        status="active",
+                    )
+                )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        except GitLabAppReviewError as error:
+            raise _gitlab_app_http_error(error) from error
+        return {"projects": saved}
+
+    @app.get("/web/gitlab/app/review-records")
+    async def _gitlab_app_review_records(request: Request) -> dict[str, object]:
+        owner_resolver(request)
+        store = _gitlab_app_review_store()
+        if store is None:
+            return {
+                "records": [],
+                "page": 1,
+                "pageSize": _GITHUB_REVIEW_DEFAULT_PAGE_SIZE,
+                "hasNextPage": False,
+                "reviewSettingsConfigured": False,
+                "reviewSettingsReason": "管理员未配置 Studio 持久化存储，无法读取评审记录。",
+            }
+        try:
+            page_request = _github_review_page_request(request)
+            records, page_result = await store.review_records_page(page_request)
+        except GitLabAppReviewError as error:
+            raise _gitlab_app_http_error(error) from error
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {
+            "records": [record.to_public_dict() for record in records],
+            "page": page_result.page,
+            "pageSize": page_result.page_size,
+            "hasNextPage": page_result.has_next_page,
+            "reviewSettingsConfigured": True,
+            "reviewSettingsReason": "",
+        }
+
+    @app.post(GITLAB_WEBHOOK_PATH, status_code=202)
+    async def _gitlab_app_webhook(request: Request) -> dict[str, object]:
+        store: TosGitLabAppReviewProjectStore | None = None
+        event: GitLabMergeRequestEvent | None = None
+        try:
+            config = load_gitlab_app_config()
+            if config is None:
+                raise GitLabAppReviewError("管理员未配置 GitLab OAuth。")
+            if not verify_gitlab_webhook_token(
+                request.headers.get("X-Gitlab-Token", ""),
+                config.webhook_secret,
+            ):
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "code": "GITLAB_WEBHOOK_TOKEN_INVALID",
+                        "message": "GitLab webhook token 无效。",
+                        "retryable": False,
+                    },
+                )
+            body = await request.body()
+            try:
+                payload = json.loads(body) if body else {}
+            except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                raise SandboxValidationError(
+                    "GitLab webhook 不是有效 JSON。"
+                ) from error
+            if not isinstance(payload, dict):
+                raise SandboxValidationError("GitLab webhook 必须是 JSON 对象。")
+            event = parse_merge_request_event(
+                payload,
+                event_name=request.headers.get("X-Gitlab-Event", ""),
+                delivery_id=request.headers.get("X-Gitlab-Event-UUID", "")
+                or request.headers.get("X-Request-Id", ""),
+                config=config,
+            )
+            if event is None:
+                return {"status": "ignored", "reason": "unsupported-event"}
+            store = _gitlab_app_review_store()
+            if not event.should_review:
+                if store is not None:
+                    await _remember_gitlab_review_record(
+                        store,
+                        create_gitlab_review_record(
+                            instance_id=event.instance_id,
+                            base_url=event.base_url,
+                            project_id=event.project_id,
+                            path_with_namespace=event.path_with_namespace,
+                            merge_request_url=event.merge_request_url,
+                            merge_request_iid=event.merge_request_iid,
+                            status="ignored",
+                            trigger="webhook",
+                            delivery_id=event.delivery_id,
+                            action=event.action,
+                            reason="merge-request-not-reviewable",
+                        ),
+                    )
+                return {
+                    "status": "ignored",
+                    "reason": "merge-request-not-reviewable",
+                    "action": event.action,
+                }
+            if store is None:
+                return {
+                    "status": "ignored",
+                    "reason": "review-settings-unavailable",
+                    "projectId": event.project_id,
+                }
+            binding = await store.project_binding(event.instance_id, event.project_id)
+            if binding is None or not binding.enabled or binding.status != "active":
+                await _remember_gitlab_review_record(
+                    store,
+                    create_gitlab_review_record(
+                        instance_id=event.instance_id,
+                        base_url=event.base_url,
+                        project_id=event.project_id,
+                        path_with_namespace=event.path_with_namespace,
+                        merge_request_url=event.merge_request_url,
+                        merge_request_iid=event.merge_request_iid,
+                        status="ignored",
+                        trigger="webhook",
+                        delivery_id=event.delivery_id,
+                        action=event.action,
+                        reason="project-review-disabled",
+                    ),
+                )
+                return {
+                    "status": "ignored",
+                    "reason": "project-review-disabled",
+                    "projectId": event.project_id,
+                }
+            (
+                config,
+                credential_owner,
+                credential_creator,
+            ) = await _gitlab_config_for_binding(
+                store,
+                binding,
+            )
+            project = await GitLabAppClient(config).project(event.project_id)
+            session = await _create_gitlab_merge_request_review_session(
+                owner_id=credential_owner,
+                creator_name=credential_creator,
+                config=config,
+                project=project,
+                merge_request_url=event.merge_request_url,
+            )
+            record = create_gitlab_review_record(
+                instance_id=event.instance_id,
+                base_url=event.base_url,
+                project_id=event.project_id,
+                path_with_namespace=event.path_with_namespace,
+                merge_request_url=event.merge_request_url,
+                merge_request_iid=event.merge_request_iid,
+                status="started",
+                trigger="webhook",
+                delivery_id=event.delivery_id,
+                action=event.action,
+                session_id=session.instance_id,
+                display_name=session.display_name,
+            )
+            await _remember_gitlab_review_record(store, record)
+            _schedule_gitlab_merge_request_review_message(
+                session_id=session.instance_id,
+                owner_id=credential_owner,
+                config=config,
+                project_id=event.project_id,
+                merge_request_iid=event.merge_request_iid,
+                merge_request_url=event.merge_request_url,
+                store=store,
+                record_id=record.record_id,
+            )
+        except SandboxError as error:
+            if store is not None and event is not None:
+                await _remember_gitlab_review_record(
+                    store,
+                    create_gitlab_review_record(
+                        instance_id=event.instance_id,
+                        base_url=event.base_url,
+                        project_id=event.project_id,
+                        path_with_namespace=event.path_with_namespace,
+                        merge_request_url=event.merge_request_url,
+                        merge_request_iid=event.merge_request_iid,
+                        status="failed",
+                        trigger="webhook",
+                        delivery_id=event.delivery_id,
+                        action=event.action,
+                        reason=_safe_error_message(error),
+                    ),
+                )
+            raise _http_error(error) from error
+        except GitLabAppReviewError as error:
+            if store is not None and event is not None:
+                await _remember_gitlab_review_record(
+                    store,
+                    create_gitlab_review_record(
+                        instance_id=event.instance_id,
+                        base_url=event.base_url,
+                        project_id=event.project_id,
+                        path_with_namespace=event.path_with_namespace,
+                        merge_request_url=event.merge_request_url,
+                        merge_request_iid=event.merge_request_iid,
+                        status="failed",
+                        trigger="webhook",
+                        delivery_id=event.delivery_id,
+                        action=event.action,
+                        reason=str(error),
+                    ),
+                )
+            raise _gitlab_app_http_error(error) from error
+        return {
+            "status": "started",
+            "sessionId": session.instance_id,
+            "displayName": session.display_name,
+            "deliveryId": event.delivery_id,
+        }
+
+    @app.post("/web/gitlab/merge-request-reviews")
+    async def _start_gitlab_merge_request_review(request: Request) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        creator_name = creator_resolver(request) if creator_resolver else owner_id
+        try:
+            data = await _request_object(request)
+            merge_request_url = data.get("mergeRequestUrl")
+            if not isinstance(merge_request_url, str):
+                raise SandboxValidationError("Merge Request URL 必须是文本。")
+            config, _credential, _credential_type = await _gitlab_config_for_owner(
+                owner_id
+            )
+            project_path, mr_iid = parse_merge_request_url(config, merge_request_url)
+            projects = await GitLabAppClient(config).projects()
+            project = next(
+                (
+                    item
+                    for item in projects
+                    if item.path_with_namespace.casefold() == project_path.casefold()
+                ),
+                None,
+            )
+            if project is None:
+                raise SandboxValidationError("GitLab App 无法访问该项目。")
+            session = await _create_gitlab_merge_request_review_session(
+                owner_id=owner_id,
+                creator_name=creator_name,
+                config=config,
+                project=project,
+                merge_request_url=merge_request_url.strip(),
+            )
+            store = _gitlab_app_review_store()
+            record_id = ""
+            if store is not None:
+                record = create_gitlab_review_record(
+                    instance_id=project.instance_id,
+                    base_url=project.base_url,
+                    project_id=project.project_id,
+                    path_with_namespace=project.path_with_namespace,
+                    merge_request_url=merge_request_url.strip(),
+                    merge_request_iid=mr_iid,
+                    status="started",
+                    trigger="manual",
+                    session_id=session.instance_id,
+                    display_name=session.display_name,
+                )
+                record_id = record.record_id
+                await _remember_gitlab_review_record(store, record)
+        except SandboxError as error:
+            raise _http_error(error) from error
+        except GitLabAppReviewError as error:
+            raise _gitlab_app_http_error(error) from error
+        _schedule_gitlab_merge_request_review_message(
+            session_id=session.instance_id,
+            owner_id=owner_id,
+            config=config,
+            project_id=project.project_id,
+            merge_request_iid=mr_iid,
+            merge_request_url=merge_request_url.strip(),
+            store=store,
+            record_id=record_id,
+        )
+        return {
+            "status": "started",
+            "sessionId": session.instance_id,
+            "displayName": session.display_name,
+        }
+
+    @app.get("/web/github/app/config")
+    async def _github_app_config(request: Request) -> dict[str, object]:
+        owner_resolver(request)
+        return github_app_public_config()
+
+    @app.get("/web/github/app/repositories")
+    async def _github_app_repositories(request: Request) -> dict[str, object]:
+        owner_resolver(request)
+        try:
+            page_request = _github_review_page_request(request)
+            page_result = await _github_app_installed_repositories_page(
+                page_request,
+                request.query_params.get("q", ""),
+            )
+        except GitHubAppReviewError as error:
+            raise _github_app_http_error(error) from error
+        except SandboxError as error:
+            raise _http_error(error) from error
+        storage_configured = _github_app_review_store() is not None
+        return {
+            **page_result,
+            "reviewSettingsConfigured": storage_configured,
+            "reviewSettingsReason": ""
+            if storage_configured
+            else "管理员未配置 Studio 持久化存储，无法保存启用评审设置。",
+        }
+
+    @app.put("/web/github/app/review-repositories")
+    async def _github_app_review_repositories(request: Request) -> dict[str, object]:
+        owner_resolver(request)
+        store = _github_app_review_store()
+        if store is None:
+            raise _github_app_http_error(
+                GitHubAppReviewStorageUnavailable(
+                    "管理员未配置 Studio 持久化存储，无法保存启用评审设置。"
+                )
+            )
+        try:
+            data = await _request_object(request)
+            repositories = data.get("repositories")
+            repository = data.get("repository")
+            review_enabled = data.get("reviewEnabled")
+            if repository is not None or review_enabled is not None:
+                if not isinstance(repository, str) or not isinstance(
+                    review_enabled, bool
+                ):
+                    raise SandboxValidationError("启用评审仓库更新格式无效。")
+                normalized_repository = normalize_review_repository(repository)
+                current = await store.enabled_repositories()
+                updated = {
+                    item
+                    for item in current
+                    if item.casefold() != normalized_repository.casefold()
+                }
+                if review_enabled:
+                    updated.add(normalized_repository)
+                normalized = sorted(updated, key=str.casefold)
+            else:
+                if not isinstance(repositories, list) or any(
+                    not isinstance(repository, str) for repository in repositories
+                ):
+                    raise SandboxValidationError("启用评审仓库列表格式无效。")
+                normalized = [
+                    normalize_review_repository(item) for item in repositories
+                ]
+            installed = await _github_app_installed_repositories()
+            installed_lookup = {
+                str(repository.get("fullName") or "").casefold()
+                for repository in installed
+            }
+            unknown = [
+                repository
+                for repository in normalized
+                if repository.casefold() not in installed_lookup
+            ]
+            if unknown:
+                raise SandboxValidationError(
+                    "GitHub App 未安装到这些仓库：" + "、".join(unknown)
+                )
+            saved = await store.save_enabled_repositories(normalized)
+        except SandboxError as error:
+            raise _http_error(error) from error
+        except GitHubAppReviewError as error:
+            raise _github_app_http_error(error) from error
+        return {"repositories": saved}
+
+    @app.get("/web/github/app/review-records")
+    async def _github_app_review_records(request: Request) -> dict[str, object]:
+        owner_resolver(request)
+        store = _github_app_review_store()
+        if store is None:
+            return {
+                "records": [],
+                "page": 1,
+                "pageSize": _GITHUB_REVIEW_DEFAULT_PAGE_SIZE,
+                "hasNextPage": False,
+                "reviewSettingsConfigured": False,
+                "reviewSettingsReason": "管理员未配置 Studio 持久化存储，无法读取评审记录。",
+            }
+        try:
+            page_request = _github_review_page_request(request)
+            records, page_result = await store.review_records_page(page_request)
+        except GitHubAppReviewError as error:
+            raise _github_app_http_error(error) from error
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {
+            "records": [record.to_public_dict() for record in records],
+            "page": page_result.page,
+            "pageSize": page_result.page_size,
+            "hasNextPage": page_result.has_next_page,
+            "reviewSettingsConfigured": True,
+            "reviewSettingsReason": "",
+        }
+
+    @app.post("/web/github/app/webhook", status_code=202)
+    async def _github_app_webhook(request: Request) -> dict[str, object]:
+        store: TosGitHubAppReviewRepositoryStore | None = None
+        event = None
+        try:
+            config = load_github_app_config()
+            if config is None:
+                raise GitHubAppReviewError("管理员未配置 GitHub App。")
+            body = await request.body()
+            signature = request.headers.get("X-Hub-Signature-256", "")
+            if not verify_webhook_signature(
+                body,
+                signature,
+                config.webhook_secret,
+            ):
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "code": "GITHUB_WEBHOOK_SIGNATURE_INVALID",
+                        "message": "GitHub webhook 签名无效。",
+                        "retryable": False,
+                    },
+                )
+            try:
+                payload = json.loads(body) if body else {}
+            except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                raise SandboxValidationError(
+                    "GitHub webhook 不是有效 JSON。"
+                ) from error
+            if not isinstance(payload, dict):
+                raise SandboxValidationError("GitHub webhook 必须是 JSON 对象。")
+            event = parse_pull_request_event(
+                payload,
+                event_name=request.headers.get("X-GitHub-Event", ""),
+                delivery_id=request.headers.get("X-GitHub-Delivery", ""),
+            )
+            if event is None:
+                return {"status": "ignored", "reason": "unsupported-event"}
+            store = _github_app_review_store()
+            if not event.should_review:
+                if store is not None:
+                    await _remember_github_review_record(
+                        store,
+                        create_review_record(
+                            repository=event.repository,
+                            pull_request_url=event.pull_request_url,
+                            pull_request_number=event.pull_request_number,
+                            status="ignored",
+                            trigger="webhook",
+                            delivery_id=event.delivery_id,
+                            action=event.action,
+                            reason="pull-request-not-reviewable",
+                        ),
+                    )
+                return {
+                    "status": "ignored",
+                    "reason": "pull-request-not-reviewable",
+                    "action": event.action,
+                }
+            if store is None:
+                return {
+                    "status": "ignored",
+                    "reason": "review-settings-unavailable",
+                    "repository": event.repository,
+                }
+            enabled = await store.enabled_repositories()
+            if event.repository.casefold() not in {
+                repository.casefold() for repository in enabled
+            }:
+                await _remember_github_review_record(
+                    store,
+                    create_review_record(
+                        repository=event.repository,
+                        pull_request_url=event.pull_request_url,
+                        pull_request_number=event.pull_request_number,
+                        status="ignored",
+                        trigger="webhook",
+                        delivery_id=event.delivery_id,
+                        action=event.action,
+                        reason="repository-review-disabled",
+                    ),
+                )
+                return {
+                    "status": "ignored",
+                    "reason": "repository-review-disabled",
+                    "repository": event.repository,
+                }
+            client = GitHubAppClient(config)
+            installation_token = await client.installation_token(event.installation_id)
+            session = await _create_github_pull_request_review_session(
+                owner_id=config.review_owner_id,
+                creator_name=config.review_creator_name,
+                pull_request_url=event.pull_request_url,
+                installation_token=installation_token,
+            )
+            record = create_review_record(
+                repository=event.repository,
+                pull_request_url=event.pull_request_url,
+                pull_request_number=event.pull_request_number,
+                status="started",
+                trigger="webhook",
+                delivery_id=event.delivery_id,
+                action=event.action,
+                session_id=session.instance_id,
+                display_name=session.display_name,
+            )
+            await _remember_github_review_record(store, record)
+            _schedule_github_pull_request_review_message(
+                session_id=session.instance_id,
+                owner_id=config.review_owner_id,
+                pull_request_url=event.pull_request_url,
+                store=store,
+                record_id=record.record_id,
+            )
+        except SandboxError as error:
+            if store is not None and event is not None:
+                await _remember_github_review_record(
+                    store,
+                    create_review_record(
+                        repository=event.repository,
+                        pull_request_url=event.pull_request_url,
+                        pull_request_number=event.pull_request_number,
+                        status="failed",
+                        trigger="webhook",
+                        delivery_id=event.delivery_id,
+                        action=event.action,
+                        reason=_safe_error_message(error),
+                    ),
+                )
+            raise _http_error(error) from error
+        except GitHubAppReviewError as error:
+            if store is not None and event is not None:
+                await _remember_github_review_record(
+                    store,
+                    create_review_record(
+                        repository=event.repository,
+                        pull_request_url=event.pull_request_url,
+                        pull_request_number=event.pull_request_number,
+                        status="failed",
+                        trigger="webhook",
+                        delivery_id=event.delivery_id,
+                        action=event.action,
+                        reason=str(error),
+                    ),
+                )
+            raise _github_app_http_error(error) from error
+
+        return {
+            "status": "started",
+            "sessionId": session.instance_id,
+            "displayName": session.display_name,
+            "deliveryId": event.delivery_id,
+        }
+
+    @app.post("/web/github/pull-request-reviews")
+    async def _start_github_pull_request_review(
+        request: Request,
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        creator_name = creator_resolver(request) if creator_resolver else owner_id
+        try:
+            data = await _request_object(request)
+            pull_request_url = data.get("pullRequestUrl")
+            if not isinstance(pull_request_url, str):
+                raise SandboxValidationError("Pull Request URL 必须是文本。")
+            pull_request_url = pull_request_url.strip()
+            match = _GITHUB_PULL_REQUEST_URL_RE.fullmatch(pull_request_url)
+            if match is None:
+                raise SandboxValidationError("请输入完整的 GitHub Pull Request URL。")
+            owner, repo, _number = match.groups()
+            installation_token = await _github_app_installation_token_for_pull_request(
+                owner,
+                repo,
+            )
+            session = await _create_github_pull_request_review_session(
+                owner_id=owner_id,
+                creator_name=creator_name,
+                pull_request_url=pull_request_url,
+                installation_token=installation_token,
+            )
+            store = _github_app_review_store()
+            record_id = ""
+            if store is not None:
+                record = create_review_record(
+                    repository=f"{owner}/{repo}",
+                    pull_request_url=pull_request_url,
+                    pull_request_number=int(_number),
+                    status="started",
+                    trigger="manual",
+                    session_id=session.instance_id,
+                    display_name=session.display_name,
+                )
+                record_id = record.record_id
+                await _remember_github_review_record(store, record)
+        except SandboxError as error:
+            raise _http_error(error) from error
+        except GitHubAppReviewError as error:
+            raise _github_app_http_error(error) from error
+
+        _schedule_github_pull_request_review_message(
+            session_id=session.instance_id,
+            owner_id=owner_id,
+            pull_request_url=pull_request_url,
+            store=store,
+            record_id=record_id,
+        )
+        return {
+            "status": "started",
+            "sessionId": session.instance_id,
+            "displayName": session.display_name,
         }
 
     @app.post("/web/sandbox/snapshots/{snapshot_id}/resume")
@@ -3362,16 +5071,17 @@ def mount_sandbox_routes(
         snapshot_id: str,
         request: Request,
     ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
         try:
             session = await service.resume_snapshot(
                 snapshot_id,
-                owner_resolver(request),
+                owner_id,
                 is_admin=_is_admin(request),
             )
         except SandboxError as error:
             raise _http_error(error) from error
         return {
-            **_public_session(session),
+            **_public_session(session, owner_id),
             "toolName": STUDIO_SANDBOX_TOOL_NAME,
         }
 

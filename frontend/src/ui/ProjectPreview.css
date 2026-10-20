@@ -1,5 +1,5 @@
 .layout {
-  --pp-sidebar-width: 236px;
+  --pp-sidebar-width: 240px;
 }
 
 .layout:has(.sidebar.is-collapsed) {
@@ -395,7 +395,7 @@
 }
 
 .pp-root.is-deploy {
-  --pp-publish-content-width: min(760px, max(680px, calc(100% - 48px)));
+  --pp-publish-content-width: min(760px, calc(100% - 48px));
   overflow-y: auto;
 }
 
@@ -923,6 +923,89 @@
   font-size: 12.5px;
 }
 
+.pp-github-cicd-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pp-github-cicd-tabs {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid hsl(var(--border) / 0.72);
+  border-radius: 10px;
+  background: hsl(var(--muted) / 0.42);
+}
+
+.pp-github-cicd-tabs button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pp-github-cicd-tabs button.is-active {
+  border-color: hsl(var(--border));
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+}
+
+.pp-github-cicd-tabs button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.pp-github-cicd-copy {
+  margin: -4px 0 12px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.pp-github-cicd-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: hsl(var(--primary));
+  font-size: 11.5px;
+  font-weight: 560;
+  white-space: nowrap;
+}
+
+.pp-github-cicd-status .pp-ic {
+  width: 13px;
+  height: 13px;
+}
+
+.pp-github-cicd-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.84fr);
+  gap: 10px;
+}
+
+.pp-github-cicd-field {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12.5px;
+}
+
 .pp-deployment-select {
   position: relative;
   min-width: 0;
@@ -1113,6 +1196,17 @@
   color: hsl(var(--primary));
 }
 
+.pp-deployment-select-copy .pp-deployment-select-description,
+.pp-deployment-select-copy .pp-deployment-select-metadata {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pp-deployment-select-copy .pp-deployment-select-metadata {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
 .pp-deployment-select-badge {
   flex-shrink: 0;
   padding: 1px 5px;
@@ -1175,6 +1269,231 @@
   outline-offset: 2px;
 }
 
+.pp-github-cicd-field:first-child {
+  grid-column: 1 / -1;
+}
+
+.pp-github-cicd-field > span {
+  color: hsl(var(--foreground));
+  font-weight: 560;
+}
+
+.pp-github-token-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pp-github-token-label-row > span {
+  min-width: 0;
+}
+
+.pp-github-token-label-row > a {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: hsl(var(--primary));
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.pp-github-token-label-row > a:hover {
+  text-decoration: underline;
+}
+
+.pp-github-token-label-row > a:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.35);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.pp-github-token-label-row > a .pp-ic {
+  width: 13px;
+  height: 13px;
+}
+
+.pp-github-token-input {
+  position: relative;
+}
+
+.pp-github-token-input input {
+  padding-right: 42px;
+}
+
+.pp-github-token-input button {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+
+.pp-github-token-input button:hover:not(:disabled) {
+  background: hsl(var(--muted) / 0.55);
+  color: hsl(var(--foreground));
+}
+
+.pp-github-token-input button:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.3);
+}
+
+.pp-github-token-input button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.pp-github-token-input button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.pp-github-token-help {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.pp-github-cicd-submit {
+  grid-column: 1 / -1;
+  align-self: end;
+  min-width: 0;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid hsl(var(--primary));
+  border-radius: 6px;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 620;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pp-github-cicd-submit:disabled {
+  opacity: 0.52;
+  cursor: default;
+}
+
+.pp-github-cicd-result,
+.pp-github-cicd-error {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid hsl(var(--border) / 0.72);
+}
+
+.pp-github-cicd-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.pp-github-cicd-result-head strong,
+.pp-github-cicd-error strong {
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.pp-github-cicd-result-head span {
+  color: hsl(var(--primary));
+  font-size: 11.5px;
+  font-weight: 620;
+}
+
+.pp-github-cicd-result-grid,
+.pp-github-cicd-error dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.pp-github-cicd-result-grid div,
+.pp-github-cicd-error dl div {
+  min-width: 0;
+}
+
+.pp-github-cicd-result dt,
+.pp-github-cicd-error dt {
+  margin-bottom: 3px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+}
+
+.pp-github-cicd-result dd,
+.pp-github-cicd-error dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: hsl(var(--foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.pp-github-cicd-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.pp-github-cicd-links a {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 5px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.pp-github-cicd-error {
+  color: hsl(var(--destructive));
+}
+
+.pp-github-cicd-error p {
+  margin: 6px 0 10px;
+  color: hsl(var(--destructive));
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.pp-github-cicd-error dd {
+  color: hsl(var(--destructive));
+}
+
+.pp-github-cicd-bound-note {
+  margin: 10px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .pp-instance-note {
   margin: 10px 0 0;
   color: hsl(42 96% 43%);
@@ -1207,6 +1526,7 @@
 .pp-config-select,
 .pp-runtime-name-input,
 .pp-channel-fields input,
+.pp-github-cicd-field input,
 .pp-instance-fields input,
 .pp-network-fields input,
 .pp-env-row input,
@@ -1237,6 +1557,7 @@
 .pp-config-select:focus,
 .pp-runtime-name-input:focus,
 .pp-channel-fields input:focus,
+.pp-github-cicd-field input:focus,
 .pp-instance-fields input:focus,
 .pp-network-fields input:focus,
 .pp-env-row input:focus,
@@ -1263,188 +1584,12 @@
 .pp-config-select:disabled,
 .pp-runtime-name-input:disabled,
 .pp-channel-fields input:disabled,
+.pp-github-cicd-field input:disabled,
 .pp-instance-fields input:disabled,
 .pp-network-fields input:disabled,
 .pp-env-row input:disabled,
 .pp-env-row textarea:disabled {
   opacity: 0.55;
-}
-
-.pp-channel-card {
-  position: relative;
-  width: clamp(154px, 33.333%, 236px);
-  max-width: 100%;
-  height: 112px;
-  perspective: 1200px;
-  transition: height 180ms ease;
-}
-
-.pp-channel-card.is-flipped {
-  height: 176px;
-}
-
-.pp-channel-card-inner {
-  width: 100%;
-  height: 100%;
-  position: relative;
-  transform-style: preserve-3d;
-  transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.pp-channel-card.is-flipped .pp-channel-card-inner {
-  transform: rotateY(180deg);
-}
-
-.pp-channel-card-face {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  box-sizing: border-box;
-  overflow: hidden;
-  border: 1px solid hsl(var(--border) / 0.72);
-  border-radius: 14px;
-  background: hsl(var(--background));
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
-}
-
-.pp-channel-card-front {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 11px;
-  padding: 12px;
-  color: hsl(var(--foreground));
-  cursor: pointer;
-  font: inherit;
-  text-align: left;
-  transition:
-    border-color 180ms ease,
-    box-shadow 180ms ease,
-    transform 180ms ease;
-}
-
-.pp-channel-card-front:hover:not(:disabled) {
-  border-color: hsl(var(--foreground) / 0.22);
-  box-shadow: 0 12px 30px hsl(var(--foreground) / 0.07);
-  transform: translateY(-1px);
-}
-
-.pp-channel-card-front:focus-visible,
-.pp-channel-remove:focus-visible {
-  outline: 2px solid hsl(var(--ring) / 0.58);
-  outline-offset: 2px;
-}
-
-.pp-channel-card-front:disabled {
-  cursor: default;
-}
-
-.pp-channel-card-back {
-  padding: 10px;
-  transform: rotateY(180deg);
-}
-
-.pp-channel-card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.pp-channel-card-head > strong {
-  font-size: 12.5px;
-  font-weight: 650;
-}
-
-.pp-channel-logo {
-  width: 42px;
-  height: 42px;
-  flex: 0 0 42px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid hsl(var(--border) / 0.65);
-  border-radius: 12px;
-  background: white;
-  box-shadow: 0 4px 14px hsl(var(--foreground) / 0.07);
-}
-
-.pp-channel-logo img {
-  width: 30px;
-  height: 30px;
-  display: block;
-}
-
-.pp-channel-card-copy {
-  min-width: 0;
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.pp-channel-card-copy strong {
-  font-size: 14px;
-  font-weight: 650;
-}
-
-.pp-channel-card-copy small {
-  display: -webkit-box;
-  overflow: hidden;
-  color: hsl(var(--muted-foreground));
-  font-size: 12.5px;
-  line-height: 1.45;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.pp-channel-remove {
-  min-height: 24px;
-  padding: 0 6px;
-  border: 1px solid hsl(var(--destructive) / 0.14);
-  border-radius: 7px;
-  background: hsl(var(--destructive) / 0.07);
-  color: hsl(0 46% 36%);
-  cursor: pointer;
-  font: inherit;
-  font-size: 10.5px;
-  white-space: nowrap;
-}
-
-.pp-channel-remove:hover:not(:disabled) {
-  background: hsl(var(--destructive) / 0.12);
-  color: hsl(0 52% 31%);
-}
-
-.pp-channel-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 7px;
-}
-
-.pp-channel-fields label {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
-}
-
-.pp-channel-fields label > span {
-  color: hsl(var(--foreground));
-  font-weight: 560;
-}
-
-.pp-channel-fields small {
-  margin-left: 5px;
-  color: hsl(var(--destructive));
-  font-size: 9px;
-  font-weight: 500;
 }
 
 .pp-network-layout {
@@ -2131,6 +2276,20 @@
   line-height: 1.5;
 }
 
+.pp-status-unconfirmed {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 14px 18px;
+  padding: 10px 11px;
+  border: 1px solid hsl(42 90% 45% / 0.25);
+  border-radius: 5px;
+  background: hsl(42 90% 50% / 0.07);
+  color: hsl(35 82% 34%);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
 .pp-deploy-result {
   margin: 14px 18px 18px;
   padding: 14px;
@@ -2295,8 +2454,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pp-channel-card-inner,
-  .pp-channel-card-front,
   .pp-deployment-select-chevron,
   .pp-config-actions .pp-deploy {
     transition: none;
@@ -2315,14 +2472,6 @@
 }
 
 @media (max-width: 860px) {
-  .layout {
-    --pp-sidebar-width: 204px;
-  }
-
-  .layout:has(.sidebar.is-collapsed) {
-    --pp-sidebar-width: 56px;
-  }
-
   .pp-root.is-deploy {
     --pp-publish-content-width: min(88%, calc(100% - 36px));
   }
@@ -2390,6 +2539,16 @@
 
 @media (max-width: 520px) {
   .pp-auth-fields,
+  .pp-github-cicd-form,
+  .pp-github-cicd-result-grid,
+  .pp-github-cicd-error dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pp-github-cicd-submit {
+    width: 100%;
+  }
+
   .pp-network-layout {
     grid-template-columns: minmax(0, 1fr);
     gap: 16px;

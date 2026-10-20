@@ -8,9 +8,12 @@
 //   404 -> SSO not configured on legacy servers (local username mode)
 
 import { BOOT_REQUEST_TIMEOUT_MS, requestSignal } from "./timeout";
+import { adkT, withLocaleHeaders } from "./i18n";
 
 const LOCAL_USER_KEY = "veadk_local_user";
 const TAB_LOCAL_USER_KEY = "veadk_local_user_tab";
+const REFRESH_RETRY_HEADER = "X-VeADK-OAuth-Refresh-Retry";
+const REFRESH_RETRY_DELAYS_MS = [50, 250] as const;
 
 export type AuthStatus = "authenticated" | "unauthenticated";
 
@@ -88,15 +91,15 @@ export async function fetchProviders(): Promise<Provider[]> {
   let res: Response;
   try {
     res = await fetch("/web/auth-config", {
-      headers: { Accept: "application/json" },
+      headers: withLocaleHeaders({ Accept: "application/json" }),
       signal: requestSignal(undefined, BOOT_REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
     console.warn("[identity] /web/auth-config is unreachable:", error);
-    throw new Error("无法加载登录配置，请检查网络后重试。");
+    throw new Error(adkT("identity.loadConfigNetworkFailed"));
   }
   if (!res.ok) {
-    throw new Error(`登录配置服务异常（HTTP ${res.status}），请稍后重试。`);
+    throw new Error(adkT("identity.configServiceFailed", { status: res.status }));
   }
   try {
     const data = (await res.json()) as { providers?: unknown };
@@ -106,7 +109,7 @@ export async function fetchProviders(): Promise<Provider[]> {
     return data.providers as Provider[];
   } catch (error) {
     console.warn("[identity] /web/auth-config returned an invalid response:", error);
-    throw new Error("登录配置服务返回了无法解析的响应，请稍后重试。");
+    throw new Error(adkT("identity.invalidConfigResponse"));
   }
 }
 
@@ -157,22 +160,42 @@ export function logout(): void {
   window.location.assign("/oauth2/logout");
 }
 
+async function fetchIdentityResponse(): Promise<Response> {
+  for (let attempt = 0; ; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetch("/oauth2/userinfo", {
+        headers: withLocaleHeaders({ Accept: "application/json" }),
+        signal: requestSignal(undefined, BOOT_REQUEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      console.warn("[identity] /oauth2/userinfo is unreachable:", error);
+      throw new Error(adkT("identity.serviceNetworkFailed"));
+    }
+
+    const retryDelay = REFRESH_RETRY_DELAYS_MS[attempt];
+    if (
+      response.status !== 401 ||
+      response.headers.get(REFRESH_RETRY_HEADER) !== "1" ||
+      retryDelay === undefined
+    ) {
+      return response;
+    }
+
+    // Another Studio instance may have already rotated the browser's refresh
+    // token. Give its Set-Cookie response a moment to land, then retry with the
+    // updated HttpOnly cookie. The frontend never reads either token.
+    await new Promise((resolve) => window.setTimeout(resolve, retryDelay));
+  }
+}
+
 /** Resolve identity. With SSO: via /oauth2/userinfo. Without SSO (endpoint 404):
  *  use a locally chosen username, or prompt for one on the login page.
  *
  *  Network and server failures reject instead of silently changing identity
  *  mode. The caller can then show a retryable error. */
 export async function resolveIdentity(): Promise<Identity> {
-  let res: Response;
-  try {
-    res = await fetch("/oauth2/userinfo", {
-      headers: { Accept: "application/json" },
-      signal: requestSignal(undefined, BOOT_REQUEST_TIMEOUT_MS),
-    });
-  } catch (error) {
-    console.warn("[identity] /oauth2/userinfo is unreachable:", error);
-    throw new Error("无法连接身份服务，请检查网络后重试。");
-  }
+  const res = await fetchIdentityResponse();
 
   // SSO enabled, signed in.
   if (res.ok) {
@@ -181,7 +204,7 @@ export async function resolveIdentity(): Promise<Identity> {
       info = (await res.json()) as Record<string, unknown>;
     } catch (error) {
       console.warn("[identity] /oauth2/userinfo returned a non-JSON response:", error);
-      throw new Error("身份服务返回了无法解析的响应，请稍后重试。");
+      throw new Error(adkT("identity.invalidServiceResponse"));
     }
     const userId = String(info.sub ?? info.user_id ?? info.email ?? "");
     return { status: "authenticated", userId, info };
@@ -192,7 +215,7 @@ export async function resolveIdentity(): Promise<Identity> {
   }
 
   if (res.status !== 404) {
-    throw new Error(`身份服务异常（HTTP ${res.status}），请稍后重试。`);
+    throw new Error(adkT("identity.serviceFailed", { status: res.status }));
   }
 
   // Legacy server without the identity endpoint: local username mode.
@@ -206,7 +229,15 @@ export async function resolveIdentity(): Promise<Identity> {
 /** A short display name for the signed-in user. */
 export function displayName(info?: Record<string, unknown>): string {
   if (!info) return "";
-  return String(info.name ?? info.preferred_username ?? info.email ?? info.sub ?? "");
+  for (const value of [
+    info.name,
+    info.preferred_username,
+    info.username,
+    info.email,
+  ]) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
 }
 
 /** Standard OIDC profile picture URL, when provided by the identity service. */

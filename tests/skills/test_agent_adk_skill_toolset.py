@@ -23,7 +23,7 @@ from google.adk.tools.skill_toolset import SkillToolset
 
 from veadk import Agent
 from veadk.prompts.agent_default_prompt import DEFAULT_INSTRUCTION
-from veadk.skills import utils as skill_utils
+from veadk.skills import check_skills_callback as skill_utils
 from veadk.skills.skill import Skill as VeADKSkill
 from veadk.tools.skills_tools.skills_toolset import SkillsToolset
 
@@ -81,7 +81,7 @@ def test_sandbox_agent_skills_path_does_not_warn_as_deprecated(
     monkeypatch.setattr(
         skill_utils,
         "load_skills_from_cloud",
-        lambda source: [remote_skill],
+        lambda source, **kwargs: [remote_skill],
     )
 
     with warnings.catch_warnings(record=True) as caught:

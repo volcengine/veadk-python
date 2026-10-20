@@ -34,7 +34,7 @@ test("aborts only the active standard conversation stream", () => {
   );
   assert.match(
     appSource,
-    /<Composer[\s\S]*?onStop=\{busy \? stopCurrentGeneration : undefined\}/,
+    /<Composer[\s\S]*?onStop=\{busy && !agentInfo\?\.turnLifecycleControl \? stopCurrentGeneration : undefined\}/,
   );
   assert.match(
     sendSource,
@@ -68,11 +68,15 @@ test("aborts only an active Sandbox agent response", () => {
   );
   assert.match(
     appSource,
-    /function stopSandboxGeneration\(\)[\s\S]*?sandboxMessageAbortRef\.current\?\.abort\(\)[\s\S]*?sandboxClient[\s\S]*?\.interruptSession\(activeSessionId\)/,
+    /function stopSandboxGeneration\(\)[\s\S]*?const controller = sandboxMessageAbortRef\.current[\s\S]*?controller\.abort\(\)/,
   );
   assert.match(
     appSource,
-    /<SandboxComposer[\s\S]*?onStop=\{sandboxBusy \? stopSandboxGeneration : undefined\}/,
+    /sandboxClient\.interruptSession\(activeSession\.id\)/,
+  );
+  assert.match(
+    appSource,
+    /<SandboxComposer[\s\S]*?onStop=\{sandboxBusy \|\| development.submitting \? stopSandboxGeneration : undefined\}/,
   );
   assert.match(
     appSource,
@@ -107,13 +111,22 @@ test("aborts only an active Sandbox agent response", () => {
   );
 });
 
-test("standard Composer turns its enabled send control into an accessible stop control", () => {
+test("intelligent stop is independent of the SSE subscriber and keeps transcript", () => {
+  const stopSource = between(appSource, "  function stopSandboxGeneration()", "  async function sendSandboxMessage(");
+  assert.match(stopSource, /if \(activeSession\?\.intelligentDevelopment\) \{\s*void development\.stop\(\);\s*return;/);
+  assert.doesNotMatch(stopSource, /setSandboxTurns|setInput|filter\(/);
+  assert.match(appSource, /await development\.submit\(text\.trim\(\), activeSession\.id\)/);
+  assert.match(appSource, /await sendSandboxMessage\(goal, \[\], \[\], connected\)/);
+});
+
+test("standard Composer gives MPA pause and resume precedence in the primary control", () => {
   assert.match(composerSource, /onStop\?: \(\) => void/);
-  assert.match(composerSource, /const canStop = busy && Boolean\(onStop\)/);
-  assert.match(composerSource, /disabled=\{canStop \? false : !canSend\}/);
-  assert.match(composerSource, /onClick=\{canStop \? onStop : submitComposer\}/);
-  assert.match(composerSource, /aria-label=\{\s*canStop\s*\? "停止生成"/);
-  assert.match(composerSource, /canStop \? \(\s*<ComposerStopIcon/);
+  assert.match(composerSource, /const canStop = busy && Boolean\(onStop\) && !turnControl/);
+  assert.match(composerSource, /disabled=\{turnControlPending \? true : canPauseTurn \|\| canResumeTurn \? false : canStop \? false : !canSend\}/);
+  assert.match(composerSource, /canPauseTurn && onTurnControl/);
+  assert.match(composerSource, /canResumeTurn && onTurnControl/);
+  assert.doesNotMatch(composerSource, /onTurnControl\("cancel"\)|onTurnControl\("interrupt"\)/);
+  assert.match(composerSource, /canPauseTurn \? \(\s*<Pause className="icon"/);
   assert.match(composerSource, /<ComposerSendIcon/);
   const importSection = composerSource.slice(
     0,
@@ -122,12 +135,15 @@ test("standard Composer turns its enabled send control into an accessible stop c
   assert.doesNotMatch(importSection, /\bArrowUp\b/);
 });
 
-test("Sandbox Composer exposes the same stop state without stopping unrelated commands", () => {
+test("Sandbox Composer exposes its independent stop state without stopping unrelated commands", () => {
   assert.match(sandboxComposerSource, /onStop\?: \(\) => void/);
-  assert.match(sandboxComposerSource, /const canStop = busy && Boolean\(onStop\)/);
+  assert.match(sandboxComposerSource, /const canStop = \(busy \|\| sending\) && Boolean\(onStop\)/);
   assert.match(sandboxComposerSource, /disabled=\{canStop \? false : !canSend\}/);
   assert.match(sandboxComposerSource, /onClick=\{canStop \? onStop/);
-  assert.match(sandboxComposerSource, /aria-label=\{canStop \? "停止生成" : "发送"\}/);
+  assert.match(
+    sandboxComposerSource,
+    /aria-label=\{canStop \? t\("composer\.stop"\) : t\("composer\.send"\)\}/,
+  );
   assert.match(sandboxComposerSource, /canStop \? \(\s*<SandboxStopIcon/);
   assert.match(sandboxComposerSource, /busy \? \(\s*<SandboxSpinnerIcon/);
 });

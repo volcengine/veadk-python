@@ -1,5 +1,6 @@
 import { withAuth } from "./auth";
 import { studioFetch } from "./client";
+import { adkT, withLocaleHeaders } from "./i18n";
 import type { Block } from "../blocks";
 
 const SANDBOX_API = "/web/sandbox/sessions";
@@ -17,34 +18,40 @@ export const CODEX_PROJECT_HANDOFF_PAIRING_TTL_SECONDS = 60 * 60;
 export const SANDBOX_DISPLAY_NAME_MAX_LENGTH = 40;
 export type SandboxAgentKind = "deepseek-harness" | "openclaw" | "hermes";
 
+/** Present agent availability without changing the underlying lifecycle state. */
+export function sandboxCardStatus(status: string): string {
+  const normalized = status.trim().toLowerCase();
+  return ["ready", "running", "wakeable"].includes(normalized) ? "ready" : normalized;
+}
+
 export function sandboxStatusLabel(status: string): string {
   switch (status.trim().toLowerCase()) {
     case "ready":
-      return "就绪";
+      return adkT("sandbox.status.ready");
     case "wakeable":
-      return "可唤醒";
+      return adkT("sandbox.status.wakeable");
     case "creating":
-      return "创建中";
+      return adkT("sandbox.status.creating");
     case "starting":
     case "initializing":
-      return "启动中";
+      return adkT("sandbox.status.starting");
     case "pending":
-      return "等待中";
+      return adkT("sandbox.status.pending");
     case "running":
-      return "运行中";
+      return adkT("sandbox.status.running");
     case "failed":
     case "error":
-      return "异常";
+      return adkT("sandbox.status.failed");
     case "stopped":
-      return "已停止";
+      return adkT("sandbox.status.stopped");
     case "expired":
-      return "已过期";
+      return adkT("sandbox.status.expired");
     case "deleting":
-      return "删除中";
+      return adkT("sandbox.status.deleting");
     case "deleted":
-      return "已删除";
+      return adkT("sandbox.status.deleted");
     default:
-      return "未知状态";
+      return adkT("sandbox.status.unknown");
   }
 }
 
@@ -141,6 +148,7 @@ export interface SandboxUploadedFile {
 }
 
 export interface SandboxTokenUsage {
+  cacheWriteInputTokens?: number;
   totalTokens: number;
   inputTokens: number;
   cachedInputTokens: number;
@@ -229,7 +237,11 @@ export interface SandboxListOptions extends SandboxRequestOptions {
 
 export interface SandboxStartOptions extends SandboxRequestOptions {
   displayName?: string;
+  modelId?: string;
   persistent?: boolean;
+  diskGb?: number;
+  projectId?: string;
+  baseVersionId?: string;
 }
 
 export interface SandboxSession {
@@ -243,13 +255,17 @@ export interface SandboxSession {
   expireAt: string;
   persistent: boolean;
   toolType: string;
+  intelligentDevelopment: boolean;
   createdBy: string;
+  region: string;
+  isMine: boolean;
   threadId: string;
   cwd: string;
   workspaceLocked: boolean;
   busy: boolean;
   model?: string;
   permissions: SandboxPermissions;
+  restoredConversation?: SandboxThreadSnapshot;
 }
 
 export interface SandboxSnapshot {
@@ -265,6 +281,8 @@ export interface SandboxSnapshot {
   reason: string;
   createdAt: string;
   createdBy: string;
+  region: string;
+  isMine: boolean;
 }
 
 export type SandboxAgentResource = SandboxSession | SandboxSnapshot;
@@ -331,6 +349,10 @@ export interface AgentKitSandboxClient {
     message: SandboxMessage,
     options?: SandboxRequestOptions,
   ): Promise<SandboxReply>;
+  interruptSession(
+    sessionId: string,
+    options?: SandboxRequestOptions,
+  ): Promise<void>;
   getStatus(
     sessionId: string,
     options?: SandboxRequestOptions,
@@ -460,6 +482,7 @@ export interface SandboxSessionSettings {
 
 interface SessionResponse {
   sessionId: string;
+  toolName?: string;
   userSessionId?: string;
   displayName?: string;
   status: string;
@@ -468,12 +491,15 @@ interface SessionResponse {
   persistent?: boolean;
   toolType?: string;
   createdBy?: string;
+  region?: string;
+  isMine?: boolean;
   threadId?: string;
   cwd?: string;
   workspaceLocked?: boolean;
   busy?: boolean;
   model?: string;
   permissions?: unknown;
+  conversation?: unknown;
 }
 
 interface ListSessionsResponse {
@@ -491,15 +517,25 @@ interface SnapshotResponse {
   reason?: string;
   createdAt?: string;
   createdBy?: string;
+  region?: string;
+  isMine?: boolean;
 }
 
 interface SandboxErrorPayload {
   detail?: unknown;
   error?: unknown;
   message?: unknown;
+  code?: unknown;
+  retryable?: unknown;
 }
 
 interface SandboxStreamPayload {
+  itemType?: unknown;
+  phase?: unknown;
+  durationMs?: unknown;
+  snapshot?: unknown;
+  plan?: unknown;
+  items?: unknown;
   id?: unknown;
   kind?: unknown;
   status?: unknown;
@@ -521,12 +557,51 @@ interface SandboxStreamPayload {
   usage?: unknown;
   threadTotal?: unknown;
   modelContextWindow?: unknown;
+  delivery?: unknown;
+  payload?: unknown;
+  code?: unknown;
+  retryable?: unknown;
 }
 
-function sandboxHeaders(headers?: HeadersInit): Headers {
-  const next = new Headers(headers);
+export function sandboxHeaders(headers?: HeadersInit): Headers {
+  const next = withLocaleHeaders(headers);
   if (!next.has("Accept")) next.set("Accept", "application/json");
   return next;
+}
+
+export class SandboxServiceError extends Error {
+  readonly code: string;
+  readonly retryable: boolean;
+  readonly publicMessage: string;
+  readonly httpStatus?: number;
+
+  constructor(
+    message: string,
+    options: {
+      code?: string;
+      retryable?: boolean;
+      publicMessage?: string;
+      httpStatus?: number;
+    } = {},
+  ) {
+    super(message);
+    this.name = "SandboxServiceError";
+    this.code = options.code ?? "";
+    this.retryable = options.retryable === true;
+    this.publicMessage = options.publicMessage?.trim() || message;
+    this.httpStatus = options.httpStatus;
+  }
+}
+
+export function intelligentDevelopmentErrorMessage(error: unknown): string {
+  if (error instanceof SandboxServiceError) return error.publicMessage;
+  if (error instanceof Error && error.name === "TimeoutError") {
+    return adkT("sandbox.developmentTimeout");
+  }
+  if (error instanceof TypeError) {
+    return adkT("sandbox.developmentDisconnected");
+  }
+  return adkT("sandbox.developmentFailed");
 }
 
 async function responseError(response: Response, fallback: string): Promise<Error> {
@@ -535,10 +610,13 @@ async function responseError(response: Response, fallback: string): Promise<Erro
   try {
     payload = JSON.parse(text) as SandboxErrorPayload;
   } catch {
-    const summary = `${fallback}（HTTP ${response.status}）`;
-    return new Error(text ? `${summary}：${text}` : summary);
+    const summary = adkT("common.fallbackWithHttpStatus", { fallback, status: response.status });
+    return new Error(text ? adkT("common.fallbackWithDetail", { fallback: summary, detail: text }) : summary);
   }
   const nestedDetail = payload.detail;
+  const structured = nestedDetail && typeof nestedDetail === "object"
+    ? nestedDetail as SandboxErrorPayload
+    : payload;
   const detail =
     nestedDetail && typeof nestedDetail === "object" && "message" in nestedDetail
       ? (nestedDetail as SandboxErrorPayload).message
@@ -548,8 +626,16 @@ async function responseError(response: Response, fallback: string): Promise<Erro
     : detail == null
       ? ""
       : JSON.stringify(detail);
-  const summary = `${fallback}（HTTP ${response.status}）`;
-  return new Error(detailText ? `${summary}：${detailText}` : summary);
+  const summary = adkT("common.fallbackWithHttpStatus", { fallback, status: response.status });
+  const message = detailText
+    ? adkT("common.fallbackWithDetail", { fallback: summary, detail: detailText })
+    : summary;
+  return new SandboxServiceError(message, {
+    code: typeof structured.code === "string" ? structured.code : "",
+    retryable: structured.retryable === true,
+    publicMessage: detailText || summary,
+    httpStatus: response.status,
+  });
 }
 
 async function responseJson(
@@ -560,16 +646,17 @@ async function responseJson(
   try {
     return JSON.parse(text) as unknown;
   } catch {
-    throw new Error(`${fallback} Studio 服务响应异常，请刷新后重试。`);
+    throw new Error(adkT("sandbox.invalidStudioResponse", { fallback }));
   }
 }
 
 function parseSession(
   data: SessionResponse,
   toolName: SandboxSession["toolName"] = "codex",
+  intelligentDevelopment = data.toolName === "intelligent-development",
 ): SandboxSession {
   if (!data.sessionId || !data.status) {
-    throw new Error("AgentKit 沙箱返回了无效的 Session 信息。");
+    throw new Error(adkT("sandbox.invalidSession"));
   }
   return {
     resourceType: "session",
@@ -582,13 +669,19 @@ function parseSession(
     expireAt: data.expireAt ?? "",
     persistent: data.persistent !== false,
     toolType: data.toolType ?? "",
+    intelligentDevelopment,
     createdBy: data.createdBy ?? "",
+    region: data.region ?? "",
+    isMine: data.isMine === true,
     threadId: data.threadId ?? "",
     cwd: data.cwd ?? "",
     workspaceLocked: data.workspaceLocked === true,
     busy: data.busy === true,
     ...(typeof data.model === "string" ? { model: data.model } : {}),
     permissions: parsePermissions(data.permissions),
+    ...(data.conversation === undefined
+      ? {}
+      : { restoredConversation: parseThreadSnapshot(data.conversation) }),
   };
 }
 
@@ -597,7 +690,7 @@ function parseSnapshot(
   toolName: SandboxSession["toolName"] = "codex",
 ): SandboxSnapshot {
   if (!data.snapshotId || !data.status) {
-    throw new Error("AgentKit 沙箱返回了无效的 Snapshot 信息。");
+    throw new Error(adkT("sandbox.invalidSnapshot"));
   }
   return {
     resourceType: "snapshot",
@@ -612,12 +705,14 @@ function parseSnapshot(
     reason: data.reason ?? "",
     createdAt: data.createdAt ?? "",
     createdBy: data.createdBy ?? "",
+    region: data.region ?? "",
+    isMine: data.isMine === true,
   };
 }
 
 function sandboxListUrl(base: string, options?: SandboxListOptions): string {
-  if (!options?.autoResumeSnapshots) return base;
-  const params = new URLSearchParams({ autoResumeSnapshots: "true" });
+  if (options?.autoResumeSnapshots === undefined) return base;
+  const params = new URLSearchParams({ autoResumeSnapshots: String(options.autoResumeSnapshots) });
   return `${base}?${params.toString()}`;
 }
 
@@ -660,7 +755,7 @@ function parsePermissions(value: unknown): SandboxPermissions {
 
 function parseSettings(value: unknown): SandboxSessionSettings {
   if (!value || typeof value !== "object") {
-    throw new Error("Sandbox 返回了无效设置。");
+    throw new Error(adkT("sandbox.invalidSettings"));
   }
   const data = value as SessionResponse;
   return {
@@ -742,7 +837,7 @@ function parseThreadSnapshot(value: unknown): SandboxThreadSnapshot {
     typeof data.threadId !== "string" ||
     !Array.isArray(data.messages)
   ) {
-    throw new Error("Sandbox 返回了无效 Thread 快照。");
+    throw new Error(adkT("sandbox.invalidThreadSnapshot"));
   }
   const messages = data.messages.flatMap((value): SandboxThreadMessage[] => {
     const message = recordOf(value);
@@ -866,28 +961,25 @@ function parseApproval(payload: SandboxStreamPayload): SandboxApproval | null {
   };
 }
 
-async function parseSandboxStream(
-  response: Response,
-  options: SandboxRequestOptions = {},
-): Promise<SandboxReply> {
-  if (!response.body) throw new Error("沙箱对话服务未返回内容。");
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
+export function createSandboxProjection(options: SandboxRequestOptions = {}) {
   let reply = "";
   const blocks: Block[] = [];
   const activityIndexes = new Map<string, number>();
+  const textIndexes = new Map<string, number>();
+  let progressBlock: Extract<Block, { kind: "progress" }> | undefined;
   let latestUsage: SandboxTokenUsageUpdate | undefined;
 
   function emitBlocks(): void {
-    options.onBlocks?.(blocks.map((block) => ({ ...block })));
+    const visible = progressBlock ? [...blocks, progressBlock] : blocks;
+    options.onBlocks?.([...visible]);
   }
 
   function appendReply(text: string): void {
     reply += text;
     const last = blocks[blocks.length - 1];
-    if (last?.kind === "text") last.text += text;
+    const lastIndex = blocks.length - 1;
+    const activityBacked = [...activityIndexes.values()].includes(lastIndex);
+    if (last?.kind === "text" && !activityBacked) blocks[lastIndex] = { ...last, text: last.text + text };
     else blocks.push({ kind: "text", text });
     emitBlocks();
   }
@@ -895,14 +987,18 @@ async function parseSandboxStream(
   function applyActivity(payload: SandboxStreamPayload): void {
     if (
       typeof payload.id !== "string" ||
-      (payload.kind !== "thinking" && payload.kind !== "tool") ||
-      (payload.status !== "running" && payload.status !== "done")
+      (payload.kind !== "thinking"
+        && payload.kind !== "commentary"
+        && payload.kind !== "tool") ||
+      (payload.status !== "running" && payload.status !== "done" && payload.status !== "error")
     ) return;
-    const done = payload.status === "done";
+    const done = payload.status !== "running";
     let block: Block;
     if (payload.kind === "thinking") {
+      block = { kind: "thinking", text: typeof payload.text === "string" ? payload.text : "", done };
+    } else if (payload.kind === "commentary") {
       if (typeof payload.text !== "string" || !payload.text) return;
-      block = { kind: "thinking", text: payload.text, done };
+      block = { kind: "text", text: payload.text };
     } else {
       if (typeof payload.name !== "string" || !payload.name) return;
       block = {
@@ -910,9 +1006,14 @@ async function parseSandboxStream(
         name: payload.name,
         args: payload.args,
         response: payload.response,
+        status: payload.status === "error" ? "failed" : done ? "completed" : "running",
         done,
       };
     }
+    block = { ...block, id: payload.id,
+      ...(typeof payload.itemType === "string" ? { itemType: payload.itemType } : {}),
+      ...(typeof payload.phase === "string" ? { phase: payload.phase } : {}),
+      ...(typeof payload.durationMs === "number" ? { durationMs: payload.durationMs } : {}) };
     const existing = activityIndexes.get(payload.id);
     if (existing === undefined) {
       activityIndexes.set(payload.id, blocks.length);
@@ -936,16 +1037,112 @@ async function parseSandboxStream(
     try {
       payload = JSON.parse(data.join("\n")) as SandboxStreamPayload;
     } catch {
-      throw new Error("沙箱对话服务返回了无法解析的响应。");
+      throw new Error(adkT("sandbox.invalidConversationResponse"));
     }
     if (event === "error") {
-      throw new Error(
-        typeof payload.message === "string" && payload.message
-          ? payload.message
-          : "沙箱对话失败，请稍后重试。",
-      );
+      const message = typeof payload.message === "string" && payload.message
+        ? payload.message
+        : adkT("sandbox.conversationFailed");
+      throw new SandboxServiceError(message, {
+        code: typeof payload.code === "string" ? payload.code : "",
+        retryable: payload.retryable === true,
+        publicMessage: message,
+      });
     }
+    if (event === "progress" && typeof payload.text === "string") {
+      progressBlock = payload.text ? { kind: "progress", text: payload.text } : undefined;
+      emitBlocks();
+    }
+    if (["activity", "delta", "tool_output", "tool_progress", "plan", "diff"].includes(event)) progressBlock = undefined;
     if (event === "activity") applyActivity(payload);
+    if ((event === "tool_output" || event === "tool_progress") && typeof payload.id === "string") {
+      const index = activityIndexes.get(payload.id);
+      const block = index === undefined ? undefined : blocks[index];
+      if (block?.kind === "tool" && index !== undefined && typeof payload.text === "string") {
+        const response = recordOf(block.response) || {};
+        blocks[index] = event === "tool_progress"
+          ? { ...block, progressText: payload.text }
+          : { ...block, response: { ...response, output: (payload.snapshot ? "" : String(response.output || "")) + payload.text } };
+        emitBlocks();
+      }
+    }
+    if ((event === "plan" || event === "diff") && typeof payload.id === "string") {
+      const text = typeof payload.text === "string" ? payload.text : "";
+      const items = Array.isArray(payload.items) ? payload.items : Array.isArray(payload.plan) ? payload.plan : [];
+      const block: Block = event === "diff"
+        ? { kind: "diff", id: payload.id, text, done: payload.status === "done" }
+        : { kind: "plan", id: payload.id, title: adkT("developmentRuns.plan"), summary: text,
+            done: payload.status === "done", items: items.flatMap((value) => {
+              const item = recordOf(value);
+              if (!item || typeof (item.text ?? item.step) !== "string") return [];
+              const status = item.status === "inProgress" ? "in_progress" : item.status;
+              return [{ text: String(item.text ?? item.step), status: status === "completed" || status === "failed" || status === "in_progress" ? status : "pending" }];
+            }) };
+      const index = activityIndexes.get(payload.id);
+      if (index === undefined) { activityIndexes.set(payload.id, blocks.length); blocks.push(block); }
+      else blocks[index] = block;
+      emitBlocks();
+    }
+
+    if (event === "development.source_ready" || event === "development.succeeded") {
+      const eventPayload = recordOf(payload.payload);
+      const eventData = recordOf(eventPayload?.delivery);
+      const expectedVerified = event === "development.succeeded";
+      if (
+        eventData &&
+        typeof eventData.sessionId === "string" &&
+        typeof eventData.artifactSha256 === "string" &&
+        typeof eventData.validationReportSha256 === "string" &&
+        typeof eventData.agentName === "string" &&
+        typeof eventData.entryPoint === "string" &&
+        typeof eventData.fileCount === "number" &&
+        typeof eventData.artifactSize === "number" &&
+        typeof eventData.validatedAt === "string" &&
+        eventData.deployable === true &&
+        eventData.verified === expectedVerified &&
+        typeof eventData.validationSummary === "string" &&
+        Array.isArray(eventData.gateSummary) &&
+        eventData.gateSummary.every((item) => typeof item === "string")
+      ) {
+        const delivery: Block = {
+          kind: "delivery",
+          value: {
+            sessionId: eventData.sessionId,
+            ...(typeof eventData.projectId === "string"
+              && typeof eventData.versionId === "string"
+              ? {
+                  projectId: eventData.projectId,
+                  versionId: eventData.versionId,
+                  ...(eventData.parentVersionId === null
+                    || typeof eventData.parentVersionId === "string"
+                    ? { parentVersionId: eventData.parentVersionId }
+                    : {}),
+                }
+              : {}),
+            artifactSha256: eventData.artifactSha256,
+            validationReportSha256: eventData.validationReportSha256,
+            agentName: eventData.agentName,
+            entryPoint: eventData.entryPoint,
+            fileCount: eventData.fileCount,
+            artifactSize: eventData.artifactSize,
+            validatedAt: eventData.validatedAt,
+            gateSummary: eventData.gateSummary as string[],
+            deployable: eventData.deployable,
+            verified: eventData.verified,
+            validationSummary: eventData.validationSummary,
+          },
+        };
+        const existing = blocks.findIndex(
+          (block) => block.kind === "delivery"
+            && block.value.sessionId === eventData.sessionId
+            && block.value.artifactSha256 === eventData.artifactSha256
+            && block.value.validationReportSha256 === eventData.validationReportSha256,
+        );
+        if (existing === -1) blocks.push(delivery);
+        else blocks[existing] = delivery;
+        emitBlocks();
+      }
+    }
     if (event === "approval") {
       const approval = parseApproval(payload);
       if (approval) options.onApproval?.(approval);
@@ -964,31 +1161,70 @@ async function parseSandboxStream(
       options.onApprovalResolved?.(payload.approvalId);
     }
     if (event === "delta" && typeof payload.text === "string") {
-      appendReply(payload.text);
+      if (typeof payload.id === "string" && payload.id) {
+        const existing = textIndexes.get(payload.id);
+        const previous = existing === undefined ? undefined : blocks[existing];
+        const snapshot = recordOf(payload)?.snapshot === true;
+        if (previous?.kind === "text") {
+          blocks[existing!] = { ...previous,
+            phase: typeof payload.phase === "string" && payload.phase ? payload.phase : previous.phase,
+            text: snapshot ? (previous.text.startsWith(payload.text) ? previous.text : payload.text) : previous.text + payload.text };
+        } else {
+          textIndexes.set(payload.id, blocks.length);
+          blocks.push({ kind: "text", text: payload.text, id: payload.id,
+            itemType: typeof payload.itemType === "string" ? payload.itemType : undefined,
+            phase: typeof payload.phase === "string" ? payload.phase : undefined });
+        }
+        reply = blocks.filter((block) => block.kind === "text").map((block) => block.text).join("");
+        emitBlocks();
+      } else appendReply(payload.text);
     }
     if (event === "done" && !reply && typeof payload.text === "string") {
       appendReply(payload.text);
     }
+    if (event === "done") {
+      for (let i = 0; i < blocks.length; i++) {
+        const block = blocks[i];
+        if (block.kind === "thinking" || block.kind === "plan" || block.kind === "diff") blocks[i] = { ...block, done: true };
+        if (block.kind === "tool" && !block.done) blocks[i] = { ...block, done: true, status: block.status === "failed" ? "failed" : "completed" };
+      }
+      progressBlock = undefined;
+      emitBlocks();
+    }
   }
 
+  return {
+    consumeFrame,
+    result: (): SandboxReply => ({ text: reply, blocks: blocks.map((block) => ({ ...block })), ...(latestUsage ? { usage: latestUsage } : {}) }),
+  };
+}
+
+async function parseSandboxStream(
+  response: Response,
+  options: SandboxRequestOptions = {},
+): Promise<SandboxReply> {
+  if (!response.body) throw new Error(adkT("sandbox.emptyConversationResponse"));
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const projection = createSandboxProjection(options);
   while (true) {
     const { done, value } = await reader.read();
     buffer += decoder.decode(value, { stream: !done });
     const frames = buffer.split(/\r?\n\r?\n/);
     buffer = frames.pop() ?? "";
-    frames.forEach(consumeFrame);
+    frames.forEach(projection.consumeFrame);
     if (done) break;
   }
-  if (buffer.trim()) consumeFrame(buffer);
-  if (blocks.length === 0) throw new Error("沙箱未返回有效回复，请重试。");
-  return {
-    text: reply,
-    blocks,
-    ...(latestUsage ? { usage: latestUsage } : {}),
-  };
+  if (buffer.trim()) projection.consumeFrame(buffer);
+  projection.consumeFrame("event: done\ndata: {}");
+  const reply = projection.result();
+  if (reply.blocks.length === 0) throw new Error(adkT("sandbox.emptyReply"));
+  return reply;
 }
 
 async function sandboxJson(
+  api: string,
   sessionId: string,
   action: string,
   {
@@ -1003,9 +1239,9 @@ async function sandboxJson(
     fallback: string;
   },
 ): Promise<unknown> {
-  if (!sessionId) throw new Error("缺少要操作的 AgentKit Session。");
+  if (!sessionId) throw new Error(adkT("sandbox.missingSession"));
   const response = await studioFetch(
-    `${SANDBOX_API}/${encodeURIComponent(sessionId)}/${action}`,
+    `${api}/${encodeURIComponent(sessionId)}/${action}`,
     {
       method,
       headers: sandboxHeaders(
@@ -1020,10 +1256,19 @@ async function sandboxJson(
   return response.json();
 }
 
-export const sandboxClient: AgentKitSandboxClient = {
+function createSandboxClient(
+  api: string,
+  config: {
+    textOnly?: boolean;
+    messageTimeoutMs?: number;
+    interruptTimeoutMs?: number;
+    intelligentDevelopment?: boolean;
+  } = {},
+): AgentKitSandboxClient {
+  return {
   async listSessions(options = {}) {
     const response = await studioFetch(
-      sandboxListUrl(SANDBOX_API, options),
+      sandboxListUrl(api, options),
       {
         method: "GET",
         headers: sandboxHeaders(),
@@ -1032,39 +1277,58 @@ export const sandboxClient: AgentKitSandboxClient = {
       LIST_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法读取 Codex 智能体，请稍后重试。");
+      throw await responseError(response, adkT("sandbox.listCodexFailed"));
     }
     const data = (await response.json()) as ListSessionsResponse;
     if (!Array.isArray(data.sessions)) {
-      throw new Error("AgentKit 沙箱返回了无效的 Session 列表。");
+      throw new Error(adkT("sandbox.invalidSessionList"));
     }
     if (data.snapshots !== undefined && !Array.isArray(data.snapshots)) {
-      throw new Error("AgentKit 沙箱返回了无效的 Snapshot 列表。");
+      throw new Error(adkT("sandbox.invalidSnapshotList"));
     }
     return [
-      ...data.sessions.map((session) => parseSession(session)),
+      ...data.sessions.map((session) =>
+        parseSession(session, "codex", config.intelligentDevelopment)),
       ...(data.snapshots ?? []).map((snapshot) => parseSnapshot(snapshot)),
     ];
   },
 
   async startSession(options = {}) {
+    const displayName = options.displayName?.trim() ?? "";
     const response = await studioFetch(
-      SANDBOX_API,
+      api,
       {
         method: "POST",
         headers: sandboxHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
-          displayName: options.displayName?.trim() ?? "",
-          persistent: options.persistent ?? true,
+          // Project display names allow more characters than session titles.
+          displayName: config.textOnly && options.projectId
+            ? Array.from(displayName).slice(0, SANDBOX_DISPLAY_NAME_MAX_LENGTH).join("")
+            : displayName,
+          ...(options.modelId?.trim() ? { modelId: options.modelId.trim() } : {}),
+          ...(config.textOnly && options.projectId
+            ? {
+                projectId: options.projectId,
+                ...(options.baseVersionId
+                  ? { baseVersionId: options.baseVersionId }
+                  : {}),
+                }
+              : {}),
+          ...(config.textOnly ? {} : { persistent: options.persistent ?? true }),
+          ...(options.diskGb !== undefined ? { diskGb: options.diskGb } : {}),
         }),
         signal: options.signal,
       },
       START_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法启动 AgentKit 沙箱，请稍后重试。");
+      throw await responseError(response, adkT("sandbox.startFailed"));
     }
-    return parseSession((await response.json()) as SessionResponse);
+    return parseSession(
+      (await response.json()) as SessionResponse,
+      "codex",
+      config.intelligentDevelopment,
+    );
   },
 
   async listAgentSessions(kind, options = {}) {
@@ -1078,14 +1342,14 @@ export const sandboxClient: AgentKitSandboxClient = {
       LIST_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, `无法读取 ${kind} 智能体，请稍后重试。`);
+      throw await responseError(response, adkT("sandbox.listAgentFailed", { kind }));
     }
     const data = (await response.json()) as ListSessionsResponse;
     if (!Array.isArray(data.sessions)) {
-      throw new Error(`AgentKit 返回了无效的 ${kind} Session 列表。`);
+      throw new Error(adkT("sandbox.invalidKindSessionList", { kind }));
     }
     if (data.snapshots !== undefined && !Array.isArray(data.snapshots)) {
-      throw new Error(`AgentKit 返回了无效的 ${kind} Snapshot 列表。`);
+      throw new Error(adkT("sandbox.invalidKindSnapshotList", { kind }));
     }
     return [
       ...data.sessions.map((session) => parseSession(session, kind)),
@@ -1102,19 +1366,20 @@ export const sandboxClient: AgentKitSandboxClient = {
         body: JSON.stringify({
           displayName: options.displayName?.trim() ?? "",
           persistent: options.persistent ?? true,
+          ...(options.diskGb !== undefined ? { diskGb: options.diskGb } : {}),
         }),
         signal: options.signal,
       },
       START_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, `无法创建 ${kind} 智能体，请稍后重试。`);
+      throw await responseError(response, adkT("sandbox.createAgentFailed", { kind }));
     }
     return parseSession((await response.json()) as SessionResponse, kind);
   },
 
   async openAgentSession(kind, sessionId, options = {}) {
-    if (!sessionId) throw new Error("缺少要打开的 AgentKit Session。");
+    if (!sessionId) throw new Error(adkT("sandbox.missingSessionToOpen"));
     const response = await studioFetch(
       `/web/${kind}/sessions/${encodeURIComponent(sessionId)}/open`,
       {
@@ -1125,13 +1390,13 @@ export const sandboxClient: AgentKitSandboxClient = {
       SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, `无法打开 ${kind} 智能体。`);
+      throw await responseError(response, adkT("sandbox.openAgentFailed", { kind }));
     }
     const value = (await response.json()) as SessionResponse & {
       webuiUrl?: unknown;
     };
     if (typeof value.webuiUrl !== "string" || !value.webuiUrl.startsWith("/")) {
-      throw new Error(`${kind} 智能体返回了无效的主页面地址。`);
+      throw new Error(adkT("sandbox.invalidAgentHomeUrl", { kind }));
     }
     return {
       session: parseSession(value, kind),
@@ -1141,7 +1406,7 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async launchAgentTerminal(kind, sessionId, options = {}) {
-    if (!sessionId) throw new Error("缺少要打开 Terminal 的 AgentKit Session。");
+    if (!sessionId) throw new Error(adkT("sandbox.missingSessionForTerminal"));
     const response = await studioFetch(
       `/web/${kind}/sessions/${encodeURIComponent(sessionId)}/terminal`,
       {
@@ -1152,7 +1417,7 @@ export const sandboxClient: AgentKitSandboxClient = {
       SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, `无法打开 ${kind} Terminal。`);
+      throw await responseError(response, adkT("sandbox.openTerminalFailed", { kind }));
     }
     const value = (await response.json()) as {
       url?: unknown;
@@ -1179,12 +1444,12 @@ export const sandboxClient: AgentKitSandboxClient = {
       CLOSE_TIMEOUT_MS,
     );
     if (!response.ok && response.status !== 404) {
-      throw await responseError(response, `无法删除 ${kind} 智能体。`);
+      throw await responseError(response, adkT("sandbox.deleteAgentFailed", { kind }));
     }
   },
 
   async resumeSnapshot(kind, snapshotId, options = {}) {
-    if (!snapshotId) throw new Error("缺少要唤醒的 AgentKit Snapshot。");
+    if (!snapshotId) throw new Error(adkT("sandbox.missingSnapshot"));
     const base = kind === "codex" ? "/web/sandbox" : `/web/${kind}`;
     const response = await studioFetch(
       `${base}/snapshots/${encodeURIComponent(snapshotId)}/resume`,
@@ -1196,7 +1461,7 @@ export const sandboxClient: AgentKitSandboxClient = {
       START_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法从快照唤醒智能体，请稍后重试。");
+      throw await responseError(response, adkT("sandbox.resumeSnapshotFailed"));
     }
     return parseSession((await response.json()) as SessionResponse, kind);
   },
@@ -1214,14 +1479,14 @@ export const sandboxClient: AgentKitSandboxClient = {
       CLOSE_TIMEOUT_MS,
     );
     if (!response.ok && response.status !== 404) {
-      throw await responseError(response, "无法删除智能体快照。");
+      throw await responseError(response, adkT("sandbox.deleteSnapshotFailed"));
     }
   },
 
   async connectSession(sessionId, options = {}) {
-    if (!sessionId) throw new Error("缺少要连接的 AgentKit Session。");
+    if (!sessionId) throw new Error(adkT("sandbox.missingSessionToConnect"));
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/connect`,
+      `${api}/${encodeURIComponent(sessionId)}/connect`,
       {
         method: "POST",
         headers: sandboxHeaders({ "Content-Type": "application/json" }),
@@ -1230,21 +1495,25 @@ export const sandboxClient: AgentKitSandboxClient = {
       CONNECT_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法连接 Codex 智能体，请稍后重试。");
+      throw await responseError(response, adkT("sandbox.connectCodexFailed"));
     }
-    const session = parseSession((await response.json()) as SessionResponse);
+    const session = parseSession(
+      (await response.json()) as SessionResponse,
+      "codex",
+      config.intelligentDevelopment,
+    );
     if (session.status.toLowerCase() !== "ready") {
-      throw new Error(`AgentKit Session 尚未就绪，当前状态：${session.status}。`);
+      throw new Error(adkT("sandbox.sessionNotReady", { status: session.status }));
     }
     return session;
   },
 
   async sendMessage(message, options = {}) {
     if (!message.sessionId || !message.text.trim()) {
-      throw new Error("内置智能体会话缺少有效的消息内容。");
+      throw new Error(adkT("sandbox.invalidMessage"));
     }
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(message.sessionId)}/messages`,
+      `${api}/${encodeURIComponent(message.sessionId)}/messages`,
       {
         method: "POST",
         headers: sandboxHeaders({
@@ -1253,22 +1522,40 @@ export const sandboxClient: AgentKitSandboxClient = {
         }),
         body: JSON.stringify({
           message: message.text,
-          ...(message.skillIds?.length ? { skillIds: message.skillIds } : {}),
+          ...(!config.textOnly && message.skillIds?.length
+            ? { skillIds: message.skillIds }
+            : {}),
         }),
         signal: options.signal,
       },
-      MESSAGE_TIMEOUT_MS,
+      config.messageTimeoutMs ?? MESSAGE_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "沙箱对话失败，请稍后重试。");
+      throw await responseError(response, adkT("sandbox.conversationFailed"));
     }
     return parseSandboxStream(response, options);
   },
 
+  async interruptSession(sessionId, options = {}) {
+    if (!sessionId) return;
+    const response = await studioFetch(
+      `${api}/${encodeURIComponent(sessionId)}/interrupt`,
+      {
+        method: "POST",
+        headers: sandboxHeaders(),
+        signal: options.signal,
+      },
+      config.interruptTimeoutMs ?? CLOSE_TIMEOUT_MS,
+    );
+    if (!response.ok && ![404, 409].includes(response.status)) {
+      throw await responseError(response, adkT("sandbox.interruptFailed"));
+    }
+  },
+
   async getStatus(sessionId, options = {}) {
-    const value = await sandboxJson(sessionId, "status", {
+    const value = await sandboxJson(api, sessionId, "status", {
       options,
-      fallback: "无法读取 Codex 状态。",
+      fallback: adkT("sandbox.getStatusFailed"),
     });
     const settings = parseSettings(value);
     const data = recordOf(value);
@@ -1286,12 +1573,12 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async getEndpoint(sessionId, options = {}) {
-    const value = recordOf(await sandboxJson(sessionId, "endpoint", {
+    const value = recordOf(await sandboxJson(api, sessionId, "endpoint", {
       options,
-      fallback: "无法读取 Sandbox Endpoint。",
+      fallback: adkT("sandbox.getEndpointFailed"),
     }));
     if (typeof value?.endpoint !== "string" || !value.endpoint.trim()) {
-      throw new Error("Sandbox 返回了无效 Endpoint。");
+      throw new Error(adkT("sandbox.invalidEndpoint"));
     }
     return {
       endpoint: value.endpoint,
@@ -1322,11 +1609,11 @@ export const sandboxClient: AgentKitSandboxClient = {
     if (!response.ok) {
       throw await responseError(
         response,
-        "无法生成 Codex 云端接力配对码。",
+        adkT("sandbox.createHandoffPairingFailed"),
       );
     }
     const value = recordOf(
-      await responseJson(response, "无法生成 Codex 云端接力配对码。"),
+      await responseJson(response, adkT("sandbox.createHandoffPairingFailed")),
     );
     if (
       typeof value?.pairingCode !== "string" ||
@@ -1334,7 +1621,7 @@ export const sandboxClient: AgentKitSandboxClient = {
       typeof value.expireAt !== "string" ||
       !value.expireAt.trim()
     ) {
-      throw new Error("Studio 返回了无效的 Codex 云端接力配对码。");
+      throw new Error(adkT("sandbox.invalidHandoffPairing"));
     }
     const studioUrl = typeof value.studioUrl === "string" && value.studioUrl.trim()
       ? value.studioUrl.trim()
@@ -1356,10 +1643,10 @@ export const sandboxClient: AgentKitSandboxClient = {
       CODEX_PROJECT_HANDOFF_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法读取端云接力状态。");
+      throw await responseError(response, adkT("sandbox.getHandoffStatusFailed"));
     }
     const value = recordOf(
-      await responseJson(response, "无法读取端云接力状态。"),
+      await responseJson(response, adkT("sandbox.getHandoffStatusFailed")),
     );
     const states: ReadonlySet<string> = new Set([
       "issued",
@@ -1376,7 +1663,7 @@ export const sandboxClient: AgentKitSandboxClient = {
       typeof value.expireAt !== "string" ||
       !value.expireAt.trim()
     ) {
-      throw new Error("Studio 返回了无效的端云接力状态。");
+      throw new Error(adkT("sandbox.invalidHandoffStatus"));
     }
     return {
       state: value.state as CodexProjectHandoffState,
@@ -1401,12 +1688,12 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async listModels(sessionId, options = {}) {
-    const value = recordOf(await sandboxJson(sessionId, "models", {
+    const value = recordOf(await sandboxJson(api, sessionId, "models", {
       options,
-      fallback: "无法读取 Codex 模型列表。",
+      fallback: adkT("sandbox.listModelsFailed"),
     }));
     if (!Array.isArray(value?.models)) {
-      throw new Error("Sandbox 返回了无效模型列表。");
+      throw new Error(adkT("sandbox.invalidModelList"));
     }
     return value.models.flatMap((model) => {
       const parsed = parseModel(model);
@@ -1415,26 +1702,26 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async setModel(sessionId, model, options = {}) {
-    const value = recordOf(await sandboxJson(sessionId, "model", {
+    const value = recordOf(await sandboxJson(api, sessionId, "model", {
       method: "PUT",
       body: { model },
       options,
-      fallback: "无法切换 Codex 模型。",
+      fallback: adkT("sandbox.setModelFailed"),
     }));
     if (typeof value?.model !== "string" || !value.model) {
-      throw new Error("Sandbox 返回了无效模型。");
+      throw new Error(adkT("sandbox.invalidModel"));
     }
     return value.model;
   },
 
   async listSkills(sessionId, forceReload = false, options = {}) {
     const query = forceReload ? "?force_reload=true" : "";
-    const value = recordOf(await sandboxJson(sessionId, `skills${query}`, {
+    const value = recordOf(await sandboxJson(api, sessionId, `skills${query}`, {
       options,
-      fallback: "无法读取 Codex Skills。",
+      fallback: adkT("sandbox.listSkillsFailed"),
     }));
     if (!Array.isArray(value?.skills)) {
-      throw new Error("Sandbox 返回了无效 Skill 列表。");
+      throw new Error(adkT("sandbox.invalidSkillList"));
     }
     return value.skills.flatMap((skill) => {
       const parsed = parseSkill(skill);
@@ -1448,12 +1735,12 @@ export const sandboxClient: AgentKitSandboxClient = {
     if (query.search) search.set("search", query.search);
     if (query.archived) search.set("archived", "true");
     const suffix = search.size ? `?${search}` : "";
-    const value = recordOf(await sandboxJson(sessionId, `threads${suffix}`, {
+    const value = recordOf(await sandboxJson(api, sessionId, `threads${suffix}`, {
       options,
-      fallback: "无法读取 Codex Thread 列表。",
+      fallback: adkT("sandbox.listThreadsFailed"),
     }));
     if (!Array.isArray(value?.threads)) {
-      throw new Error("Sandbox 返回了无效 Thread 列表。");
+      throw new Error(adkT("sandbox.invalidThreadList"));
     }
     return {
       threads: value.threads.flatMap((thread) => {
@@ -1467,22 +1754,23 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async newThread(sessionId, options = {}) {
-    return parseThreadSnapshot(await sandboxJson(sessionId, "threads/new", {
+    return parseThreadSnapshot(await sandboxJson(api, sessionId, "threads/new", {
       method: "POST",
       options,
-      fallback: "无法创建新的 Codex Thread。",
+      fallback: adkT("sandbox.createThreadFailed"),
     }));
   },
 
   async readThread(sessionId, threadId, options = {}) {
-    if (!threadId) throw new Error("缺少要读取的 Codex Thread。");
+    if (!threadId) throw new Error(adkT("sandbox.missingThread"));
     return parseThreadSnapshot(
       await sandboxJson(
+        api,
         sessionId,
         `threads/${encodeURIComponent(threadId)}`,
         {
           options,
-          fallback: "无法读取 Codex 历史消息。",
+          fallback: adkT("sandbox.readThreadFailed"),
         },
       ),
     );
@@ -1490,34 +1778,34 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async resumeThread(sessionId, threadId, options = {}) {
     return parseThreadSnapshot(
-      await sandboxJson(sessionId, "threads/resume", {
+      await sandboxJson(api, sessionId, "threads/resume", {
         method: "POST",
         body: { threadId },
         options,
-        fallback: "无法恢复 Codex Thread。",
+        fallback: adkT("sandbox.resumeThreadFailed"),
       }),
     );
   },
 
   async forkThread(sessionId, options = {}) {
-    return parseThreadSnapshot(await sandboxJson(sessionId, "threads/fork", {
+    return parseThreadSnapshot(await sandboxJson(api, sessionId, "threads/fork", {
       method: "POST",
       options,
-      fallback: "无法分叉 Codex Thread。",
+      fallback: adkT("sandbox.forkThreadFailed"),
     }));
   },
 
   async archiveThread(sessionId, threadId, options = {}) {
     const value = recordOf(
-      await sandboxJson(sessionId, "threads/archive", {
+      await sandboxJson(api, sessionId, "threads/archive", {
         method: "POST",
         body: { threadId },
         options,
-        fallback: "无法归档 Codex Thread。",
+        fallback: adkT("sandbox.archiveThreadFailed"),
       }),
     );
     if (value?.archived !== true) {
-      throw new Error("Sandbox 返回了无效归档结果。");
+      throw new Error(adkT("sandbox.invalidArchiveResult"));
     }
     return {
       archived: true,
@@ -1527,15 +1815,15 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async deleteThread(sessionId, threadId, options = {}) {
     const value = recordOf(
-      await sandboxJson(sessionId, "threads/delete", {
+      await sandboxJson(api, sessionId, "threads/delete", {
         method: "POST",
         body: { threadId },
         options,
-        fallback: "无法删除 Codex Thread。",
+        fallback: adkT("sandbox.deleteThreadFailed"),
       }),
     );
     if (value?.deleted !== true) {
-      throw new Error("Sandbox 返回了无效删除结果。");
+      throw new Error(adkT("sandbox.invalidDeleteResult"));
     }
     return {
       deleted: true,
@@ -1544,16 +1832,16 @@ export const sandboxClient: AgentKitSandboxClient = {
   },
 
   async compactThread(sessionId, options = {}) {
-    await sandboxJson(sessionId, "threads/compact", {
+    await sandboxJson(api, sessionId, "threads/compact", {
       method: "POST",
       options,
-      fallback: "无法压缩 Codex Thread。",
+      fallback: adkT("sandbox.compactThreadFailed"),
     });
   },
 
   async getSettings(sessionId, options = {}) {
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/settings`,
+      `${api}/${encodeURIComponent(sessionId)}/settings`,
       {
         method: "GET",
         headers: sandboxHeaders(),
@@ -1562,14 +1850,14 @@ export const sandboxClient: AgentKitSandboxClient = {
       SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法读取 Codex 权限与工作空间。");
+      throw await responseError(response, adkT("sandbox.getSettingsFailed"));
     }
     return parseSettings(await response.json());
   },
 
   async updatePermissions(sessionId, permissions, options = {}) {
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/permissions`,
+      `${api}/${encodeURIComponent(sessionId)}/permissions`,
       {
         method: "PUT",
         headers: sandboxHeaders({ "Content-Type": "application/json" }),
@@ -1579,7 +1867,7 @@ export const sandboxClient: AgentKitSandboxClient = {
       SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法更新 Codex 权限。");
+      throw await responseError(response, adkT("sandbox.updatePermissionsFailed"));
     }
     const value = (await response.json()) as { permissions?: unknown };
     return parsePermissions(value.permissions);
@@ -1587,7 +1875,7 @@ export const sandboxClient: AgentKitSandboxClient = {
 
   async updateWorkspace(sessionId, cwd, options = {}) {
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/workspace`,
+      `${api}/${encodeURIComponent(sessionId)}/workspace`,
       {
         method: "PUT",
         headers: sandboxHeaders({ "Content-Type": "application/json" }),
@@ -1597,11 +1885,11 @@ export const sandboxClient: AgentKitSandboxClient = {
       SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法更新 Codex 工作空间。");
+      throw await responseError(response, adkT("sandbox.updateWorkspaceFailed"));
     }
     const value = (await response.json()) as { cwd?: unknown };
     if (typeof value.cwd !== "string" || !value.cwd) {
-      throw new Error("Sandbox 返回了无效工作目录。");
+      throw new Error(adkT("sandbox.invalidWorkingDirectory"));
     }
     return value.cwd;
   },
@@ -1609,7 +1897,7 @@ export const sandboxClient: AgentKitSandboxClient = {
   async listDirectories(sessionId, path, options = {}) {
     const query = new URLSearchParams({ path });
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/directories?${query}`,
+      `${api}/${encodeURIComponent(sessionId)}/directories?${query}`,
       {
         method: "GET",
         headers: sandboxHeaders(),
@@ -1618,7 +1906,7 @@ export const sandboxClient: AgentKitSandboxClient = {
       SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法读取 Sandbox 目录。");
+      throw await responseError(response, adkT("sandbox.listDirectoriesFailed"));
     }
     const value = (await response.json()) as Partial<SandboxDirectoryListing>;
     if (
@@ -1631,7 +1919,7 @@ export const sandboxClient: AgentKitSandboxClient = {
           typeof entry.path !== "string",
       )
     ) {
-      throw new Error("Sandbox 返回了无效目录列表。");
+      throw new Error(adkT("sandbox.invalidDirectoryList"));
     }
     return {
       path: value.path,
@@ -1647,7 +1935,7 @@ export const sandboxClient: AgentKitSandboxClient = {
     options = {},
   ) {
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
+      `${api}/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
       {
         method: "POST",
         headers: sandboxHeaders({ "Content-Type": "application/json" }),
@@ -1657,23 +1945,23 @@ export const sandboxClient: AgentKitSandboxClient = {
       SETTINGS_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法提交 Codex 审批决定。");
+      throw await responseError(response, adkT("sandbox.resolveApprovalFailed"));
     }
   },
 
   async launchTerminal(sessionId, options = {}) {
-    return launchSandboxTool(sessionId, "terminal", options);
+    return launchSandboxTool(api, sessionId, "terminal", options);
   },
 
   async launchBrowser(sessionId, options = {}) {
-    return launchSandboxTool(sessionId, "browser", options);
+    return launchSandboxTool(api, sessionId, "browser", options);
   },
 
   async uploadFile(sessionId, file, options = {}) {
     const form = new FormData();
     form.set("file", file, file.name);
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/files`,
+      `${api}/${encodeURIComponent(sessionId)}/files`,
       {
         method: "POST",
         headers: sandboxHeaders(),
@@ -1683,7 +1971,7 @@ export const sandboxClient: AgentKitSandboxClient = {
       UPLOAD_TIMEOUT_MS,
     );
     if (!response.ok) {
-      throw await responseError(response, "无法上传文件到 Sandbox。");
+      throw await responseError(response, adkT("sandbox.uploadFileFailed"));
     }
     const value = (await response.json()) as Partial<SandboxUploadedFile>;
     if (
@@ -1693,7 +1981,7 @@ export const sandboxClient: AgentKitSandboxClient = {
       typeof value.mimeType !== "string" ||
       typeof value.sizeBytes !== "number"
     ) {
-      throw new Error("Sandbox 返回了无效上传结果。");
+      throw new Error(adkT("sandbox.invalidUploadResult"));
     }
     return value as SandboxUploadedFile;
   },
@@ -1701,7 +1989,7 @@ export const sandboxClient: AgentKitSandboxClient = {
   async closeSession(sessionId, options = {}) {
     if (!sessionId) return;
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/disconnect`,
+      `${api}/${encodeURIComponent(sessionId)}/disconnect`,
       {
         method: "POST",
         headers: sandboxHeaders(),
@@ -1710,30 +1998,14 @@ export const sandboxClient: AgentKitSandboxClient = {
       CLOSE_TIMEOUT_MS,
     );
     if (!response.ok && response.status !== 404) {
-      throw await responseError(response, "无法断开 Codex 智能体连接。");
-    }
-  },
-
-  async interruptSession(sessionId, options = {}) {
-    if (!sessionId) return;
-    const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}/interrupt`,
-      {
-        method: "POST",
-        headers: sandboxHeaders(),
-        signal: options.signal,
-      },
-      CLOSE_TIMEOUT_MS,
-    );
-    if (!response.ok && response.status !== 404) {
-      throw await responseError(response, "无法停止 Codex 任务。");
+      throw await responseError(response, adkT("sandbox.disconnectCodexFailed"));
     }
   },
 
   async deleteSession(sessionId, options = {}) {
     if (!sessionId) return;
     const response = await studioFetch(
-      `${SANDBOX_API}/${encodeURIComponent(sessionId)}`,
+      `${api}/${encodeURIComponent(sessionId)}`,
       {
         method: "DELETE",
         headers: sandboxHeaders(),
@@ -1742,18 +2014,31 @@ export const sandboxClient: AgentKitSandboxClient = {
       CLOSE_TIMEOUT_MS,
     );
     if (!response.ok && response.status !== 404) {
-      throw await responseError(response, "无法删除 Codex 智能体。");
+      throw await responseError(response, adkT("sandbox.deleteCodexFailed"));
     }
+  },  };
+}
+
+
+export const sandboxClient = createSandboxClient(SANDBOX_API);
+export const intelligentDevelopmentClient = createSandboxClient(
+  "/web/intelligent-development/sessions",
+  {
+    textOnly: true,
+    messageTimeoutMs: 3_600_000,
+    interruptTimeoutMs: 45_000,
+    intelligentDevelopment: true,
   },
-};
+);
 
 async function launchSandboxTool(
+  api: string,
   sessionId: string,
   tool: "terminal" | "browser",
   options: SandboxRequestOptions,
 ): Promise<SandboxToolLaunch> {
   const response = await studioFetch(
-    `${SANDBOX_API}/${encodeURIComponent(sessionId)}/${tool}`,
+    `${api}/${encodeURIComponent(sessionId)}/${tool}`,
     {
       method: "POST",
       headers: sandboxHeaders(),
@@ -1765,15 +2050,15 @@ async function launchSandboxTool(
     throw await responseError(
       response,
       tool === "terminal"
-        ? "无法打开 Sandbox Terminal。"
-        : "无法打开 Sandbox Browser。",
+        ? adkT("sandbox.openSandboxTerminalFailed")
+        : adkT("sandbox.openSandboxBrowserFailed"),
     );
   }
   const value = (await response.json()) as {
     url?: unknown;
     shellSessionId?: unknown;
   };
-  const toolUrl = sandboxToolUrl(value.url, "Sandbox 工具");
+  const toolUrl = sandboxToolUrl(value.url, adkT("sandbox.toolLabel"));
   return {
     url: toolUrl,
     ...(typeof value.shellSessionId === "string"
@@ -1784,19 +2069,19 @@ async function launchSandboxTool(
 
 function sandboxToolUrl(value: unknown, label: string): string {
   if (typeof value !== "string") {
-    throw new Error(`${label} 返回了无效地址。`);
+    throw new Error(adkT("sandbox.invalidToolUrl", { label }));
   }
   if (value.startsWith("/")) return withAuth(value);
   let parsed: URL;
   try {
     parsed = new URL(value);
   } catch {
-    throw new Error(`${label} 返回了无效地址。`);
+    throw new Error(adkT("sandbox.invalidToolUrl", { label }));
   }
   const allowsHttp =
     parsed.protocol === "http:" && window.location.protocol === "http:";
   if (parsed.protocol !== "https:" && !allowsHttp) {
-    throw new Error(`${label} 返回了不安全的地址。`);
+    throw new Error(adkT("sandbox.unsafeToolUrl", { label }));
   }
   return parsed.toString();
 }

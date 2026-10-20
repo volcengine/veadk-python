@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import type { SkillSpaceRef } from "../../create/skills/skillspace";
+import { useTranslation } from "react-i18next";
+import { getSkillSpaceDisplayName, type SkillSpaceRef } from "../../create/skills/skillspace";
 import {
   createSkillSpace,
   updateSkillSpace,
   uploadSkillArchive,
   validateSkillArchive,
 } from "../../adk/skills";
+import {
+  SkillConfigSelect,
+  type SkillConfigOption,
+} from "./SkillConfigSelect";
 import { normalizeSkillError, SkillErrorDetails } from "./SkillErrorDetails";
 
 function DialogFrame({
@@ -19,6 +24,7 @@ function DialogFrame({
   onClose: () => void;
   className?: string;
 }) {
+  const { t } = useTranslation("skills");
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     closeRef.current?.focus();
@@ -29,16 +35,28 @@ function DialogFrame({
   return (
     <div className="skill-dialog-backdrop" onMouseDown={onClose}>
       <section className={`skill-dialog${className ? ` ${className}` : ""}`} role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
-        <header><h2>{title}</h2><button ref={closeRef} type="button" onClick={onClose} aria-label="关闭">关闭</button></header>
+        <header><h2>{title}</h2><button ref={closeRef} type="button" onClick={onClose} aria-label={t("management.close")}>{t("management.close")}</button></header>
         {children}
       </section>
     </div>
   );
 }
 
-export function CreateSkillSpaceDialog({ region, onClose, onCreated }: { region: string; onClose: () => void; onCreated: (space: SkillSpaceRef) => void }) {
+export function CreateSkillSpaceDialog({
+  region: initialRegion,
+  regionOptions,
+  onClose,
+  onCreated,
+}: {
+  region: string;
+  regionOptions: SkillConfigOption[];
+  onClose: () => void;
+  onCreated: (space: SkillSpaceRef) => void;
+}) {
+  const { t } = useTranslation("skills");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [region, setRegion] = useState(initialRegion);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const submit = async () => {
@@ -46,21 +64,33 @@ export function CreateSkillSpaceDialog({ region, onClose, onCreated }: { region:
     setSubmitting(true);
     setError(null);
     try {
-      onCreated(await createSkillSpace({ name: name.trim(), description: description.trim() || undefined, region }));
+      const created = await createSkillSpace({
+        name: name.trim(),
+        description: description.trim() || undefined,
+        region,
+      });
+      onCreated({ ...created, region: created.region || region });
     } catch (reason) {
-      setError(normalizeSkillError(reason, "创建 Skill 空间失败"));
+      setError(normalizeSkillError(reason, t("management.createSpaceFailed")));
     } finally {
       setSubmitting(false);
     }
   };
   return (
-    <DialogFrame title="新建 Skill 空间" onClose={onClose}>
+    <DialogFrame title={t("management.createSpaceTitle")} onClose={onClose}>
       <div className="skill-dialog__body">
-        <label><span>名称</span><input autoFocus value={name} maxLength={128} onChange={(event) => setName(event.target.value)} /></label>
-        <label><span>描述（可选）</span><textarea value={description} maxLength={1024} onChange={(event) => setDescription(event.target.value)} /></label>
+        <label><span>{t("management.name")}</span><input autoFocus value={name} maxLength={128} onChange={(event) => setName(event.target.value)} /></label>
+        <SkillConfigSelect
+          label={t("management.region")}
+          value={region}
+          options={regionOptions}
+          onChange={setRegion}
+          required
+        />
+        <label><span>{t("management.optionalDescription")}</span><textarea value={description} maxLength={1024} onChange={(event) => setDescription(event.target.value)} /></label>
         {error ? <div className="skill-inline-error"><SkillErrorDetails error={error} /></div> : null}
       </div>
-      <footer><button type="button" className="skill-button" onClick={onClose}>取消</button><button type="button" className="skill-button skill-button--primary" disabled={!name.trim() || submitting} onClick={() => void submit()}>{submitting ? "创建中…" : "创建"}</button></footer>
+      <footer><button type="button" className="skill-button" onClick={onClose}>{t("management.cancel")}</button><button type="button" className="skill-button skill-button--primary" disabled={!name.trim() || submitting} onClick={() => void submit()}>{submitting ? t("management.creating") : t("management.create")}</button></footer>
     </DialogFrame>
   );
 }
@@ -76,6 +106,7 @@ export function EditSkillSpaceDialog({
   onClose: () => void;
   onUpdated: (space: SkillSpaceRef) => void;
 }) {
+  const { t } = useTranslation("skills");
   const [name, setName] = useState(space.name);
   const [description, setDescription] = useState(space.description || "");
   const [submitting, setSubmitting] = useState(false);
@@ -93,24 +124,25 @@ export function EditSkillSpaceDialog({
       });
       onUpdated({ ...space, ...updated, skillCount: space.skillCount });
     } catch (reason) {
-      setError(normalizeSkillError(reason, "更新 Skill 空间失败"));
+      setError(normalizeSkillError(reason, t("management.updateSpaceFailed")));
     } finally {
       setSubmitting(false);
     }
   };
   return (
-    <DialogFrame title="编辑 Skill 空间" onClose={onClose}>
+    <DialogFrame title={t("management.editSpaceTitle")} onClose={onClose}>
       <div className="skill-dialog__body">
-        <label><span>名称</span><input autoFocus value={name} maxLength={128} onChange={(event) => setName(event.target.value)} /></label>
-        <label><span>描述（可选）</span><textarea value={description} maxLength={1024} onChange={(event) => setDescription(event.target.value)} /></label>
+        <label><span>{t("management.name")}</span><input autoFocus value={name} maxLength={128} onChange={(event) => setName(event.target.value)} /></label>
+        <label><span>{t("management.optionalDescription")}</span><textarea value={description} maxLength={1024} onChange={(event) => setDescription(event.target.value)} /></label>
         {error ? <div className="skill-inline-error"><SkillErrorDetails error={error} /></div> : null}
       </div>
-      <footer><button type="button" className="skill-button" onClick={onClose}>取消</button><button type="button" className="skill-button skill-button--primary" disabled={!name.trim() || submitting} onClick={() => void submit()}>{submitting ? "保存中…" : "保存"}</button></footer>
+      <footer><button type="button" className="skill-button" onClick={onClose}>{t("management.cancel")}</button><button type="button" className="skill-button skill-button--primary" disabled={!name.trim() || submitting} onClick={() => void submit()}>{submitting ? t("management.saving") : t("management.save")}</button></footer>
     </DialogFrame>
   );
 }
 
 export function UploadSkillDialog({ space, region, onClose, onUploaded }: { space: SkillSpaceRef; region: string; onClose: () => void; onUploaded: () => void }) {
+  const { t, i18n } = useTranslation("skills");
   const [file, setFile] = useState<File | null>(null);
   const [validation, setValidation] = useState<{ name: string; fileCount: number } | null>(null);
   const [validating, setValidating] = useState(false);
@@ -134,7 +166,7 @@ export function UploadSkillDialog({ space, region, onClose, onUploaded }: { spac
       }
     } catch (reason) {
       if (validationRequest.current === request) {
-        setError(normalizeSkillError(reason, "Skill ZIP 格式校验失败"));
+        setError(normalizeSkillError(reason, t("management.archiveValidationFailed")));
       }
     } finally {
       if (validationRequest.current === request) setValidating(false);
@@ -148,13 +180,13 @@ export function UploadSkillDialog({ space, region, onClose, onUploaded }: { spac
       await uploadSkillArchive({ spaceId: space.id, region, project: space.projectName, file });
       onUploaded();
     } catch (reason) {
-      setError(normalizeSkillError(reason, "上传 Skill 失败"));
+      setError(normalizeSkillError(reason, t("management.uploadFailed")));
     } finally {
       setSubmitting(false);
     }
   };
   return (
-    <DialogFrame title={`上传到 ${space.name}`} className="skill-upload-dialog" onClose={onClose}>
+    <DialogFrame title={t("management.uploadTitle", { name: getSkillSpaceDisplayName(space) })} className="skill-upload-dialog" onClose={onClose}>
       <div className="skill-dialog__body">
         <input
           ref={fileInputRef}
@@ -178,15 +210,15 @@ export function UploadSkillDialog({ space, region, onClose, onUploaded }: { spac
             void selectFile(event.dataTransfer.files?.[0] || null);
           }}
         >
-          <strong>{file ? file.name : "拖拽 Skill ZIP 到这里"}</strong>
-          <span>{file ? `${file.size.toLocaleString()} 字节` : "或点击选择本地文件"}</span>
+          <strong>{file ? file.name : t("management.dropzone")}</strong>
+          <span>{file ? t("fileTree.bytes", { value: new Intl.NumberFormat(i18n.resolvedLanguage).format(file.size) }) : t("management.chooseLocalFile")}</span>
         </button>
-        <p>ZIP 根目录需要包含 SKILL.md，也可以只包含一层包装目录。选择后仅检查格式，不会自动上传。</p>
-        {validating ? <div className="skill-inline-notice">正在检查文件格式…</div> : null}
-        {validation ? <div className="skill-inline-notice">格式检查通过：{validation.name}，共 {validation.fileCount} 个文件</div> : null}
+        <p>{t("management.archiveHelp")}</p>
+        {validating ? <div className="skill-inline-notice">{t("management.validating")}</div> : null}
+        {validation ? <div className="skill-inline-notice">{t("management.validationPassed", { name: validation.name, count: validation.fileCount })}</div> : null}
         {error ? <div className="skill-inline-error"><SkillErrorDetails error={error} /></div> : null}
       </div>
-      <footer><button type="button" className="skill-button" onClick={onClose}>取消</button><button type="button" className="skill-button skill-button--primary" disabled={!file || !validation || validating || submitting} onClick={() => void upload()}>{submitting ? "上传中…" : "上传"}</button></footer>
+      <footer><button type="button" className="skill-button" onClick={onClose}>{t("management.cancel")}</button><button type="button" className="skill-button skill-button--primary" disabled={!file || !validation || validating || submitting} onClick={() => void upload()}>{submitting ? t("management.uploading") : t("management.upload")}</button></footer>
     </DialogFrame>
   );
 }

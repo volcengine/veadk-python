@@ -1,7 +1,9 @@
+import { isReservedSkillSpaceName } from "../create/skills/consts";
 import { withAuth } from "./auth";
 import { withLocalUser } from "./identity";
 import { DEFAULT_REQUEST_TIMEOUT_MS, requestSignal, TRANSFER_REQUEST_TIMEOUT_MS } from "./timeout";
 import type { SkillSpacePage, SkillSpaceRef } from "../create/skills/skillspace";
+import { adkT, withLocaleHeaders } from "./i18n";
 
 const API_ROOT = "/web/skill-management";
 
@@ -28,7 +30,7 @@ export class SkillManagementApiError extends Error {
 async function request(path: string, init: RequestInit = {}, timeout = DEFAULT_REQUEST_TIMEOUT_MS) {
   return fetch(withAuth(`${API_ROOT}${path}`), {
     ...init,
-    headers: withLocalUser(init.headers),
+    headers: withLocaleHeaders(withLocalUser(init.headers)),
     signal: requestSignal(init.signal, timeout),
   });
 }
@@ -56,7 +58,7 @@ export async function skillApiErrorFromResponse(
       originalError = payload.detail.originalError;
     }
   } catch {
-    if (rawResponse.trim()) message = `${fallback}：${rawResponse.trim()}`;
+    if (rawResponse.trim()) message = adkT("common.fallbackWithDetail", { fallback, detail: rawResponse.trim() });
   }
   return new SkillManagementApiError(
     message,
@@ -90,7 +92,7 @@ export async function listManagedSkillSpaces(args: {
   if (args.project) params.set("project", args.project);
   return json(
     await request(`/spaces?${params}`, { signal: args.signal }),
-    "读取 Skill 空间失败",
+    adkT("skills.listSpacesFailed"),
   );
 }
 
@@ -100,14 +102,91 @@ export async function createSkillSpace(args: {
   region: string;
   projectName?: string;
 }): Promise<SkillSpaceRef> {
+  if (isReservedSkillSpaceName(args.name)) {
+    throw new SkillManagementApiError(adkT("skills.reservedSpaceName"), 409, "SKILL_SPACE_RESERVED_IDENTITY");
+  }
   return json(
     await request("/spaces", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(args),
     }),
-    "创建 Skill 空间失败",
+    adkT("skills.createSpaceFailed"),
   );
+}
+
+export async function ensureSharedSkillSpace(args: {
+  region: string;
+  signal?: AbortSignal;
+}): Promise<SkillSpaceRef> {
+  const params = new URLSearchParams({ region: args.region });
+  return json(
+    await request(`/shared-space/ensure?${params}`, { method: "POST", signal: args.signal }),
+    adkT("skills.sharedSpaceFailed"),
+  );
+}
+
+export async function ensureReviewSkillSpace(args: {
+  region: string;
+  signal?: AbortSignal;
+}): Promise<SkillSpaceRef> {
+  const params = new URLSearchParams({ region: args.region });
+  return json(
+    await request(`/review-space/ensure?${params}`, { method: "POST", signal: args.signal }),
+    adkT("skills.reviewSpaceFailed"),
+  );
+}
+
+export async function submitSkillReview(args: {
+  spaceId: string;
+  skillId: string;
+  version: string;
+  region: string;
+}): Promise<import("../reviews/reviewModel").ReviewApplication> {
+  return json(
+    await request(`/spaces/${encodeURIComponent(args.spaceId)}/skills/${encodeURIComponent(args.skillId)}/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ region: args.region, version: args.version }),
+    }, TRANSFER_REQUEST_TIMEOUT_MS),
+    adkT("skills.submitReviewFailed"),
+  );
+}
+
+export async function listSkillReviews(args: { region: string; signal?: AbortSignal }): Promise<{
+  items: import("../reviews/reviewModel").ReviewApplication[];
+  totalCount: number;
+}> {
+  const params = new URLSearchParams({ region: args.region });
+  return json(await request(`/reviews?${params}`, { signal: args.signal }), adkT("skills.listReviewsFailed"));
+}
+
+export async function getSkillReviewFiles(args: { id: string; region: string; signal?: AbortSignal }): Promise<{ files: ManagedSkillFile[] }> {
+  const params = new URLSearchParams({ region: args.region });
+  return json(await request(`/reviews/${encodeURIComponent(args.id)}/files?${params}`, { signal: args.signal }, TRANSFER_REQUEST_TIMEOUT_MS), adkT("skills.reviewFilesFailed"));
+}
+
+export async function decideSkillReview(args: {
+  id: string;
+  region: string;
+  decision: import("../reviews/reviewModel").ReviewDecision;
+  reason?: string;
+  comment?: string;
+}): Promise<import("../reviews/reviewModel").ReviewApplication> {
+  return json(await request(`/reviews/${encodeURIComponent(args.id)}/decision`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({region: args.region, decision: args.decision, reason: args.reason || "", comment: args.comment || ""}),
+  }, TRANSFER_REQUEST_TIMEOUT_MS), adkT("skills.decideReviewFailed"));
+}
+
+export async function listSourceSkillReviews(args: {
+  spaceId: string; region: string; signal?: AbortSignal;
+}): Promise<{ items: import("../reviews/reviewModel").ReviewApplication[] }> {
+  const params = new URLSearchParams({region: args.region});
+  return json(await request(`/spaces/${encodeURIComponent(args.spaceId)}/reviews?${params}`, {
+    signal: args.signal,
+  }), adkT("skills.listReviewsFailed"));
 }
 
 export async function updateSkillSpace(args: {
@@ -116,6 +195,9 @@ export async function updateSkillSpace(args: {
   description?: string;
   region: string;
 }): Promise<SkillSpaceRef> {
+  if (isReservedSkillSpaceName(args.name)) {
+    throw new SkillManagementApiError(adkT("skills.reservedSpaceName"), 409, "SKILL_SPACE_RESERVED_IDENTITY");
+  }
   return json(
     await request(`/spaces/${encodeURIComponent(args.spaceId)}`, {
       method: "PUT",
@@ -126,7 +208,7 @@ export async function updateSkillSpace(args: {
         region: args.region,
       }),
     }),
-    "更新 Skill 空间失败",
+    adkT("skills.updateSpaceFailed"),
   );
 }
 
@@ -140,7 +222,7 @@ export async function deleteSkillSpace(args: {
       `/spaces/${encodeURIComponent(args.spaceId)}?${params}`,
       { method: "DELETE" },
     ),
-    "删除 Skill 空间失败",
+    adkT("skills.deleteSpaceFailed"),
   );
 }
 
@@ -162,7 +244,7 @@ export async function uploadSkillArchive(args: {
       },
       TRANSFER_REQUEST_TIMEOUT_MS,
     ),
-    "上传 Skill 失败",
+    adkT("skills.uploadFailed"),
   );
 }
 
@@ -182,7 +264,7 @@ export async function validateSkillArchive(file: File): Promise<{
       },
       TRANSFER_REQUEST_TIMEOUT_MS,
     ),
-    "校验 Skill 失败",
+    adkT("skills.validateFailed"),
   );
 }
 
@@ -197,7 +279,7 @@ export async function deleteManagedSkill(args: {
       `/spaces/${encodeURIComponent(args.spaceId)}/skills/${encodeURIComponent(args.skillId)}?${params}`,
       { method: "DELETE" },
     ),
-    "删除 Skill 失败",
+    adkT("skills.deleteFailed"),
   );
 }
 
@@ -214,12 +296,16 @@ export async function getManagedSkillFiles(args: {
   skillId: string;
   version?: string;
   region: string;
+  skillSpaceName?: string;
+  skillName?: string;
 }): Promise<ManagedSkillFile[]> {
   const params = new URLSearchParams({ region: args.region });
   if (args.version) params.set("version", args.version);
+  if (args.skillSpaceName) params.set("skill_space_name", args.skillSpaceName);
+  if (args.skillName) params.set("skill_name", args.skillName);
   const result = await json<{ files: ManagedSkillFile[] }>(
     await request(`/spaces/${encodeURIComponent(args.spaceId)}/skills/${encodeURIComponent(args.skillId)}/files?${params}`),
-    "读取 Skill 文件失败",
+    adkT("skills.listFilesFailed"),
   );
   return Array.isArray(result.files) ? result.files : [];
 }
@@ -230,15 +316,19 @@ export async function downloadManagedSkillArchive(args: {
   version?: string;
   region: string;
   fallbackName: string;
+  skillSpaceName?: string;
+  skillName?: string;
 }): Promise<void> {
   const params = new URLSearchParams({ region: args.region });
   if (args.version) params.set("version", args.version);
+  if (args.skillSpaceName) params.set("skill_space_name", args.skillSpaceName);
+  if (args.skillName) params.set("skill_name", args.skillName);
   const response = await request(
     `/spaces/${encodeURIComponent(args.spaceId)}/skills/${encodeURIComponent(args.skillId)}/archive?${params}`,
     {},
     TRANSFER_REQUEST_TIMEOUT_MS,
   );
-  if (!response.ok) await json(response, "下载 Skill 失败");
+  if (!response.ok) await json(response, adkT("skills.downloadFailed"));
   const disposition = response.headers.get("content-disposition") || "";
   const filename = disposition.match(/filename="([^"]+)"/)?.[1] || `${args.fallbackName}.zip`;
   const url = URL.createObjectURL(await response.blob());

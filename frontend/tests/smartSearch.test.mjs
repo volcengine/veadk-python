@@ -20,10 +20,11 @@ test("smart search enables only retrieval sources mounted on the Agent", () => {
   assert.match(searchViewSource, /mounted\.has\("knowledge"\)/);
   assert.match(searchViewSource, /mounted\.has\("memory"\)/);
   assert.match(searchViewSource, /mounted\.has\("web"\)/);
-  assert.match(searchViewSource, /当前 Agent 未挂载\$\{label\}/);
-  assert.match(searchViewSource, /通过 web_search 工具检索/);
+  assert.match(searchViewSource, /t\("search\.notMounted", \{ label \}\)/);
+  assert.match(searchViewSource, /t\("search\.webDescription"\)/);
   assert.match(searchViewSource, /aria-haspopup="listbox"/);
-  assert.match(searchViewSource, /在 \$\{retrievalComponent\?\.name/);
+  assert.match(searchViewSource, /t\("search\.placeholder\.knowledge"/);
+  assert.match(searchViewSource, /t\("search\.placeholder\.memory"/);
   assert.doesNotMatch(searchViewSource, /className="search-sources"/);
 });
 
@@ -33,9 +34,10 @@ test("knowledge and memory searches use the selected Agent endpoint", () => {
   assert.match(clientSource, /apiFetch\(`\/web\/search\?\$\{params\.toString\(\)\}`, \{\}, ep\)/);
 });
 
-test("sidebar and submit action share the restrained custom search icon", () => {
+test("sidebar uses the Figma search icon while submit keeps its restrained glyph", () => {
   assert.match(searchViewSource, /function SearchGlyph/);
-  assert.match(searchViewSource, /<SearchGlyph \/>/);
+  assert.match(searchViewSource, /import \{ SidebarSearchIcon \} from "\.\/icons\/SidebarIcons"/);
+  assert.match(searchViewSource, /<SidebarSearchIcon className="icon" \/>/);
   assert.match(searchViewSource, /<SearchGlyph className="icon" \/>/);
   assert.doesNotMatch(searchViewSource, /import \{[^}]*\bSearch\b[^}]*\} from "lucide-react"/s);
 });

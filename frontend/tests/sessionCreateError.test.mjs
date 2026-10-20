@@ -8,20 +8,19 @@ const clientSource = readFileSync(
 );
 
 test("session creation surfaces the backend error detail with its status", () => {
-  assert.match(clientSource, /const fallback = `创建会话失败 \(\$\{res\.status\}\)`/);
+  assert.match(clientSource, /const fallback = adkT\("client\.createSessionFailedWithStatus", \{ status: res\.status \}\)/);
   assert.match(
     clientSource,
-    /const detail = await httpErrorMessage\(res, "创建会话失败"\)/,
+    /const detail = await httpErrorMessage\(res, adkT\("client\.createSessionFailed"\)\)/,
   );
   assert.match(
     clientSource,
-    /detail === fallback \? fallback : `\$\{fallback\}：\$\{detail\}`/,
+    /detail === fallback \? fallback : adkT\("common\.fallbackWithDetail", \{ fallback, detail \}\)/,
   );
 });
 
 test("runtime listing surfaces HTTP status and backend detail", () => {
-  assert.match(clientSource, /const detail = await httpErrorMessage\(res, "加载 Runtime 失败"\)/);
-  assert.match(clientSource, /const context = `\$\{fallback\}（HTTP \$\{res\.status\}）`/);
+  assert.match(clientSource, /const detail = await httpErrorMessage\(res, adkT\("client\.loadRuntimeFailed"\)\)/);
   assert.match(clientSource, /throw new Error\(detail\)/);
   assert.doesNotMatch(clientSource, /`\$\{summary\}：\$\{detail\}`/);
 });

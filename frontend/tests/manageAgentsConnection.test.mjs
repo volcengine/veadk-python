@@ -29,8 +29,8 @@ const manageStyles = readFileSync(
 
 test("managed runtimes connect through the Agent page", () => {
   assert.match(manageSource, /onConnect:\s*\(runtime:\s*ManagedRuntime\)/);
-  assert.match(manageSource, /连接到此 Agent/);
-  assert.match(manageSource, /currentRuntimeId === rt\.runtimeId[\s\S]*?已连接/);
+  assert.match(manageSource, /t\("manageAgents\.connect"\)/);
+  assert.match(manageSource, /currentRuntimeId === rt\.runtimeId[\s\S]*?t\("manageAgents\.connected"\)/);
   assert.match(appSource, /connectMyAgent[\s\S]*?connectRuntime\(/);
   assert.match(appSource, /<MyAgents[\s\S]*?onUseAgent=\{/);
   assert.match(workspaceSource, /onSelectAgent\(agent\.id\)/);
@@ -48,6 +48,11 @@ test("runtime connection probing is shared with the Agent selector", () => {
   assert.match(connectionsSource, /runtimeRegionCandidates,/);
   assert.match(connectionsSource, /for \(const candidate of runtimeRegionCandidates\(region\)\)/);
   assert.match(connectionsSource, /probeRuntimeApps\(runtimeId, candidate,[\s\S]*?retryProbe: true/);
+  assert.match(connectionsSource, /ensureRuntimeRouteChannel\(runtimeId, candidate\)/);
+  assert.match(
+    clientSource,
+    /\/web\/runtime-route-channel\/\$\{encodeURIComponent\(runtimeId\)\}\/connect/,
+  );
   assert.match(connectionsSource, /resolvedRegion = candidate/);
   assert.match(connectionsSource, /addRuntimeConnection\(/);
   assert.match(connectionsSource, /resolvedRegion,[\s\S]*?apps,[\s\S]*?labels/);
@@ -66,8 +71,10 @@ test("runtime connections keep the Runtime resource name separate from Agent lab
   );
   assert.match(
     appSource,
-    /connectRuntime\([\s\S]*?result\.runtimeId,[\s\S]*?result\.runtimeName,[\s\S]*?agentName: result\.agentName/,
+    /connectRuntime\([\s\S]*?result\.runtimeId,[\s\S]*?result\.runtimeName,[\s\S]*?agentName: result\.agentName,[\s\S]*?mpaInstanceId: result\.mpaInstanceId/,
   );
+  assert.match(connectionsSource, /mpaInstanceId: c\.mpaInstanceId/);
+  assert.match(connectionsSource, /mpaInstanceId: mpaInstanceId\?\.trim\(\) \|\| previous\?\.mpaInstanceId/);
 });
 
 test("fresh deployments wait for the Runtime network to become reachable", () => {
@@ -84,18 +91,36 @@ test("fresh deployments wait for the Runtime network to become reachable", () =>
   );
 });
 
+test("a successful compatibility probe is reused by the connect flow", () => {
+  assert.match(clientSource, /preferCached\?: boolean/);
+  assert.match(clientSource, /if \(options\.preferCached\)[\s\S]*?runtimeAppsCache\.get/);
+  assert.match(
+    connectionsSource,
+    /probeRuntimeApps\(runtimeId, candidate,[\s\S]*?retryProbe: true,[\s\S]*?preferCached: true/,
+  );
+});
+
 test("management defaults to the active provider region without trailing list whitespace", () => {
   assert.match(manageSource, /defaultCloudRegion\(cloudProvider\)/);
   assert.match(manageSource, /cloudRegionOptions\(cloudProvider\)/);
   assert.match(manageSource, /formatCloudRegion\(regionFilter, cloudProvider\)/);
   assert.doesNotMatch(manageSource, /value: "all"/);
-  assert.match(manageSource, /role="listbox" aria-label="区域"/);
+  assert.match(manageSource, /role="listbox" aria-label=\{t\("manageAgents\.regionAria"\)\}/);
   assert.match(manageSource, /role="option"[\s\S]*?aria-selected=\{selected\}/);
   assert.match(manageStyles, /\.manage-region-menu\s*\{[\s\S]*?border-radius:\s*12px;/);
-  assert.match(manageSource, /列出你有权管理的 AgentKit Runtime\s*<\/p>/);
-  assert.doesNotMatch(manageSource, /列出你有权管理的 AgentKit Runtime。/);
+  assert.match(manageSource, /t\("manageAgents\.subtitle"\)/);
   assert.match(
     manageStyles,
     /\.manage\s*\{[\s\S]*?padding:\s*28px 24px 16px;/,
   );
+});
+
+test("task Runtime selection survives a failed chat connection", () => {
+  const start = appSource.indexOf("const connectMyAgent = async");
+  const end = appSource.indexOf("const openMyAgentDetails", start);
+  const connect = appSource.slice(start, end);
+  assert.ok(connect.indexOf("setSelectedCronRuntime({") < connect.indexOf("await connectRuntimeForUser("));
+  assert.match(connect, /runtimeId: agent\.runtime\.runtimeId, name: agent\.name, region: agent\.runtime\.region/);
+  assert.match(appSource, /selectedRuntime=\{selectedCronRuntime \?\? currentRuntime \?\? selectedDraftStudioRuntime\}/);
+  assert.match(appSource, /useEffect\(\(\) => setSelectedCronRuntime\(undefined\), \[appName\]\)/);
 });

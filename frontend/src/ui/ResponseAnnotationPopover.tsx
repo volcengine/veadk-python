@@ -16,6 +16,7 @@ import { Button } from "@openai/apps-sdk-ui/components/Button";
 import { Popover } from "@openai/apps-sdk-ui/components/Popover";
 import { Textarea } from "@openai/apps-sdk-ui/components/Textarea";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   canSubmitResponseAnnotation,
   prepareResponseAnnotationNote,
@@ -38,6 +39,7 @@ export function ResponseAnnotationPopover({
   onClose,
   onSubmit,
 }: ResponseAnnotationPopoverProps) {
+  const { t } = useTranslation("conversation");
   const busyRef = useRef(false);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -111,8 +113,8 @@ export function ResponseAnnotationPopover({
         {submitted ? (
           <div className="response-annotation-success" role="status" aria-live="polite">
             <div>
-              <strong>已加入 Bad case 评测集</strong>
-              <p>这条批注已关联当前问题和完整模型回复。</p>
+              <strong>{t("annotation.successTitle")}</strong>
+              <p>{t("annotation.successDescription")}</p>
             </div>
             <Button
               type="button"
@@ -121,13 +123,13 @@ export function ResponseAnnotationPopover({
               pill={false}
               onClick={dismiss}
             >
-              完成
+              {t("annotation.done")}
             </Button>
           </div>
         ) : (
           <form
             className="response-annotation-form"
-            aria-label="批注选中的模型回复"
+            aria-label={t("annotation.ariaLabel")}
             aria-busy={busy || undefined}
             onSubmit={(event) => {
               event.preventDefault();
@@ -135,11 +137,11 @@ export function ResponseAnnotationPopover({
             }}
           >
             <div className="response-annotation-header">
-              <h2>添加批注</h2>
+              <h2>{t("annotation.title")}</h2>
             </div>
             <blockquote title={excerpt}>{excerpt}</blockquote>
             <label className="response-annotation-field">
-              <span>批注内容</span>
+              <span>{t("annotation.content")}</span>
               <Textarea
                 value={note}
                 rows={3}
@@ -148,8 +150,8 @@ export function ResponseAnnotationPopover({
                 maxLength={RESPONSE_ANNOTATION_NOTE_MAX_LENGTH}
                 disabled={busy}
                 invalid={Boolean(error)}
-                aria-label="批注内容"
-                placeholder="说明问题或期望的修改方式"
+                aria-label={t("annotation.content")}
+                placeholder={t("annotation.placeholder")}
                 onChange={(event) => {
                   setNote(prepareResponseAnnotationNote(event.target.value));
                   if (error) setError("");
@@ -158,7 +160,7 @@ export function ResponseAnnotationPopover({
             </label>
             {error && (
               <p className="response-annotation-error" role="alert">
-                {error}，请重试。
+                {t("annotation.retryError", { error })}
               </p>
             )}
             <div className="response-annotation-actions">
@@ -172,7 +174,7 @@ export function ResponseAnnotationPopover({
                 disabled={busy}
                 onClick={dismiss}
               >
-                取消
+                {t("annotation.cancel")}
               </Button>
               <Button
                 className="response-annotation-action"
@@ -183,7 +185,7 @@ export function ResponseAnnotationPopover({
                 loading={busy}
                 disabled={!canSubmitResponseAnnotation(note)}
               >
-                加入 Bad Case
+                {t("annotation.submit")}
               </Button>
             </div>
           </form>

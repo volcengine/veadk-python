@@ -22,8 +22,13 @@ from veadk.integrations.agentkit import create_agentkit_app
 app = create_agentkit_app(
     root_agent,
     AGENT_DISPLAY_NAMES,
+    enable_studio_tools=True,
 )
 ```
+
+`enable_studio_tools` 和 `enable_studio_routes` 分别是 Studio 动态工具和动态
+HTTP 路由的 Runtime 级开关，默认值均为 `False`。工具开关替代原来的 Agent 级
+`enable_bff_tools` 字段。
 
 服务会提供 AgentKit 对话接口，以及 `/ping`、`/web/agent-info/{app_name}`、
 `/web/agent-graph`、`/web/search` 和内置 Web UI。完整生成结果可参考

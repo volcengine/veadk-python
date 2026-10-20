@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,11 +20,17 @@ import asyncio
 import json
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
+from types import SimpleNamespace
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
 
 CloudCredentials = tuple[str, str, str | None]
+
+
+class ManagedSidecarRegistryError(ValueError):
+    """The managed Sidecar image cannot be safely anchored to a customer CR."""
 
 
 def _safe_exception_detail(
@@ -282,6 +288,53 @@ def _cr_page(
     return result
 
 
+def _registry_host(value: str) -> str:
+    candidate = value.strip()
+    if not candidate:
+        return ""
+    parsed = urlsplit(candidate if "://" in candidate else f"//{candidate}")
+    return str(parsed.hostname or "").rstrip(".").casefold()
+
+
+def _managed_image_location(image: str) -> tuple[str, str]:
+    candidate = image.strip()
+    parsed = urlsplit(candidate if "://" in candidate else f"//{candidate}")
+    host = str(parsed.hostname or "").rstrip(".").casefold()
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if not host or len(path_parts) < 2:
+        raise ManagedSidecarRegistryError(
+            "受控 Harness Sidecar 基础镜像地址无效，无法定位客户 CR。"
+        )
+    return host, path_parts[0]
+
+
+def _cr_domains(client: Any, registry: str) -> list[dict[str, Any]]:
+    list_domains = getattr(client, "list_domains", None)
+    if callable(list_domains):
+        result = list_domains(registry)
+    else:
+        private_list_domains = getattr(client, "_list_domains", None)
+        if callable(private_list_domains):
+            result = private_list_domains(registry)
+        else:
+            response = client._ve_request(
+                request_body={"Registry": registry},
+                action="ListDomains",
+            )
+            metadata = response.get("ResponseMetadata") or {}
+            if metadata.get("Error"):
+                raise ValueError("ListDomains failed")
+            result = response.get("Result") or {}
+
+    if isinstance(result, list):
+        return [item for item in result if isinstance(item, dict)]
+    if isinstance(result, dict):
+        nested = result.get("Result") if "Result" in result else result
+        if isinstance(nested, dict):
+            return [item for item in nested.get("Items", []) if isinstance(item, dict)]
+    raise ValueError("ListDomains returned an invalid result")
+
+
 def _is_agentkit_build_pipeline(client: Any, pipeline: dict[str, Any]) -> bool:
     check = getattr(client, "is_agentkit_build_pipeline", None)
     if callable(check):
@@ -434,6 +487,34 @@ class DeploymentResourceService:
 
     def _tos_client(self):
         if self._tos is None:
+            access_key, secret_key, session_token = self.credentials or ("", "", None)
+            if access_key and secret_key:
+                import tos
+
+                from agentkit.platform import VolcConfiguration
+
+                config = VolcConfiguration(
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    session_token=session_token,
+                    region=self.region,
+                    provider=self.provider,
+                )
+                endpoint = config.get_service_endpoint("tos")
+                # TOSService does not accept explicit credentials. Preserve the
+                # shape consumed by _tos_buckets without SDK rediscovery.
+                self._tos = SimpleNamespace(
+                    client=tos.TosClientV2(
+                        access_key,
+                        secret_key,
+                        endpoint.host,
+                        endpoint.region,
+                        security_token=session_token or "",
+                    ),
+                    actual_region=endpoint.region,
+                )
+                return self._tos
+
             from agentkit.toolkit.volcengine.services.tos_service import (
                 TOSService,
                 TOSServiceConfig,
@@ -491,6 +572,7 @@ class DeploymentResourceService:
         namespace: str = "",
         workspace_id: str = "",
         search: str = "",
+        name_prefix: str = "",
         page_number: int = 1,
         page_size: int = 100,
     ) -> dict[str, Any]:
@@ -510,6 +592,10 @@ class DeploymentResourceService:
                 for item in _tos_buckets(client)
                 if not item.get("Location") or item.get("Location") == service_region
             ]
+            if name_prefix:
+                all_items = [
+                    item for item in all_items if item["name"].startswith(name_prefix)
+                ]
             if search:
                 normalized_search = search.casefold()
                 all_items = [
@@ -818,6 +904,90 @@ class DeploymentResourceService:
 
         return resolved
 
+    def anchor_managed_sidecar_registry(
+        self,
+        base_image: str,
+        config: Mapping[str, str],
+    ) -> dict[str, str]:
+        """Bind account-owned bases while leaving external public bases unbound.
+
+        A managed base can live in a platform-owned public registry. Such a
+        registry is intentionally absent from the customer's ``ListRegistries``
+        result, and the application image must still be pushed to a CR owned by
+        the customer. Only anchor when the base host belongs to exactly one CR
+        in the current account; a successful lookup with no match therefore
+        means that the immutable base is external to the account.
+        """
+        if self.provider != "volcengine":
+            raise ManagedSidecarRegistryError(
+                "Harness Sidecar 当前无法定位所需的客户 CR。"
+            )
+
+        try:
+            image_host, image_namespace = _managed_image_location(base_image)
+            client = self._cr_client()
+            registries = _search_in_pages(
+                lambda page, size: _cr_page(
+                    client,
+                    "ListRegistries",
+                    page,
+                    size,
+                ),
+                "",
+            )
+            matches: list[str] = []
+            for item in registries:
+                registry = _item_name(item)
+                phase = _item_status(item).casefold()
+                if not registry or (phase and phase != "running"):
+                    continue
+                domains = _cr_domains(client, registry)
+                if any(
+                    _registry_host(str(domain.get("Domain") or "")) == image_host
+                    for domain in domains
+                ):
+                    matches.append(registry)
+        except ManagedSidecarRegistryError:
+            raise
+        except Exception as error:
+            raise ManagedSidecarRegistryError(
+                "无法从当前账号唯一定位受控 Harness Sidecar 基础镜像所在的 CR。"
+            ) from error
+
+        if not matches:
+            return dict(config)
+        if len(matches) != 1:
+            raise ManagedSidecarRegistryError(
+                "无法从当前账号唯一定位受控 Harness Sidecar 基础镜像所在的 CR。"
+            )
+        registry = matches[0]
+
+        configured_registry = str(config.get("cr_instance_name") or "").strip()
+        configured_namespace = str(config.get("cr_namespace_name") or "").strip()
+        if (configured_registry and configured_registry != registry) or (
+            configured_namespace and configured_namespace != image_namespace
+        ):
+            raise ManagedSidecarRegistryError(
+                "所选 CR 与受控 Harness Sidecar 基础镜像不在同一实例和命名空间，"
+                "请改用自动创建 CR 或选择匹配资源。"
+            )
+
+        try:
+            self._require_existing_resource(
+                "cr-namespace",
+                resource_id=image_namespace,
+                registry=registry,
+            )
+        except Exception as error:
+            raise ManagedSidecarRegistryError(
+                "受控 Harness Sidecar 基础镜像所在的 CR 命名空间不可用。"
+            ) from error
+
+        anchored = dict(config)
+        anchored["cr_instance_name"] = registry
+        anchored["cr_namespace_name"] = image_namespace
+        return anchored
+
 
 def mount_deployment_resource_routes(
     app: FastAPI,
@@ -852,6 +1022,7 @@ def mount_deployment_resource_routes(
                 namespace=str(request.query_params.get("namespace") or "").strip(),
                 workspace_id=str(request.query_params.get("workspaceId") or "").strip(),
                 search=str(request.query_params.get("search") or "").strip(),
+                name_prefix=str(request.query_params.get("namePrefix") or "").strip(),
                 page_number=page_number,
                 page_size=page_size,
             )

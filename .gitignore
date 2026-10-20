@@ -45,6 +45,7 @@ htmlcov/
 .cache
 nosetests.xml
 coverage.xml
+coverage/
 *.cover
 *.py,cover
 .hypothesis/
@@ -98,7 +99,8 @@ ipython_config.py
 #   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
 #   This is especially recommended for binary packages to ensure reproducibility, and is more
 #   commonly ignored for libraries.
-uv.lock
+# VeADK also publishes Studio as a locked offline application. Keep the root
+# uv.lock tracked so a release built from an exact Git SHA is reproducible.
 
 # poetry
 #   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
@@ -204,10 +206,31 @@ cython_debug/
 .trae
 .claude
 .agents
+/.dbg/
+/debug-*.md
+.adk/
+**/.adk/
+
+# Local AI/design and verification artifacts. Keep evidence summaries in
+# PRD/spec documents, not raw screenshots, traces, manifests, or run logs.
+/.artifacts/
+/.superpowers/
+/evidence/
+
 # AgentKit deploy config (contains account-specific secrets)
 agentkit.yaml
 agentkit*.yaml
 .agentkit/
 
+# veadk mpa create config (contains PG/model/OpenViking/Feishu secrets).
+# Only the committed *.example.yaml template is allowed.
+mpa-create.config.yaml
+mpa-create.config*.yaml
+!mpa-create.config.example.yaml
+**/mpa-create.config.yaml
+**/mpa-create.config*.yaml
+!**/mpa-create.config.example.yaml
+
 # PiAgent release archives are downloaded and verified during image builds.
 examples/piagent_with_mcp/vendor/pi-*.tar.gz
+.gstack/

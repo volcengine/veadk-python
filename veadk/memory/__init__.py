@@ -15,7 +15,11 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from veadk.memory.long_term_memory import LongTermMemory
+    from veadk.memory.long_term_memory import (
+        LongTermMemory,
+        MemoryAutoSavePolicy,
+        MemoryAutoSavePolicyInput,
+    )
     from veadk.memory.short_term_memory import ShortTermMemory
 
 
@@ -29,7 +33,20 @@ def __getattr__(name):
         from veadk.memory.long_term_memory import LongTermMemory
 
         return LongTermMemory
+    if name == "MemoryAutoSavePolicy":
+        from veadk.memory.long_term_memory import MemoryAutoSavePolicy
+
+        return MemoryAutoSavePolicy
+    if name == "MemoryAutoSavePolicyInput":
+        from veadk.memory.long_term_memory import MemoryAutoSavePolicyInput
+
+        return MemoryAutoSavePolicyInput
     raise AttributeError(f"module 'veadk.memory' has no attribute '{name}'")
 
 
-__all__ = ["ShortTermMemory", "LongTermMemory"]
+__all__ = [
+    "ShortTermMemory",
+    "LongTermMemory",
+    "MemoryAutoSavePolicy",
+    "MemoryAutoSavePolicyInput",
+]

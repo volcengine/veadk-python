@@ -1,0 +1,3 @@
+.filter-tabs-preview-example { width: 145px; }
+.filter-tabs-preview-example > button:nth-child(1) { width: 16px; }
+.filter-tabs-preview-example > button:nth-child(2) { width: 105px; }

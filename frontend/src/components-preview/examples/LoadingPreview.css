@@ -1,0 +1,6 @@
+.loading-preview-examples {
+  display: grid;
+  gap: 32px;
+}
+
+.loading-preview-examples > section { min-width: 0; }

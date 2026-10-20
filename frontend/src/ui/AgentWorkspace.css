@@ -36,6 +36,17 @@
   align-items: center;
 }
 
+.aw-agent-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aw-agent-heading-copy {
+  min-width: 0;
+}
+
 .aw-view-tabs {
   flex: 0 0 auto;
   gap: 26px;
@@ -278,6 +289,75 @@
   color: hsl(var(--destructive));
   font-size: 12px;
   line-height: 1.45;
+}
+
+.aw-mpa-delete-preview {
+  display: grid;
+  gap: 12px;
+  color: hsl(var(--foreground));
+}
+
+.aw-mpa-delete-preview p {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.aw-mpa-delete-preview__stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.aw-mpa-delete-preview__stats div {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--muted) / 0.35);
+}
+
+.aw-mpa-delete-preview__stats dt {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.aw-mpa-delete-preview__stats dd {
+  margin: 2px 0 0;
+  color: hsl(var(--foreground));
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.aw-mpa-delete-preview__blockers,
+.aw-mpa-delete-preview__plan {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--panel));
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.aw-mpa-delete-preview__blockers strong {
+  display: block;
+  margin-bottom: 4px;
+  color: hsl(var(--destructive));
+  font-size: 12.5px;
+}
+
+.aw-mpa-delete-preview__blockers ul,
+.aw-mpa-delete-preview__plan {
+  padding-left: 18px;
+}
+
+.aw-mpa-delete-preview__blockers ul {
+  margin: 0;
 }
 
 .aw-agent-item,
@@ -658,6 +738,12 @@
   justify-content: center;
 }
 
+.aw-agent-head > .aw-agent-heading {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+}
+
 .aw-head-actions {
   flex: 0 0 auto;
   display: flex;
@@ -665,59 +751,13 @@
   gap: 8px;
 }
 
-.aw-head-delete {
-  min-height: 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 0 12px;
-  border: 1px solid hsl(var(--destructive) / 0.24);
+.aw-agent-meta {
+  flex: 0 0 auto;
+  padding: 2px 7px;
   border-radius: 999px;
-  background: hsl(var(--destructive) / 0.07);
-  color: hsl(var(--destructive));
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 620;
-}
-
-.aw-head-delete:hover:not(:disabled) {
-  background: hsl(var(--destructive) / 0.12);
-}
-
-.aw-head-delete:disabled {
-  cursor: default;
-  opacity: 0.46;
-}
-
-.aw-head-delete svg {
-  width: 14px;
-  height: 14px;
-}
-
-.aw-head-delete--draft {
-  border-color: hsl(var(--border));
-  background: transparent;
-  color: hsl(var(--foreground));
-}
-
-.aw-head-delete--draft:hover:not(:disabled) {
-  background: hsl(var(--secondary) / 0.54);
-}
-
-.aw-head-delete.studio-update-action {
-  border: 1px solid hsl(var(--destructive) / 0.34);
-  background: rgba(255, 255, 255, 0.76);
-  color: hsl(var(--destructive));
-  -webkit-backdrop-filter: blur(7px);
-  backdrop-filter: blur(7px);
-}
-
-.aw-head-delete.studio-update-action:hover:not(:disabled) {
-  border: 1px solid hsl(var(--destructive));
-  background: hsl(var(--destructive));
-  color: #fff;
+  background: hsl(var(--secondary));
+  color: hsl(var(--muted-foreground));
+  font-size: 10.5px;
 }
 
 .aw-agent-title-row {
@@ -872,6 +912,18 @@
   padding: 0 24px 80px;
 }
 
+.aw-agent-detail__body .aw-content {
+  min-width: 0;
+  overflow: visible;
+  margin-top: 0;
+  padding: 0;
+}
+
+.aw-agent-detail__body .aw-detail-deployment {
+  padding-right: 0;
+  padding-left: 0;
+}
+
 .aw-basic-stack {
   display: flex;
   flex-direction: column;
@@ -879,6 +931,12 @@
 }
 
 .aw-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.aw-session-config {
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -970,8 +1028,16 @@
   overflow-wrap: anywhere;
 }
 
+.aw-detail-fetch-alert {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .aw-usage-state button,
-.aw-usage-pagination button {
+.aw-usage-pagination button,
+.aw-session-config-state button,
+.aw-session-config-actions button,
+.aw-session-config-upgrade button {
   min-height: 32px;
   padding: 0 12px;
   border: 1px solid hsl(var(--border));
@@ -985,12 +1051,18 @@
 }
 
 .aw-usage-state button:hover,
-.aw-usage-pagination button:hover:not(:disabled) {
+.aw-usage-pagination button:hover:not(:disabled),
+.aw-session-config-state button:hover:not(:disabled),
+.aw-session-config-actions button:hover:not(:disabled),
+.aw-session-config-upgrade button:hover:not(:disabled) {
   background: hsl(var(--secondary) / 0.5);
 }
 
 .aw-usage-state button:focus-visible,
-.aw-usage-pagination button:focus-visible {
+.aw-usage-pagination button:focus-visible,
+.aw-session-config-state button:focus-visible,
+.aw-session-config-actions button:focus-visible,
+.aw-session-config-upgrade button:focus-visible {
   outline: 2px solid hsl(var(--ring) / 0.55);
   outline-offset: 2px;
 }
@@ -1350,6 +1422,39 @@
   color: hsl(var(--foreground));
   cursor: pointer;
   font: inherit;
+}
+
+.aw-integration-notice {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 10px 12px;
+  border: 1px solid hsl(42 72% 74% / 0.45);
+  border-radius: 8px;
+  background: hsl(42 92% 96%);
+  color: hsl(42 72% 32%);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.aw-update-recovery-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid hsl(42 72% 74% / 0.45);
+  border-radius: 8px;
+  background: hsl(42 92% 96%);
+  color: hsl(42 72% 32%);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.aw-update-recovery-notice strong {
+  color: inherit;
+  font-size: 13px;
+  font-weight: 650;
 }
 
 .aw-canvas-card,
@@ -1837,6 +1942,109 @@
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.aw-version-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.aw-version-list {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+}
+
+.aw-version-row {
+  display: grid;
+  grid-template-columns:
+    minmax(120px, 1fr) minmax(104px, 0.9fr) minmax(96px, 0.7fr)
+    minmax(86px, 0.6fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 13px 16px;
+  border-top: 1px solid hsl(var(--border) / 0.72);
+  background: hsl(var(--panel));
+  font-size: 12px;
+}
+
+.aw-version-row:first-child {
+  border-top: 0;
+}
+
+.aw-version-row > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.aw-version-row strong {
+  overflow: hidden;
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-version-row small,
+.aw-version-row span {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.aw-version-row em {
+  overflow: hidden;
+  color: hsl(var(--foreground) / 0.82);
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-version-row p {
+  grid-column: 2 / -1;
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+}
+
+.aw-version-row a {
+  color: hsl(var(--foreground));
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.aw-version-row a:hover {
+  text-decoration: underline;
+}
+
+.aw-version-actions {
+  align-items: flex-end;
+}
+
+.aw-version-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.aw-version-actions button:hover:not(:disabled) {
+  background: hsl(var(--muted) / 0.55);
+}
+
+.aw-version-actions button:disabled {
+  cursor: not-allowed;
+  color: hsl(var(--muted-foreground));
+  opacity: 0.62;
 }
 
 .aw-status-dot {
@@ -2511,6 +2719,180 @@
   color: hsl(142 62% 30%);
 }
 
+.aw-session-config-grid {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.aw-session-config-grid > div,
+.aw-session-config-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--panel));
+}
+
+.aw-session-config-grid dt,
+.aw-session-config-field span {
+  color: hsl(var(--muted-foreground));
+  font-size: 11.5px;
+  font-weight: 550;
+}
+
+.aw-session-config-grid dd {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.aw-session-config-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 280px) auto;
+  align-items: end;
+  gap: 14px;
+}
+
+.aw-session-config-card h4,
+.aw-session-config-card p {
+  margin: 0;
+}
+
+.aw-session-config-card h4 {
+  color: hsl(var(--foreground));
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.aw-session-config-card p,
+.aw-session-config-value small {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.aw-profile-config .aw-session-config-card {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+.aw-profile-config .aw-session-config-card p {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.aw-profile-config-list {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.aw-profile-config-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-session-config-field {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aw-session-config-field input {
+  width: 100%;
+  height: 34px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 7px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.aw-session-config-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.aw-session-config-actions button:disabled,
+.aw-session-config-state button:disabled,
+.aw-session-config-upgrade button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.aw-session-config-value {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.aw-session-config-value span {
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.aw-session-config-value small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-session-config-state,
+.aw-session-config-notice,
+.aw-session-config-upgrade {
+  min-height: 52px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--secondary) / 0.16);
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.aw-session-config-state {
+  justify-content: center;
+}
+
+.aw-session-config-state.is-error {
+  justify-content: space-between;
+  color: hsl(var(--destructive));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.aw-session-config-notice {
+  color: hsl(142 62% 30%);
+}
+
+.aw-session-config-upgrade {
+  justify-content: space-between;
+  background: hsl(var(--primary) / 0.07);
+  color: hsl(var(--foreground));
+}
+
 .aw-basic-actions {
   position: absolute;
   z-index: 8;
@@ -2848,6 +3230,17 @@
     gap: 18px;
     margin-inline: 16px;
     overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+  }
+
+  .aw-agent-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .aw-agent-tabs button {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
 
   .aw-agent-head {
@@ -2931,6 +3324,45 @@
 
   .aw-readonly-config {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .aw-session-config-grid,
+  .aw-session-config-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .aw-session-config-actions,
+  .aw-session-config-upgrade,
+  .aw-session-config-state.is-error {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .aw-session-config-actions {
+    justify-content: flex-start;
+  }
+
+  .aw-version-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .aw-version-row p {
+    grid-column: 1;
+    overflow-wrap: anywhere;
+  }
+
+  .aw-version-row small,
+  .aw-version-row span,
+  .aw-version-row em {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .aw-version-actions {
+    align-items: flex-start;
   }
 }
 

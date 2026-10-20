@@ -28,14 +28,14 @@ test("keeps Agent selection state without a global conversation header", () => {
   assert.doesNotMatch(appSource, /setAppName\(valid \? saved : fallback \|\| ""\)/);
   assert.doesNotMatch(appSource, /remoteIds\[0\] \?\? ""/);
   assert.doesNotMatch(appSource, /if \(agentsSource === "cloud"\) \{\s*setAppName\(""\)/);
-  assert.match(navbarSource, /appName \? label\(appName\) : "选择 Agent"/);
-  assert.match(navbarSource, /agentsSource === "cloud"[\s\S]*?aria-label="切换智能体"/);
+  assert.match(navbarSource, /appName \? label\(appName\) : t\("navbar\.selectAgent"\)/);
+  assert.match(navbarSource, /agentsSource === "cloud"[\s\S]*?aria-label=\{t\("navbar\.switchAgent"\)\}/);
   assert.match(navbarSource, /<ArrowLeftRight aria-hidden="true"/);
 });
 
 test("does not add a sandbox title row above the main content", () => {
   assert.doesNotMatch(appSource, /<Navbar\b/);
-  assert.match(appSource, /<section className="main-shell">\s*<main className=/);
+  assert.match(appSource, /<section className="main-shell">\s*<main\s+className=/);
 });
 
 test("opens new chat even when no Agent is active", () => {
@@ -45,7 +45,10 @@ test("opens new chat even when no Agent is active", () => {
   assert.match(handler, /setMyAgents\(false\)/);
   assert.match(handler, /startNewChat\(\)/);
   assert.doesNotMatch(handler, /hasAgentSelection|showToast|setMyAgents\(true\)/);
-  assert.match(appSource, /onNewChat=\{openNewChat\}/);
+  assert.match(
+    appSource,
+    /onNewChat=\{\(\) => requestIntelligentNavigation\(openNewChat\)\}/,
+  );
 });
 
 test("only using an Agent selects it for the main conversation", () => {

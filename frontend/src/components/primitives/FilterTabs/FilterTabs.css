@@ -1,0 +1,34 @@
+/* Figma: 631:247226 */
+.studio-filter-tabs { display: inline-flex; align-items: center; gap: 24px; height: 32px; }
+.studio-filter-tabs > button {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  max-width: 200px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #dbdee7;
+  font-family: "Century Gothic", sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: 22px;
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.3;
+  cursor: pointer;
+  transition: opacity var(--studio-motion-duration-fast, 140ms) ease-out, color var(--studio-motion-duration-fast, 140ms) ease-out;
+}
+.studio-filter-tabs > button[aria-checked="true"] { opacity: 1; }
+
+@media (hover: hover) {
+  .studio-filter-tabs > button[aria-checked="false"]:hover { opacity: 0.65; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-filter-tabs > button { transition: none; }
+}

@@ -13,11 +13,10 @@
 # limitations under the License.
 
 import logging
+import os
 import sys
 
 from opentelemetry import trace
-
-from veadk.utils.misc import getenv
 
 _LOGGER_NAME = "veadk"
 
@@ -93,7 +92,7 @@ def setup_logger():
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(_VeADKFormatter(colorize=sys.stdout.isatty()))
     root.addHandler(handler)
-    root.setLevel(getenv("LOGGING_LEVEL", "DEBUG"))
+    root.setLevel(os.getenv("LOGGING_LEVEL") or "DEBUG")
 
     # keep veadk logs on their own handler, do not bubble up to the root logger
     root.propagate = False

@@ -25,8 +25,12 @@ import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
+from frontend.service.studio_release_server import publisher
 from veadk.cli.frontend_branding import SiteLogo
+from veadk.cli.studio_artifacts import StudioArtifact, StudioRuntimeManifest
+from veadk.cli.studio_dependencies import STUDIO_AGENTKIT_CLI_ARTIFACT
 from veadk.cli.studio_release import (
+    BYTEPLUS_STUDIO_RELEASE_REGION,
     STUDIO_RELEASE_REGION,
     StudioReleaseError,
     StudioReleaseManifest,
@@ -42,6 +46,31 @@ from veadk.cli.studio_self_update import (
     mount_studio_update_routes,
 )
 from veadk.utils.cloud_provider import CloudProvider
+
+
+@pytest.fixture(autouse=True)
+def _allow_studio_update_permissions(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        publisher,
+        "_AGENTKIT_CLI_ARCHIVE_SHA256",
+        hashlib.sha256(b"pinned-cli").hexdigest(),
+    )
+    monkeypatch.setattr(
+        StudioSelfUpdater,
+        "_permission_report",
+        lambda _self, _credentials: SimpleNamespace(
+            ready=True,
+            missing_actions=(),
+            to_payload=lambda: {
+                "ready": True,
+                "missingActions": [],
+                "policyName": "",
+                "authorizationUrl": "",
+                "iamConsoleUrl": "https://console.volcengine.com/iam/policymanage",
+                "principalName": "",
+            },
+        ),
+    )
 
 
 def test_studio_release_version_defaults_to_bundled(
@@ -156,14 +185,67 @@ def test_studio_update_settings_keep_active_provider() -> None:
     assert settings.provider == "byteplus"
 
 
+def test_byteplus_studio_uses_byteplus_release_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _Store:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr("veadk.cli.studio_self_update.StudioReleaseStore", _Store)
+    updater = StudioSelfUpdater(
+        settings=_settings(
+            deployment_region="ap-southeast-1",
+            provider="byteplus",
+        ),
+        credential_resolver=lambda: ("ak", "sk", "token"),
+        branding_logo=None,
+    )
+
+    updater._store("ak", "sk", "token")
+
+    assert captured["region"] == BYTEPLUS_STUDIO_RELEASE_REGION
+    assert captured["provider"] == "byteplus"
+
+
 def _bundle(
     path: Path,
     *,
     unsafe_name: str | None = None,
+    include_cli_archive: bool = True,
+    cli_archive_content: bytes = b"pinned-cli",
+    identity_roles_support: bool = False,
 ) -> None:
+    veadk_wheel = "veadk_python-1.2.3-py3-none-any.whl"
+    wheel_path = path.parent / veadk_wheel
+    with zipfile.ZipFile(wheel_path, "w") as wheel:
+        wheel.writestr(
+            "veadk_python-1.2.3.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: veadk-python\nVersion: 1.2.3\n",
+        )
+        if identity_roles_support:
+            wheel.writestr(
+                "frontend/server/user_management/service.py",
+                '"""Identity-backed Studio role management."""\n',
+            )
+    wheel_digest = hashlib.sha256(wheel_path.read_bytes()).hexdigest()
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("run.sh", "#!/bin/bash\n")
-        archive.writestr("requirements.txt", "veadk-python\n")
+        archive.writestr(
+            "requirements.txt",
+            "--no-index\n"
+            "--require-hashes\n"
+            f"./{veadk_wheel} --hash=sha256:{wheel_digest}\n",
+        )
+        archive.write(wheel_path, veadk_wheel)
+        wheel_path.unlink()
+        if include_cli_archive:
+            archive.writestr(
+                STUDIO_AGENTKIT_CLI_ARTIFACT.filename,
+                cli_archive_content,
+            )
         if unsafe_name:
             archive.writestr(unsafe_name, "unsafe")
 
@@ -174,6 +256,303 @@ def test_extract_studio_bundle_rejects_path_traversal(tmp_path: Path) -> None:
 
     with pytest.raises(StudioReleaseError, match="unsafe path"):
         extract_studio_bundle(archive, tmp_path / "package")
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"include_cli_archive": False}, "pinned AgentKit CLI archive"),
+        ({"cli_archive_content": b"tampered"}, "checksum"),
+    ],
+)
+def test_extract_studio_bundle_rejects_incompatible_cli_archive(
+    tmp_path: Path,
+    kwargs: dict[str, Any],
+    message: str,
+) -> None:
+    archive = tmp_path / "bundle.zip"
+    _bundle(archive, **kwargs)
+
+    with pytest.raises(StudioReleaseError, match=message):
+        extract_studio_bundle(archive, tmp_path / "package")
+
+
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+def test_online_update_preserves_preloaded_cli_archive_for_each_provider(
+    tmp_path: Path,
+    provider: CloudProvider,
+) -> None:
+    archive = tmp_path / "bundle.zip"
+    package = tmp_path / "package"
+    _bundle(archive)
+    extract_studio_bundle(archive, package)
+    updater = StudioSelfUpdater(
+        settings=_settings(
+            deployment_region=(
+                "ap-southeast-1" if provider == "byteplus" else "cn-beijing"
+            ),
+            provider=provider,
+        ),
+        credential_resolver=lambda: ("ak", "sk", "token"),
+        branding_logo=None,
+    )
+
+    updater._prepare_package(package)
+
+    requirements = (package / "requirements.txt").read_text(encoding="utf-8")
+    assert "volcengine-agentkit-cli-bin" not in requirements
+    assert (
+        package / STUDIO_AGENTKIT_CLI_ARTIFACT.filename
+    ).read_bytes() == b"pinned-cli"
+    run_script = (package / "run.sh").read_text(encoding="utf-8")
+    assert '--archive "$ROOT_DIR/agentkit-linux-x64.tar.gz"' in run_script
+    assert f"--provider {provider}" in run_script
+
+
+def test_thin_update_uses_public_runtime_when_all_artifacts_are_reachable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wheel = tmp_path / "dependency.whl"
+    wheel.write_bytes(b"wheel")
+    cli = tmp_path / "agentkit-linux-x64.tar.gz"
+    cli.write_bytes(b"pinned-cli")
+    runtime = StudioRuntimeManifest.create(
+        "volcengine",
+        (
+            StudioArtifact.from_path(wheel, provider="volcengine", kind="wheel"),
+            StudioArtifact.from_path(
+                cli,
+                provider="volcengine",
+                kind="agentkit-cli",
+            ),
+        ),
+    )
+    release = StudioReleaseManifest(
+        version="20260724153046",
+        git_sha="a" * 40,
+        sha256="b" * 64,
+        size=1,
+        created_at="2026-07-24T15:30:46+08:00",
+        runtime_epoch=runtime.runtime_epoch,
+        thin_sha256="c" * 64,
+        thin_size=1,
+    )
+
+    class _Store:
+        def download_thin_bundle(
+            self,
+            _release: StudioReleaseManifest,
+            destination: Path,
+        ) -> None:
+            destination.write_bytes(b"thin")
+
+    probed: list[str] = []
+    monkeypatch.setattr(
+        "veadk.cli.studio_self_update.probe_studio_artifact",
+        lambda artifact: probed.append(artifact.filename),
+    )
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("ak", "sk", "token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.studio_self_update.extract_studio_bundle",
+        lambda _archive, destination: (
+            destination.mkdir(),
+            (destination / "studio-runtime.json").write_bytes(runtime.to_json()),
+        ),
+    )
+
+    selected = updater._download_runtime_package(
+        _Store(),  # type: ignore[arg-type]
+        release,
+        tmp_path,
+    )
+
+    assert selected == tmp_path / "package-thin"
+    assert sorted(probed) == ["agentkit-linux-x64.tar.gz", "dependency.whl"]
+
+
+def test_thin_update_falls_back_to_legacy_full_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wheel = tmp_path / "dependency.whl"
+    wheel.write_bytes(b"wheel")
+    cli = tmp_path / "agentkit-linux-x64.tar.gz"
+    cli.write_bytes(b"cli")
+    runtime = StudioRuntimeManifest.create(
+        "volcengine",
+        (
+            StudioArtifact.from_path(wheel, provider="volcengine", kind="wheel"),
+            StudioArtifact.from_path(
+                cli,
+                provider="volcengine",
+                kind="agentkit-cli",
+            ),
+        ),
+    )
+    full_source = tmp_path / "full-source.zip"
+    _bundle(full_source)
+    full_content = full_source.read_bytes()
+    release = StudioReleaseManifest(
+        version="20260724153047",
+        git_sha="a" * 40,
+        sha256=hashlib.sha256(full_content).hexdigest(),
+        size=len(full_content),
+        created_at="2026-07-24T15:30:47+08:00",
+        runtime_epoch=runtime.runtime_epoch,
+        thin_sha256="c" * 64,
+        thin_size=1,
+    )
+
+    class _Store:
+        def download_thin_bundle(
+            self,
+            _release: StudioReleaseManifest,
+            _destination: Path,
+        ) -> None:
+            raise StudioReleaseError("thin unavailable")
+
+        def download_bundle(
+            self,
+            _release: StudioReleaseManifest,
+            destination: Path,
+        ) -> None:
+            destination.write_bytes(full_content)
+
+    monkeypatch.setattr(
+        "veadk.cli.studio_self_update.probe_studio_artifact",
+        lambda _artifact: (_ for _ in ()).throw(ValueError("unavailable")),
+    )
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("ak", "sk", "token"),
+        branding_logo=None,
+    )
+
+    selected = updater._download_runtime_package(
+        _Store(),  # type: ignore[arg-type]
+        release,
+        tmp_path,
+    )
+
+    assert selected == tmp_path / "package"
+    assert (selected / "agentkit-linux-x64.tar.gz").read_bytes() == b"pinned-cli"
+
+
+def test_submit_thin_release_falls_back_to_legacy_full_bundle_end_to_end(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wheel = tmp_path / "dependency.whl"
+    wheel.write_bytes(b"wheel")
+    cli = tmp_path / "agentkit-linux-x64.tar.gz"
+    cli.write_bytes(b"pinned-cli")
+    runtime = StudioRuntimeManifest.create(
+        "volcengine",
+        (
+            StudioArtifact.from_path(wheel, provider="volcengine", kind="wheel"),
+            StudioArtifact.from_path(
+                cli,
+                provider="volcengine",
+                kind="agentkit-cli",
+            ),
+        ),
+    )
+    thin_base = tmp_path / "thin-base.zip"
+    _bundle(thin_base, include_cli_archive=False)
+    thin_archive = tmp_path / "thin.zip"
+    with (
+        zipfile.ZipFile(thin_base) as source,
+        zipfile.ZipFile(thin_archive, "w") as archive,
+    ):
+        wheel_name = next(
+            item.filename
+            for item in source.infolist()
+            if item.filename.endswith(".whl")
+        )
+        wheel_content = source.read(wheel_name)
+        for item in source.infolist():
+            if item.filename != "requirements.txt":
+                archive.writestr(item, source.read(item.filename))
+        archive.writestr(
+            "requirements.txt",
+            runtime.remote_requirements()
+            + f"./{wheel_name} --hash=sha256:{hashlib.sha256(wheel_content).hexdigest()}\n",
+        )
+        archive.writestr("studio-runtime.json", runtime.to_json())
+    full_archive = tmp_path / "full.zip"
+    _bundle(full_archive)
+    with zipfile.ZipFile(full_archive, "a") as archive:
+        archive.writestr("full-marker", "selected")
+    thin_content = thin_archive.read_bytes()
+    full_content = full_archive.read_bytes()
+    manifest = StudioReleaseManifest(
+        version="20260724153048",
+        git_sha="a" * 40,
+        sha256=hashlib.sha256(full_content).hexdigest(),
+        size=len(full_content),
+        created_at="2026-07-24T15:30:48+08:00",
+        runtime_epoch=runtime.runtime_epoch,
+        thin_sha256=hashlib.sha256(thin_content).hexdigest(),
+        thin_size=len(thin_content),
+    )
+    captured: dict[str, Any] = {}
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def download_bundle(
+            self, _release: StudioReleaseManifest, destination: Path
+        ) -> None:
+            captured["full_downloaded"] = True
+            destination.write_bytes(full_content)
+
+        def download_thin_bundle(
+            self, _release: StudioReleaseManifest, destination: Path
+        ) -> None:
+            captured["thin_downloaded"] = True
+            destination.write_bytes(thin_content)
+
+    class _VeFaaS:
+        def __init__(self, **_kwargs: str) -> None:
+            self.client = object()
+
+        def submit_application_code_bundle_update(self, **kwargs: Any) -> bool:
+            package = Path(kwargs["path"])
+            captured["full_selected"] = (package / "full-marker").read_text()
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("ak", "sk", "token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr(
+        "veadk.cli.studio_self_update.probe_studio_artifact",
+        lambda _artifact: (_ for _ in ()).throw(ValueError("unavailable")),
+    )
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources.reconcile_studio_update_resources",
+        lambda **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.deploy_scheduler_for_studio_update",
+        lambda *_args, **_kwargs: ("", "", "", "", "scheduler"),
+    )
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+
+    assert updater.submit_latest() == manifest
+    assert captured == {
+        "thin_downloaded": True,
+        "full_downloaded": True,
+        "full_selected": "selected",
+    }
 
 
 def test_self_update_preserves_deployed_branding_logo(tmp_path: Path) -> None:
@@ -202,7 +581,7 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
     tmp_path: Path,
 ) -> None:
     archive = tmp_path / "source.zip"
-    _bundle(archive)
+    _bundle(archive, identity_roles_support=True)
     content = archive.read_bytes()
     manifest = StudioReleaseManifest(
         version="20260724153045",
@@ -232,6 +611,7 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
             self.client = object()
 
         def submit_application_code_bundle_update(self, **kwargs: Any) -> None:
+            captured.setdefault("events", []).append("function_submit")
             package = Path(str(kwargs["path"]))
             assert "--provider byteplus" in (package / "run.sh").read_text(
                 encoding="utf-8"
@@ -240,6 +620,7 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
             captured["update"] = kwargs
 
     def _resources(**kwargs: Any) -> dict[str, str]:
+        captured.setdefault("events", []).append("identity_migration")
         captured["resource_request"] = kwargs
         return {
             "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
@@ -263,6 +644,24 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
         "frontend.server.studio_update_resources.reconcile_studio_update_resources",
         _resources,
     )
+
+    def _deploy_scheduler_for_update(
+        service: Any, **kwargs: Any
+    ) -> tuple[str, str, str, str, str]:
+        captured["scheduler_service"] = service
+        captured["scheduler_update"] = kwargs
+        return (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+            "studio-app",
+        )
+
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.deploy_scheduler_for_studio_update",
+        _deploy_scheduler_for_update,
+    )
     monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
 
     assert updater.submit_latest() == manifest
@@ -278,6 +677,7 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
     update = captured["update"]
     assert update["application_id"] == "application-id"
     assert update["function_id"] == "function-id"
+    assert update["normalize_studio_entrypoint"] is True
     assert update["environment_overrides"] == {
         "VEADK_STUDIO_RELEASE_VERSION": manifest.version,
         "CLOUD_PROVIDER": "byteplus",
@@ -285,6 +685,7 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
         "BYTEPLUS_REGION": "ap-southeast-1",
         "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
         "VEADK_STUDIO_TOS_REGION": "ap-southeast-1",
+        "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",
         "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool",
         "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool",
@@ -295,12 +696,174 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
     assert resource_request["application_id"] == "application-id"
     assert resource_request["function_id"] == "function-id"
     assert resource_request["function_client"] is not None
+    assert resource_request["migrate_identity_roles"] is True
+    assert captured["events"] == ["identity_migration", "function_submit"]
+    scheduler_update = captured["scheduler_update"]
+    assert scheduler_update["studio_function_id"] == "function-id"
+    assert scheduler_update["package_root"].name == "package"
+    assert scheduler_update["provider"] == "byteplus"
+    assert scheduler_update["project"] == "default"
+    assert scheduler_update["environment_overrides"] == {
+        "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
+        "VEADK_STUDIO_TOS_REGION": "ap-southeast-1",
+        "SANDBOX_CHAT_CODEX_SNAPSHOT": "codex-snapshot-tool",
+        "SANDBOX_CHAT_OPENCLAW_SNAPSHOT": "openclaw-snapshot-tool",
+        "SANDBOX_CHAT_HERMES_SNAPSHOT": "hermes-snapshot-tool",
+    }
     status = updater.status()
     assert status["state"] == "updating"
     assert status["progressStage"] == "publishing"
     assert status["progressMessage"] == "已提交，正在等待新 Revision 发布"
     assert status["targetVersion"] == manifest.version
     assert status["startedAt"] > 0
+
+
+def test_self_update_identity_migration_failure_blocks_function_submit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "source.zip"
+    _bundle(archive, identity_roles_support=True)
+    content = archive.read_bytes()
+    manifest = StudioReleaseManifest(
+        version="20260724153045",
+        git_sha="a" * 40,
+        sha256=hashlib.sha256(content).hexdigest(),
+        size=len(content),
+        created_at="2026-07-24T15:30:45+08:00",
+    )
+    submits = 0
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+        def download_bundle(
+            self, release: StudioReleaseManifest, destination: Path
+        ) -> None:
+            assert release == manifest
+            destination.write_bytes(content)
+
+    class _VeFaaS:
+        def __init__(self, **_kwargs: str) -> None:
+            self.client = object()
+
+        def submit_application_code_bundle_update(self, **_kwargs: Any) -> None:
+            nonlocal submits
+            submits += 1
+
+    def _migration_failure(**kwargs: Any) -> dict[str, str]:
+        assert kwargs["migrate_identity_roles"] is True
+        raise StudioReleaseError("Identity deployment migration failed")
+
+    updater = StudioSelfUpdater(
+        settings=_settings(deployment_region="cn-shanghai"),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources.reconcile_studio_update_resources",
+        _migration_failure,
+    )
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+
+    with pytest.raises(StudioReleaseError, match="Identity deployment migration"):
+        updater.submit_latest()
+    assert submits == 0
+    status = updater.status()
+    assert status["progressStage"] == "error"
+    assert status["errorStage"] == "provisioning"
+
+
+def test_submit_latest_continues_main_function_when_scheduler_update_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "source.zip"
+    _bundle(archive)
+    content = archive.read_bytes()
+    manifest = StudioReleaseManifest(
+        version="20260724153045",
+        git_sha="a" * 40,
+        sha256=hashlib.sha256(content).hexdigest(),
+        size=len(content),
+        created_at="2026-07-24T15:30:45+08:00",
+    )
+    captured: dict[str, Any] = {}
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+        def download_bundle(
+            self, release: StudioReleaseManifest, destination: Path
+        ) -> None:
+            assert release == manifest
+            destination.write_bytes(content)
+
+    class _VeFaaS:
+        def __init__(self, **_kwargs: str) -> None:
+            self.client = object()
+
+        def submit_application_code_bundle_update(self, **kwargs: Any) -> None:
+            captured["main_update"] = kwargs
+
+    def _fail_scheduler(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError(
+            "Scheduler dependency installation failed for sts-ak/sts-sk "
+            "at https://upload.example.com/object?token=sts-token"
+        )
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources.reconcile_studio_update_resources",
+        lambda **_kwargs: {
+            "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
+            "VEADK_STUDIO_TOS_REGION": "cn-beijing",
+        },
+    )
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.deploy_scheduler_for_studio_update",
+        _fail_scheduler,
+    )
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+
+    assert updater.submit_latest() == manifest
+
+    update = captured["main_update"]
+    assert update["function_id"] == "function-id"
+    assert update["environment_overrides"] == {
+        "VEADK_STUDIO_RELEASE_VERSION": manifest.version,
+        "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
+        "VEADK_STUDIO_TOS_REGION": "cn-beijing",
+    }
+    status = updater.status()
+    assert status["state"] == "updating"
+    assert status["progressStage"] == "publishing"
+    assert status["errorId"] == ""
+    assert status["errorStage"] == ""
+    assert "warningId=" in status["errorLog"]
+    assert "stage=scheduler" in status["errorLog"]
+    assert "定时任务更新未全部完成，继续更新 Studio 主函数" in status["errorLog"]
+    assert "Scheduler dependency installation failed" in status["errorLog"]
+    assert "sts-ak" not in status["errorLog"]
+    assert "sts-sk" not in status["errorLog"]
+    assert "sts-token" not in status["errorLog"]
+    assert "?[REDACTED]" in status["errorLog"]
 
 
 def test_submit_latest_reports_missing_vefaas_permissions(
@@ -352,6 +915,16 @@ def test_submit_latest_reports_missing_vefaas_permissions(
         "frontend.server.studio_update_resources.reconcile_studio_update_resources",
         lambda **_kwargs: {},
     )
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.deploy_scheduler_for_studio_update",
+        lambda *_args, **_kwargs: (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+            "studio",
+        ),
+    )
     monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
 
     with pytest.raises(StudioReleaseError, match="Studio 更新权限不足"):
@@ -372,6 +945,37 @@ def test_submit_latest_reports_missing_vefaas_permissions(
         "https://console.volcengine.com/vefaas/"
         "region:vefaas+cn-beijing/function/detail/function-id"
     )
+
+
+def test_submit_latest_stops_before_bundle_reads_when_precheck_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(
+        updater,
+        "_permission_report",
+        lambda _credentials: SimpleNamespace(
+            ready=False,
+            missing_actions=("vefaas:CreateDependencyInstallTask",),
+        ),
+    )
+    monkeypatch.setattr(
+        updater,
+        "_store",
+        lambda *_args: pytest.fail(
+            "bundle store must not be read after failed precheck"
+        ),
+    )
+
+    with pytest.raises(StudioReleaseError, match="请先完成授权"):
+        updater.submit_latest()
+
+    assert updater._last_error == "Studio 更新缺少 1 项 IAM 权限，请先完成授权"
+    assert updater._error_stage == "permissions"
 
 
 def test_submit_latest_stops_before_upload_when_resource_migration_fails(
@@ -447,6 +1051,17 @@ def test_byteplus_console_url_uses_byteplus_domain() -> None:
         "https://console.byteplus.com/vefaas/"
         "region:vefaas+ap-southeast-1/function/detail/function-id"
     )
+    assert updater._permission_console_url() == "https://console.byteplus.com/iam"
+
+
+def test_volcengine_permission_console_url_uses_volcengine_domain() -> None:
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("ak", "sk", ""),
+        branding_logo=None,
+    )
+
+    assert updater._permission_console_url() == "https://console.volcengine.com/iam"
 
 
 def test_application_status_uses_current_function_environment(
@@ -607,7 +1222,9 @@ def test_vefaas_log_permission_denial_hides_log_region(
     monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
 
     assert updater._load_vefaas_logs(7) == []
-    assert updater._progress_payload()["updateLogsVisible"] is False
+    progress = updater._progress_payload()
+    assert progress["updateLogsVisible"] is False
+    assert progress["permissionConsoleUrl"] == "https://console.volcengine.com/iam"
 
 
 def test_non_permission_log_error_keeps_log_region_visible(
@@ -645,6 +1262,14 @@ def test_update_routes_require_admin_and_custom_header() -> None:
                 "available": True,
             }
         ),
+        permission_precheck=lambda: {
+            "ready": False,
+            "missingActions": ["vefaas:CreateTimer"],
+            "policyName": "VeADKFrontendPolicy",
+            "authorizationUrl": "https://api.volcengine.com/api-explorer/",
+            "iamConsoleUrl": "https://console.volcengine.com/iam/policymanage",
+            "principalName": "VeADKFrontendServiceRole",
+        },
         submit_version=lambda version: submitted.append(version) or _manifest(),
     )
 
@@ -656,6 +1281,12 @@ def test_update_routes_require_admin_and_custom_header() -> None:
     client = TestClient(app)
 
     assert client.get("/web/studio-update").status_code == 403
+    assert client.get("/web/studio-update/permissions").status_code == 403
+    permission_response = client.get(
+        "/web/studio-update/permissions", headers={"X-Admin": "1"}
+    )
+    assert permission_response.status_code == 200
+    assert permission_response.json()["missingActions"] == ["vefaas:CreateTimer"]
     assert (
         client.get(
             "/web/studio-update?targetVersion=20260724153045&startedAt=123456",
@@ -892,15 +1523,51 @@ def test_status_waits_during_cross_instance_submission_grace(
     )
     monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "20260724143045")
 
+    started_at = int(time.time() * 1000) - 5 * 60 * 1000
     status = updater.status(
         target_version=manifest.version,
-        started_at=int(time.time() * 1000),
+        started_at=started_at,
     )
 
     assert status["state"] == "updating"
     assert status["progressStage"] == "submitting"
     assert status["message"] == "正在等待 Function 更新提交"
     assert status["errorId"] == ""
+
+
+def test_status_rejects_target_after_cross_instance_submission_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest()
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+    updater = StudioSelfUpdater(
+        settings=_settings(),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr(
+        updater,
+        "_application_status",
+        lambda: ("deploy_success", "20260724143045", 3, False),
+    )
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "20260724143045")
+
+    status = updater.status(
+        target_version=manifest.version,
+        started_at=int(time.time() * 1000) - 11 * 60 * 1000,
+    )
+
+    assert status["state"] == "error"
+    assert status["errorStage"] == "submitting"
+    assert status["message"] == "目标版本未成功提交，请重新尝试更新"
 
 
 def test_status_treats_newer_release_as_completed_stale_target(
@@ -1076,6 +1743,16 @@ def test_retry_clears_previous_failure_diagnostics(
     monkeypatch.setattr(
         "frontend.server.studio_update_resources.reconcile_studio_update_resources",
         lambda **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.deploy_scheduler_for_studio_update",
+        lambda *_args, **_kwargs: (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+            "studio",
+        ),
     )
     monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
 

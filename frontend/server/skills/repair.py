@@ -18,8 +18,6 @@ from __future__ import annotations
 
 import inspect
 
-from veadk.cli.frontend_skill_creator import _runner_source
-
 
 def repair_generated_skill(root):
     """Repair safe frontmatter and root-name mistakes without changing behavior."""
@@ -138,6 +136,8 @@ def repair_generated_skill(root):
 
 def skill_workbench_runner_source() -> str:
     """Inject deterministic repair into the workbench-only DevEnv runner."""
+    from veadk.cli.frontend_skill_creator import _runner_source
+
     source = _runner_source()
     definition_anchor = "def metadata(skill_md):"
     validation_anchor = """    skill_md = skill_md_path.read_text(encoding=\"utf-8\")

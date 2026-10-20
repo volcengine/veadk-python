@@ -1,0 +1,471 @@
+import type { CloudProvider } from "../adk/cloudProvider";
+import { emptyDraft, type AgentDraft } from "./types";
+import { normalizeHarnessSidecarIntent } from "./harnessSidecarOptions";
+import { BUILTIN_TOOLS } from "./veadkCatalog";
+
+export interface RuntimeModelConfiguration {
+  modelName: string;
+  modelProvider: string;
+}
+
+export interface RuntimeAgentIntrospection {
+  name?: string;
+  description?: string;
+  instruction?: string;
+  type?: AgentDraft["agentType"];
+  model?: string;
+  tools?: readonly string[];
+  skills?: readonly { name: string }[];
+  children?: readonly RuntimeAgentIntrospection[];
+}
+
+export interface RuntimeCloudAgent extends RuntimeAgentIntrospection {
+  appName: string;
+  graph?: RuntimeAgentIntrospection;
+  draft?: AgentDraft;
+}
+
+export interface RuntimeEnvironmentValue {
+  key: string;
+  value: string;
+}
+
+function applyConfiguredMcpCredentials(
+  draft: AgentDraft,
+  configuredEnvKeys: ReadonlySet<string>,
+): AgentDraft {
+  const apply = (node: AgentDraft): AgentDraft => ({
+    ...node,
+    mcpTools: (node.mcpTools ?? []).map((tool) => {
+      const credentialConfigured = Boolean(
+        tool.authTokenEnv &&
+          (configuredEnvKeys.has(tool.authTokenEnv) || tool.authToken),
+      );
+      return {
+        ...tool,
+        credentialConfigured,
+        ...(credentialConfigured
+          ? {
+              credentialSourceUrl: tool.url?.trim() ?? "",
+              credentialSourceAuthTokenEnv: tool.authTokenEnv?.trim() ?? "",
+            }
+          : {}),
+      };
+    }),
+    subAgents: node.subAgents.map(apply),
+    ...(node.workflow
+      ? {
+          workflow: {
+            ...node.workflow,
+            nodes: node.workflow.nodes.map((workflowNode) => ({
+              ...workflowNode,
+              agent: apply(workflowNode.agent),
+            })),
+          },
+        }
+      : {}),
+  });
+  return apply(draft);
+}
+
+/** Split the provider-qualified identifier exposed by older runtimes at its
+ * first slash, preserving any remaining slashes as part of the model name. */
+export function modelConfigurationFromRuntime(
+  value: string | undefined,
+): RuntimeModelConfiguration {
+  const qualifiedName = value?.trim() ?? "";
+  const separator = qualifiedName.indexOf("/");
+  if (separator <= 0 || separator === qualifiedName.length - 1) {
+    return { modelName: qualifiedName, modelProvider: "" };
+  }
+  return {
+    modelName: qualifiedName.slice(separator + 1),
+    modelProvider: qualifiedName.slice(0, separator),
+  };
+}
+
+export function modelNameFromRuntime(value: string | undefined): string {
+  return modelConfigurationFromRuntime(value).modelName;
+}
+
+/** Apply deployed Agent introspection to the editable builder representation.
+ * Runtime identity and model fields are authoritative; the draft only carries
+ * builder-only settings that the live Agent does not expose. */
+export function applyRuntimeAgentIntrospection(
+  editableDraft: AgentDraft,
+  runtimeNode: RuntimeAgentIntrospection | undefined,
+  fallbackRoot?: Pick<RuntimeAgentIntrospection, "name" | "model">,
+  preserveDraftInstruction = false,
+): AgentDraft {
+  const runtimeModel = modelConfigurationFromRuntime(
+    runtimeNode?.model || fallbackRoot?.model,
+  );
+  const runtimeChildren = runtimeNode?.children ?? [];
+  const runtimeAgentType = runtimeNode?.type;
+  const agentType =
+    editableDraft.agentType === "a2a" &&
+    editableDraft.a2aRegistry?.enabled &&
+    runtimeAgentType === "llm"
+      ? "a2a"
+      : runtimeAgentType ?? editableDraft.agentType;
+
+  return {
+    ...editableDraft,
+    name:
+      runtimeNode?.name?.trim() ||
+      fallbackRoot?.name?.trim() ||
+      editableDraft.name,
+    description: runtimeNode?.description ?? editableDraft.description,
+    instruction: preserveDraftInstruction
+      ? editableDraft.instruction
+      : (runtimeNode?.instruction ?? editableDraft.instruction),
+    agentType,
+    modelName: runtimeModel.modelName || editableDraft.modelName,
+    modelProvider: runtimeModel.modelProvider || editableDraft.modelProvider,
+    skills: runtimeNode?.skills?.map((skill) => skill.name) ?? editableDraft.skills,
+    subAgents: editableDraft.subAgents.map((child, index) =>
+      applyRuntimeAgentIntrospection(
+        child,
+        runtimeChildren[index],
+        undefined,
+        preserveDraftInstruction,
+      ),
+    ),
+  };
+}
+
+/** Restore the effective registry values exposed by the deployed Runtime.
+ * Registry-backed remote Agents execute as LLM nodes with dynamic tools, so
+ * their editable A2A configuration must be hydrated separately. */
+export function hydrateA2aRegistryFromRuntime(
+  draft: AgentDraft,
+  runtimeEnvs: readonly RuntimeEnvironmentValue[],
+): AgentDraft {
+  const values = new Map(runtimeEnvs.map(({ key, value }) => [key, value]));
+  const hasRegistryValues = [
+    "REGISTRY_SPACE_ID",
+    "REGISTRY_TOP_K",
+    "REGISTRY_REGION",
+    "REGISTRY_ENDPOINT",
+  ].some((key) => values.has(key));
+  if (!hasRegistryValues) return draft;
+
+  const runtimeValue = (key: string, current: string | undefined) =>
+    values.has(key) ? (values.get(key) ?? "") : (current ?? "");
+  const hydrateNode = (node: AgentDraft): AgentDraft => ({
+    ...node,
+    ...(node.a2aRegistry?.enabled
+      ? {
+          a2aRegistry: {
+            ...node.a2aRegistry,
+            registrySpaceId: runtimeValue(
+              "REGISTRY_SPACE_ID",
+              node.a2aRegistry.registrySpaceId,
+            ),
+            registryTopK: runtimeValue(
+              "REGISTRY_TOP_K",
+              node.a2aRegistry.registryTopK,
+            ),
+            registryRegion: runtimeValue(
+              "REGISTRY_REGION",
+              node.a2aRegistry.registryRegion,
+            ),
+            registryEndpoint: runtimeValue(
+              "REGISTRY_ENDPOINT",
+              node.a2aRegistry.registryEndpoint,
+            ),
+          },
+        }
+      : {}),
+    subAgents: node.subAgents.map(hydrateNode),
+  });
+
+  return hydrateNode(draft);
+}
+
+function cloudDraftWithDefaults(
+  draft: AgentDraft,
+  cloudProvider: CloudProvider,
+): AgentDraft {
+  const provider = draft.cloudProvider ?? cloudProvider;
+  const defaults = emptyDraft(provider);
+  const deployment = draft.deployment;
+  const network = deployment?.network;
+  const cloudEnvironment = draft.cloudEnvironment;
+  const a2aRegistry = draft.a2aRegistry;
+  return {
+    ...defaults,
+    ...draft,
+    name: draft.name ?? defaults.name,
+    description: draft.description ?? defaults.description,
+    instruction: draft.instruction ?? defaults.instruction,
+    agentType: draft.agentType ?? defaults.agentType,
+    cloudProvider: provider,
+    maxIterations: draft.maxIterations ?? defaults.maxIterations,
+    a2aUrl: draft.a2aUrl ?? defaults.a2aUrl,
+    model: draft.model ?? undefined,
+    modelSource:
+      draft.modelSource === "ark" || draft.modelSource === "custom"
+        ? draft.modelSource
+        : undefined,
+    modelName: draft.modelName ?? defaults.modelName,
+    modelProvider: draft.modelProvider ?? defaults.modelProvider,
+    modelApiBase: draft.modelApiBase ?? defaults.modelApiBase,
+    memory: {
+      shortTerm: draft.memory?.shortTerm ?? defaults.memory.shortTerm,
+      longTerm: draft.memory?.longTerm ?? defaults.memory.longTerm,
+    },
+    tools: [...(draft.tools ?? [])],
+    skills: [...(draft.skills ?? [])],
+    knowledgebase: draft.knowledgebase ?? defaults.knowledgebase,
+    tracing: draft.tracing ?? defaults.tracing,
+    harnessSidecar: normalizeHarnessSidecarIntent(draft.harnessSidecar),
+    subAgents: (draft.subAgents ?? []).map((child) =>
+      cloudDraftWithDefaults(child, provider),
+    ),
+    builtinTools: [...(draft.builtinTools ?? [])],
+    customTools: [...(draft.customTools ?? [])],
+    mcpTools: [...(draft.mcpTools ?? [])],
+    a2aRegistry: {
+      ...defaults.a2aRegistry!,
+      ...(a2aRegistry ?? {}),
+      enabled: a2aRegistry?.enabled ?? false,
+      registrySpaceId: a2aRegistry?.registrySpaceId ?? "",
+      registryTopK: a2aRegistry?.registryTopK ?? "",
+      registryRegion: a2aRegistry?.registryRegion ?? "",
+      registryEndpoint: a2aRegistry?.registryEndpoint ?? "",
+    },
+    shortTermBackend: draft.shortTermBackend ?? defaults.shortTermBackend,
+    longTermBackend: draft.longTermBackend ?? defaults.longTermBackend,
+    longTermMemoryIndex:
+      draft.longTermMemoryIndex ?? defaults.longTermMemoryIndex,
+    autoSaveSession: draft.autoSaveSession ?? defaults.autoSaveSession,
+    knowledgebaseBackend:
+      draft.knowledgebaseBackend ?? defaults.knowledgebaseBackend,
+    knowledgebaseIndex:
+      draft.knowledgebaseIndex ?? defaults.knowledgebaseIndex,
+    tracingExporters: [...(draft.tracingExporters ?? [])],
+    selectedSkills: [...(draft.selectedSkills ?? [])],
+    cloudEnvironment: {
+      ...defaults.cloudEnvironment!,
+      ...(cloudEnvironment ?? {}),
+      cliTools: [...(cloudEnvironment?.cliTools ?? [])],
+      dockerfile:
+        typeof cloudEnvironment?.dockerfile === "string"
+          ? cloudEnvironment.dockerfile
+          : undefined,
+    },
+    deployment: {
+      ...defaults.deployment!,
+      ...(deployment ?? {}),
+      feishuEnabled: deployment?.feishuEnabled ?? false,
+      runtimeName: deployment?.runtimeName ?? undefined,
+      runtimeNameCustomized:
+        deployment?.runtimeNameCustomized ??
+        defaults.deployment?.runtimeNameCustomized,
+      network: network
+        ? {
+            ...network,
+            vpcId: network.vpcId ?? "",
+            subnetIds: network.subnetIds ?? "",
+            enableSharedInternetAccess:
+              network.enableSharedInternetAccess ?? false,
+          }
+        : undefined,
+      modelApiKeyId: deployment?.modelApiKeyId ?? "",
+      modelApiKeyName: deployment?.modelApiKeyName ?? "",
+      envValues: deployment?.envValues ?? undefined,
+    },
+    ...(draft.workflow
+      ? {
+          workflow: {
+            ...draft.workflow,
+            nodes: draft.workflow.nodes.map((node) => ({
+              ...node,
+              agent: cloudDraftWithDefaults(node.agent, provider),
+            })),
+          },
+        }
+      : {}),
+  };
+}
+
+const MANAGED_RUNTIME_INSTRUCTION_HEADINGS = [
+  "动态子智能体协作规则：",
+  "Dynamic sub-agent collaboration rules:",
+] as const;
+const MANAGED_RUNTIME_INSTRUCTION_SIGNATURES = [
+  "collect_resources",
+  "create_agents",
+  "handoff_to",
+] as const;
+
+function normalizeMarkdownEscapes(value: string): string {
+  return value.replace(/\\([\\`*_[\]{}()<>#+\-.!|])/g, "$1");
+}
+
+function stripManagedInstructionBlock(instruction: string): string {
+  const headingOffsets = MANAGED_RUNTIME_INSTRUCTION_HEADINGS.flatMap((heading) => {
+    const offsets: number[] = [];
+    let searchOffset = 0;
+    while (searchOffset < instruction.length) {
+      const headingOffset = instruction.indexOf(heading, searchOffset);
+      if (headingOffset < 0) break;
+      offsets.push(headingOffset);
+      searchOffset = headingOffset + heading.length;
+    }
+    return offsets;
+  }).sort((left, right) => left - right);
+
+  const managedBlockOffset = headingOffsets.find((headingOffset, index) => {
+    const nextHeadingOffset = headingOffsets[index + 1] ?? instruction.length;
+    const candidate = normalizeMarkdownEscapes(
+      instruction.slice(headingOffset, nextHeadingOffset),
+    );
+    return MANAGED_RUNTIME_INSTRUCTION_SIGNATURES.every((signature) =>
+      candidate.includes(signature),
+    );
+  });
+
+  return managedBlockOffset === undefined
+    ? instruction
+    : instruction.slice(0, managedBlockOffset).trimEnd();
+}
+
+/** Remove generated quick-mode runtime rules before restoring an editable
+ * cloud draft. Match against Markdown-normalized text while slicing the
+ * original instruction so user-authored content is otherwise unchanged. */
+export function stripManagedRuntimeInstructions(draft: AgentDraft): AgentDraft {
+  const stripNode = (node: AgentDraft): AgentDraft => ({
+    ...node,
+    instruction:
+      node.dynamicAgentDelegation === true
+        ? stripManagedInstructionBlock(node.instruction)
+        : node.instruction,
+    subAgents: node.subAgents.map(stripNode),
+    ...(node.workflow
+      ? {
+          workflow: {
+            ...node.workflow,
+            nodes: node.workflow.nodes.map((workflowNode) => ({
+              ...workflowNode,
+              agent: stripNode(workflowNode.agent),
+            })),
+          },
+        }
+      : {}),
+  });
+
+  return stripNode(draft);
+}
+
+function cloudGraphToDraft(
+  node: RuntimeAgentIntrospection,
+  cloudProvider: CloudProvider,
+): AgentDraft {
+  const defaults = emptyDraft(cloudProvider);
+  const runtimeTools = [...(node.tools ?? [])];
+  const builtinTools = BUILTIN_TOOLS.filter((tool) =>
+    tool.toolNames.some((name) => runtimeTools.includes(name)),
+  );
+  const builtinToolNames = new Set(
+    builtinTools.flatMap((tool) => tool.toolNames),
+  );
+  const runtimeModel = modelConfigurationFromRuntime(node.model);
+  return {
+    ...defaults,
+    modelSource: undefined,
+    name: node.name?.trim() ?? "",
+    description: node.description ?? "",
+    instruction: node.instruction || defaults.instruction,
+    agentType: node.type ?? "llm",
+    modelName: runtimeModel.modelName,
+    modelProvider: runtimeModel.modelProvider,
+    tools: runtimeTools.filter((name) => !builtinToolNames.has(name)),
+    builtinTools: builtinTools.map((tool) => tool.id),
+    skills: node.skills?.map((skill) => skill.name) ?? [],
+    subAgents: (node.children ?? []).map((child) =>
+      cloudGraphToDraft(child, cloudProvider),
+    ),
+  };
+}
+
+/** Rebuild an editable Runtime configuration exclusively from data returned by
+ * the deployed Agent and Runtime control plane. New Studio deployments expose
+ * the complete sanitized builder snapshot as `draft`; legacy deployments fall
+ * back to their introspected graph and explicit editor defaults. */
+export function runtimeAgentDraftFromCloud(
+  agent: RuntimeCloudAgent,
+  cloudProvider: CloudProvider,
+  configuredEnvKeys: readonly string[] = [],
+): AgentDraft {
+  const provider = agent.draft?.cloudProvider ?? cloudProvider;
+  const runtimeModel = modelConfigurationFromRuntime(agent.model);
+  const cloudDraft = agent.draft
+    ? cloudDraftWithDefaults(agent.draft, provider)
+    : agent.graph
+      ? cloudGraphToDraft(agent.graph, provider)
+      : {
+          ...emptyDraft(provider),
+          modelSource: undefined,
+          name: agent.name?.trim() || agent.appName.trim(),
+          description: agent.description ?? "",
+          instruction: agent.instruction || emptyDraft(provider).instruction,
+          agentType: agent.type ?? "llm",
+          modelName: runtimeModel.modelName,
+          modelProvider: runtimeModel.modelProvider,
+          tools: [...(agent.tools ?? [])],
+          skills: agent.skills?.map((skill) => skill.name) ?? [],
+        };
+  const editableCloudDraft =
+    agent.draft && cloudDraft.dynamicAgentDelegation === true
+      ? stripManagedRuntimeInstructions(cloudDraft)
+      : cloudDraft;
+
+  return applyConfiguredMcpCredentials(
+    applyRuntimeAgentIntrospection(
+      editableCloudDraft,
+      agent.graph,
+      {
+        name: agent.name?.trim() || agent.appName.trim(),
+        model: agent.model,
+      },
+      Boolean(agent.draft),
+    ),
+    new Set(configuredEnvKeys),
+  );
+}
+
+/** Classify live Runtime models against the ModelArk catalog selected for the
+ * update. A catalog hit is ModelArk; every other live model is custom. */
+export function classifyRuntimeModelSources(
+  draft: AgentDraft,
+  arkModelIds: ReadonlySet<string>,
+): AgentDraft {
+  const classifyNode = (node: AgentDraft): AgentDraft => {
+    const modelName = node.modelName?.trim() ?? "";
+    return {
+      ...node,
+      modelSource:
+        node.agentType === "llm" || !node.agentType
+          ? arkModelIds.has(modelName)
+            ? "ark"
+            : "custom"
+          : node.modelSource,
+      subAgents: node.subAgents.map(classifyNode),
+      ...(node.workflow
+        ? {
+            workflow: {
+              ...node.workflow,
+              nodes: node.workflow.nodes.map((workflowNode) => ({
+                ...workflowNode,
+                agent: classifyNode(workflowNode.agent),
+              })),
+            },
+          }
+        : {}),
+    };
+  };
+
+  return classifyNode(draft);
+}

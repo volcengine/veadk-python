@@ -1,0 +1,416 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
+
+from hashlib import sha256
+from io import BytesIO
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from frontend.service.studio_scheduler.deploy import (
+    _stage_package,
+    deploy_scheduler,
+    deploy_scheduler_for_studio_update,
+    scheduler_function_name,
+    scheduler_worker_function_name,
+)
+
+
+class _Client:
+    def __init__(self) -> None:
+        self.created_timers: list[Any] = []
+        self.created_worker: Any = None
+        self.events: list[str] = []
+
+    def list_functions(self, _request: Any) -> Any:
+        return SimpleNamespace(items=[], total=0)
+
+    def release(self, _request: Any) -> None:
+        self.events.append("release")
+
+    def get_release_status(self, _request: Any) -> Any:
+        return SimpleNamespace(status="Success")
+
+    def create_dependency_install_task(self, _request: Any) -> None:
+        self.events.append("install")
+
+    def get_dependency_install_task_status(self, _request: Any) -> Any:
+        return SimpleNamespace(status="Success")
+
+    def list_triggers(self, _request: Any) -> Any:
+        return SimpleNamespace(items=[])
+
+    def create_timer(self, request: Any) -> Any:
+        self.created_timers.append(request)
+        return SimpleNamespace(id=f"timer-{len(self.created_timers)}")
+
+    def create_function(self, request: Any) -> Any:
+        self.created_worker = request
+        return SimpleNamespace(id="worker-function-1")
+
+
+class _Service:
+    def __init__(self) -> None:
+        self.provider = "volcengine"
+        self.region = "cn-beijing"
+        self.client = _Client()
+        self.created_bundle: Path | None = None
+
+    def _create_function(self, _name: str, path: str) -> tuple[str, str]:
+        bundle = Path(path)
+        assert (bundle / "requirements.txt").is_file()
+        assert "studio_scheduler.http_app:app" in (bundle / "run.sh").read_text()
+        self.created_bundle = bundle
+        return _name, "function-1"
+
+    def _upload_and_mount_code(self, function_id: str, path: str) -> None:
+        assert function_id == "worker-function-1"
+        assert Path(path, "run.sh").is_file()
+
+
+class _TimeoutClient(_Client):
+    def __init__(self) -> None:
+        super().__init__()
+        self.timeouts: list[int | None] = []
+
+    def _record(self, kwargs: dict[str, Any]) -> None:
+        self.timeouts.append(kwargs.get("_request_timeout"))
+
+    def list_functions(self, _request: Any, **kwargs: Any) -> Any:
+        self._record(kwargs)
+        return super().list_functions(_request)
+
+    def release(self, _request: Any, **kwargs: Any) -> None:
+        self._record(kwargs)
+        super().release(_request)
+
+    def get_release_status(self, _request: Any, **kwargs: Any) -> Any:
+        self._record(kwargs)
+        return super().get_release_status(_request)
+
+    def create_dependency_install_task(self, _request: Any, **kwargs: Any) -> None:
+        self._record(kwargs)
+        super().create_dependency_install_task(_request)
+
+    def get_dependency_install_task_status(self, _request: Any, **kwargs: Any) -> Any:
+        self._record(kwargs)
+        return super().get_dependency_install_task_status(_request)
+
+    def list_triggers(self, _request: Any, **kwargs: Any) -> Any:
+        self._record(kwargs)
+        return super().list_triggers(_request)
+
+    def create_timer(self, request: Any, **kwargs: Any) -> Any:
+        self._record(kwargs)
+        return super().create_timer(request)
+
+    def create_function(self, request: Any, **kwargs: Any) -> Any:
+        self._record(kwargs)
+        return super().create_function(request)
+
+
+class _TimeoutService(_Service):
+    def __init__(self) -> None:
+        super().__init__()
+        self.client = _TimeoutClient()
+
+    def _create_function(self, _name: str, path: str) -> tuple[str, str]:
+        bundle = Path(path)
+        assert (bundle / "requirements.txt").is_file()
+        self.created_bundle = bundle
+        response = self.client.create_function(SimpleNamespace())
+        return _name, str(response.id)
+
+
+def test_deploy_creates_separate_function_and_minute_timer(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("veadk-python\n", encoding="utf-8")
+    service = _Service()
+
+    function_id, timer_id, worker_function_id, worker_timer_id = deploy_scheduler(
+        service,
+        studio_application_name="studio_test",
+        package_root=tmp_path,
+        role_trn="trn:iam::role/studio",
+        environment={"VEADK_STUDIO_TOS_BUCKET": "studio"},
+    )
+
+    assert function_id == "function-1"
+    assert timer_id == "timer-1"
+    assert worker_function_id == "worker-function-1"
+    assert worker_timer_id == "timer-2"
+    scanner_timer, worker_timer = service.client.created_timers
+    assert scanner_timer.function_id == "function-1"
+    assert scanner_timer.crontab == "* * * * *"
+    assert scanner_timer.enable_concurrency is False
+    assert scanner_timer.payload == '{"source":"veadk-studio-cronjobs","phase":"scan"}'
+    assert worker_timer.function_id == "worker-function-1"
+    assert worker_timer.enable_concurrency is True
+    assert (
+        worker_timer.payload == '{"source":"veadk-studio-cronjobs","phase":"execute"}'
+    )
+    assert service.client.created_worker.request_timeout == 10800
+    assert service.client.created_worker.max_concurrency == 1
+    assert service.client.created_worker.async_task_config.enable_async_task is True
+    assert service.client.created_worker.async_task_config.max_retry == 0
+    assert service.client.events == ["install", "release", "install", "release"]
+
+
+def test_deploy_extends_vefaas_sdk_request_timeout(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("veadk-python\n", encoding="utf-8")
+    service = _TimeoutService()
+    original_list_functions = service.client.list_functions
+
+    deploy_scheduler(
+        service,
+        studio_application_name="studio_timeout",
+        package_root=tmp_path,
+        role_trn="trn:iam::role/studio",
+        environment={"VEADK_STUDIO_TOS_BUCKET": "studio"},
+    )
+
+    assert service.client.timeouts
+    assert set(service.client.timeouts) == {600}
+    assert service.client.list_functions == original_list_functions
+
+
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_scheduler_deploy_prints_both_functions_and_cloud_logs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    existing: bool,
+) -> None:
+    (tmp_path / "requirements.txt").write_text("veadk-python\n", encoding="utf-8")
+    service = _Service()
+    service.provider = provider
+    service.region = "cn-beijing" if provider == "volcengine" else "ap-southeast-1"
+    counters: dict[str, int] = {}
+    messages: list[str] = []
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy_progress.logger.info",
+        lambda message, *args: messages.append(message % args if args else message),
+    )
+    if existing:
+        monkeypatch.setattr(
+            service.client,
+            "list_functions",
+            lambda _: SimpleNamespace(
+                total=2,
+                items=[
+                    SimpleNamespace(name="studio-test-cronjobs", id="function-1"),
+                    SimpleNamespace(
+                        name="studio-test-cronjobs-worker", id="worker-function-1"
+                    ),
+                ],
+            ),
+        )
+        monkeypatch.setattr(
+            service.client,
+            "get_function",
+            lambda _: SimpleNamespace(
+                async_task_config=SimpleNamespace(enable_async_task=True),
+            ),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            service, "_replace_application_code_bundle", lambda **_: None, raising=False
+        )
+
+    def install_status(request: Any) -> Any:
+        key = request.function_id
+        counters[key] = counters.get(key, 0) + 1
+        return SimpleNamespace(status="Running" if counters[key] == 1 else "Success")
+
+    monkeypatch.setattr(
+        service.client, "get_dependency_install_task_status", install_status
+    )
+    monkeypatch.setattr(
+        service.client,
+        "get_dependency_install_task_log_download_uri",
+        lambda request: SimpleNamespace(
+            download_url=f"https://logs.example/{request.function_id}.log?signature=private-signature"
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        service.client,
+        "get_release_status",
+        lambda _: SimpleNamespace(
+            status="Success",
+            status_message="Health check passed",
+            new_revision_number=2,
+        ),
+    )
+
+    class LogResponse(BytesIO):
+        headers: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kwargs: LogResponse(
+            b"Collecting scheduler-dependency\nInstalling collected packages\n"
+        ),
+    )
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.time.sleep", lambda _: None
+    )
+    deploy_scheduler(
+        service,
+        studio_application_name="studio_test",
+        package_root=tmp_path,
+        role_trn="trn:iam::role/studio",
+        environment={"VEADK_STUDIO_TOS_BUCKET": "studio"},
+    )
+
+    output = "\n".join(messages)
+    assert "studio-test-cronjobs" in output
+    assert "studio-test-cronjobs-worker" in output
+    assert "function-1" in output
+    assert "worker-function-1" in output
+    assert output.count("Collecting scheduler-dependency") == 2
+    assert output.count("Installing collected packages") == 2
+    assert "Health check passed" in output
+    assert "timer-1" in output and "timer-2" in output
+    assert "private-signature" not in output
+    assert (
+        ("Scanner" in output and "Worker" in output)
+        if provider == "byteplus"
+        else ("定时扫描器" in output and "任务执行器" in output)
+    )
+
+
+def test_stage_package_preserves_offline_runtime_dependencies(
+    tmp_path: Path,
+) -> None:
+    package_root = tmp_path / "package"
+    destination = tmp_path / "scheduler"
+    package_root.mkdir()
+    destination.mkdir()
+    (package_root / "requirements.txt").write_text(
+        "--no-index\n--find-links ./wheelhouse\n-r ./studio-runtime.lock\n",
+        encoding="utf-8",
+    )
+    (package_root / "studio-runtime.lock").write_text(
+        "fastapi==1.0 --hash=sha256:test\n",
+        encoding="utf-8",
+    )
+    wheelhouse = package_root / "wheelhouse"
+    wheelhouse.mkdir()
+    (wheelhouse / "fastapi-1.0-py3-none-any.whl").write_bytes(b"dependency")
+    (package_root / "veadk_python-1.0-py3-none-any.whl").write_bytes(b"legacy")
+
+    _stage_package(package_root, destination)
+
+    expected_hash = sha256(b"dependency").hexdigest()
+    assert (destination / "requirements.txt").read_text(encoding="utf-8") == (
+        "--no-index\n"
+        "--require-hashes\n"
+        "./fastapi-1.0-py3-none-any.whl "
+        f"--hash=sha256:{expected_hash}\n"
+    )
+    assert (destination / "studio-runtime.lock").is_file()
+    assert not (destination / "wheelhouse").exists()
+    assert (destination / "fastapi-1.0-py3-none-any.whl").read_bytes() == (
+        b"dependency"
+    )
+    assert (destination / "veadk_python-1.0-py3-none-any.whl").read_bytes() == b"legacy"
+
+
+def test_scheduler_function_name_is_safe_and_bounded() -> None:
+    name = scheduler_function_name("studio_" + "a" * 100)
+    worker_name = scheduler_worker_function_name("studio_" + "a" * 100)
+
+    assert "_" not in name
+    assert name.endswith("-cronjobs")
+    assert len(name) <= 64
+    assert "_" not in worker_name
+    assert worker_name.endswith("-cronjobs-worker")
+    assert len(worker_name) <= 64
+
+
+def test_self_update_reuses_studio_role_storage_and_stable_name(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _UpdateClient:
+        def get_function(self, _request: Any) -> Any:
+            return SimpleNamespace(
+                name="studio-function",
+                role="trn:iam::role/studio",
+                envs=[
+                    SimpleNamespace(
+                        key="VEADK_STUDIO_TOS_BUCKET",
+                        value="existing-bucket",
+                    ),
+                    SimpleNamespace(
+                        key="VEADK_STUDIO_CRONJOB_SCHEDULER_BASE",
+                        value="stable-studio-app",
+                    ),
+                ],
+            )
+
+    service = SimpleNamespace(client=_UpdateClient())
+
+    def _deploy(service_arg: Any, **kwargs: Any) -> tuple[str, str, str, str]:
+        captured["service"] = service_arg
+        captured.update(kwargs)
+        return (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+        )
+
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.deploy_scheduler",
+        _deploy,
+    )
+
+    result = deploy_scheduler_for_studio_update(
+        service,
+        studio_function_id="studio-function-id",
+        package_root=tmp_path,
+        provider="byteplus",
+        project="default",
+        environment_overrides={
+            "VEADK_STUDIO_TOS_REGION": "ap-southeast-1",
+            "VEADK_STUDIO_TOS_ENDPOINT": "tos-ap-southeast-1.bytepluses.com",
+        },
+    )
+
+    assert result == (
+        "scheduler-function",
+        "scheduler-timer",
+        "worker-function",
+        "worker-timer",
+        "stable-studio-app",
+    )
+    assert captured["service"] is service
+    assert captured["studio_application_name"] == "stable-studio-app"
+    assert captured["role_trn"] == "trn:iam::role/studio"
+    assert captured["environment"] == {
+        "CLOUD_PROVIDER": "byteplus",
+        "AGENTKIT_CLOUD_PROVIDER": "byteplus",
+        "VEADK_STUDIO_TOS_BUCKET": "existing-bucket",
+        "VEADK_STUDIO_TOS_REGION": "ap-southeast-1",
+        "VEADK_STUDIO_TOS_ENDPOINT": "tos-ap-southeast-1.bytepluses.com",
+        "VEADK_STUDIO_PROJECT": "default",
+    }

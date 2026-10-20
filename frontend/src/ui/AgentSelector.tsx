@@ -16,6 +16,8 @@ import {
   Search,
   X,
 } from "lucide-react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import {
   getCachedRuntimeAgentInfo,
   getCachedRuntimeDetail,
@@ -30,6 +32,7 @@ import {
   type RuntimeDetail,
 } from "../adk/client";
 import { connectRuntime } from "../adk/connections";
+import { modelNameFromRuntime } from "../create/runtimeModelName";
 import {
   beginAgentConnect,
   classifyTelemetryError,
@@ -69,13 +72,13 @@ export interface AgentSelectorProps {
 const PAGE_SIZE = 15;
 const LOAD_TIMEOUT_MS = 10_000;
 
-function runtimeMetadataErrorMessage(message: string): string {
+function runtimeMetadataErrorMessage(message: string, t: TFunction<"ui">): string {
   const normalized = message.toLowerCase();
   if (
     normalized.includes("invalidagentkitruntime.notfound") ||
     normalized.includes("specified agentkitruntime does not exist")
   ) {
-    return "该 Runtime 已不存在或列表信息已过期，请刷新列表后重试。";
+    return t("agentSelector.errors.notFound");
   }
   if (
     normalized.includes("accessdenied") ||
@@ -84,28 +87,28 @@ function runtimeMetadataErrorMessage(message: string): string {
     normalized.includes("(401)") ||
     normalized.includes("(403)")
   ) {
-    return "当前账号无权访问该 Runtime，请检查所属 Project 和访问权限。";
+    return t("agentSelector.errors.accessDenied");
   }
   if (
     normalized.includes("agent-info failed: 404") ||
     normalized.includes("读取 agent 列表失败 (404)")
   ) {
-    return "该 Agent Server 版本暂不支持信息预览。";
+    return t("agentSelector.errors.previewUnsupported");
   }
-  return "该 Runtime 暂时无法访问，请确认其状态为“就绪”后重试。";
+  return t("agentSelector.errors.unavailable");
 }
 
 /** Reject if `p` doesn't settle within `ms` (so a stuck request surfaces). */
-function withTimeout<T>(p: Promise<T>, ms = LOAD_TIMEOUT_MS): Promise<T> {
+function withTimeout<T>(p: Promise<T>, timeoutMessage: string, ms = LOAD_TIMEOUT_MS): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("加载超时，请重试")), ms);
+    const timer = setTimeout(() => reject(new Error(timeoutMessage)), ms);
     p.then(
       (v) => {
-        clearTimeout(t);
+        clearTimeout(timer);
         resolve(v);
       },
       (e) => {
-        clearTimeout(t);
+        clearTimeout(timer);
         reject(e);
       },
     );
@@ -128,6 +131,7 @@ export function AgentSelector({
   runtimeScope,
   onSelect,
 }: AgentSelectorProps) {
+  const { t } = useTranslation("ui");
   // Lazily-loaded pages of the full list: pageCache[i] holds page i's runtimes,
   // tokens[i] is the next_token that fetches page i (tokens[0] = "").
   const [pageCache, setPageCache] = useState<CloudRuntime[][]>([]);
@@ -172,6 +176,7 @@ export function AgentSelector({
             region: "all",
             scope: "all",
           }),
+          t("agentSelector.errors.timeout"),
         );
         setPageCache((pc) => {
           const n = [...pc];
@@ -190,7 +195,7 @@ export function AgentSelector({
         setLoading(false);
       }
     },
-    [tokens, pageCache],
+    [tokens, pageCache, t],
   );
 
   const loadMine = useCallback(async () => {
@@ -207,6 +212,7 @@ export function AgentSelector({
             pageSize: 100,
             region: "all",
           }),
+          t("agentSelector.errors.timeout"),
         );
         acc.push(...pg.runtimes);
         token = pg.nextToken;
@@ -217,7 +223,7 @@ export function AgentSelector({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     setMineOnly(runtimeScope === "mine");
@@ -268,6 +274,7 @@ export function AgentSelector({
           region: "all",
           scope: "all",
         }),
+        t("agentSelector.errors.timeout"),
       )
         .then((pg) => {
           setPageCache([pg.runtimes]);
@@ -289,7 +296,10 @@ export function AgentSelector({
       connectSource: "navbar_picker",
     });
     setConnecting(rt.runtimeId);
-    connectRuntime(rt.runtimeId, rt.name, rt.region)
+    connectRuntime(rt.runtimeId, rt.name, rt.region, rt.currentVersion, {
+      agentCategory: rt.agentCategory,
+      mpaInstanceId: rt.mpaInstanceId,
+    })
       .then(async (agentId) => {
         await onSelect(agentId);
         operation.succeed({
@@ -347,7 +357,7 @@ export function AgentSelector({
       <div
         className={`agentsel agentsel--${variant}${previewed && variant === "drawer" ? " has-detail" : ""}`}
         role="dialog"
-        aria-label="选择 Agent"
+        aria-label={t("agentSelector.selectAgent")}
         style={variant === "drawer" ? {
           top: anchorTop,
           height: `min(640px, calc(100dvh - ${anchorTop}px - 10px))`,
@@ -356,14 +366,14 @@ export function AgentSelector({
         <div className="agentsel-main">
           <div className="agentsel-head">
             <span className="agentsel-title">
-              <AgentFaceIcon /> 选择 Agent
+              <AgentFaceIcon /> {t("agentSelector.selectAgent")}
             </span>
             <div className="agentsel-head-actions">
               {agentsSource === "cloud" && (
                 <button
                   className="agentsel-refresh"
                   onClick={refresh}
-                  title="刷新"
+                  title={t("common.refresh")}
                   disabled={loading}
                 >
                   <RefreshCw className={`icon ${loading ? "spin" : ""}`} />
@@ -372,7 +382,7 @@ export function AgentSelector({
               <button
                 className="agentsel-refresh"
                 onClick={onClose}
-                title="关闭"
+                title={t("common.close")}
               >
                 <X className="icon" />
               </button>
@@ -382,7 +392,7 @@ export function AgentSelector({
           {agentsSource === "local" ? (
             <div className="agentsel-body">
               {localApps.length === 0 ? (
-                <div className="agentsel-empty">暂无本地 Agent。</div>
+                <div className="agentsel-empty">{t("agentSelector.noLocalAgents")}</div>
               ) : (
                 <ul className="agentsel-list">
                   {localApps.map((app) => (
@@ -407,7 +417,7 @@ export function AgentSelector({
                   <input
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    placeholder="搜索 Runtime 名称"
+                    placeholder={t("agentSelector.searchRuntime")}
                   />
                 </div>
                 {runtimeScope === "all" && (
@@ -417,7 +427,7 @@ export function AgentSelector({
                       checked={mineOnly}
                       onChange={(e) => setMineOnly(e.target.checked)}
                     />
-                    只看我创建的
+                    {t("agentSelector.mineOnly")}
                   </label>
                 )}
               </div>
@@ -428,7 +438,7 @@ export function AgentSelector({
                   a centered overlay shows while a page loads. */}
               <div className="agentsel-listwrap">
                 {pageItems.length === 0 && !loading ? (
-                  <div className="agentsel-empty">暂无 Runtime。</div>
+                  <div className="agentsel-empty">{t("agentSelector.noRuntimes")}</div>
                 ) : (
                   <ul className="agentsel-list">
                     {pageItems.map((rt) => {
@@ -451,10 +461,10 @@ export function AgentSelector({
                                 <span
                                   className={`agentsel-status is-${bad ? "bad" : statusKind(rt.status)}`}
                                 >
-                                  {bad ? "不支持" : runtimeStatusLabel(rt.status)}
+                                  {bad ? t("agentSelector.unsupported") : runtimeStatusLabel(rt.status, t)}
                                 </span>
                                 {rt.isMine && (
-                                  <span className="runtime-owner-badge">我创建的</span>
+                                  <span className="runtime-owner-badge">{t("agentSelector.createdByMe")}</span>
                                 )}
                               </div>
                             </div>
@@ -465,15 +475,21 @@ export function AgentSelector({
                                 disabled={connectingThis || active}
                                 onClick={() => connect(rt)}
                               >
-                                {connectingThis ? "连接中…" : active ? "已连接" : bad ? "重试" : "连接"}
+                                {connectingThis
+                                  ? t("agentSelector.connecting")
+                                  : active
+                                    ? t("agentSelector.connected")
+                                    : bad
+                                      ? t("common.retry")
+                                      : t("agentSelector.connect")}
                               </button>
                               {variant === "drawer" ? (
                                 <button
                                   type="button"
                                   className={`agentsel-info ${isPreviewed ? "active" : ""}`}
-                                  aria-label={`查看 ${rt.name} 信息`}
+                                  aria-label={t("agentSelector.viewInfoFor", { name: rt.name })}
                                   aria-pressed={isPreviewed}
-                                  title="查看信息"
+                                  title={t("agentSelector.viewInfo")}
                                   onClick={() => togglePreview(rt)}
                                 >
                                   <Info className="icon" />
@@ -488,7 +504,7 @@ export function AgentSelector({
                 )}
                 {loading && (
                   <div className="agentsel-loading">
-                    <Loader2 className="icon spin" /> 加载中…
+                    <Loader2 className="icon spin" /> {t("common.loading")}
                   </div>
                 )}
               </div>
@@ -497,7 +513,7 @@ export function AgentSelector({
                 <button
                   disabled={mineOnly || page === 0 || loading}
                   onClick={() => void fetchPage(page - 1)}
-                  aria-label="上一页"
+                  aria-label={t("common.previousPage")}
                 >
                   <ChevronLeft className="icon" />
                 </button>
@@ -507,7 +523,7 @@ export function AgentSelector({
                 <button
                   disabled={mineOnly || !hasNext || loading}
                   onClick={() => void fetchPage(page + 1)}
-                  aria-label="下一页"
+                  aria-label={t("common.nextPage")}
                 >
                   <ChevronRight className="icon" />
                 </button>
@@ -528,26 +544,29 @@ export function AgentSelector({
   );
 }
 
-const COMPONENT_KIND_LABELS: Record<string, string> = {
-  knowledgebase: "知识库",
-  memory: "记忆",
-  prompt_manager: "提示词管理",
-  example_store: "样例库",
-  run_processor: "运行处理器",
-  tracer: "链路追踪",
-  toolset: "工具集",
-  plugin: "插件",
-  other: "其他",
-};
+const COMPONENT_KINDS = new Set([
+  "knowledgebase",
+  "memory",
+  "prompt_manager",
+  "example_store",
+  "run_processor",
+  "tracer",
+  "toolset",
+  "plugin",
+  "other",
+]);
 
-function componentKindLabel(kind: string): string {
-  return COMPONENT_KIND_LABELS[kind.toLowerCase()] ?? kind;
+function componentKindLabel(kind: string, t: TFunction<"ui">): string {
+  const normalized = kind.toLowerCase();
+  return COMPONENT_KINDS.has(normalized)
+    ? t(`agentSelector.componentKinds.${normalized}`)
+    : kind;
 }
 
-function componentBackendLabel(backend: string): string {
+function componentBackendLabel(backend: string, t: TFunction<"ui">): string {
   const labels: Record<string, string> = {
     context_search: "Context Search",
-    local: "本地",
+    local: t("agentSelector.local"),
     mem0: "Mem0",
     milvus: "Milvus",
     opensearch: "OpenSearch",
@@ -568,16 +587,17 @@ function RuntimePreviewPanel({
   tab: "agent" | "runtime";
   onTabChange: (tab: "agent" | "runtime") => void;
 }) {
+  const { t } = useTranslation("ui");
   return (
     <section
       className="agentsel-detail agentsel-preview"
-      aria-label="Agent 与 Runtime 信息"
+      aria-label={t("agentSelector.agentAndRuntimeInfo")}
     >
       <div className="agentsel-head agentsel-preview-head">
         <div
           className={`agentsel-detail-tabs is-${tab}`}
           role="tablist"
-          aria-label="详情类型"
+          aria-label={t("agentSelector.detailType")}
         >
           <span className="agentsel-detail-tabs-slider" aria-hidden />
           <button
@@ -588,7 +608,7 @@ function RuntimePreviewPanel({
             aria-controls="agentsel-agent-panel"
             onClick={() => onTabChange("agent")}
           >
-            Agent 信息
+            {t("agentSelector.agentInfo")}
           </button>
           <button
             id="agentsel-runtime-tab"
@@ -598,7 +618,7 @@ function RuntimePreviewPanel({
             aria-controls="agentsel-runtime-panel"
             onClick={() => onTabChange("runtime")}
           >
-            Runtime 信息
+            {t("agentSelector.runtimeInfo")}
           </button>
         </div>
       </div>
@@ -627,6 +647,7 @@ function RuntimePreviewPanel({
 /** Agent Server metadata for a hovered Runtime. This request is intentionally
  *  isolated from Runtime detail: either may fail without hiding the other. */
 function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
+  const { t } = useTranslation("ui");
   const [info, setInfo] = useState<AgentInfo | null>(() =>
     getCachedRuntimeAgentInfo(runtime.runtimeId, runtime.region),
   );
@@ -649,25 +670,26 @@ function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
         if (!alive) return;
         if (cached) return;
         const message = e instanceof Error ? e.message : String(e);
-        setError(runtimeMetadataErrorMessage(message));
+        setError(runtimeMetadataErrorMessage(message, t));
       })
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
-  }, [runtimeId, runtimeRegion]);
+  }, [runtimeId, runtimeRegion, t]);
 
   const components = info?.components ?? [];
+  const modelName = modelNameFromRuntime(info?.model);
 
   return (
     <div className="agentsel-detail-body">
       {loading ? (
         <div className="agentsel-panel-state">
-          <Loader2 className="icon spin" /> 读取 Agent 信息…
+          <Loader2 className="icon spin" /> {t("agentSelector.loadingAgentInfo")}
         </div>
       ) : error ? (
         <div className="agentsel-panel-empty">
-          <span>暂时无法读取 Agent 信息</span>
+          <span>{t("agentSelector.cannotLoadAgentInfo")}</span>
           <small title={error}>{error}</small>
         </div>
       ) : info ? (
@@ -675,14 +697,14 @@ function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
           <div className="agentsel-identity">
             <AgentFaceIcon className="agentsel-identity-icon" />
             <div className="agentsel-identity-copy">
-              <strong title={info.name}>{info.name || "未命名 Agent"}</strong>
-              {info.model && <span title={info.model}>{info.model}</span>}
+              <strong title={info.name}>{info.name || t("agentSelector.unnamedAgent")}</strong>
+              {modelName && <span title={modelName}>{modelName}</span>}
             </div>
           </div>
 
           {info.description && (
             <section className="agentsel-info-section">
-              <h3>描述</h3>
+              <h3>{t("common.description")}</h3>
               <p className="agentsel-description" title={info.description}>
                 {info.description}
               </p>
@@ -692,7 +714,7 @@ function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
             {info.subAgents.length > 0 && (
               <InfoChipSection
                 icon={<Network className="icon" />}
-                title="子 Agent"
+                title={t("agentSelector.subagents")}
                 values={info.subAgents}
               />
             )}
@@ -700,14 +722,14 @@ function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
             {info.tools.length > 0 && (
               <InfoChipSection
                 icon={<ToolCapabilityIcon />}
-                title="工具"
+                title={t("agentSelector.tools")}
                 values={info.tools}
               />
             )}
 
           <section className="agentsel-info-section">
             <h3>
-              <SkillCapabilityIcon /> 技能
+              <SkillCapabilityIcon /> {t("agentSelector.skills")}
             </h3>
             {info.skillsPreviewSupported ? (
               info.skills.length > 0 ? (
@@ -722,17 +744,17 @@ function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
                   ))}
                 </div>
               ) : (
-                <div className="agentsel-info-empty">未配置</div>
+                <div className="agentsel-info-empty">{t("common.notConfigured")}</div>
               )
             ) : (
-              <div className="agentsel-info-empty">暂不支持预览</div>
+              <div className="agentsel-info-empty">{t("agentSelector.previewUnsupported")}</div>
             )}
           </section>
 
           {components.length > 0 && (
             <section className="agentsel-info-section">
               <h3>
-                <Boxes className="icon" /> 挂载组件
+                <Boxes className="icon" /> {t("agentSelector.mountedComponents")}
               </h3>
               <div className="agentsel-info-list">
                 {components.map((component, index) => (
@@ -743,9 +765,9 @@ function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
                     <div className="agentsel-component-head">
                       <strong title={component.name}>{component.name}</strong>
                       <span>
-                        {componentKindLabel(component.kind)}
+                        {componentKindLabel(component.kind, t)}
                         {component.backend
-                          ? ` · ${componentBackendLabel(component.backend)}`
+                          ? ` · ${componentBackendLabel(component.backend, t)}`
                           : ""}
                       </span>
                     </div>
@@ -767,7 +789,7 @@ function AgentInfoContent({ runtime }: { runtime: SelectedRuntime }) {
             info.skills.length === 0 &&
             components.length === 0 && (
               <div className="agentsel-panel-empty">
-                暂无更多 Agent 配置信息。
+                {t("agentSelector.noMoreAgentInfo")}
               </div>
             )}
         </>
@@ -808,6 +830,7 @@ function InfoChipSection({
 
 /** Control-plane detail for the hovered Runtime. */
 function RuntimeDetailContent({ runtime }: { runtime: SelectedRuntime }) {
+  const { t } = useTranslation("ui");
   const [detail, setDetail] = useState<RuntimeDetail | null>(() =>
     getCachedRuntimeDetail(runtime.runtimeId, runtime.region),
   );
@@ -833,6 +856,7 @@ function RuntimeDetailContent({ runtime }: { runtime: SelectedRuntime }) {
           setError(
             runtimeMetadataErrorMessage(
               e instanceof Error ? e.message : String(e),
+              t,
             ),
           ),
       )
@@ -840,26 +864,26 @@ function RuntimeDetailContent({ runtime }: { runtime: SelectedRuntime }) {
     return () => {
       alive = false;
     };
-  }, [runtimeId, runtimeRegion]);
+  }, [runtimeId, runtimeRegion, t]);
 
   const rows: [string, string][] = [];
   if (detail) {
-    if (detail.model) rows.push(["模型", detail.model]);
-    if (detail.description) rows.push(["描述", detail.description]);
-    if (detail.status) rows.push(["状态", runtimeStatusLabel(detail.status)]);
+    if (detail.model) rows.push([t("agentSelector.model"), detail.model]);
+    if (detail.description) rows.push([t("common.description"), detail.description]);
+    if (detail.status) rows.push([t("agentSelector.status"), runtimeStatusLabel(detail.status, t)]);
     const r = detail.resources;
     const res = [
       r.cpuMilli != null ? `CPU ${r.cpuMilli}m` : "",
-      r.memoryMb != null ? `内存 ${r.memoryMb}MB` : "",
+      r.memoryMb != null ? t("agentSelector.memoryMb", { value: r.memoryMb }) : "",
       r.minInstance != null || r.maxInstance != null
-        ? `实例 ${r.minInstance ?? "?"}~${r.maxInstance ?? "?"}`
+        ? t("agentSelector.instances", { min: r.minInstance ?? "?", max: r.maxInstance ?? "?" })
         : "",
     ]
       .filter(Boolean)
       .join(" · ");
-    if (res) rows.push(["资源", res]);
+    if (res) rows.push([t("agentSelector.resources"), res]);
     if (detail.currentVersion != null)
-      rows.push(["版本", String(detail.currentVersion)]);
+      rows.push([t("agentSelector.version"), String(detail.currentVersion)]);
   }
 
   return (
@@ -873,7 +897,7 @@ function RuntimeDetailContent({ runtime }: { runtime: SelectedRuntime }) {
       </div>
       {loading ? (
         <div className="agentsel-apps-note">
-          <Loader2 className="icon spin" /> 读取详情…
+          <Loader2 className="icon spin" /> {t("agentSelector.loadingDetails")}
         </div>
       ) : error ? (
         <div className="agentsel-error">{error}</div>
@@ -889,11 +913,11 @@ function RuntimeDetailContent({ runtime }: { runtime: SelectedRuntime }) {
           </dl>
           {detail.envs.length > 0 && (
             <div className="agentsel-envs">
-              <div className="agentsel-envs-head">环境变量</div>
+              <div className="agentsel-envs-head">{t("agentSelector.environmentVariables")}</div>
               {detail.envs.map((e) => (
                 <div key={e.key} className="agentsel-env">
                   <span className="agentsel-env-k">{e.key}</span>
-                  <span className="agentsel-env-v">{e.value}</span>
+                  <span className="agentsel-env-v">{e.sensitive ? "••••••••" : e.value}</span>
                 </div>
               ))}
             </div>
@@ -916,24 +940,26 @@ function statusKind(status: string): "ok" | "warn" | "bad" | "muted" {
   return "muted";
 }
 
-const RUNTIME_STATUS_LABELS: Record<string, string> = {
-  ready: "就绪",
-  unreleased: "未发布",
-  running: "运行中",
-  active: "运行中",
-  creating: "创建中",
-  pending: "等待中",
-  deploying: "部署中",
-  updating: "更新中",
-  failed: "失败",
-  error: "异常",
-  stopping: "停止中",
-  stopped: "已停止",
-  deleting: "删除中",
-  deleted: "已删除",
-};
+const RUNTIME_STATUSES = new Set([
+  "ready",
+  "unreleased",
+  "running",
+  "active",
+  "creating",
+  "pending",
+  "deploying",
+  "updating",
+  "failed",
+  "error",
+  "stopping",
+  "stopped",
+  "deleting",
+  "deleted",
+]);
 
-function runtimeStatusLabel(status: string): string {
+function runtimeStatusLabel(status: string, t: TFunction<"ui">): string {
   const key = status.toLowerCase().replace(/[\s_-]/g, "");
-  return RUNTIME_STATUS_LABELS[key] ?? (status || "-");
+  return RUNTIME_STATUSES.has(key)
+    ? t(`agentSelector.runtimeStatus.${key}`)
+    : (status || "-");
 }

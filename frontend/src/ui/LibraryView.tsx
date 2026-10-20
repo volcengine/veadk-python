@@ -1,5 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import type { CloudProvider } from "../adk/cloudProvider";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
+import { localeCompatibleBackendText } from "../i18n/locales";
+import {
+  cloudRegionOptions,
+  defaultCloudRegion,
+  isSupportedCloudRegion,
+  type CloudProvider,
+  type CloudRegion,
+} from "../adk/cloudProvider";
 import { ArtifactLibrary } from "./ArtifactLibrary";
 import {
   collectArtifactIngestCandidates,
@@ -17,19 +26,29 @@ import {
   SkillCenterView,
   type SkillCenterWorkspaceLaunch,
 } from "./SkillCenter";
-import "./AgentWorkspace.css";
+import {
+  ResourceFilterSelect,
+  ResourcePageHeader,
+  ResourcePageShell,
+  ResourceTabs,
+} from "./ResourceCollection";
 import "./LibraryView.css";
 
 export type LibraryTab = "skills" | "knowledge" | "artifacts";
 
-const LIBRARY_TABS: ReadonlyArray<{ id: LibraryTab; label: string }> = [
-  { id: "skills", label: "技能库" },
-  { id: "knowledge", label: "知识库" },
-  { id: "artifacts", label: "产物" },
-];
+function libraryTabs(
+  t: TFunction,
+): ReadonlyArray<{ id: LibraryTab; label: string; panelId: string }> {
+  return [
+    { id: "skills", label: t("library.tabs.skills"), panelId: "library-skills-panel" },
+    { id: "knowledge", label: t("library.tabs.knowledge"), panelId: "library-knowledge-panel" },
+    { id: "artifacts", label: t("library.tabs.artifacts"), panelId: "library-artifacts-panel" },
+  ];
+}
 
 export interface LibraryViewProps {
   cloudProvider: CloudProvider;
+  studioRegion?: string;
   activeTab: LibraryTab;
   onTabChange: (tab: LibraryTab) => void;
   onPageTitleChange?: (title: string) => void;
@@ -43,6 +62,7 @@ export interface LibraryViewProps {
 
 export function LibraryView({
   cloudProvider,
+  studioRegion = "",
   activeTab,
   onTabChange,
   onPageTitleChange,
@@ -53,7 +73,16 @@ export function LibraryView({
   onArtifactActivate,
   onArtifactSourceOpen,
 }: LibraryViewProps) {
-  const [skillPageTitle, setSkillPageTitle] = useState("技能库");
+  const { t, i18n } = useTranslation("workspaceTools");
+  const tabs = useMemo(() => libraryTabs(t), [t]);
+  const defaultSkillTitle = t("library.tabs.skills");
+  const configuredRegion = isSupportedCloudRegion(studioRegion)
+    ? studioRegion
+    : defaultCloudRegion(cloudProvider);
+  const [region, setRegion] = useState<CloudRegion>(configuredRegion);
+  const [skillPageTitle, setSkillPageTitle] = useState(defaultSkillTitle);
+  const previousDefaultSkillTitleRef = useRef(defaultSkillTitle);
+  const [knowledgeDetailActive, setKnowledgeDetailActive] = useState(false);
   const [mountedTabs, setMountedTabs] = useState<ReadonlySet<LibraryTab>>(
     () => new Set<LibraryTab>(["skills", activeTab]),
   );
@@ -65,14 +94,30 @@ export function LibraryView({
   const [artifactLoading, setArtifactLoading] = useState(false);
   const [artifactError, setArtifactError] = useState("");
   const artifactCandidateSnapshot = useMemo(() => {
-    const candidates = collectArtifactIngestCandidates(artifactSources);
+    const candidates = collectArtifactIngestCandidates(
+      artifactSources,
+      t("library.untitledSession"),
+    );
     return { key: JSON.stringify(candidates), candidates };
-  }, [artifactSources]);
+  }, [artifactSources, t]);
   const artifactCandidateCache = useRef(artifactCandidateSnapshot);
   if (artifactCandidateCache.current.key !== artifactCandidateSnapshot.key) {
     artifactCandidateCache.current = artifactCandidateSnapshot;
   }
   const artifactCandidates = artifactCandidateCache.current.candidates;
+  const regionOptions = useMemo(() => cloudRegionOptions(cloudProvider), [cloudProvider]);
+
+  useEffect(() => {
+    setRegion(configuredRegion);
+  }, [configuredRegion]);
+
+  useEffect(() => {
+    const previousDefault = previousDefaultSkillTitleRef.current;
+    setSkillPageTitle((current) => current === previousDefault
+      ? defaultSkillTitle
+      : current);
+    previousDefaultSkillTitleRef.current = defaultSkillTitle;
+  }, [defaultSkillTitle]);
 
   useEffect(() => {
     artifactActivateRef.current = onArtifactActivate;
@@ -90,9 +135,9 @@ export function LibraryView({
   useEffect(() => {
     const activeTitle = activeTab === "skills"
       ? skillPageTitle
-      : LIBRARY_TABS.find((tab) => tab.id === activeTab)?.label || "库";
+      : tabs.find((tab) => tab.id === activeTab)?.label || t("library.title");
     onPageTitleChange?.(activeTitle);
-  }, [activeTab, onPageTitleChange, skillPageTitle]);
+  }, [activeTab, onPageTitleChange, skillPageTitle, t, tabs]);
 
   useEffect(() => {
     if (activeTab === "artifacts") {
@@ -130,51 +175,36 @@ export function LibraryView({
     onTabChange(tab);
   };
 
-  const handleTabKeyDown = (
-    event: KeyboardEvent<HTMLButtonElement>,
-    tab: LibraryTab,
-  ) => {
-    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
-      return;
-    }
-    event.preventDefault();
-    const currentIndex = LIBRARY_TABS.findIndex((item) => item.id === tab);
-    const nextIndex = event.key === "Home"
-      ? 0
-      : event.key === "End"
-        ? LIBRARY_TABS.length - 1
-        : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + LIBRARY_TABS.length)
-          % LIBRARY_TABS.length;
-    const nextTab = LIBRARY_TABS[nextIndex];
-    selectTab(nextTab.id);
-    document.getElementById(`library-${nextTab.id}-tab`)?.focus();
-  };
+  const toolbarLeading = (
+    <ResourceTabs
+      idPrefix="library"
+      ariaLabel={t("library.categoryAria")}
+      value={activeTab}
+      items={tabs}
+      onChange={selectTab}
+    />
+  );
+  const regionFilter = (id: string) => (
+    <ResourceFilterSelect
+      id={id}
+      ariaLabel={t("library.regionAria")}
+      value={region}
+      options={regionOptions}
+      onChange={setRegion}
+    />
+  );
+  const detailActive = activeTab === "skills"
+    ? skillPageTitle !== defaultSkillTitle
+    : activeTab === "knowledge" && knowledgeDetailActive;
 
   return (
-    <section className="library-view" aria-label="库">
-      <header className="library-view__header">
-        <h1>库</h1>
-        <p>管理您的资源和产物</p>
-      </header>
-      <nav className="aw-agent-tabs library-tabs" aria-label="库分类" role="tablist">
-        {LIBRARY_TABS.map((tab) => (
-          <button
-            type="button"
-            key={tab.id}
-            id={`library-${tab.id}-tab`}
-            className={activeTab === tab.id ? "is-active" : ""}
-            role="tab"
-            aria-selected={activeTab === tab.id}
-            aria-controls={`library-${tab.id}-panel`}
-            tabIndex={activeTab === tab.id ? 0 : -1}
-            onClick={() => selectTab(tab.id)}
-            onKeyDown={(event) => handleTabKeyDown(event, tab.id)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </nav>
-
+    <ResourcePageShell className={`library-view${detailActive ? " is-detail" : ""}`} aria-label={t("library.title")}>
+      {!detailActive ? (
+        <ResourcePageHeader
+          className="library-view__header"
+          title={t("library.title")}
+        />
+      ) : null}
       <div className="library-panels">
         {mountedTabs.has("skills") ? (
           <div
@@ -186,11 +216,14 @@ export function LibraryView({
           >
             <SkillCenterView
               cloudProvider={cloudProvider}
+              region={region}
               active={activeTab === "skills"}
               activationRevision={activationRevisions.skills}
               onPageTitleChange={setSkillPageTitle}
               initialWorkspace={skillInitialWorkspace}
               onInitialWorkspaceConsumed={onSkillInitialWorkspaceConsumed}
+              toolbarLeading={toolbarLeading}
+              toolbarFilters={regionFilter("library-skills-region-filter")}
             />
           </div>
         ) : null}
@@ -204,8 +237,12 @@ export function LibraryView({
           >
             <KnowledgeLibrary
               cloudProvider={cloudProvider}
+              region={region}
               active={activeTab === "knowledge"}
               activationRevision={activationRevisions.knowledge}
+              onDetailChange={setKnowledgeDetailActive}
+              toolbarLeading={toolbarLeading}
+              toolbarFilters={regionFilter("library-knowledge-region-filter")}
             />
           </div>
         ) : null}
@@ -219,11 +256,17 @@ export function LibraryView({
           >
             <ArtifactLibrary
               items={artifactItems}
+              region={region}
               userId={artifactUserId}
               active={activeTab === "artifacts"}
               activationRevision={activationRevisions.artifacts}
               loading={artifactLoading}
-              error={artifactError}
+              error={artifactError
+                ? localeCompatibleBackendText(
+                    artifactError,
+                    i18n.resolvedLanguage || i18n.language,
+                  ) || t("artifactLibrary.loadDetailFallback")
+                : ""}
               onRetry={() => void loadArtifacts()}
               onEdit={updateStoredArtifact}
               onDelete={deleteStoredArtifact}
@@ -231,10 +274,12 @@ export function LibraryView({
               onOpenSource={onArtifactSourceOpen
                 ? (artifact) => onArtifactSourceOpen(artifact.appName, artifact.sessionId)
                 : undefined}
+              toolbarLeading={toolbarLeading}
+              toolbarFilters={regionFilter("library-artifacts-region-filter")}
             />
           </div>
         ) : null}
       </div>
-    </section>
+    </ResourcePageShell>
   );
 }

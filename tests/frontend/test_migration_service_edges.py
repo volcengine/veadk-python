@@ -50,6 +50,16 @@ from tests.frontend.test_migration_server import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _pin_scripted_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These suites cover the in-Sandbox ``codex exec`` driver.
+
+    The app-server driver has its own suite and its own background-worker test; pin
+    the scripted driver here so every command assertion stays deterministic.
+    """
+    monkeypatch.setenv("AGENTKIT_MIGRATION_APP_SERVER", "0")
+
+
 def zip_bytes(files: dict[str, bytes]) -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
@@ -73,7 +83,7 @@ def test_source_archive_validation_covers_size_structure_and_encryption(
     with pytest.raises(MigrationError) as upload_size:
         validate_source_archive(b"x")
     assert_code(upload_size, "MIGRATION_SOURCE_TOO_LARGE")
-    monkeypatch.setattr(service_module, "MIGRATION_UPLOAD_MAX_BYTES", 50 * 1024 * 1024)
+    monkeypatch.setattr(service_module, "MIGRATION_UPLOAD_MAX_BYTES", 20 * 1024 * 1024)
 
     with pytest.raises(MigrationError) as duplicate:
         validate_source_archive(zip_bytes({"A.py": b"a", "a.py": b"b"}))
@@ -90,7 +100,7 @@ def test_source_archive_validation_covers_size_structure_and_encryption(
     with pytest.raises(MigrationError) as file_count:
         validate_source_archive(zip_bytes({"app.py": b"x"}))
     assert_code(file_count, "MIGRATION_SOURCE_FILE_COUNT")
-    monkeypatch.setattr(service_module, "_MAX_ARCHIVE_FILES", 20_000)
+    monkeypatch.setattr(service_module, "_MAX_ARCHIVE_FILES", 2_000)
 
     monkeypatch.setattr(service_module, "_MAX_EXPANDED_BYTES", 0)
     with pytest.raises(MigrationError) as expanded:

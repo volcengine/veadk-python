@@ -28,11 +28,16 @@ from pathlib import Path, PurePosixPath
 
 import yaml
 
+from frontend.server.source_project_limits import (
+    SOURCE_PROJECT_MAX_BYTES,
+    SOURCE_PROJECT_MAX_FILES,
+)
+
 _DEFAULT_ENTRY_POINT = "app.py"
-_MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
-_MAX_ARCHIVE_FILES = 20_000
-_MAX_EXPANDED_BYTES = 512 * 1024 * 1024
-_MAX_FILE_BYTES = 128 * 1024 * 1024
+_MAX_ARCHIVE_BYTES = SOURCE_PROJECT_MAX_BYTES
+_MAX_ARCHIVE_FILES = SOURCE_PROJECT_MAX_FILES
+_MAX_EXPANDED_BYTES = SOURCE_PROJECT_MAX_BYTES
+_MAX_FILE_BYTES = SOURCE_PROJECT_MAX_BYTES
 _MAX_PATH_BYTES = 4 * 1024
 _MAX_PATH_DEPTH = 64
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -42,6 +47,33 @@ _AGENT_RUNTIME_METHODS = frozenset({"run", "run_async"})
 
 class DeploymentSourceError(ValueError):
     """Deployment source does not satisfy the trusted package contract."""
+
+
+def ensure_default_agentkit_dockerfile(
+    base: Path,
+    cloud_provider: str,
+    *,
+    entry_point: str | None = None,
+) -> bool:
+    """Add Studio's canonical Dockerfile when a deployment has no custom one.
+
+    When provided, ``entry_point`` is used as the Python startup script.
+    """
+
+    dockerfile = base / "Dockerfile"
+    if dockerfile.exists():
+        return False
+
+    from veadk.cli.generated_agent_codegen import render_default_agentkit_dockerfile
+
+    dockerfile.write_text(
+        render_default_agentkit_dockerfile(
+            cloud_provider,
+            entry_point=entry_point,
+        ),
+        encoding="utf-8",
+    )
+    return True
 
 
 def _relative_path(value: object, *, field: str) -> str:
@@ -81,26 +113,26 @@ def _is_macos_metadata(relative: str) -> bool:
     )
 
 
-def _configured_entry_point(base: Path) -> str:
+def _configured_entry_point(base: Path, *, fallback: str) -> str:
     manifest_path = base / "agentkit.yaml"
     if not manifest_path.is_file():
-        return _DEFAULT_ENTRY_POINT
+        return fallback
     try:
         manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, yaml.YAMLError) as error:
         raise DeploymentSourceError(f"agentkit.yaml 无法解析：{error}") from error
     if manifest is None:
-        return _DEFAULT_ENTRY_POINT
+        return fallback
     if not isinstance(manifest, Mapping):
         raise DeploymentSourceError("agentkit.yaml 根节点必须是对象。")
     common = manifest.get("common")
     if common is None:
-        return _DEFAULT_ENTRY_POINT
+        return fallback
     if not isinstance(common, Mapping):
         raise DeploymentSourceError("agentkit.yaml 的 common 必须是对象。")
     value = common.get("entry_point")
     if value is None:
-        return _DEFAULT_ENTRY_POINT
+        return fallback
     return _relative_path(value, field="agentkit.yaml common.entry_point")
 
 
@@ -109,6 +141,20 @@ def _require_entry_point(base: Path, entry_point: str) -> str:
     if not target.is_file() or target.is_symlink():
         raise DeploymentSourceError(f"部署入口文件不存在：{entry_point}")
     return entry_point
+
+
+def resolve_agentkit_entry_point(
+    base: Path,
+    *,
+    fallback: str = _DEFAULT_ENTRY_POINT,
+) -> str:
+    """Resolve and validate the root AgentKit manifest's Python entry point."""
+
+    safe_fallback = _relative_path(fallback, field="部署入口文件")
+    return _require_entry_point(
+        base,
+        _configured_entry_point(base, fallback=safe_fallback),
+    )
 
 
 def _reject_path_collisions(paths: set[str]) -> None:
@@ -190,7 +236,7 @@ def write_inline_source(base: Path, files: object) -> str:
         target = _target(base, relative)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
-    return _require_entry_point(base, _configured_entry_point(base))
+    return resolve_agentkit_entry_point(base)
 
 
 def _manifest_files(manifest: object) -> tuple[dict[str, tuple[int, str]], str]:
@@ -225,7 +271,7 @@ def _manifest_files(manifest: object) -> tuple[dict[str, tuple[int, str]], str]:
             raise DeploymentSourceError("迁移产物文件清单格式无效。")
         expanded_bytes += size
         if expanded_bytes > _MAX_EXPANDED_BYTES:
-            raise DeploymentSourceError("迁移产物解压后超过 512 MiB。")
+            raise DeploymentSourceError("迁移产物解压后超过 20 MiB。")
         descriptors[relative] = (size, digest)
     _reject_path_collisions(set(descriptors))
     entry_point = _relative_path(
@@ -285,5 +331,6 @@ def extract_migration_source(
 __all__ = [
     "DeploymentSourceError",
     "extract_migration_source",
+    "resolve_agentkit_entry_point",
     "write_inline_source",
 ]

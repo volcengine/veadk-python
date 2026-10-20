@@ -23,7 +23,7 @@ BYTEPLUS_MODELARK_BASE_URL = "https://ark.ap-southeast.bytepluses.com/api/v3"
 
 SUPPORTED_CLOUD_PROVIDERS = frozenset({"volcengine", "byteplus"})
 
-VOLCENGINE_STUDIO_AGENT_MODEL_NAME = "doubao-seed-2-1-pro-260628"
+VOLCENGINE_STUDIO_AGENT_MODEL_NAME = "doubao-seed-2-1-pro-260915"
 BYTEPLUS_STUDIO_AGENT_MODEL_NAME = "dola-seed-2-1-turbo-260628"
 
 VOLCENGINE_GENERATED_AGENT_MODEL_NAME = "doubao-seed-1-6-250615"
@@ -80,6 +80,24 @@ BYTEPLUS_MODELARK_MODEL_IDS = frozenset(
         "skylark-embedding-vision-251215",
         "skylark-embedding-vision-250615",
         BYTEPLUS_IMAGE_EDIT_MODEL_NAME,
+    }
+)
+
+# The Sandbox tools are provisioned with ``VOLCENGINE_STUDIO_AGENT_MODEL_NAME``, and the
+# development allowlist is what migration and intelligent build validate against, so the
+# default has to stay in the list.
+VOLCENGINE_STUDIO_DEVELOPMENT_MODEL_IDS = frozenset(
+    {
+        "doubao-seed-2-1-pro-260915",
+        "deepseek-v4-1-flash-260910",
+        "deepseek-v4-pro-ga-260813",
+        "doubao-seed-evolving",
+    }
+)
+BYTEPLUS_STUDIO_DEVELOPMENT_MODEL_IDS = frozenset(
+    {
+        "dola-seed-2-1-turbo-260628",
+        "deepseek-v4-pro-ga-260813",
     }
 )
 
@@ -194,6 +212,21 @@ def provider_allows_model(provider: str, model_id: str) -> bool:
     if _provider_id(provider) == "byteplus":
         return is_byteplus_model(normalized)
     return True
+
+
+def studio_development_model_ids(provider: str) -> frozenset[str]:
+    """Return the provider-specific allowlist for Studio build and migration."""
+    normalized_provider = _provider_id(provider)
+    if normalized_provider == "volcengine":
+        return VOLCENGINE_STUDIO_DEVELOPMENT_MODEL_IDS
+    if normalized_provider == "byteplus":
+        return BYTEPLUS_STUDIO_DEVELOPMENT_MODEL_IDS
+    return frozenset()
+
+
+def provider_allows_studio_development_model(provider: str, model_id: str) -> bool:
+    """Return whether a model can power Studio intelligent development flows."""
+    return model_id.strip() in studio_development_model_ids(provider)
 
 
 def provider_env_placeholders(provider: str) -> dict[str, str]:

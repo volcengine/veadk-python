@@ -11,6 +11,6 @@ test("keeps the deployment action text-only", () => {
   assert.doesNotMatch(projectPreviewSource, /DeployIcon|CloudUpload|RotateCcw/);
   assert.match(
     projectPreviewSource,
-    /deploying[\s\S]*?`\$\{deploymentActionLabel\}中…`[\s\S]*?deployError[\s\S]*?`重试\$\{deploymentActionLabel\}`[\s\S]*?: deploymentActionLabel/,
+    /deploying[\s\S]*?t\("projectPreview\.actionInProgress", \{ action: deploymentActionLabel \}\)[\s\S]*?deployError[\s\S]*?t\("projectPreview\.retryAction", \{ action: deploymentActionLabel \}\)[\s\S]*?: deploymentActionLabel/,
   );
 });

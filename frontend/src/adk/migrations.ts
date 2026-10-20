@@ -1,5 +1,7 @@
 import { withAuth } from "./auth";
 import { withLocalUser } from "./identity";
+import { adkT, withLocaleHeaders } from "./i18n";
+import type { SandboxTokenUsage } from "./sandbox";
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   requestSignal,
@@ -33,12 +35,133 @@ export type MigrationTaskState =
   | "cancelled"
   | "expired";
 
+export type MigrationEvaluationDimensionId =
+  | "semantic_fidelity"
+  | "output_contract"
+  | "workflow_tool_fidelity"
+  | "context_memory_fidelity"
+  | "boundary_error_fidelity"
+  | "safety_refusal_fidelity";
+
+export type MigrationEvaluationLocale = "zh-CN" | "en-US";
+
+export type MigrationEvaluationState =
+  | "disabled"
+  | "waiting_dataset"
+  | "pending"
+  | "preparing"
+  | "waiting_environment"
+  | "deploying"
+  | "executing"
+  | "judging"
+  | "aggregating"
+  | "completed"
+  | "failed"
+  | "blocked"
+  | "cancelled";
+
+export type MigrationEvaluationFailureStage =
+  | "preparing"
+  | "deploying"
+  | "executing"
+  | "judging"
+  | "aggregating";
+
+export interface MigrationEvaluationAsset {
+  schemaVersion: 1;
+  kind: "dataset" | "report";
+  assetId: string;
+  version: string;
+  versionId: string;
+  sha256: string;
+  sizeBytes: number;
+  size: number;
+  createdAt: string;
+  acl: "owner";
+  viewReady: boolean;
+  downloadReady: boolean;
+  caseCount?: number;
+  attempt?: number;
+}
+
+export interface MigrationEvaluationStatus {
+  enabled: boolean;
+  state: MigrationEvaluationState;
+  message: string;
+  preset?: "standard" | "custom";
+  dimensions?: MigrationEvaluationDimensionId[];
+  locale?: MigrationEvaluationLocale;
+  attempt?: number;
+  dataset?: MigrationEvaluationAsset;
+  report?: MigrationEvaluationAsset;
+  environment?: {
+    required: string[];
+    optional: string[];
+    defaults: Record<string, string>;
+  };
+  runtimeName?: string;
+  canResume?: boolean;
+  canRetry?: boolean;
+  error?: {
+    code: string;
+    message: string;
+    retryable: boolean;
+    stage?: MigrationEvaluationFailureStage;
+    detail?: string;
+  };
+}
+
+export interface MigrationEvaluationMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface MigrationEvaluationCase {
+  caseId: string;
+  userInput: string;
+  expectedOutcome?: string | null;
+  criteria: string[];
+  priorMessages: MigrationEvaluationMessage[];
+}
+
+export interface MigrationEvaluationDataset {
+  locked: boolean;
+  asset?: MigrationEvaluationAsset;
+  cases: MigrationEvaluationCase[];
+}
+
 export interface MigrationCapabilities {
   enabled: boolean;
   reason: string;
+  model?: {
+    configured: boolean;
+    id: string;
+  };
+  unsupportedModelIds?: string[];
   maxUploadBytes: number;
   sessionTtlSeconds: number;
   frameworks: MigrationFramework[];
+  evaluation?: {
+    available: boolean;
+    reason: string;
+    maxCases: number;
+    maxDatasetBytes: number;
+    maxMessagesPerCase: number;
+    maxMessagesBytes: number;
+    maxReferenceOutputBytes: number;
+    maxCriteria: number;
+    maxCriterionBytes: number;
+    maxCapturedOutputBytes: number;
+    inputMode: "page";
+    pageInputMethods: Array<"manual" | "bulk_paste">;
+    defaultPreset: "standard";
+    maximumSessionTtlSeconds: number;
+    dimensions: Array<{
+      id: MigrationEvaluationDimensionId;
+      label: string;
+      description: string;
+    }>;
+  };
 }
 
 export interface MigrationEvidence {
@@ -81,12 +204,25 @@ export interface MigrationAnalysis {
   warnings: string[];
 }
 
+export interface MigrationPendingQuestion {
+  id: string;
+  header: string;
+  question: string;
+  options: Array<{ label: string; description: string }>;
+}
+
+export interface MigrationPendingInput {
+  id: string;
+  questions: MigrationPendingQuestion[];
+}
+
 export interface MigrationTask {
   id: string;
   state: MigrationTaskState;
   message: string;
   sourceFileName: string;
   instruction: string;
+  modelId?: string;
   createdAt: string | number;
   expiresAt: string;
   sessionTtlSeconds: number;
@@ -102,6 +238,7 @@ export interface MigrationTask {
     deployReady: boolean;
   };
   analysis?: MigrationAnalysis;
+  pendingInput?: MigrationPendingInput;
   analysisRef?: {
     attempt: number;
     sha256: string;
@@ -117,6 +254,14 @@ export interface MigrationTask {
     message: string;
     retryable: boolean;
   };
+  persistence?: {
+    state: "saving" | "saved" | "failed" | "unavailable";
+    projectId?: string;
+    versionId?: string;
+    message: string;
+    retryable?: boolean;
+  };
+  evaluation?: MigrationEvaluationStatus;
 }
 
 export type MigrationActivityKind =
@@ -124,7 +269,36 @@ export type MigrationActivityKind =
   | "message"
   | "plan"
   | "command"
-  | "status";
+  | "status"
+  | "summary";
+
+export interface MigrationActivityTool {
+  name: string;
+  input?: unknown;
+  output?: unknown;
+  error?: string;
+  exitCode?: number;
+}
+
+export interface MigrationActivityPlanItem {
+  text: string;
+  status: "pending" | "in_progress" | "completed" | "failed";
+}
+
+/** One turn's own cost, in the shape the shared turn summary renders. */
+export interface MigrationActivityTurn {
+  turnId: string;
+  status: string;
+  model?: string;
+  durationMs?: number;
+  startedAt?: number;
+  completedAt?: number;
+  usage?: Partial<SandboxTokenUsage>;
+  usageIncomplete?: boolean;
+  toolCalls: number;
+  toolDurationMs?: number;
+  toolDurationComplete: boolean;
+}
 
 export interface MigrationActivityItem {
   id: string;
@@ -132,6 +306,16 @@ export interface MigrationActivityItem {
   status: "running" | "completed" | "failed";
   title: string;
   detail?: string;
+  tool?: MigrationActivityTool;
+  plan?: MigrationActivityPlanItem[];
+  /** Codex' own item type: the shared row renderer keys its native look off it. */
+  itemType?: string;
+  /** How long Codex spent on the item; the process header sums these. */
+  durationMs?: number;
+  /** Codex' message phase (commentary / final_answer) when it reports one. */
+  phase?: string;
+  /** The turn's timing and token usage, on the item that summarizes a turn. */
+  turn?: MigrationActivityTurn;
 }
 
 export interface MigrationActivity {
@@ -231,13 +415,107 @@ const TASK_STATES = new Set<MigrationTaskState>([
   "expired",
 ]);
 
+const EVALUATION_STATES = new Set<MigrationEvaluationState>([
+  "disabled",
+  "waiting_dataset",
+  "pending",
+  "preparing",
+  "waiting_environment",
+  "deploying",
+  "executing",
+  "judging",
+  "aggregating",
+  "completed",
+  "failed",
+  "blocked",
+  "cancelled",
+]);
+const EVALUATION_FAILURE_STAGES = new Set<MigrationEvaluationFailureStage>([
+  "preparing",
+  "deploying",
+  "executing",
+  "judging",
+  "aggregating",
+]);
+
+const EVALUATION_DIMENSIONS = new Set<MigrationEvaluationDimensionId>([
+  "semantic_fidelity",
+  "output_contract",
+  "workflow_tool_fidelity",
+  "context_memory_fidelity",
+  "boundary_error_fidelity",
+  "safety_refusal_fidelity",
+]);
+
 const ACTIVITY_KINDS = new Set<MigrationActivityKind>([
   "reasoning",
   "message",
   "plan",
   "command",
   "status",
+  "summary",
 ]);
+
+const TURN_USAGE_KEYS = [
+  "totalTokens",
+  "inputTokens",
+  "outputTokens",
+  "cachedInputTokens",
+  "cacheWriteInputTokens",
+  "reasoningOutputTokens",
+] as const;
+
+const TURN_NUMBER_KEYS = ["durationMs", "startedAt", "completedAt"] as const;
+
+/** A turn summary the page can hand to the shared component, or a contract error. */
+function normalizeActivityTurn(value: unknown): MigrationActivityTurn {
+  const turn = record(value, adkT("migrations.labels.activityItem"));
+  if (
+    typeof turn.turnId !== "string" ||
+    typeof turn.status !== "string" ||
+    !Number.isSafeInteger(turn.toolCalls) ||
+    (turn.toolCalls as number) < 0 ||
+    typeof turn.toolDurationComplete !== "boolean"
+  ) {
+    throw new Error(adkT("migrations.invalidActivityItem"));
+  }
+  const normalized: MigrationActivityTurn = {
+    turnId: turn.turnId,
+    status: turn.status,
+    toolCalls: turn.toolCalls as number,
+    toolDurationComplete: turn.toolDurationComplete,
+  };
+  if (typeof turn.model === "string" && turn.model) normalized.model = turn.model;
+  if (turn.usageIncomplete === true) normalized.usageIncomplete = true;
+  for (const key of TURN_NUMBER_KEYS) {
+    const number = turn[key];
+    if (number === undefined) continue;
+    if (!Number.isFinite(number) || (number as number) < 0) {
+      throw new Error(adkT("migrations.invalidActivityItem"));
+    }
+    normalized[key] = number as number;
+  }
+  if (turn.toolDurationMs !== undefined) {
+    if (!Number.isFinite(turn.toolDurationMs) || (turn.toolDurationMs as number) < 0) {
+      throw new Error(adkT("migrations.invalidActivityItem"));
+    }
+    normalized.toolDurationMs = turn.toolDurationMs as number;
+  }
+  if (turn.usage !== undefined) {
+    const usage = record(turn.usage, adkT("migrations.labels.activityItem"));
+    const counts: Partial<SandboxTokenUsage> = {};
+    for (const key of TURN_USAGE_KEYS) {
+      const count = usage[key];
+      if (count === undefined) continue;
+      if (!Number.isSafeInteger(count) || (count as number) < 0) {
+        throw new Error(adkT("migrations.invalidActivityItem"));
+      }
+      counts[key] = count as number;
+    }
+    normalized.usage = counts;
+  }
+  return normalized;
+}
 
 const ACTIVITY_STATES = new Set<MigrationActivityItem["status"]>([
   "running",
@@ -245,34 +523,237 @@ const ACTIVITY_STATES = new Set<MigrationActivityItem["status"]>([
   "failed",
 ]);
 
+const ACTIVITY_PLAN_STATES = new Set<MigrationActivityPlanItem["status"]>([
+  "pending",
+  "in_progress",
+  "completed",
+  "failed",
+]);
+
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label}格式错误。`);
+    throw new Error(adkT("migrations.invalidFormat", { label }));
   }
   return value as Record<string, unknown>;
 }
 
 function stringArray(value: unknown, label: string): string[] {
-  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
-    throw new Error(`${label}格式错误。`);
+  if (
+    !Array.isArray(value) ||
+    !value.every((item) => typeof item === "string")
+  ) {
+    throw new Error(adkT("migrations.invalidFormat", { label }));
   }
   return value;
 }
 
 function framework(value: unknown, label: string): MigrationFramework {
-  if (typeof value !== "string" || !FRAMEWORKS.has(value as MigrationFramework)) {
-    throw new Error(`${label}格式错误。`);
+  if (
+    typeof value !== "string" ||
+    !FRAMEWORKS.has(value as MigrationFramework)
+  ) {
+    throw new Error(adkT("migrations.invalidFormat", { label }));
   }
   return value as MigrationFramework;
 }
 
+function evaluationDimension(
+  value: unknown,
+  label: string,
+): MigrationEvaluationDimensionId {
+  if (
+    typeof value !== "string" ||
+    !EVALUATION_DIMENSIONS.has(value as MigrationEvaluationDimensionId)
+  ) {
+    throw new Error(adkT("migrations.invalidFormat", { label }));
+  }
+  return value as MigrationEvaluationDimensionId;
+}
+
+function normalizeEvaluationAsset(value: unknown): MigrationEvaluationAsset {
+  const asset = record(value, adkT("migrations.labels.evaluationAsset"));
+  if (
+    asset.schemaVersion !== 1 ||
+    !["dataset", "report"].includes(String(asset.kind)) ||
+    typeof asset.assetId !== "string" ||
+    typeof asset.version !== "string" ||
+    typeof asset.versionId !== "string" ||
+    typeof asset.sha256 !== "string" ||
+    typeof asset.sizeBytes !== "number" ||
+    typeof asset.size !== "number" ||
+    typeof asset.createdAt !== "string" ||
+    asset.acl !== "owner" ||
+    typeof asset.viewReady !== "boolean" ||
+    typeof asset.downloadReady !== "boolean"
+  ) {
+    throw new Error(
+      adkT("migrations.invalidFormat", {
+        label: adkT("migrations.labels.evaluationAsset"),
+      }),
+    );
+  }
+  return {
+    schemaVersion: 1,
+    kind: asset.kind as "dataset" | "report",
+    assetId: asset.assetId,
+    version: asset.version,
+    versionId: asset.versionId,
+    sha256: asset.sha256,
+    sizeBytes: asset.sizeBytes,
+    size: asset.size,
+    createdAt: asset.createdAt,
+    acl: "owner",
+    viewReady: asset.viewReady,
+    downloadReady: asset.downloadReady,
+    ...(typeof asset.caseCount === "number"
+      ? { caseCount: asset.caseCount }
+      : {}),
+    ...(typeof asset.attempt === "number" ? { attempt: asset.attempt } : {}),
+  };
+}
+
+function normalizeEvaluation(value: unknown): MigrationEvaluationStatus {
+  const evaluation = record(value, adkT("migrations.labels.evaluation"));
+  if (
+    typeof evaluation.enabled !== "boolean" ||
+    typeof evaluation.state !== "string" ||
+    !EVALUATION_STATES.has(evaluation.state as MigrationEvaluationState) ||
+    typeof evaluation.message !== "string"
+  ) {
+    throw new Error(
+      adkT("migrations.invalidFormat", {
+        label: adkT("migrations.labels.evaluation"),
+      }),
+    );
+  }
+  const normalized: MigrationEvaluationStatus = {
+    enabled: evaluation.enabled,
+    state: evaluation.state as MigrationEvaluationState,
+    message: evaluation.message,
+  };
+  if (evaluation.preset === "standard" || evaluation.preset === "custom") {
+    normalized.preset = evaluation.preset;
+  }
+  if (Array.isArray(evaluation.dimensions)) {
+    normalized.dimensions = evaluation.dimensions.map((item) =>
+      evaluationDimension(item, adkT("migrations.labels.evaluationDimension")),
+    );
+  }
+  if (evaluation.locale === "zh-CN" || evaluation.locale === "en-US") {
+    normalized.locale = evaluation.locale;
+  }
+  if (typeof evaluation.attempt === "number")
+    normalized.attempt = evaluation.attempt;
+  if (evaluation.dataset !== undefined) {
+    normalized.dataset = normalizeEvaluationAsset(evaluation.dataset);
+  }
+  if (evaluation.report !== undefined) {
+    normalized.report = normalizeEvaluationAsset(evaluation.report);
+  }
+  if (evaluation.environment !== undefined) {
+    const environment = record(
+      evaluation.environment,
+      adkT("migrations.labels.environment"),
+    );
+    const required = stringArray(
+      environment.required,
+      adkT("migrations.labels.requiredEnvironment"),
+    );
+    const optional = stringArray(
+      environment.optional,
+      adkT("migrations.labels.optionalEnvironment"),
+    );
+    const names = [...required, ...optional];
+    const defaults = record(
+      environment.defaults,
+      adkT("migrations.labels.environmentDefaults"),
+    );
+    if (
+      evaluation.state !== "waiting_environment" ||
+      names.length === 0 ||
+      new Set(names).size !== names.length ||
+      Object.entries(defaults).some(
+        ([key, value]) => !names.includes(key) || typeof value !== "string",
+      )
+    ) {
+      throw new Error(
+        adkT("migrations.invalidFormat", {
+          label: adkT("migrations.labels.environment"),
+        }),
+      );
+    }
+    normalized.environment = {
+      required,
+      optional,
+      defaults: defaults as Record<string, string>,
+    };
+  } else if (evaluation.state === "waiting_environment") {
+    throw new Error(
+      adkT("migrations.invalidFormat", {
+        label: adkT("migrations.labels.environment"),
+      }),
+    );
+  }
+  if (typeof evaluation.runtimeName === "string")
+    normalized.runtimeName = evaluation.runtimeName;
+  if (typeof evaluation.canResume === "boolean")
+    normalized.canResume = evaluation.canResume;
+  if (typeof evaluation.canRetry === "boolean")
+    normalized.canRetry = evaluation.canRetry;
+  if (evaluation.error !== undefined) {
+    const error = record(evaluation.error, adkT("migrations.labels.error"));
+    if (
+      error.stage !== undefined &&
+      (typeof error.stage !== "string" ||
+        !EVALUATION_FAILURE_STAGES.has(
+          error.stage as MigrationEvaluationFailureStage,
+        ))
+    ) {
+      throw new Error(
+        adkT("migrations.invalidFormat", {
+          label: adkT("migrations.labels.error"),
+        }),
+      );
+    }
+    if (
+      error.detail !== undefined &&
+      (typeof error.detail !== "string" ||
+        !error.detail.trim() ||
+        new TextEncoder().encode(error.detail).byteLength > 2 * 1024)
+    ) {
+      throw new Error(
+        adkT("migrations.invalidFormat", {
+          label: adkT("migrations.labels.error"),
+        }),
+      );
+    }
+    normalized.error = {
+      code:
+        typeof error.code === "string"
+          ? error.code
+          : "MIGRATION_EVALUATION_ERROR",
+      message:
+        typeof error.message === "string" ? error.message : evaluation.message,
+      retryable: error.retryable === true,
+      ...(error.stage !== undefined
+        ? { stage: error.stage as MigrationEvaluationFailureStage }
+        : {}),
+      ...(typeof error.detail === "string" ? { detail: error.detail } : {}),
+    };
+  }
+  return normalized;
+}
+
 function normalizeAnalysis(value: unknown): MigrationAnalysis {
-  const analysis = record(value, "迁移分析结果");
+  const analysis = record(value, adkT("migrations.labels.analysisResult"));
   const recommended =
     analysis.recommended === null
       ? null
-      : record(analysis.recommended, "迁移建议");
-  const boundary = record(analysis.boundary, "迁移边界");
+      : record(analysis.recommended, adkT("migrations.labels.recommendation"));
+  const boundary = record(
+    analysis.boundary,
+    adkT("migrations.labels.boundary"),
+  );
   if (
     analysis.schema_version !== 1 ||
     !["needs_input", "recommendation_ready", "unsupported"].includes(
@@ -285,7 +766,7 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
     !Array.isArray(analysis.entries) ||
     !Array.isArray(analysis.questions)
   ) {
-    throw new Error("迁移分析结果格式错误。");
+    throw new Error(adkT("migrations.invalidAnalysisResult"));
   }
   return {
     schema_version: 1,
@@ -294,24 +775,33 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
     input_sha256: analysis.input_sha256,
     summary: analysis.summary,
     frameworks: analysis.frameworks.map((item) => {
-      const candidate = record(item, "框架候选");
+      const candidate = record(
+        item,
+        adkT("migrations.labels.frameworkCandidate"),
+      );
       if (
         !["high", "medium", "low"].includes(String(candidate.confidence)) ||
         !Array.isArray(candidate.evidence)
       ) {
-        throw new Error("框架候选格式错误。");
+        throw new Error(adkT("migrations.invalidFrameworkCandidate"));
       }
       return {
-        id: framework(candidate.id, "框架候选"),
+        id: framework(
+          candidate.id,
+          adkT("migrations.labels.frameworkCandidate"),
+        ),
         confidence: candidate.confidence as "high" | "medium" | "low",
         evidence: candidate.evidence.map((evidenceValue) => {
-          const evidence = record(evidenceValue, "分析证据");
+          const evidence = record(
+            evidenceValue,
+            adkT("migrations.labels.analysisEvidence"),
+          );
           if (
             typeof evidence.path !== "string" ||
             typeof evidence.line !== "number" ||
             typeof evidence.reason !== "string"
           ) {
-            throw new Error("分析证据格式错误。");
+            throw new Error(adkT("migrations.invalidAnalysisEvidence"));
           }
           return {
             path: evidence.path,
@@ -325,38 +815,57 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
       recommended === null
         ? null
         : {
-            framework: framework(recommended.framework, "推荐框架"),
+            framework: framework(
+              recommended.framework,
+              adkT("migrations.labels.recommendedFramework"),
+            ),
             entry:
-              recommended.entry === null || typeof recommended.entry === "string"
+              recommended.entry === null ||
+              typeof recommended.entry === "string"
                 ? recommended.entry
                 : null,
             reason:
               typeof recommended.reason === "string" ? recommended.reason : "",
           },
     entries: analysis.entries.map((item) => {
-      const entry = record(item, "入口候选");
-      if (typeof entry.value !== "string" || typeof entry.evidence !== "string") {
-        throw new Error("入口候选格式错误。");
+      const entry = record(item, adkT("migrations.labels.entryCandidate"));
+      if (
+        typeof entry.value !== "string" ||
+        typeof entry.evidence !== "string"
+      ) {
+        throw new Error(adkT("migrations.invalidEntryCandidate"));
       }
       return {
         value: entry.value,
-        framework: framework(entry.framework, "入口框架"),
+        framework: framework(
+          entry.framework,
+          adkT("migrations.labels.entryFramework"),
+        ),
         evidence: entry.evidence,
       };
     }),
     boundary: {
-      include: stringArray(boundary.include, "迁移包含范围"),
-      exclude: stringArray(boundary.exclude, "迁移排除范围"),
+      include: stringArray(
+        boundary.include,
+        adkT("migrations.labels.includeScope"),
+      ),
+      exclude: stringArray(
+        boundary.exclude,
+        adkT("migrations.labels.excludeScope"),
+      ),
     },
-    assumptions: stringArray(analysis.assumptions, "分析假设"),
+    assumptions: stringArray(
+      analysis.assumptions,
+      adkT("migrations.labels.assumptions"),
+    ),
     questions: analysis.questions.map((item) => {
-      const question = record(item, "待确认问题");
+      const question = record(item, adkT("migrations.labels.question"));
       if (
         typeof question.id !== "string" ||
         typeof question.prompt !== "string" ||
         typeof question.required !== "boolean"
       ) {
-        throw new Error("待确认问题格式错误。");
+        throw new Error(adkT("migrations.invalidQuestion"));
       }
       return {
         id: question.id,
@@ -364,13 +873,60 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
         required: question.required,
       };
     }),
-    warnings: stringArray(analysis.warnings, "迁移警告"),
+    warnings: stringArray(
+      analysis.warnings,
+      adkT("migrations.labels.analysisWarnings"),
+    ),
   };
 }
 
+function normalizePendingInput(value: unknown): MigrationPendingInput {
+  const input = record(value, adkT("migrations.labels.pendingInput"));
+  if (typeof input.id !== "string" || !input.id.trim()) {
+    throw new Error(adkT("migrations.invalidPendingInput"));
+  }
+  if (!Array.isArray(input.questions) || input.questions.length === 0) {
+    throw new Error(adkT("migrations.invalidPendingInput"));
+  }
+  const questions = input.questions.map((item) => {
+    const question = record(item, adkT("migrations.labels.pendingQuestion"));
+    if (
+      typeof question.id !== "string" ||
+      !question.id.trim() ||
+      typeof question.header !== "string" ||
+      typeof question.question !== "string"
+    ) {
+      throw new Error(adkT("migrations.invalidPendingInput"));
+    }
+    const rawOptions = question.options;
+    const options = Array.isArray(rawOptions)
+      ? rawOptions.map((option) => {
+          const entry = record(option, adkT("migrations.labels.pendingOption"));
+          if (
+            typeof entry.label !== "string" ||
+            typeof entry.description !== "string"
+          ) {
+            throw new Error(adkT("migrations.invalidPendingInput"));
+          }
+          return { label: entry.label, description: entry.description };
+        })
+      : [];
+    return {
+      id: question.id,
+      header: question.header,
+      question: question.question,
+      options,
+    };
+  });
+  return { id: input.id, questions };
+}
+
 function normalizeTask(value: unknown): MigrationTask {
-  const task = record(value, "迁移会话");
-  const artifact = record(task.artifact, "迁移产物状态");
+  const task = record(value, adkT("migrations.labels.task"));
+  const artifact = record(
+    task.artifact,
+    adkT("migrations.labels.artifactStatus"),
+  );
   if (
     typeof task.id !== "string" ||
     typeof task.state !== "string" ||
@@ -378,7 +934,8 @@ function normalizeTask(value: unknown): MigrationTask {
     typeof task.message !== "string" ||
     typeof task.sourceFileName !== "string" ||
     typeof task.instruction !== "string" ||
-    (typeof task.createdAt !== "string" && typeof task.createdAt !== "number") ||
+    (typeof task.createdAt !== "string" &&
+      typeof task.createdAt !== "number") ||
     typeof task.expiresAt !== "string" ||
     typeof task.sessionTtlSeconds !== "number" ||
     typeof task.canModify !== "boolean" ||
@@ -387,7 +944,7 @@ function normalizeTask(value: unknown): MigrationTask {
     typeof task.canConfirm !== "boolean" ||
     typeof task.canStop !== "boolean"
   ) {
-    throw new Error("迁移会话格式错误。");
+    throw new Error(adkT("migrations.invalidTask"));
   }
   const normalized: MigrationTask = {
     id: task.id,
@@ -410,15 +967,24 @@ function normalizeTask(value: unknown): MigrationTask {
       deployReady: artifact.deployReady === true,
     },
   };
-  if (task.analysis !== undefined) normalized.analysis = normalizeAnalysis(task.analysis);
+  if (typeof task.modelId === "string" && task.modelId.trim()) {
+    normalized.modelId = task.modelId;
+  }
+  if (task.analysis !== undefined)
+    normalized.analysis = normalizeAnalysis(task.analysis);
+  if (task.pendingInput !== undefined)
+    normalized.pendingInput = normalizePendingInput(task.pendingInput);
   if (task.analysisRef !== undefined) {
-    const reference = record(task.analysisRef, "分析结果引用");
+    const reference = record(
+      task.analysisRef,
+      adkT("migrations.labels.analysisReference"),
+    );
     if (
       typeof reference.attempt !== "number" ||
       typeof reference.sha256 !== "string" ||
       typeof reference.inputSha256 !== "string"
     ) {
-      throw new Error("分析结果引用格式错误。");
+      throw new Error(adkT("migrations.invalidAnalysisReference"));
     }
     normalized.analysisRef = {
       attempt: reference.attempt,
@@ -427,10 +993,18 @@ function normalizeTask(value: unknown): MigrationTask {
     };
   }
   if (task.confirmation !== undefined) {
-    const confirmation = record(task.confirmation, "迁移确认");
+    const confirmation = record(
+      task.confirmation,
+      adkT("migrations.labels.confirmation"),
+    );
     normalized.confirmation = {
       ...(confirmation.framework !== undefined
-        ? { framework: framework(confirmation.framework, "确认框架") }
+        ? {
+            framework: framework(
+              confirmation.framework,
+              adkT("migrations.labels.confirmedFramework"),
+            ),
+          }
         : {}),
       ...(confirmation.entry === null || typeof confirmation.entry === "string"
         ? { entry: confirmation.entry }
@@ -441,30 +1015,66 @@ function normalizeTask(value: unknown): MigrationTask {
     };
   }
   if (task.error !== undefined) {
-    const error = record(task.error, "迁移错误");
+    const error = record(task.error, adkT("migrations.labels.error"));
     normalized.error = {
       code: typeof error.code === "string" ? error.code : "MIGRATION_ERROR",
       message: typeof error.message === "string" ? error.message : task.message,
       retryable: error.retryable === true,
     };
   }
+  if (task.persistence !== undefined) {
+    const persistence = record(
+      task.persistence,
+      adkT("migrations.labels.sourcePersistence"),
+    );
+    if (
+      !["saving", "saved", "failed", "unavailable"].includes(
+        String(persistence.state),
+      ) ||
+      typeof persistence.message !== "string" ||
+      (persistence.projectId !== undefined &&
+        typeof persistence.projectId !== "string") ||
+      (persistence.versionId !== undefined &&
+        typeof persistence.versionId !== "string") ||
+      (persistence.retryable !== undefined &&
+        typeof persistence.retryable !== "boolean")
+    ) {
+      throw new Error(adkT("migrations.invalidSourcePersistence"));
+    }
+    normalized.persistence = {
+      state: persistence.state as "saving" | "saved" | "failed" | "unavailable",
+      message: persistence.message,
+      ...(typeof persistence.projectId === "string"
+        ? { projectId: persistence.projectId }
+        : {}),
+      ...(typeof persistence.versionId === "string"
+        ? { versionId: persistence.versionId }
+        : {}),
+      ...(typeof persistence.retryable === "boolean"
+        ? { retryable: persistence.retryable }
+        : {}),
+    };
+  }
+  if (task.evaluation !== undefined) {
+    normalized.evaluation = normalizeEvaluation(task.evaluation);
+  }
   return normalized;
 }
 
 function normalizeActivity(value: unknown): MigrationActivity {
-  const activity = record(value, "迁移执行动态");
+  const activity = record(value, adkT("migrations.labels.activity"));
   if (
     typeof activity.available !== "boolean" ||
     typeof activity.complete !== "boolean" ||
     !Array.isArray(activity.items)
   ) {
-    throw new Error("迁移执行动态格式错误。");
+    throw new Error(adkT("migrations.invalidActivity"));
   }
   return {
     available: activity.available,
     complete: activity.complete,
     items: activity.items.map((value) => {
-      const item = record(value, "迁移执行动态项");
+      const item = record(value, adkT("migrations.labels.activityItem"));
       if (
         typeof item.id !== "string" ||
         typeof item.kind !== "string" ||
@@ -474,7 +1084,56 @@ function normalizeActivity(value: unknown): MigrationActivity {
         typeof item.title !== "string" ||
         (item.detail !== undefined && typeof item.detail !== "string")
       ) {
-        throw new Error("迁移执行动态项格式错误。");
+        throw new Error(adkT("migrations.invalidActivityItem"));
+      }
+      let tool: MigrationActivityTool | undefined;
+      if (item.tool !== undefined) {
+        const value = record(item.tool, adkT("migrations.labels.activityTool"));
+        if (
+          typeof value.name !== "string" ||
+          (value.error !== undefined && typeof value.error !== "string") ||
+          (value.exitCode !== undefined && !Number.isInteger(value.exitCode))
+        ) {
+          throw new Error(adkT("migrations.invalidActivityTool"));
+        }
+        tool = {
+          name: value.name,
+          ...(Object.prototype.hasOwnProperty.call(value, "input")
+            ? { input: value.input }
+            : {}),
+          ...(Object.prototype.hasOwnProperty.call(value, "output")
+            ? { output: value.output }
+            : {}),
+          ...(typeof value.error === "string" ? { error: value.error } : {}),
+          ...(typeof value.exitCode === "number"
+            ? { exitCode: value.exitCode }
+            : {}),
+        };
+      }
+      let plan: MigrationActivityPlanItem[] | undefined;
+      if (item.plan !== undefined) {
+        if (!Array.isArray(item.plan)) {
+          throw new Error(adkT("migrations.invalidActivityPlan"));
+        }
+        plan = item.plan.map((value) => {
+          const planItem = record(
+            value,
+            adkT("migrations.labels.activityPlanItem"),
+          );
+          if (
+            typeof planItem.text !== "string" ||
+            typeof planItem.status !== "string" ||
+            !ACTIVITY_PLAN_STATES.has(
+              planItem.status as MigrationActivityPlanItem["status"],
+            )
+          ) {
+            throw new Error(adkT("migrations.invalidActivityPlanItem"));
+          }
+          return {
+            text: planItem.text,
+            status: planItem.status as MigrationActivityPlanItem["status"],
+          };
+        });
       }
       return {
         id: item.id,
@@ -482,24 +1141,50 @@ function normalizeActivity(value: unknown): MigrationActivity {
         status: item.status as MigrationActivityItem["status"],
         title: item.title,
         ...(typeof item.detail === "string" ? { detail: item.detail } : {}),
+        ...(tool ? { tool } : {}),
+        ...(plan ? { plan } : {}),
+        // Codex' own row fields and the turn summary are what the shared renderer
+        // reads; a normalization that dropped them would hand the page a stream it
+        // renders as something else.
+        ...(typeof item.itemType === "string" ? { itemType: item.itemType } : {}),
+        ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
+        ...(typeof item.phase === "string" ? { phase: item.phase } : {}),
+        ...(item.turn !== undefined
+          ? { turn: normalizeActivityTurn(item.turn) }
+          : {}),
       };
     }),
   };
 }
 
 function normalizeArtifact(value: unknown): MigrationArtifact {
-  const artifact = record(value, "迁移产物");
-  const cli = record(artifact.cli, "CLI 信息");
-  const migration = record(artifact.migration, "迁移信息");
-  const startup = record(artifact.startup, "启动信息");
-  const environment = record(artifact.environment, "环境变量信息");
-  const verification = record(artifact.verification, "校验信息");
-  const report = record(artifact.report, "迁移报告");
-  const descriptor = record(artifact.artifact, "产物归档");
+  const artifact = record(value, adkT("migrations.labels.artifact"));
+  const cli = record(artifact.cli, adkT("migrations.labels.cli"));
+  const migration = record(
+    artifact.migration,
+    adkT("migrations.labels.migration"),
+  );
+  const startup = record(artifact.startup, adkT("migrations.labels.startup"));
+  const environment = record(
+    artifact.environment,
+    adkT("migrations.labels.environment"),
+  );
+  const verification = record(
+    artifact.verification,
+    adkT("migrations.labels.verification"),
+  );
+  const report = record(artifact.report, adkT("migrations.labels.report"));
+  const descriptor = record(
+    artifact.artifact,
+    adkT("migrations.labels.archive"),
+  );
   const environmentDefaults =
     environment.defaults === undefined
       ? {}
-      : record(environment.defaults, "环境变量默认值");
+      : record(
+          environment.defaults,
+          adkT("migrations.labels.environmentDefaults"),
+        );
   if (
     artifact.schema_version !== 1 ||
     !["succeeded", "succeeded_with_warnings", "partial"].includes(
@@ -520,15 +1205,15 @@ function normalizeArtifact(value: unknown): MigrationArtifact {
     typeof descriptor.sha256 !== "string" ||
     typeof artifact.created_at !== "string"
   ) {
-    throw new Error("迁移产物格式错误。");
+    throw new Error(adkT("migrations.invalidArtifact"));
   }
   const requiredEnvironment = stringArray(
     environment.required,
-    "必需环境变量",
+    adkT("migrations.labels.requiredEnvironment"),
   );
   const optionalEnvironment = stringArray(
     environment.optional,
-    "可选环境变量",
+    adkT("migrations.labels.optionalEnvironment"),
   );
   const declaredEnvironment = new Set([
     ...requiredEnvironment,
@@ -537,7 +1222,7 @@ function normalizeArtifact(value: unknown): MigrationArtifact {
   const normalizedEnvironmentDefaults = Object.fromEntries(
     Object.entries(environmentDefaults).map(([key, defaultValue]) => {
       if (!declaredEnvironment.has(key) || typeof defaultValue !== "string") {
-        throw new Error("环境变量默认值格式错误。");
+        throw new Error(adkT("migrations.invalidEnvironmentDefaults"));
       }
       return [key, defaultValue];
     }),
@@ -549,7 +1234,9 @@ function normalizeArtifact(value: unknown): MigrationArtifact {
     migration: {
       engine: migration.engine as "structured" | "agentic",
       framework: migration.framework,
-      ...(typeof migration.entry === "string" ? { entry: migration.entry } : {}),
+      ...(typeof migration.entry === "string"
+        ? { entry: migration.entry }
+        : {}),
       ...(typeof migration.source_sha256 === "string"
         ? { source_sha256: migration.source_sha256 }
         : {}),
@@ -559,14 +1246,14 @@ function normalizeArtifact(value: unknown): MigrationArtifact {
     },
     status: artifact.status as MigrationArtifact["status"],
     files: artifact.files.map((item) => {
-      const file = record(item, "迁移产物文件");
+      const file = record(item, adkT("migrations.labels.artifactFile"));
       if (
         typeof file.path !== "string" ||
         typeof file.size !== "number" ||
         typeof file.sha256 !== "string" ||
         typeof file.mode !== "string"
       ) {
-        throw new Error("迁移产物文件格式错误。");
+        throw new Error(adkT("migrations.invalidArtifactFile"));
       }
       return {
         path: file.path,
@@ -589,14 +1276,15 @@ function normalizeArtifact(value: unknown): MigrationArtifact {
       defaults: normalizedEnvironmentDefaults,
     },
     verification: {
-      status: verification.status as MigrationArtifact["verification"]["status"],
+      status:
+        verification.status as MigrationArtifact["verification"]["status"],
       checks: verification.checks.map((item) => {
-        const check = record(item, "迁移校验项");
+        const check = record(item, adkT("migrations.labels.verificationCheck"));
         if (
           typeof check.name !== "string" ||
           !["passed", "failed"].includes(String(check.status))
         ) {
-          throw new Error("迁移校验项格式错误。");
+          throw new Error(adkT("migrations.invalidVerificationCheck"));
         }
         return {
           name: check.name,
@@ -605,7 +1293,10 @@ function normalizeArtifact(value: unknown): MigrationArtifact {
         };
       }),
     },
-    warnings: stringArray(artifact.warnings, "迁移产物警告"),
+    warnings: stringArray(
+      artifact.warnings,
+      adkT("migrations.labels.artifactWarnings"),
+    ),
     report: { path: report.path },
     artifact: {
       path: "migration-result.zip",
@@ -623,7 +1314,7 @@ async function request(
 ): Promise<Response> {
   return fetch(withAuth(`${API_ROOT}${path}`), {
     ...init,
-    headers: withLocalUser(init.headers),
+    headers: withLocaleHeaders(withLocalUser(init.headers)),
     signal: requestSignal(init.signal, timeoutMs),
   });
 }
@@ -647,7 +1338,7 @@ function validationErrorDetail(value: unknown): string {
       return location ? `${location}: ${message}` : message;
     })
     .filter(Boolean)
-    .join("；");
+    .join(adkT("migrations.validationSeparator"));
 }
 
 async function errorFrom(
@@ -656,11 +1347,16 @@ async function errorFrom(
 ): Promise<MigrationApiError> {
   const text = await response.text().catch(() => "");
   try {
-    const body = record(JSON.parse(text), "错误响应");
+    const body = record(
+      JSON.parse(text),
+      adkT("migrations.labels.errorResponse"),
+    );
     if (Array.isArray(body.detail)) {
       const detail = validationErrorDetail(body.detail);
       return new MigrationApiError(
-        detail ? `请求参数校验失败：${detail}` : fallback,
+        detail
+          ? adkT("migrations.requestValidationFailed", { detail })
+          : fallback,
         response.status,
         "MIGRATION_REQUEST_INVALID",
         false,
@@ -680,7 +1376,7 @@ async function errorFrom(
     }
     const detail =
       body.detail && typeof body.detail === "object"
-        ? record(body.detail, "错误详情")
+        ? record(body.detail, adkT("migrations.labels.errorDetail"))
         : body;
     return new MigrationApiError(
       typeof detail.message === "string" ? detail.message : fallback,
@@ -693,9 +1389,13 @@ async function errorFrom(
   } catch {
     const contentType =
       response.headers.get("content-type")?.split(";", 1)[0] ||
-      "Content-Type 缺失";
+      adkT("common.contentTypeMissing");
     return new MigrationApiError(
-      `${fallback}（HTTP ${response.status}，Content-Type: ${contentType}）。请检查代理或网关配置。`,
+      adkT("migrations.gatewayError", {
+        fallback,
+        status: response.status,
+        contentType,
+      }),
       response.status,
       "MIGRATION_ERROR",
       false,
@@ -710,7 +1410,7 @@ async function json(response: Response, fallback: string): Promise<unknown> {
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
     throw new MigrationApiError(
-      `${fallback}：服务端返回非 JSON 响应（HTTP ${response.status}）。请检查代理或网关配置。`,
+      adkT("migrations.nonJsonResponse", { fallback, status: response.status }),
       response.status,
       "MIGRATION_RESPONSE_INVALID",
       false,
@@ -726,9 +1426,9 @@ export async function getMigrationCapabilities(
   const body = record(
     await json(
       await request("/capabilities", { signal }),
-      "读取迁移能力失败",
+      adkT("migrations.loadCapabilitiesFailed"),
     ),
-    "迁移能力",
+    adkT("migrations.labels.capabilities"),
   );
   if (
     typeof body.enabled !== "boolean" ||
@@ -737,25 +1437,116 @@ export async function getMigrationCapabilities(
     typeof body.sessionTtlSeconds !== "number" ||
     !Array.isArray(body.frameworks)
   ) {
-    throw new Error("迁移能力格式错误。");
+    throw new Error(adkT("migrations.invalidCapabilities"));
   }
-  return {
+  const capability: MigrationCapabilities = {
     enabled: body.enabled,
     reason: body.reason,
     maxUploadBytes: body.maxUploadBytes,
     sessionTtlSeconds: body.sessionTtlSeconds,
-    frameworks: body.frameworks.map((item) => framework(item, "迁移框架")),
+    frameworks: body.frameworks.map((item) =>
+      framework(item, adkT("migrations.labels.framework")),
+    ),
   };
+  if (body.model !== undefined) {
+    const model = record(
+      body.model,
+      adkT("migrations.labels.modelCapabilities"),
+    );
+    if (typeof model.configured !== "boolean" || typeof model.id !== "string") {
+      throw new Error(adkT("migrations.invalidModelCapabilities"));
+    }
+    capability.model = { configured: model.configured, id: model.id };
+  }
+  if (body.evaluation !== undefined) {
+    const evaluation = record(
+      body.evaluation,
+      adkT("migrations.labels.evaluationCapabilities"),
+    );
+    if (
+      typeof evaluation.available !== "boolean" ||
+      typeof evaluation.reason !== "string" ||
+      typeof evaluation.maxCases !== "number" ||
+      typeof evaluation.maxDatasetBytes !== "number" ||
+      typeof evaluation.maxMessagesPerCase !== "number" ||
+      typeof evaluation.maxMessagesBytes !== "number" ||
+      typeof evaluation.maxReferenceOutputBytes !== "number" ||
+      typeof evaluation.maxCriteria !== "number" ||
+      typeof evaluation.maxCriterionBytes !== "number" ||
+      typeof evaluation.maxCapturedOutputBytes !== "number" ||
+      evaluation.inputMode !== "page" ||
+      !Array.isArray(evaluation.pageInputMethods) ||
+      !evaluation.pageInputMethods.every((item) =>
+        ["manual", "bulk_paste"].includes(String(item)),
+      ) ||
+      evaluation.defaultPreset !== "standard" ||
+      typeof evaluation.maximumSessionTtlSeconds !== "number" ||
+      !Array.isArray(evaluation.dimensions)
+    ) {
+      throw new Error(
+        adkT("migrations.invalidFormat", {
+          label: adkT("migrations.labels.evaluationCapabilities"),
+        }),
+      );
+    }
+    capability.evaluation = {
+      available: evaluation.available,
+      reason: evaluation.reason,
+      maxCases: evaluation.maxCases,
+      maxDatasetBytes: evaluation.maxDatasetBytes,
+      maxMessagesPerCase: evaluation.maxMessagesPerCase,
+      maxMessagesBytes: evaluation.maxMessagesBytes,
+      maxReferenceOutputBytes: evaluation.maxReferenceOutputBytes,
+      maxCriteria: evaluation.maxCriteria,
+      maxCriterionBytes: evaluation.maxCriterionBytes,
+      maxCapturedOutputBytes: evaluation.maxCapturedOutputBytes,
+      inputMode: "page",
+      pageInputMethods: evaluation.pageInputMethods as Array<
+        "manual" | "bulk_paste"
+      >,
+      defaultPreset: "standard",
+      maximumSessionTtlSeconds: evaluation.maximumSessionTtlSeconds,
+      dimensions: evaluation.dimensions.map((item) => {
+        const dimension = record(
+          item,
+          adkT("migrations.labels.evaluationDimension"),
+        );
+        if (
+          typeof dimension.label !== "string" ||
+          typeof dimension.description !== "string"
+        ) {
+          throw new Error(
+            adkT("migrations.invalidFormat", {
+              label: adkT("migrations.labels.evaluationDimension"),
+            }),
+          );
+        }
+        return {
+          id: evaluationDimension(
+            dimension.id,
+            adkT("migrations.labels.evaluationDimension"),
+          ),
+          label: dimension.label,
+          description: dimension.description,
+        };
+      }),
+    };
+  }
+  return capability;
 }
 
 export async function listMigrationTasks(
   signal?: AbortSignal,
 ): Promise<MigrationTask[]> {
   const body = record(
-    await json(await request("/tasks", { signal }), "读取迁移会话失败"),
-    "迁移会话列表",
+    await json(
+      await request("/tasks", { signal }),
+      adkT("migrations.loadTasksFailed"),
+    ),
+    adkT("migrations.labels.taskList"),
   );
-  if (!Array.isArray(body.items)) throw new Error("迁移会话列表格式错误。");
+  if (!Array.isArray(body.items))
+    throw new Error(adkT("migrations.invalidTaskList"));
   return body.items.map(normalizeTask);
 }
 
@@ -763,6 +1554,13 @@ export async function createMigrationTask(args: {
   taskId: string;
   sourceFileName: string;
   instruction: string;
+  modelId?: string;
+  evaluation?: {
+    enabled: true;
+    preset: "standard" | "custom";
+    dimensions?: MigrationEvaluationDimensionId[];
+    locale: MigrationEvaluationLocale;
+  };
   signal?: AbortSignal;
 }): Promise<MigrationTask> {
   return normalizeTask(
@@ -776,14 +1574,219 @@ export async function createMigrationTask(args: {
             taskId: args.taskId,
             sourceFileName: args.sourceFileName,
             instruction: args.instruction,
+            ...(args.modelId ? { modelId: args.modelId } : {}),
+            ...(args.evaluation ? { evaluation: args.evaluation } : {}),
           }),
           signal: args.signal,
         },
         SESSION_START_TIMEOUT_MS,
       ),
-      "创建迁移会话失败",
+      adkT("migrations.createTaskFailed"),
     ),
   );
+}
+
+function normalizeEvaluationCase(value: unknown): MigrationEvaluationCase {
+  const item = record(value, adkT("migrations.labels.evaluationCase"));
+  if (
+    typeof item.caseId !== "string" ||
+    typeof item.userInput !== "string" ||
+    !Array.isArray(item.priorMessages) ||
+    !Array.isArray(item.criteria)
+  ) {
+    throw new Error(
+      adkT("migrations.invalidFormat", {
+        label: adkT("migrations.labels.evaluationCase"),
+      }),
+    );
+  }
+  return {
+    caseId: item.caseId,
+    userInput: item.userInput,
+    expectedOutcome:
+      item.expectedOutcome === null || typeof item.expectedOutcome === "string"
+        ? item.expectedOutcome
+        : null,
+    criteria: stringArray(
+      item.criteria,
+      adkT("migrations.labels.evaluationCriteria"),
+    ),
+    priorMessages: item.priorMessages.map((messageValue) => {
+      const message = record(
+        messageValue,
+        adkT("migrations.labels.evaluationMessage"),
+      );
+      if (
+        !["user", "assistant"].includes(String(message.role)) ||
+        typeof message.content !== "string"
+      ) {
+        throw new Error(
+          adkT("migrations.invalidFormat", {
+            label: adkT("migrations.labels.evaluationMessage"),
+          }),
+        );
+      }
+      return {
+        role: message.role as "user" | "assistant",
+        content: message.content,
+      };
+    }),
+  };
+}
+
+function normalizeEvaluationDataset(
+  value: unknown,
+): MigrationEvaluationDataset {
+  const dataset = record(value, adkT("migrations.labels.evaluationDataset"));
+  if (typeof dataset.locked !== "boolean" || !Array.isArray(dataset.cases)) {
+    throw new Error(
+      adkT("migrations.invalidFormat", {
+        label: adkT("migrations.labels.evaluationDataset"),
+      }),
+    );
+  }
+  return {
+    locked: dataset.locked,
+    cases: dataset.cases.map(normalizeEvaluationCase),
+    ...(dataset.asset !== undefined
+      ? { asset: normalizeEvaluationAsset(dataset.asset) }
+      : {}),
+  };
+}
+
+export async function putMigrationEvaluationDataset(
+  taskId: string,
+  cases: MigrationEvaluationCase[],
+  signal?: AbortSignal,
+): Promise<MigrationEvaluationDataset> {
+  return normalizeEvaluationDataset(
+    await json(
+      await request(
+        `/tasks/${encodeURIComponent(taskId)}/evaluation/dataset`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cases }),
+          signal,
+        },
+        TRANSFER_REQUEST_TIMEOUT_MS,
+      ),
+      adkT("migrations.evaluation.datasetSaveFailed"),
+    ),
+  );
+}
+
+export async function getMigrationEvaluationDataset(
+  taskId: string,
+  signal?: AbortSignal,
+): Promise<MigrationEvaluationDataset> {
+  return normalizeEvaluationDataset(
+    await json(
+      await request(`/tasks/${encodeURIComponent(taskId)}/evaluation/dataset`, {
+        signal,
+      }),
+      adkT("migrations.evaluation.datasetLoadFailed"),
+    ),
+  );
+}
+
+export async function getMigrationEvaluation(
+  taskId: string,
+  signal?: AbortSignal,
+): Promise<MigrationEvaluationStatus> {
+  return normalizeEvaluation(
+    await json(
+      await request(`/tasks/${encodeURIComponent(taskId)}/evaluation`, {
+        signal,
+      }),
+      adkT("migrations.evaluation.statusLoadFailed"),
+    ),
+  );
+}
+
+export async function resumeMigrationEvaluation(
+  taskId: string,
+  environment: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<MigrationEvaluationStatus> {
+  return normalizeEvaluation(
+    await json(
+      await request(
+        `/tasks/${encodeURIComponent(taskId)}/evaluation/resume`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ environment }),
+          signal,
+        },
+        SESSION_START_TIMEOUT_MS,
+      ),
+      adkT("migrations.evaluation.resumeFailed"),
+    ),
+  );
+}
+
+export async function retryMigrationEvaluation(
+  taskId: string,
+  signal?: AbortSignal,
+): Promise<MigrationEvaluationStatus> {
+  return normalizeEvaluation(
+    await json(
+      await request(
+        `/tasks/${encodeURIComponent(taskId)}/evaluation/retry`,
+        { method: "POST", signal },
+        SESSION_START_TIMEOUT_MS,
+      ),
+      adkT("migrations.evaluation.retryFailed"),
+    ),
+  );
+}
+
+export async function getMigrationEvaluationReport(
+  taskId: string,
+  versionId: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const response = await request(
+    `/tasks/${encodeURIComponent(taskId)}/evaluation/report?versionId=${encodeURIComponent(versionId)}`,
+    { signal },
+  );
+  if (!response.ok) {
+    throw await errorFrom(
+      response,
+      adkT("migrations.evaluation.reportLoadFailed"),
+    );
+  }
+  const contentType = response.headers.get("Content-Type") ?? "";
+  const content = await response.text();
+  if (!contentType.toLowerCase().includes("text/html") || !content.trim()) {
+    throw new Error(adkT("migrations.evaluation.reportLoadFailed"));
+  }
+  return content;
+}
+
+export async function downloadMigrationEvaluationReport(
+  taskId: string,
+  versionId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await request(
+    `/tasks/${encodeURIComponent(taskId)}/evaluation/report/download?versionId=${encodeURIComponent(versionId)}`,
+    { signal },
+    TRANSFER_REQUEST_TIMEOUT_MS,
+  );
+  if (!response.ok) {
+    throw await errorFrom(
+      response,
+      adkT("migrations.evaluation.reportDownloadFailed"),
+    );
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = responseFilename(response, `${taskId}-evaluation-report.html`);
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
 export async function uploadMigrationSource(
@@ -803,7 +1806,7 @@ export async function uploadMigrationSource(
         },
         SESSION_START_TIMEOUT_MS,
       ),
-      "上传迁移项目失败",
+      adkT("migrations.uploadProjectFailed"),
     ),
   );
 }
@@ -815,7 +1818,7 @@ export async function getMigrationTask(
   return normalizeTask(
     await json(
       await request(`/tasks/${encodeURIComponent(taskId)}`, { signal }),
-      "读取迁移会话失败",
+      adkT("migrations.loadTasksFailed"),
     ),
   );
 }
@@ -826,13 +1829,195 @@ export async function getMigrationActivity(
 ): Promise<MigrationActivity> {
   return normalizeActivity(
     await json(
-      await request(
-        `/tasks/${encodeURIComponent(taskId)}/activity`,
-        { signal, cache: "no-store" },
-      ),
-      "读取迁移执行动态失败",
+      await request(`/tasks/${encodeURIComponent(taskId)}/activity`, {
+        signal,
+        cache: "no-store",
+      }),
+      adkT("migrations.loadActivityFailed"),
     ),
   );
+}
+
+/** One frame of the task event stream; every payload is a whole snapshot. */
+export type MigrationTaskEvent =
+  | { kind: "task"; seq: number; task: MigrationTask }
+  | { kind: "activity"; seq: number; activity: MigrationActivity }
+  /** ``code`` and ``message`` are empty on the frame that reports recovery. */
+  | {
+      kind: "error";
+      seq: number;
+      code: string;
+      message: string;
+      retryable: boolean;
+    }
+  | { kind: "done"; seq: number; state: string };
+
+const STREAM_RETRY_MS = 1_000;
+const STREAM_RETRY_MAX_MS = 15_000;
+
+function invalidStream(): Error {
+  return new Error(adkT("migrations.invalidEventsResponse"));
+}
+
+/**
+ * Parse one Server-Sent Events frame into a task event.
+ *
+ * Heartbeats, comments, and event names this build does not know yet return ``null``
+ * rather than throwing, so a newer Studio can add events without breaking the page.
+ */
+export function parseMigrationStreamFrame(frame: string): MigrationTaskEvent | null {
+  const lines = frame.split(/\r?\n/);
+  const name = lines
+    .find((line) => line.startsWith("event:"))
+    ?.slice(6)
+    .trim();
+  if (!name) return null;
+  const data = lines
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n");
+  if (!data) return null;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(data);
+  } catch {
+    throw invalidStream();
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw invalidStream();
+  }
+  const value = payload as Record<string, unknown>;
+  const seq = value.seq;
+  if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 1) {
+    throw invalidStream();
+  }
+  if (name === "task") return { kind: "task", seq, task: normalizeTask(value) };
+  if (name === "activity") {
+    return { kind: "activity", seq, activity: normalizeActivity(value) };
+  }
+  if (name === "error") {
+    return {
+      kind: "error",
+      seq,
+      // An error frame without a code or a message says the task is readable again.
+      code: typeof value.code === "string" ? value.code : "",
+      message: typeof value.message === "string" ? value.message : "",
+      retryable: value.retryable === true,
+    };
+  }
+  if (name === "done") {
+    return {
+      kind: "done",
+      seq,
+      state: typeof value.state === "string" ? value.state : "",
+    };
+  }
+  return null;
+}
+
+function streamPause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal.addEventListener("abort", finish, { once: true });
+    if (signal.aborted) finish();
+  });
+}
+
+async function readMigrationStream(args: {
+  taskId: string;
+  cursor: number;
+  signal: AbortSignal;
+  onEvent: (event: MigrationTaskEvent) => void;
+  advance: (seq: number) => void;
+}): Promise<boolean> {
+  const response = await request(
+    `/tasks/${encodeURIComponent(args.taskId)}/events?after=${args.cursor}`,
+    {
+      signal: args.signal,
+      cache: "no-store",
+      headers: { Accept: "text/event-stream" },
+    },
+    0,
+  );
+  if (!response.ok) {
+    throw await errorFrom(response, adkT("migrations.loadEventsFailed"));
+  }
+  if (!response.body) throw invalidStream();
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let done = false;
+  try {
+    while (!done) {
+      const chunk = await reader.read();
+      buffer += decoder.decode(chunk.value, { stream: !chunk.done });
+      const frames = buffer.split(/\r?\n\r?\n/);
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        const event = parseMigrationStreamFrame(frame);
+        if (!event) continue;
+        args.advance(event.seq);
+        args.onEvent(event);
+        if (event.kind === "done") done = true;
+      }
+      if (chunk.done) break;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  return done;
+}
+
+/**
+ * Follow one migration task until it settles, reconnecting from the last sequence it
+ * saw.  The server owns the payloads and the settlement rule, so the page no longer
+ * polls: it applies snapshots and stops when the stream says ``done``.
+ */
+export async function observeMigrationTask(args: {
+  taskId: string;
+  signal: AbortSignal;
+  after?: number;
+  onEvent: (event: MigrationTaskEvent) => void;
+  onConnection?: (message: string) => void;
+}): Promise<void> {
+  let cursor = Math.max(0, Math.trunc(args.after ?? 0));
+  let retry = 0;
+  while (!args.signal.aborted) {
+    try {
+      const done = await readMigrationStream({
+        taskId: args.taskId,
+        cursor,
+        signal: args.signal,
+        onEvent: args.onEvent,
+        advance: (seq) => {
+          cursor = seq;
+        },
+      });
+      retry = 0;
+      if (done || args.signal.aborted) return;
+      args.onConnection?.("");
+      await streamPause(STREAM_RETRY_MS, args.signal);
+    } catch (error) {
+      if (args.signal.aborted) return;
+      if (
+        error instanceof MigrationApiError &&
+        [401, 403, 404].includes(error.status)
+      ) {
+        throw error;
+      }
+      args.onConnection?.(adkT("migrations.reconnecting"));
+      await streamPause(
+        Math.min(STREAM_RETRY_MS * 2 ** retry++, STREAM_RETRY_MAX_MS),
+        args.signal,
+      );
+    }
+  }
 }
 
 export async function confirmMigrationTask(args: {
@@ -867,7 +2052,7 @@ export async function confirmMigrationTask(args: {
         },
         SESSION_START_TIMEOUT_MS,
       ),
-      "启动迁移失败",
+      adkT("migrations.startFailed"),
     ),
   );
 }
@@ -897,7 +2082,33 @@ export async function submitMigrationAnalysisAnswers(args: {
         },
         SESSION_START_TIMEOUT_MS,
       ),
-      "提交分析补充信息失败",
+      adkT("migrations.submitAnswersFailed"),
+    ),
+  );
+}
+
+export async function submitMigrationAnalysisInput(args: {
+  taskId: string;
+  requestId: string;
+  answers: Record<string, string>;
+  signal?: AbortSignal;
+}): Promise<MigrationTask> {
+  return normalizeTask(
+    await json(
+      await request(
+        `/tasks/${encodeURIComponent(args.taskId)}/input`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            requestId: args.requestId,
+            answers: args.answers,
+          }),
+          signal: args.signal,
+        },
+        SESSION_START_TIMEOUT_MS,
+      ),
+      adkT("migrations.submitInputFailed"),
     ),
   );
 }
@@ -908,11 +2119,11 @@ export async function stopMigrationTask(
 ): Promise<MigrationTask> {
   return normalizeTask(
     await json(
-      await request(
-        `/tasks/${encodeURIComponent(taskId)}/stop`,
-        { method: "POST", signal },
-      ),
-      "终止迁移失败",
+      await request(`/tasks/${encodeURIComponent(taskId)}/stop`, {
+        method: "POST",
+        signal,
+      }),
+      adkT("migrations.stopFailed"),
     ),
   );
 }
@@ -922,11 +2133,11 @@ export async function deleteMigrationTask(
   signal?: AbortSignal,
 ): Promise<void> {
   await json(
-    await request(
-      `/tasks/${encodeURIComponent(taskId)}`,
-      { method: "DELETE", signal },
-    ),
-    "删除迁移会话失败",
+    await request(`/tasks/${encodeURIComponent(taskId)}`, {
+      method: "DELETE",
+      signal,
+    }),
+    adkT("migrations.deleteTaskFailed"),
   );
 }
 
@@ -936,11 +2147,10 @@ export async function getMigrationArtifact(
 ): Promise<MigrationArtifact> {
   return normalizeArtifact(
     await json(
-      await request(
-        `/tasks/${encodeURIComponent(taskId)}/artifact`,
-        { signal },
-      ),
-      "读取迁移产物失败",
+      await request(`/tasks/${encodeURIComponent(taskId)}/artifact`, {
+        signal,
+      }),
+      adkT("migrations.loadArtifactFailed"),
     ),
   );
 }
@@ -956,7 +2166,8 @@ export async function getMigrationArtifactFile(
     { signal },
     TRANSFER_REQUEST_TIMEOUT_MS,
   );
-  if (!response.ok) throw await errorFrom(response, "读取迁移产物文件失败");
+  if (!response.ok)
+    throw await errorFrom(response, adkT("migrations.loadArtifactFileFailed"));
   return {
     blob: await response.blob(),
     mimeType:
@@ -980,7 +2191,8 @@ export async function downloadMigrationArtifact(
     { signal },
     TRANSFER_REQUEST_TIMEOUT_MS,
   );
-  if (!response.ok) throw await errorFrom(response, "下载迁移产物失败");
+  if (!response.ok)
+    throw await errorFrom(response, adkT("migrations.downloadArtifactFailed"));
   const url = URL.createObjectURL(await response.blob());
   const link = document.createElement("a");
   link.href = url;

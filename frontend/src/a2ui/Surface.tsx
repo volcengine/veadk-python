@@ -2,6 +2,7 @@
 // the component registry.
 
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { resolve as resolveValue, resolveString as resolveStr } from "./bind";
 import { getRenderer, type RenderContext } from "./registry";
 import type {
@@ -68,9 +69,10 @@ export function buildSurfaces(messages: A2uiMessage[]): SurfaceState[] {
 }
 
 function Fallback({ node }: { node: A2uiComponent }) {
+  const { t } = useTranslation("conversation");
   return (
     <details className="a2ui-fallback">
-      <summary>Unsupported component: {node.component}</summary>
+      <summary>{t("blocks.unsupportedComponent", { component: node.component })}</summary>
       <pre>{JSON.stringify(node, null, 2)}</pre>
     </details>
   );

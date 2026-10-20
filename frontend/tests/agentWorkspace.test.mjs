@@ -35,6 +35,25 @@ const connectionsSource = readFileSync(
   new URL("../src/adk/connections.ts", import.meta.url),
   "utf8",
 );
+const skillSourcePickerSource = readFileSync(
+  new URL("../src/ui/SkillSourcePicker.tsx", import.meta.url),
+  "utf8",
+);
+const enUiCatalog = JSON.parse(
+  readFileSync(new URL("../src/i18n/resources/en-US/ui.json", import.meta.url), "utf8"),
+);
+const zhUiCatalog = JSON.parse(
+  readFileSync(new URL("../src/i18n/resources/zh-CN/ui.json", import.meta.url), "utf8"),
+);
+
+test("failed MPA deployment tasks expose explicit safe retry", () => {
+  assert.match(
+    workspaceSource,
+    /const retryOperation = \(\) => \{[\s\S]*?task\.retry\(\)[\s\S]*?\.catch\(\(\) => undefined\)[\s\S]*?\.finally\(\(\) => setRetrying\(false\)\)/,
+  );
+  assert.equal(enUiCatalog.agentWorkspace.retryOperation, "Retry operation");
+  assert.equal(zhUiCatalog.agentWorkspace.retryOperation, "重试操作");
+});
 
 test("Agent navigation uses the card page and keeps only detail workspace routes", () => {
   assert.match(appSource, /import \{[\s\S]*?AgentWorkspace[\s\S]*?\} from "\.\/ui\/AgentWorkspace"/);
@@ -44,7 +63,7 @@ test("Agent navigation uses the card page and keeps only detail workspace routes
   );
   assert.doesNotMatch(appSource, /<Navbar\b/);
   assert.doesNotMatch(appSource, /showManageAgents\s*\?\s*"智能体"/);
-  assert.match(appSource, /myAgents \? \([\s\S]*?<MyAgents/);
+  assert.match(appSource, /myAgents && !showManageAgents \? \([\s\S]*?<MyAgents/);
   assert.match(
     appSource,
     /const showManageAgents = manageAgents && Boolean\([\s\S]*?agentDetailTarget \|\| focusedDeploymentTaskId \|\| focusedWorkspaceAgentId/,
@@ -59,6 +78,7 @@ test("workspace drafts stay wired to custom Agent creation", () => {
   assert.match(appSource, /draftStorageError/);
   assert.match(appSource, /onDraftChange=\{\(draft, dirty\) =>/);
   assert.match(appSource, /deploymentTarget=\{runtimeUpdateTarget \?\? undefined\}/);
+  assert.match(appSource, /workspaceDraftId=\{editingDraftId \|\| undefined\}/);
   assert.match(
     appSource,
     /if \(dirty\)[\s\S]*?saveWorkspaceDraft[\s\S]*?else[\s\S]*?restoreWorkspaceDraftBaseline\(editingDraftId\)/,
@@ -66,6 +86,33 @@ test("workspace drafts stay wired to custom Agent creation", () => {
   assert.match(
     appSource,
     /onDiscard=\{editingDraftId \? \(\) => \{[\s\S]*?restoreWorkspaceDraftBaseline\(editingDraftId\)[\s\S]*?setFocusedWorkspaceAgentId\(appName\)/,
+  );
+});
+
+test("every continue-edit entry routes persisted quick drafts back to quick creation", () => {
+  assert.match(
+    appSource,
+    /const activeDraft = nextDrafts\.find[\s\S]*?setImportedDraft\(activeDraft\.draft\);[\s\S]*?setCustomCreationSurface\([\s\S]*?workspaceAgentCreationMode\(activeDraft\) === "quick"[\s\S]*?\? "vulcan"[\s\S]*?: "traditional"/,
+  );
+
+  const editHandlers = [
+    ...appSource.matchAll(/onEditDraft=\{\(item\) => \{([\s\S]*?)\n\s*\}\}/g),
+  ];
+  assert.ok(editHandlers.length >= 2);
+  for (const [, handler] of editHandlers) {
+    assert.match(handler, /setImportedDraft\(item\.draft\)/);
+    assert.match(
+      handler,
+      /setCustomCreationSurface\([\s\S]*?workspaceAgentCreationMode\(item\) === "quick"[\s\S]*?\? "vulcan"[\s\S]*?: "traditional"/,
+    );
+    assert.match(handler, /setRuntimeUpdateTarget\(item\.deploymentTarget \?\? null\)/);
+  }
+});
+
+test("running deployments match drafts by stable draft id before names", () => {
+  assert.match(
+    workspaceSource,
+    /task\.draftId === selectedDraft\.id[\s\S]*?task\.agentDraft\?\.name === selectedDraft\.draft\.name/,
   );
 });
 
@@ -92,26 +139,92 @@ test("focused agent details can render without the workspace tabs or list sideba
   assert.match(appSource, /runtimeApp: detailConnection\?\.apps\[0\]/);
   assert.match(workspaceSource, /const knownApp = selectedAgent\?\.runtimeApp \?\? ""[\s\S]*?getRuntimeAgentInfo\([\s\S]*?knownApp/);
   assert.match(clientSource, /loadDraft = true/);
-  assert.match(clientSource, /return fetchAgentInfo\(app, ep, false\)/);
+  assert.match(clientSource, /return fetchAgentInfoWithA2aFallback\(app, ep, false, signal\)/);
+});
+
+test("focused agent details use the shared resource detail header", () => {
+  assert.match(workspaceSource, /onBack\?: \(\) => void/);
+  assert.match(
+    workspaceSource,
+    /<ResourceDetailLayout[\s\S]*?title=\{selectedName\}[\s\S]*?identitySeed=\{selectedName\}[\s\S]*?backLabel=\{t\("agentWorkspace\.backToAgentList"\)\}[\s\S]*?onBack=\{detailOnly \? onBack : undefined\}/,
+  );
+  assert.doesNotMatch(workspaceSource, /import \{ PageBackButton \}/);
+  assert.match(appSource, /<AgentWorkspace[\s\S]*?detailOnly[\s\S]*?onBack=\{closeAgentDetailPage\}/);
+});
+
+test("agent detail navigation delegates responsive layout to the shared resource shell", () => {
+  const detailLayoutStart = workspaceSource.indexOf("<ResourceDetailLayout");
+  const detailLayoutContractEnd = workspaceSource.indexOf("activeSectionKey={section}", detailLayoutStart);
+  assert.ok(detailLayoutStart >= 0 && detailLayoutContractEnd > detailLayoutStart);
+  const detailLayoutContract = workspaceSource.slice(detailLayoutStart, detailLayoutContractEnd);
+  assert.match(detailLayoutContract, /sections=\{visibleAgentSections\.map/);
+  assert.doesNotMatch(detailLayoutContract, /className="aw-agent-tabs"/);
+  assert.match(workspaceSource, /activeSectionKey=\{section\}/);
+  assert.match(workspaceSource, /onSectionChange=\{setSection\}/);
+  assert.match(
+    workspaceStyles,
+    /@media \(max-width: 720px\)[\s\S]*?\.aw-version-row\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/,
+  );
+  assert.match(
+    workspaceStyles,
+    /@media \(max-width: 720px\)[\s\S]*?\.aw-version-row p\s*\{[\s\S]*?overflow-wrap:\s*anywhere/,
+  );
+});
+
+test("runtime detail failures remain visible and retryable", () => {
+  assert.match(workspaceSource, /const \[detailAgentInfoError, setDetailAgentInfoError\] = useState\(""\)/);
+  assert.match(workspaceSource, /const \[detailAgentInfoUnsupported, setDetailAgentInfoUnsupported\] = useState\(false\)/);
+  assert.match(workspaceSource, /const \[runtimeDetailError, setRuntimeDetailError\] = useState\(""\)/);
+  assert.match(
+    workspaceSource,
+    /getRuntimeAgentInfo[\s\S]*?\.catch\(\(error: unknown\)[\s\S]*?setDetailAgentInfoError/,
+  );
+  assert.match(
+    workspaceSource,
+    /getRuntimeDetail[\s\S]*?\.catch\(\(error: unknown\)[\s\S]*?setRuntimeDetailError/,
+  );
+  assert.match(workspaceSource, /title=\{t\("agentWorkspace\.partialInfoUnavailable"\)\}/);
+  assert.match(workspaceSource, /description=\{t\("agentWorkspace\.upgradeRuntimeForDetails"\)\}/);
+  assert.match(workspaceSource, /title=\{t\("agentWorkspace\.detailLoadFailed"\)\}/);
+  assert.doesNotMatch(workspaceSource, /className="aw-usage-state aw-detail-fetch-error is-error"/);
+  assert.doesNotMatch(workspaceSource, /<DeploymentErrorMessage/);
+  assert.match(workspaceSource, /setDetailReloadToken\(\(value\) => value \+ 1\)/);
 });
 
 test("agent details show capability badges and deployment state before the flow", () => {
   assert.match(workspaceSource, /const toolNames = useMemo/);
   assert.match(workspaceSource, /const skillNames = useMemo/);
-  assert.match(workspaceSource, /<dt>工具<\/dt>[\s\S]*?className="aw-fact-badges"[\s\S]*?toolNames\.map/);
-  assert.match(workspaceSource, /<dt>技能<\/dt>[\s\S]*?className="aw-fact-badges"[\s\S]*?skillNames\.map/);
+  assert.match(workspaceSource, /<dt>\{t\("agentSelector\.tools"\)\}<\/dt>[\s\S]*?className="aw-fact-badges"[\s\S]*?toolNames\.map/);
+  assert.match(workspaceSource, /<dt>\{t\("agentSelector\.skills"\)\}<\/dt>[\s\S]*?className="aw-fact-badges"[\s\S]*?skillNames\.map/);
   assert.match(workspaceStyles, /\.aw-fact-badges span\s*\{[\s\S]*?border-radius:\s*999px;/);
   assert.ok(
-    workspaceSource.indexOf("<h3>部署配置</h3>") < workspaceSource.indexOf("<strong>执行流程</strong>"),
+    workspaceSource.indexOf('t("agentWorkspace.deploymentConfig")') < workspaceSource.indexOf('t("agentWorkspace.executionFlow")'),
   );
+  assert.ok(
+    workspaceSource.indexOf('t("agentWorkspace.executionFlow")') < workspaceSource.indexOf('t("agentWorkspace.details")'),
+  );
+  assert.ok(
+    workspaceSource.indexOf('t("agentWorkspace.details")') < workspaceSource.indexOf('t("agentWorkspace.selectedOptimizations")'),
+  );
+  assert.match(
+    workspaceSource,
+    /const publishedHarnessSidecar =[\s\S]*?selectedAgentInfo\?\.draft\?\.harnessSidecar \?\?[\s\S]*?harnessIntentFromRuntimeEnvs\(runtimeDetail\?\.envs\)/,
+  );
+  assert.match(workspaceSource, /aria-label=\{t\("agentWorkspace\.selectedOptimizations"\)\}/);
+  assert.doesNotMatch(workspaceSource, /<h3>Harness Sidecar<\/h3>/);
+  assert.match(workspaceSource, /<dt>\{t\("agentWorkspace\.configurationStatus"\)\}<\/dt>[\s\S]*?t\("skillCenter\.status\.enabled"\)[\s\S]*?t\("skillCenter\.status\.inactive"\)[\s\S]*?t\("agentWorkspace\.notRecorded"\)/);
+  assert.match(workspaceSource, /<dt>\{t\("agentWorkspace\.optimizationProfile"\)\}<\/dt>[\s\S]*?harnessSidecarProfileLabel/);
+  assert.match(workspaceSource, /<dt>\{t\("agentWorkspace\.selectedOptimizations"\)\}<\/dt>[\s\S]*?publishedHarnessOptimizations\.map/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.selectedOptimizationsDescription"\)/);
+  assert.doesNotMatch(workspaceSource, /发布时选择的智能体优化项，只读展示。/);
   assert.match(workspaceSource, /status\.toLowerCase\(\) === "ready"[\s\S]*?className="aw-status-dot"/);
   assert.match(workspaceStyles, /\.aw-readonly-config dd\.is-ready\s*\{[\s\S]*?color:\s*hsl\(142 62% 30%\)/);
   assert.match(workspaceSource, /const executionFlowKey = selectedAgentInfo/);
   assert.match(workspaceSource, /const draftFlowKey = useMemo\(\(\) => canvasDraftKey\(draft\), \[draft\]\)/);
   assert.match(workspaceSource, /const displayCurrentVersion =[\s\S]*?selectedAgent\?\.currentVersion \?\? runtimeDetail\?\.currentVersion \?\? null/);
   assert.match(workspaceSource, /const runtimeVersionKey =[\s\S]*?displayCurrentVersion \?\? selectedPendingTask\?\.startedAt/);
-  assert.match(workspaceSource, /<span>v\{displayCurrentVersion\}<\/span>/);
-  assert.match(workspaceSource, /\? `v\$\{displayCurrentVersion\}`[\s\S]*?: "暂未提供"/);
+  assert.match(workspaceSource, /className="aw-agent-meta">v\{displayCurrentVersion\}<\/span>/);
+  assert.match(workspaceSource, /\? `v\$\{displayCurrentVersion\}`[\s\S]*?: t\("agentWorkspace\.notAvailable"\)/);
   assert.match(
     workspaceSource,
     /className="aw-canvas"[\s\S]*?<AgentBuildCanvas[\s\S]*?key=\{executionFlowKey\}/,
@@ -131,11 +244,11 @@ test("agent details show capability badges and deployment state before the flow"
 test("agent details expose detected integration methods without inventing unavailable endpoints", () => {
   assert.match(
     workspaceSource,
-    /type AgentSection = "basic" \| "usage" \| "evaluations" \| "optimizations" \| "integrations"/,
+    /type AgentSection = "basic" \| "profileConfig" \| "sessionConfig" \| "usage" \| "diagnostics" \| "evaluations" \| "optimizations" \| "integrations" \| "versions"/,
   );
   assert.match(
     workspaceSource,
-    /\{ id: "basic", label: "基本信息" \},\s*\{ id: "usage", label: "用量统计" \},\s*\{ id: "evaluations", label: "评测集" \},\s*\{ id: "optimizations", label: "优化项" \},\s*\{ id: "integrations", label: "接入方法" \}/,
+    /const AGENT_SECTIONS: AgentSection\[\] = \[[\s\S]*?"basic",[\s\S]*?"profileConfig",[\s\S]*?"sessionConfig",[\s\S]*?"usage",[\s\S]*?"diagnostics",[\s\S]*?"evaluations",[\s\S]*?"optimizations",[\s\S]*?"integrations",[\s\S]*?"versions",[\s\S]*?\]/,
   );
   assert.match(workspaceSource, /role="tablist"/);
   assert.match(workspaceSource, /role="tab"/);
@@ -144,7 +257,7 @@ test("agent details expose detected integration methods without inventing unavai
   assert.match(workspaceSource, /probeRuntimeApps/);
   assert.match(workspaceSource, /probeRuntimeA2a/);
   assert.match(workspaceSource, /type IntegrationProtocol = "api-server" \| "a2a"/);
-  assert.match(workspaceSource, /aria-label="接入协议"/);
+  assert.match(workspaceSource, /aria-label=\{t\("agentWorkspace\.integrationProtocol"\)\}/);
   assert.match(workspaceSource, /role="tab"/);
   assert.match(workspaceSource, /aria-controls=\{`integration-\$\{protocol\.id\}-panel`\}/);
   assert.match(workspaceSource, /setIntegrationProtocol/);
@@ -163,9 +276,9 @@ test("agent details expose detected integration methods without inventing unavai
   assert.match(workspaceSource, /<Markdown/);
   assert.match(workspaceSource, /<API_KEY>/);
   assert.match(workspaceSource, /revealRuntimeApiKey/);
-  assert.match(workspaceSource, /aria-label=\{visible \? "隐藏 API Key" : "显示 API Key"\}/);
+  assert.match(workspaceSource, /aria-label=\{visible \? t\("agentWorkspace\.hideApiKey"\) : t\("agentWorkspace\.showApiKey"\)\}/);
   assert.match(workspaceSource, /visible && value \? value : "\*\*\*\*"/);
-  assert.match(workspaceSource, /"暂无"/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.notAvailable"\)/);
   assert.match(
     workspaceSource,
     /section === "integrations" && integrationLoading[\s\S]*?className="aw-detail-loading"/,
@@ -215,15 +328,13 @@ test("runtime-backed Agent details load and paginate usage without stale respons
     /new URLSearchParams\(\{[\s\S]*?runtimeId,[\s\S]*?region,[\s\S]*?appName,[\s\S]*?page: String\(page\),[\s\S]*?pageSize: String\(pageSize\)/,
   );
   assert.match(clientSource, /`\/web\/agent-usage\?\$\{params\.toString\(\)\}`/);
-  assert.match(clientSource, /httpErrorMessage\(res, "加载 Agent 用量失败"\)/);
-  assert.match(clientSource, /服务端返回非 JSON 响应/);
+  assert.match(clientSource, /httpErrorMessage\(res, adkT\("client\.loadAgentUsageFailed"\)\)/);
+  assert.match(clientSource, /adkT\("client\.agentUsageNonJson"/);
   assert.match(clientSource, /Content-Type/);
-  assert.match(clientSource, /请确认当前服务以 Studio 模式启动/);
+  assert.match(clientSource, /adkT\("client\.checkStudioGateway"\)/);
 
-  assert.match(
-    workspaceSource,
-    /canViewUsage && selectedAgent\?\.runtimeId\s*\? AGENT_SECTIONS\s*:\s*AGENT_SECTIONS\.filter\(\(item\) => item\.id !== "usage"\)/,
-  );
+  assert.match(workspaceSource, /if \(item === "usage"\) return canViewUsage && selectedAgent\?\.runtimeId/);
+  assert.match(workspaceSource, /if \(item === "sessionConfig"\) return false/);
   assert.match(workspaceSource, /canViewUsage\?: boolean/);
   assert.match(workspaceSource, /section === "usage" && !canViewUsage[\s\S]*?setSection\("basic"\)/);
   assert.match(workspaceSource, /section !== "usage" \|\| !runtimeId/);
@@ -237,17 +348,17 @@ test("runtime-backed Agent details load and paginate usage without stale respons
   assert.match(workspaceSource, /response\.runtimeId !== runtimeId/);
   assert.match(workspaceSource, /response\.appName !== appName/);
 
-  assert.match(workspaceSource, /<h3>使用概览<\/h3>/);
-  assert.match(workspaceSource, /<dt>总调用次数<\/dt>/);
-  assert.match(workspaceSource, /<dt>使用用户数<\/dt>/);
-  assert.match(workspaceSource, /<th scope="col">用户<\/th>/);
-  assert.match(workspaceSource, /<th scope="col">调用次数<\/th>/);
-  assert.match(workspaceSource, /<th scope="col">最近使用<\/th>/);
-  assert.match(workspaceSource, /正在加载用量统计/);
-  assert.match(workspaceSource, /暂无使用记录。用户成功调用后将在这里显示。/);
+  assert.match(workspaceSource, /<h3>\{t\("agentWorkspace\.usageOverview"\)\}<\/h3>/);
+  assert.match(workspaceSource, /<dt>\{t\("agentWorkspace\.totalCalls"\)\}<\/dt>/);
+  assert.match(workspaceSource, /<dt>\{t\("agentWorkspace\.userCount"\)\}<\/dt>/);
+  assert.match(workspaceSource, /<th scope="col">\{t\("agentWorkspace\.user"\)\}<\/th>/);
+  assert.match(workspaceSource, /<th scope="col">\{t\("agentWorkspace\.callCount"\)\}<\/th>/);
+  assert.match(workspaceSource, /<th scope="col">\{t\("agentWorkspace\.lastUsed"\)\}<\/th>/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.loadingUsage"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.noUsage"\)/);
   assert.match(workspaceSource, /className="aw-usage-state is-error" role="alert"/);
   assert.match(workspaceSource, /setAgentUsageReloadToken/);
-  assert.match(workspaceSource, /aria-label="用量用户列表分页"/);
+  assert.match(workspaceSource, /aria-label=\{t\("agentWorkspace\.usagePagination"\)\}/);
   assert.match(workspaceSource, /setAgentUsagePage\(\(page\) => Math\.max\(1, page - 1\)\)/);
   assert.match(workspaceSource, /setAgentUsagePage\(\(page\) => page \+ 1\)/);
   assert.match(workspaceStyles, /\.aw-usage-summary/);
@@ -259,6 +370,166 @@ test("runtime-backed Agent details load and paginate usage without stale respons
   assert.match(workspaceStyles, /\.aw-usage-pagination button:disabled/);
 });
 
+test("MPA Agent detail consumes the dedicated MpaAgentView model", () => {
+  assert.match(clientSource, /export type MpaAgentBindingStatus/);
+  assert.match(clientSource, /export interface MpaAgentView/);
+  assert.match(clientSource, /export async function getMpaAgentView/);
+  assert.match(
+    clientSource,
+    /`\/web\/mpa\/agents\/\$\{encodeURIComponent\(params\.mpaInstanceId\)\}\/view\?\$\{query\.toString\(\)\}`/,
+  );
+  assert.match(workspaceSource, /getMpaAgentView/);
+  assert.match(workspaceSource, /const \[mpaAgentView, setMpaAgentView\]/);
+  assert.match(workspaceSource, /selectedMpaAgentView\?\.bindingStatus/);
+  assert.match(
+    workspaceSource,
+    /selectedMpaBindingStatus === "bound"[\s\S]*?currentSessionId/,
+  );
+  assert.match(workspaceSource, /t\("agentWorkspace\.mpaRuntimeMissing"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.mpaRuntimeBindingAmbiguous"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.mpaRuntimeOrphan"\)/);
+  assert.match(workspaceSource, /function mpaSafeErrorMessage/);
+  assert.match(workspaceSource, /runtime_legacy_auth_unsupported/);
+  assert.match(workspaceSource, /selectedMpaSafeError \|\|/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.mpaControlPlane"\)/);
+  assert.equal(
+    enUiCatalog.agentWorkspace.mpaRuntimeBindingAmbiguous,
+    "Multiple MPA Runtimes match this Agent. Resolve the binding before making changes.",
+  );
+  assert.equal(
+    zhUiCatalog.agentWorkspace.mpaRuntimeBindingAmbiguous,
+    "多个 MPA Runtime 匹配当前 Agent，请先修复绑定后再修改。",
+  );
+});
+
+test("MPA Agent details retain hidden Profile implementation without a navigation entry", () => {
+  assert.match(workspaceSource, /mpaProfileFromAgentDraft/);
+  assert.match(workspaceSource, /startMpaAgentOperation/);
+  assert.match(workspaceSource, /type MpaProfilePayload/);
+  assert.match(workspaceSource, /function MpaProfileConfigPanel/);
+  assert.match(workspaceSource, /if \(item === "profileConfig"\) return false/);
+  assert.match(workspaceSource, /const shouldLoadUpdateCapability = selectedAgentCategory !== "mpa"/);
+  assert.match(
+    workspaceSource,
+    /if \(!shouldLoadUpdateCapability \|\| !canUpdate \|\| !runtimeId \|\| !region\)/,
+  );
+  assert.match(workspaceSource, /const profileDraft = useMemo\(\(\) => mpaProfileFromAgentDraft\(draft\), \[draft\]\)/);
+  assert.match(workspaceSource, /const mpaProfileStatusRequestKey = mpaAgentViewRequestKey/);
+  assert.match(
+    workspaceSource,
+    /mpaProfileStatus\?\.requestKey === mpaProfileStatusRequestKey[\s\S]*?\? mpaProfileStatus\.value[\s\S]*?: selectedMpaAgentView\?\.profile/,
+  );
+  assert.match(
+    workspaceSource,
+    /setMpaProfileStatus\([\s\S]*?value\.profile[\s\S]*?\? \{ requestKey: mpaProfileStatusRequestKey, value: value\.profile \}[\s\S]*?: null/,
+  );
+  assert.match(workspaceSource, /const mpaProfileCanWrite = selectedMpaAgentView\?\.capabilities\.canWrite === true/);
+  assert.match(workspaceSource, /const profileConfigDisabledReason = !selectedAgent/);
+  assert.match(workspaceSource, /runtimeReady=\{mpaProfileCanWrite\}/);
+  assert.match(workspaceSource, /selectedMpaBindingStatus === "runtime_missing"[\s\S]*?t\("agentWorkspace\.mpaRuntimeMissing"\)/);
+  assert.match(workspaceSource, /selectedMpaBindingStatus === "binding_ambiguous"[\s\S]*?t\("agentWorkspace\.mpaRuntimeBindingAmbiguous"\)/);
+  assert.match(workspaceSource, /selectedMpaSafeError[\s\S]*?selectedMpaSafeError[\s\S]*?!mpaProfileCanWrite[\s\S]*?t\("agentWorkspace\.errors\.noManagePermission"\)/);
+  assert.match(workspaceSource, /export interface MpaProfileEditTarget/);
+  assert.match(workspaceSource, /onEditMpaProfile\?: \(target: MpaProfileEditTarget\) => void/);
+  assert.match(workspaceSource, /function editMpaProfileFromStudio\(\)/);
+  assert.match(workspaceSource, /onEditMpaProfile\?\.\(\{[\s\S]*?draft,[\s\S]*?runtimeId: selectedAgent\.runtimeId,[\s\S]*?runtimeRevision:/);
+  assert.match(workspaceSource, /onEditProfile=\{editMpaProfileFromStudio\}/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.editProfile"\)/);
+  assert.match(appSource, /type MpaProfileEditTarget/);
+  assert.match(appSource, /const editMpaProfile = \(target: MpaProfileEditTarget\) => \{/);
+  assert.match(appSource, /mpaProfileOnly: true/);
+  assert.match(appSource, /onEditMpaProfile=\{editMpaProfile\}/);
+  assert.match(workspaceSource, /function canonicalJson\(value: unknown\): string/);
+  assert.match(workspaceSource, /crypto\.subtle\.digest\("SHA-256", bytes\)/);
+  assert.match(workspaceSource, /return `mpa-profile:\$\{runtimeId\}:\$\{operationKind\}:\$\{hex\}`/);
+  assert.match(workspaceSource, /const operationKind = selectedMpaProfileStatus\?\.status === "applied"[\s\S]*?\? "update"[\s\S]*?: "create"/);
+  assert.match(workspaceSource, /const idempotencyKey = await profileIdempotencyKey\(/);
+  assert.match(
+    workspaceSource,
+    /startMpaAgentOperation\(\{[\s\S]*?operationKind,[\s\S]*?runtimeId,[\s\S]*?region,[\s\S]*?mpaInstanceId,[\s\S]*?draft,/,
+  );
+  assert.match(workspaceSource, /runtimeRevision: operationKind === "update" \? runtimeRevision : undefined/);
+  assert.match(workspaceSource, /targetKey: operationKind === "update"[\s\S]*?\? mpaInstanceId[\s\S]*?: `runtime:\$\{region\}:\$\{runtimeId\}`/);
+  assert.match(workspaceSource, /setDetailReloadToken\(\(value\) => value \+ 1\)/);
+  assert.match(workspaceSource, /setSessionConfigReloadToken\(\(value\) => value \+ 1\)/);
+  assert.match(workspaceSource, /section === "profileConfig" && \(/);
+  assert.match(workspaceSource, /<MpaProfileConfigPanel[\s\S]*?profile=\{profileDraft\}[\s\S]*?onApply=\{\(\) => void applyMpaProfileFromStudio\(\)\}/);
+  assert.match(workspaceStyles, /\.aw-profile-config \.aw-session-config-card/);
+  assert.match(workspaceStyles, /\.aw-profile-config-list/);
+  assert.equal(enUiCatalog.agentWorkspace.sections.profileConfig, "Profile configuration");
+  assert.equal(zhUiCatalog.agentWorkspace.sections.profileConfig, "Profile 配置");
+  assert.equal(
+    enUiCatalog.agentWorkspace.profileNotAppliedDescription,
+    "This Runtime can run, but it has not been saved as a Studio-managed Profile. Applying it creates a Profile revision.",
+  );
+  assert.equal(
+    zhUiCatalog.agentWorkspace.profileNotAppliedDescription,
+    "当前 Runtime 可运行，但尚未保存为 Studio 可管理的 Profile。应用后会生成 Profile revision。",
+  );
+});
+
+test("MPA diagnostics tab uses Runtime Console correlation instead of generic trace parsing", () => {
+  assert.match(clientSource, /export interface MpaRuntimeConsoleRun/);
+  assert.match(clientSource, /export interface MpaRuntimeTraceResponse/);
+  assert.match(clientSource, /export async function getMpaRuntimeConsoleRuns/);
+  assert.match(clientSource, /export async function getMpaRuntimeConsoleTrace/);
+  assert.match(
+    clientSource,
+    /\/api\/v1\/runtime-console\/admin\/sessions\/\$\{encodeURIComponent\(params\.sessionId\)\}\/runs/,
+  );
+  assert.match(
+    clientSource,
+    /\/api\/v1\/runtime-console\/admin\/runs\/\$\{encodeURIComponent\(params\.invocationId\)\}\/trace\?\$\{query\.toString\(\)\}/,
+  );
+  assert.match(workspaceSource, /type AgentSection = "basic" \| "profileConfig" \| "sessionConfig" \| "usage" \| "diagnostics"/);
+  assert.match(workspaceSource, /if \(item === "diagnostics"\) return false/);
+  assert.match(workspaceSource, /function MpaDiagnosticsPanel/);
+  assert.match(workspaceSource, /getMpaRuntimeConsoleRuns\(\{/);
+  assert.match(workspaceSource, /getMpaRuntimeConsoleTrace\(\{/);
+  assert.match(workspaceSource, /trace\?\.correlation/);
+  assert.match(workspaceSource, /workerCorrelationValue/);
+  assert.match(workspaceSource, /section === "diagnostics"/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.mpaDiagnosticsTitle"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.traceCorrelation"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.traceSteps"\)/);
+  assert.equal(enUiCatalog.agentWorkspace.sections.diagnostics, "Diagnostics");
+  assert.equal(zhUiCatalog.agentWorkspace.sections.diagnostics, "诊断");
+  assert.equal(
+    enUiCatalog.agentWorkspace.mpaDiagnosticsTitle,
+    "Runtime diagnostics",
+  );
+  assert.equal(
+    zhUiCatalog.agentWorkspace.mpaDiagnosticsTitle,
+    "Runtime 诊断",
+  );
+});
+
+test("agent details show GitHub delivery versions and rollback actions", () => {
+  assert.match(clientSource, /export interface GithubDeliveryVersion/);
+  assert.match(clientSource, /export async function getGithubDeliveryVersions/);
+  assert.match(clientSource, /export async function createGithubDeliveryRollbackPr/);
+  assert.match(clientSource, /agentCategory\?: "general" \| "mpa"/);
+  assert.match(clientSource, /mpaCompatibilityManifest\?: Record<string, unknown>/);
+  assert.match(workspaceSource, /getGithubDeliveryVersions/);
+  assert.match(workspaceSource, /createGithubDeliveryRollbackPr/);
+  assert.match(
+    workspaceSource,
+    /createGithubDeliveryRollbackPr\(\{[\s\S]*?region: selectedAgent\?\.region,[\s\S]*?agentCategory: selectedAgentCategory/,
+  );
+  assert.match(workspaceSource, /const \[githubVersions, setGithubVersions\]/);
+  assert.match(workspaceSource, /section === "versions"/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.githubVersions"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.sourceMergedRuntimeStill"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.prLink"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.author"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.publishStatus"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.rollbackEvent"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.rollbackToVersion"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.currentVersionOnly"\)/);
+  assert.match(workspaceStyles, /\.aw-version-list/);
+  assert.match(workspaceStyles, /\.aw-version-actions/);
+});
+
 test("workspace uses cached runtime data and prefetches likely next views", () => {
   assert.match(clientSource, /const RUNTIME_METADATA_CACHE_TTL_MS = 5 \* 60 \* 1000/);
   assert.match(clientSource, /const FEEDBACK_CASES_CACHE_TTL_MS = 60 \* 1000/);
@@ -267,6 +538,9 @@ test("workspace uses cached runtime data and prefetches likely next views", () =
   assert.match(clientSource, /export function getCachedAgentFeedbackCases/);
   assert.match(clientSource, /export function prefetchRuntimeAgentInfo/);
   assert.match(clientSource, /export function prefetchRuntimeDetail/);
+  assert.match(clientSource, /export function getCachedRuntimeUpdateCapability/);
+  assert.match(clientSource, /export function prefetchRuntimeUpdateCapability/);
+  assert.match(clientSource, /export function invalidateRuntimeUpdateCapabilityCache/);
   assert.match(clientSource, /export function prefetchAgentFeedbackCases/);
   assert.match(clientSource, /export function refreshAgentFeedbackCases/);
   assert.match(clientSource, /export function upsertCachedAgentFeedbackCase/);
@@ -284,7 +558,7 @@ test("workspace uses cached runtime data and prefetches likely next views", () =
   assert.match(workspaceSource, /for \(const agent of listedAgents\.slice\(0, 8\)\)/);
   assert.match(workspaceSource, /prefetchRuntimeDetail\(agent\.runtimeId, region\)/);
   assert.match(workspaceSource, /prefetchRuntimeAgentInfo\(agent\.runtimeId, region, agent\.runtimeApp \?\? ""\)/);
-  assert.match(workspaceSource, /prefetchAgentFeedbackCases\(\{/);
+  assert.doesNotMatch(workspaceSource, /prefetchAgentFeedbackCases\(\{/);
 });
 
 test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => {
@@ -311,7 +585,10 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(customCreateSource, /onDeploymentComplete\?: \(result: DeployResult\)/);
   assert.match(customCreateSource, /onDeploymentStarted\?: \(task: DeploymentTaskUpdate\)/);
   assert.match(customCreateSource, /<ProjectPreview[\s\S]*?embedded[\s\S]*?project=\{project\}/);
-  assert.match(customCreateSource, /deploymentActionLabel=\{deploymentTarget \? "更新并发布" : "部署"\}/);
+  assert.match(
+    customCreateSource,
+    /deploymentActionLabel=\{[\s\S]*?deploymentTarget[\s\S]*?t\("traditional\.deployment\.updateAndPublish"\)[\s\S]*?t\("common\.deploy"\)[\s\S]*?\}/,
+  );
   assert.match(customCreateSource, /deploymentRuntimeId=\{deploymentTarget\?\.runtimeId\}/);
   assert.match(customCreateSource, /onDeploymentStarted=\{onDeploymentStarted\}/);
   assert.match(customCreateSource, /onDeploymentComplete=\{onDeploymentComplete\}/);
@@ -342,7 +619,7 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   );
   assert.match(
     projectPreviewSource,
-    /更新时沿用现有 Runtime 的部署区域，无法修改。/,
+    /t\("projectPreview\.regionPreserved"\)/,
   );
   assert.match(projectPreviewSource, /onDeploymentStarted\?\.\(initialTask\)/);
   assert.match(projectPreviewSource, /RuntimeProbeError/);
@@ -351,17 +628,25 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   assert.match(projectPreviewSource, /const pendingBuildLog = \(\): DeployBuildLogSnapshot/);
   assert.match(projectPreviewSource, /s\.phase === "build" && !latestBuildLog[\s\S]*?latestBuildLog = pendingBuildLog\(\)/);
   assert.match(projectPreviewSource, /let latestPhase = initialTask\.phase \?\? "prepare"/);
-  assert.match(projectPreviewSource, /const mergeBuildFailureLog = \(message: string\): DeployBuildLogSnapshot \| undefined =>/);
-  assert.match(projectPreviewSource, /"----- 构建失败 -----"[\s\S]*?latestBuildLog = mergeDeployBuildLog\(latestBuildLog/);
-  assert.match(projectPreviewSource, /latestPhase = s\.phase/);
-  assert.match(projectPreviewSource, /label: "部署失败",\s*message,\s*\.\.\.\(buildLog/);
+  assert.match(projectPreviewSource, /function advanceDeploymentPhase\(\s*current: string \| undefined,\s*next: string \| undefined,\s*\): string/);
+  assert.match(projectPreviewSource, /const nextPhase = advanceDeploymentPhase\(latestPhase, s\.phase\)/);
+  assert.match(projectPreviewSource, /const finalizeBuildFailureLog = \(\): DeployBuildLogSnapshot \| undefined =>/);
+  assert.match(projectPreviewSource, /latestPhase !== "build" \|\| !latestBuildLog\?\.text/);
+  assert.doesNotMatch(projectPreviewSource, /"----- 构建失败 -----"/);
+  assert.match(projectPreviewSource, /const telemetryErrorMessage = \(error: unknown\): string \| undefined =>/);
+  assert.match(projectPreviewSource, /latestPhase === "build" && latestBuildLog\?\.text[\s\S]*?safeTelemetryErrorMessage\(latestBuildLog\.text, \{ preserveEnd: true \}\)/);
+  assert.match(projectPreviewSource, /errorMessage: telemetryErrorMessage\(err\)/);
+  assert.doesNotMatch(projectPreviewSource, /latestPhase = s\.phase/);
+  assert.match(projectPreviewSource, /setActivePhase\(latestPhase\)/);
   assert.match(
     projectPreviewSource,
-    /await onDeploymentComplete\?\.\(result\)[\s\S]*?catch \(error\)[\s\S]*?error instanceof RuntimeProbeError[\s\S]*?status: "success"[\s\S]*?label: "部署完成，暂未连接"[\s\S]*?message: error\.message/,
+    /const statusUnconfirmed = isDeploymentStatusUnconfirmedError\(err\)[\s\S]*?status: "running"[\s\S]*?statusUnconfirmed: true[\s\S]*?deploymentStatusUnconfirmed/,
   );
+  assert.match(projectPreviewSource, /const failedInGithub = latestPhase === "github" && Boolean\(latestGithubLog\)/);
+  assert.match(projectPreviewSource, /failedInBuild[\s\S]*?t\("projectPreview\.task\.buildFailedHint"\)[\s\S]*?failedInGithub[\s\S]*?t\("projectPreview\.task\.githubMountFailedHint"\)/);
   assert.match(
-    appSource,
-    /const startDeployment = useCallback[\s\S]*?flushPendingWorkspaceDraft\(\)[\s\S]*?draftId: editingDraftId[\s\S]*?updateDeploymentTask\(linkedTask\)[\s\S]*?openDeploymentDetail\(linkedTask\)/,
+    projectPreviewSource,
+    /await onDeploymentComplete\?\.\(completeResult\)[\s\S]*?catch \(error\)[\s\S]*?error instanceof RuntimeProbeError[\s\S]*?status: "success"[\s\S]*?label: t\("projectPreview\.task\.deployedNotConnected"\)[\s\S]*?message: error\.message/,
   );
   assert.doesNotMatch(workspaceSource, /aw-deployment-focus/);
   assert.match(
@@ -382,34 +667,45 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
   );
   assert.match(workspaceSource, /if \(!focusedDeploymentTaskId\) return;/);
   assert.doesNotMatch(workspaceSource, /activeDeploymentTaskId/);
-  assert.match(
-    workspaceSource,
-    /className=\{`aw-main\$\{deploymentInProgress \? " is-deploying" : ""\}`\}[\s\S]*?className="aw-agent-head"[\s\S]*?\{deploymentTask && shouldShowDeploymentTask && \([\s\S]*?className=\{`aw-detail-deployment\$\{deploymentInProgress \? " is-running" : ""\}`\}[\s\S]*?<DeploymentProgressCard[\s\S]*?task=\{deploymentTask\}[\s\S]*?<nav[\s\S]*?className="aw-agent-tabs"/,
-  );
+  assert.match(workspaceSource, /<ResourceDetailLayout[\s\S]*?sections=\{visibleAgentSections\.map\(\(item\) => \(\{[\s\S]*?key: item\.id,[\s\S]*?label: item\.label,[\s\S]*?content: item\.id === section/);
+  assert.match(workspaceSource, /activeSectionKey=\{section\}[\s\S]*?navigationLabel=\{t\("agentWorkspace\.agentDetails"\)\}[\s\S]*?onSectionChange=\{setSection\}/);
+  assert.match(workspaceSource, /className=\{`aw-detail-deployment\$\{deploymentInProgress \? " is-running" : ""\}`\}[\s\S]*?<DeploymentProgressCard[\s\S]*?task=\{deploymentTask\}/);
   assert.match(
     workspaceSource,
     /const deploymentDraft = deploymentTask\?\.draftId[\s\S]*?drafts\.find\(\(item\) => item\.id === deploymentTask\.draftId\)[\s\S]*?deploymentTask\.agentDraft/,
   );
   assert.match(
     workspaceSource,
-    /task\.status === "error" \|\| task\.status === "cancelled"[\s\S]*?onReturnToEdit[\s\S]*?>返回编辑<\/button>/,
+    /task\.status === "running" && task\.statusUnconfirmed[\s\S]*?agentWorkspace\.deployStatus\.unconfirmed/,
+  );
+  assert.match(
+    workspaceSource,
+    /task\.status === "running" && !task\.statusUnconfirmed[\s\S]*?Math\.round\(progress\)/,
+  );
+  assert.match(
+    workspaceSource,
+    /task\.status === "error" \|\| task\.status === "cancelled"[\s\S]*?onReturnToEdit[\s\S]*?>\{t\("agentWorkspace\.returnToEdit"\)\}<\/button>/,
   );
   assert.match(
     workspaceSource,
     /<DeploymentProgressCard[\s\S]*?task=\{deploymentTask\}[\s\S]*?onReturnToEdit=\{deploymentDraft[\s\S]*?onEditDraft\(deploymentDraft\)/,
   );
   assert.match(workspaceStyles, /\.aw-deploy-progress-actions\s*\{/);
-  assert.match(workspaceSource, /const BUILD_STEP_INDEX = DEPLOYMENT_STEPS\.findIndex/);
-  assert.match(workspaceSource, /const shouldAutoExpand = Boolean\([\s\S]*?deploymentStepIndex\(task\) === BUILD_STEP_INDEX/);
+  assert.match(workspaceSource, /const baseSteps = baseDeploymentSteps\(t\)/);
+  assert.match(workspaceSource, /task\.githubDelivery[\s\S]*?steps\.push\(\{ phase: "github"/);
+  assert.match(workspaceSource, /steps\.push\(baseSteps\[baseSteps\.length - 1\]\)/);
+  assert.match(workspaceSource, /phase:\s*"github"[\s\S]*?label:\s*t\("agentWorkspace\.deploymentSteps\.github\.label"\)/);
+  assert.match(workspaceSource, /autoExpand=\{Boolean\([\s\S]*?deploymentStepIndex\(task, t\) === 1/);
   assert.match(workspaceSource, /useState\(shouldAutoExpand\)/);
   assert.match(workspaceSource, /setExpanded\(shouldAutoExpand\)/);
   assert.match(workspaceSource, /const logTextRef = useRef<HTMLPreElement \| null>\(null\)/);
   assert.match(workspaceSource, /node\.scrollTop = node\.scrollHeight/);
-  assert.match(workspaceSource, /log\.omittedEarly[\s\S]*?"已省略早期日志"[\s\S]*?log\.snapshotTruncated[\s\S]*?"仅显示最近的构建日志"/);
+  assert.match(workspaceSource, /log\.omittedEarly[\s\S]*?t\("agentWorkspace\.logStatus\.earlyOmitted"\)[\s\S]*?log\.snapshotTruncated[\s\S]*?t\("agentWorkspace\.logStatus\.recentOnly"\)/);
   assert.match(workspaceSource, /log\.pendingMessage/);
   assert.match(workspaceSource, /className="aw-deploy-log-empty">\{pendingMessage\}/);
   assert.match(workspaceSource, /hasLogText[\s\S]*?\? <pre ref=\{logTextRef\}>\{visibleText\}<\/pre>[\s\S]*?: <div className="aw-deploy-log-empty">\{pendingMessage\}<\/div>/);
   assert.match(workspaceSource, /step\.phase === "build" && task\.buildLog[\s\S]*?className="aw-deploy-step-log"[\s\S]*?<DeploymentBuildLog task=\{task\} \/>/);
+  assert.match(workspaceSource, /step\.phase === "github" && task\.githubLog[\s\S]*?className="aw-deploy-step-log"[\s\S]*?<DeploymentGithubLog task=\{task\} \/>/);
   assert.doesNotMatch(workspaceSource, /<\/ol>\s*<DeploymentBuildLog task=\{task\} \/>/);
   assert.match(workspaceStyles, /\.aw-deploy-step-log\s*\{[\s\S]*?margin-top:\s*10px;/);
   assert.match(workspaceStyles, /\.aw-deploy-log-empty\s*\{/);
@@ -427,12 +723,30 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
     workspaceStyles,
     /\.aw-main\.is-deploying \.aw-agent-tabs,[\s\S]*?\.aw-main\.is-deploying \.aw-content,[\s\S]*?\.aw-main\.is-deploying \.aw-basic-actions\s*\{[\s\S]*?display:\s*none;/,
   );
-  assert.match(projectPreviewSource, /await onDeploymentComplete\?\.\(result\)/);
-  assert.match(projectPreviewSource, /runtimeId: result\.runtimeId \|\| deploymentRuntimeId/);
+  assert.match(projectPreviewSource, /await onDeploymentComplete\?\.\(completeResult\)/);
+  assert.match(projectPreviewSource, /let latestRuntimeId = deploymentRuntimeId/);
+  assert.match(
+    projectPreviewSource,
+    /latestRuntimeId = result\.runtimeId \|\| deploymentRuntimeId[\s\S]*?runtimeId: latestRuntimeId/,
+  );
   assert.match(
     appSource,
     /const finishDeployment = useCallback[\s\S]*?removeWorkspaceDraft\(completedDraftId\)[\s\S]*?setEditingDraftId\(""\)[\s\S]*?await connectRuntime\([\s\S]*?waitForReady: true/,
   );
+});
+
+test("starting a deployment persists the task without leaving the active editor", () => {
+  const startDeploymentSource = appSource.slice(
+    appSource.indexOf("const startDeployment = useCallback"),
+    appSource.indexOf("const finishDeployment = useCallback"),
+  );
+
+  assert.match(
+    startDeploymentSource,
+    /flushPendingWorkspaceDraft\(\)[\s\S]*?draftId: editingDraftId[\s\S]*?updateDeploymentTask\(linkedTask\)/,
+  );
+  assert.doesNotMatch(startDeploymentSource, /openDeploymentDetail\(/);
+  assert.match(appSource, /onViewDeploymentTask=\{openDeploymentDetail\}/);
 });
 
 test("runtime update deployments stay on the existing agent row", () => {
@@ -445,12 +759,13 @@ test("runtime update deployments stay on the existing agent row", () => {
   assert.match(workspaceSource, /leftTask\?\.status === "running"/);
   assert.match(
     workspaceSource,
-    /\{ label: "部署中", className: " is-deploying" \}/,
+    /\{ label: t\("myAgents\.deploying"\), className: " is-deploying" \}/,
   );
   assert.match(
     workspaceSource,
-    /selectedAgentUpdateDraft[\s\S]*?onEditDraft\?\.\(\{[\s\S]*?deploymentTarget:\s*selectedUpdateTarget/,
+    /selectedUpdateCapability\?\.agent[\s\S]*?runtimeAgentDraftFromCloud\([\s\S]*?selectedUpdateCapability\.agent/,
   );
+  assert.doesNotMatch(workspaceSource, /selectedAgentUpdateDraft\?\.draft/);
   assert.match(
     workspaceSource,
     /const matchingAgent = focusedTask\?\.runtimeId[\s\S]*?agentByRuntimeId\.get/,
@@ -470,7 +785,7 @@ test("runtime update deployments stay on the existing agent row", () => {
 
 test("deployed agent detail connects, refreshes the current Agent, then opens a new chat", () => {
   assert.match(workspaceSource, /onTalkAgent\?: \(agent: AgentEntry\) => void/);
-  assert.match(workspaceSource, /className="aw-talk studio-update-action"[\s\S]*?去对话/);
+  assert.match(workspaceSource, /className="aw-talk studio-update-action"[\s\S]*?t\("agentWorkspace\.chat"\)/);
   assert.match(workspaceSource, /onClick=\{\(\) => onTalkAgent\?\.\(selectedAgent\)\}/);
   assert.match(appSource, /const talkToWorkspaceAgent = async \(agent: AgentEntry\) => \{/);
   assert.match(
@@ -479,7 +794,7 @@ test("deployed agent detail connects, refreshes the current Agent, then opens a 
   );
   assert.match(
     appSource,
-    /const refreshCurrentAgentAndStartNewChat[\s\S]*?setConnections\(loadConnections\(\)\)[\s\S]*?setAgentInfoRefreshKey[\s\S]*?setAppName\(id\)[\s\S]*?startNewChat\(\)/,
+    /const refreshCurrentAgentAndStartNewChat[\s\S]*?loadHydratedSessions\(id, userId\)[\s\S]*?getAgentInfo\(id\)[\s\S]*?setConnections\(nextConnections\)[\s\S]*?setAgentInfo\(nextAgentInfo\)[\s\S]*?startNewChat\(\)[\s\S]*?setAppName\(id\)/,
   );
   assert.match(appSource, /await refreshCurrentAgentAndStartNewChat\(agent\.id\)/);
   assert.match(appSource, /onTalkAgent=\{talkToWorkspaceAgent\}/);
@@ -530,36 +845,60 @@ test("runtime refresh preserves agent order and detail loading uses an overlay",
     workspaceSource,
     /className="aw-detail-loading"[\s\S]*?className="loading-gap-spinner"/,
   );
-  assert.match(workspaceSource, /正在加载智能体/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.loadingAgent"\)/);
   assert.match(workspaceSource, /const updateBlockedReason = selectedDraft/);
-  assert.match(workspaceSource, /updateCapabilityLoading[\s\S]*?正在检查 Runtime 更新能力/);
+  assert.match(workspaceSource, /updateCapabilityLoading[\s\S]*?t\("agentWorkspace\.errors\.checkingUpdateConfig"\)/);
   assert.match(workspaceStyles, /\.aw-detail-loading\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?inset:\s*0;/);
 });
 
 test("runtime updates use the Agent selected in management instead of the active chat connection", () => {
   assert.match(clientSource, /export interface RuntimeUpdateCapability/);
+  assert.match(clientSource, /recoveryStatus: RuntimeUpdateRecoveryStatus/);
+  assert.match(clientSource, /editMode: "source-preserving" \| "regenerate" \| "blocked"/);
+  assert.match(clientSource, /configuredEnvKeys: string\[\]/);
+  assert.match(clientSource, /etag: string/);
   assert.match(clientSource, /envs: \{ key: string; value: string \}\[\]/);
   assert.match(clientSource, /network: NetworkConfig/);
   assert.match(clientSource, /agent\?:\s*\{[\s\S]*?\}\s*\| null/);
-  assert.match(clientSource, /export async function getRuntimeUpdateCapability/);
+  assert.match(clientSource, /export function getRuntimeUpdateCapability/);
+  assert.match(clientSource, /export async function getRuntimeMcpCredentials/);
+  assert.match(clientSource, /\/web\/runtime-mcp-credentials/);
   assert.match(clientSource, /\/web\/runtime-update-capability\?\$\{params\.toString\(\)\}/);
   assert.match(clientSource, /new URLSearchParams\(\{ runtimeId, region \}\)/);
   assert.match(clientSource, /if \(appName\) params\.set\("appName", appName\)/);
+  assert.match(clientSource, /params\.set\("currentVersion", String\(currentVersion\)\)/);
   assert.match(clientSource, /runtimeUpdateCapabilityErrorMessage/);
+  assert.match(clientSource, /runtimeUpdateCapabilityCacheKey/);
+  assert.match(clientSource, /runtimeUpdateCapabilityCache\.get\(key\)\?\.promise/);
+  assert.match(clientSource, /waitForSharedRequest\(promise, signal\)/);
   const capabilityCallStart = workspaceSource.indexOf("getRuntimeUpdateCapability({");
   const capabilityCallEnd = workspaceSource.indexOf("}).then", capabilityCallStart);
   assert.ok(capabilityCallStart >= 0 && capabilityCallEnd > capabilityCallStart);
   const capabilityCall = workspaceSource.slice(capabilityCallStart, capabilityCallEnd);
   assert.match(
     capabilityCall,
-    /runtimeId,[\s\S]*?region,[\s\S]*?appName: selectedAgentAppName,[\s\S]*?signal/,
+    /runtimeId,[\s\S]*?region,[\s\S]*?appName: capabilityRuntimeAppName,[\s\S]*?currentVersion:[\s\S]*?signal/,
   );
-  assert.match(workspaceSource, /onUpdateAgent: \(draft: AgentDraft, capability: RuntimeUpdateCapability\) => void/);
-  assert.match(workspaceSource, /selectedUpdateCapability\.agent\?\.draft \?\? draft,[\s\S]*?selectedUpdateCapability/);
+  assert.match(workspaceSource, /onUpdateAgent: \(capability: RuntimeUpdateCapability\) => void/);
+  assert.match(workspaceSource, /onUpdateAgent\(selectedUpdateCapability\)/);
   assert.match(clientSource, /appName:\s*opts\?\.appName/);
+  assert.match(clientSource, /editMode:\s*opts\?\.editMode/);
+  assert.match(clientSource, /draft:\s*opts\?\.draft/);
   assert.match(customCreateSource, /appName:\s*deploymentTarget\?\.appName/);
+  assert.match(customCreateSource, /editMode:\s*deploymentTarget\?\.editMode/);
+  assert.match(
+    customCreateSource,
+    /deploymentTarget \|\| mcpGatewayManaged \? codegenDraft\(draft\) : undefined/,
+  );
+  assert.match(customCreateSource, /updateEtag:\s*deploymentTarget\?\.etag/);
+  assert.match(customCreateSource, /baseRuntimeVersion:\s*deploymentTarget\?\.currentVersion/);
+  assert.match(
+    customCreateSource,
+    /removeRuntimeEnvKeys:\s*deploymentTarget[\s\S]*?removedConfiguredMcpEnvKeys\([\s\S]*?deploymentTarget\.configuredMcpEnvKeys[\s\S]*?draft/,
+  );
+  assert.doesNotMatch(customCreateSource, /clearMcpConfiguredAuth/);
 
-  const handlerStart = appSource.indexOf("onUpdateAgent={(nextDraft, capability) =>");
+  const handlerStart = appSource.indexOf("onUpdateAgent={async (capability) =>");
   const handlerEnd = appSource.indexOf("onEditDraft=", handlerStart);
   assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
   const handler = appSource.slice(handlerStart, handlerEnd);
@@ -569,39 +908,154 @@ test("runtime updates use the Agent selected in management instead of the active
   assert.match(handler, /capability\.runtime\.currentVersion/);
   assert.match(
     handler,
-    /capability\.runtime\.envs[\s\S]*?filter\(\(\{ key \}\) => !isRuntimeModelSelectionEnv\(key\)\)[\s\S]*?\.map/,
+    /runtimeAgentDraftFromCloud\([\s\S]*?runtimeAgent,[\s\S]*?cloudProvider,[\s\S]*?capability\.runtime\.configuredEnvKeys/,
   );
   assert.match(
     handler,
-    /envValues:\s*\{[\s\S]*?\.\.\.runtimeEnvValues,[\s\S]*?\.\.\.draftEnvValues/,
+    /capability\.runtime\.envs[\s\S]*?filter\(\(\{ key \}\) => !isRuntimeModelSelectionEnv\(key\)\)[\s\S]*?\.map/,
   );
+  assert.match(handler, /envValues:\s*runtimeEnvValues/);
+  assert.match(
+    handler,
+    /runtimeEnv\.has\("FEISHU_APP_ID"\)[\s\S]*?runtimeEnv\.has\("FEISHU_APP_SECRET"\)/,
+  );
+  assert.doesNotMatch(handler, /draftEnvValues|selectedAgentUpdateDraft\?\.draft/);
   assert.match(handler, /hydrateRuntimeModelSelection\(/);
+  assert.match(handler, /await getRuntimeMcpCredentials\(/);
+  assert.match(handler, /hydrateMcpCredentialValues\(/);
+  assert.ok(
+    handler.indexOf("hydrateMcpCredentialValues(") <
+      handler.indexOf("setImportedDraft("),
+    "MCP credentials must be restored before the editor opens",
+  );
+  assert.match(
+    handler,
+    /setCustomCreationSurface\([\s\S]*?editorDraft\.dynamicAgentDelegation === true[\s\S]*?\? "vulcan"[\s\S]*?: "traditional"/,
+  );
   assert.match(handler, /network:\s*capability\.runtime\.network/);
+  assert.match(handler, /etag:\s*capability\.etag/);
+  assert.match(handler, /editMode:\s*capability\.editMode/);
+  assert.match(
+    handler,
+    /configuredRuntimeEnvKeys:\s*capability\.runtime\.configuredEnvKeys/,
+  );
+  assert.match(
+    handler,
+    /setRuntimeUpdateTarget\(\{[\s\S]*?runtimeId:\s*capability\.runtime\.runtimeId,[\s\S]*?currentVersion:\s*capability\.runtime\.currentVersion,[\s\S]*?etag:\s*capability\.etag/,
+  );
+  assert.match(
+    handler,
+    /exitAgentDetailContext\(\)[\s\S]*?setCreateView\("custom"\)/,
+  );
+});
+
+test("introspection-only runtime updates are visibly blocked without treating empty lists as deletions", () => {
+  assert.match(
+    workspaceSource,
+    /selectedUpdateCapability\.recoveryStatus !== "complete"[\s\S]*?selectedUpdateCapability\.recoveryStatus !== "draft-only"/,
+  );
+  assert.match(workspaceSource, /t\("agentWorkspace\.updateConfigUnavailable"\)/);
+  assert.match(workspaceSource, /aw-update-recovery-notice/);
+  assert.match(
+    workspaceSource,
+    /selectedUpdateCapability\s*&&\s*!selectedUpdateCapability\.canUpdate\s*&&/,
+  );
+  assert.doesNotMatch(workspaceSource, /更新配置说明/);
+  assert.match(workspaceSource, /updateCapabilityWarnings\.map/);
+  assert.match(
+    workspaceSource,
+    /import \{ localeCompatibleBackendText \} from "\.\.\/i18n\/locales";/,
+  );
+  assert.match(workspaceStyles, /\.aw-update-recovery-notice\s*\{/);
+  assert.match(workspaceStyles, /hsl\(42 92% 96%\)/);
+  assert.doesNotMatch(
+    workspaceSource,
+    /recoveryStatus === "introspection-only"[\s\S]{0,300}runtimeAgentDraftFromCloud/,
+  );
+});
+
+test("runtime-preserved skills are explained and can be removed or replaced", () => {
+  assert.match(skillSourcePickerSource, /skill\.source === "runtime"/);
+  assert.match(skillSourcePickerSource, /skillSourcePicker\.sources\.runtime/);
+  assert.match(skillSourcePickerSource, /t\(skillSourceLabelKey\(skill\)\)/);
+  assert.match(skillSourcePickerSource, /replaceRuntimeSkill/);
+});
+
+test("agent detail actions clear the detail stack before opening another view", () => {
+  assert.match(
+    appSource,
+    /const exitAgentDetailContext = useCallback\(\(\) => \{[\s\S]*?popStudioPage\("agent-detail"\)[\s\S]*?setAgentDetailTarget\(null\)[\s\S]*?setMyAgents\(false\)[\s\S]*?setManageAgents\(false\)/,
+  );
+  assert.match(
+    appSource,
+    /const refreshCurrentAgentAndStartNewChat[\s\S]*?startNewChat\(\)[\s\S]*?setAppName\(id\)[\s\S]*?exitAgentDetailContext\(\)/,
+  );
+  assert.match(
+    appSource,
+    /async function openFeedbackCaseInStudio[\s\S]*?exitAgentDetailContext\(\)[\s\S]*?await pickSession/,
+  );
+  assert.match(
+    appSource,
+    /onCreateAgent=\{\(\) => \{[\s\S]*?exitAgentDetailContext\(\)[\s\S]*?setAddMenu\(true\)/,
+  );
+  assert.match(
+    appSource,
+    /onEditDraft=\{\(item\) => \{[\s\S]*?exitAgentDetailContext\(\)[\s\S]*?setCreateView\("custom"\)/,
+  );
 });
 
 test("runtime update capability checks ignore aborted and stale selections", () => {
   assert.match(workspaceSource, /const updateCapabilityRequestRef = useRef\(0\)/);
   assert.match(workspaceSource, /const controller = new AbortController\(\)/);
   assert.match(workspaceSource, /requestId !== updateCapabilityRequestRef\.current/);
-  assert.match(workspaceSource, /return \(\) => controller\.abort\(\)/);
+  assert.match(workspaceSource, /controller\.abort\(\)[\s\S]*?window\.clearTimeout\(pollTimer\)/);
   assert.match(workspaceSource, /const updateCapabilityRequestKey = JSON\.stringify\(\[[\s\S]*?selectedAgent\?\.runtimeId[\s\S]*?selectedAgent\?\.region[\s\S]*?\]\)/);
   assert.match(
     workspaceSource,
-    /const updateCapabilityRequestKey = JSON\.stringify\(\[[\s\S]*?selectedAgentAppName[\s\S]*?\]\)/,
+    /const updateCapabilityRequestKey = JSON\.stringify\(\[[\s\S]*?selectedAgent\?\.currentVersion[\s\S]*?capabilityRuntimeAppName[\s\S]*?\]\)/,
   );
+  assert.match(workspaceSource, /getCachedRuntimeUpdateCapability\(\{/);
   assert.match(workspaceSource, /updateCapability\?\.requestKey === updateCapabilityRequestKey/);
   assert.match(workspaceSource, /value\.runtime\.region !== region/);
   assert.match(
     workspaceSource,
-    /selectedAgentAppName &&[\s\S]*?value\.agent\?\.appName !== selectedAgentAppName/,
+    /capabilityRuntimeAppName &&[\s\S]*?value\.agent\?\.appName !== capabilityRuntimeAppName/,
   );
   assert.match(workspaceSource, /value\.canUpdate && !value\.agent\?\.appName/);
   assert.match(workspaceSource, /selectedUpdateCapability\.agent\?\.appName/);
-  assert.match(workspaceSource, /updateCapabilityLoading[\s\S]*?loading-gap-spinner[\s\S]*?检测中/);
+  assert.match(workspaceSource, /updateCapabilityLoading[\s\S]*?loading-gap-spinner[\s\S]*?t\("agentWorkspace\.preparing"\)/);
   assert.match(workspaceSource, /aria-describedby=\{updateBlockedReason \? updateReasonId : undefined\}/);
   assert.match(workspaceSource, /className="aw-update-disabled-reason"[\s\S]*?role="tooltip"/);
+  const capabilityRequest = workspaceSource.slice(
+    workspaceSource.indexOf("const loadCapability = (initial: boolean) =>"),
+    workspaceSource.indexOf("loadCapability(true);"),
+  );
+  assert.match(
+    capabilityRequest,
+    /\.catch\(\(\) => \{[\s\S]*?setUpdateCapabilityError\(t\("agentWorkspace\.errors\.checkUpdateCapability"\)\)/,
+  );
+  assert.doesNotMatch(capabilityRequest, /error\.message/);
   assert.match(workspaceStyles, /\.aw-update-wrap\.is-disabled:hover \.aw-update-disabled-reason/);
   assert.match(workspaceStyles, /\.aw-update-wrap\.is-disabled:focus-visible \.aw-update-disabled-reason/);
+});
+
+test("preparing recovery stops the button spinner and polls safely in the background", () => {
+  assert.match(clientSource, /\| "preparing"/);
+  assert.match(
+    clientSource,
+    /value\.recoveryStatus === "preparing"[\s\S]*?runtimeUpdateCapabilityCache\.delete\(key\)/,
+  );
+  assert.match(workspaceSource, /const maxPollAttempts = 60/);
+  assert.match(workspaceSource, /const preparing = value\.recoveryStatus === "preparing"/);
+  assert.match(
+    workspaceSource,
+    /setUpdateCapability\([\s\S]*?setUpdateCapabilityLoading\(false\)[\s\S]*?window\.setTimeout\(\(\) => loadCapability\(false\), 1_000\)/,
+  );
+  assert.match(workspaceSource, /t\("agentWorkspace\.restoringUpdateConfig"\)/);
+  assert.match(
+    workspaceSource,
+    /selectedUpdateCapability\.recoveryStatus === "preparing"[\s\S]*?\? "status"/,
+  );
 });
 
 test("workspace keeps agent deletion in selection mode and the floating detail actions", () => {
@@ -615,7 +1069,13 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
     /const detailAgentEntry:[\s\S]*?canDelete: agentDetailTarget\.runtime\.canDelete/,
   );
   assert.match(appSource, /const deleteWorkspaceAgents = useCallback/);
-  assert.match(appSource, /await deleteRuntime\(agent\.runtimeId, agent\.region\)/);
+  assert.match(
+    appSource,
+    /await deleteRuntime\(agent\.runtimeId, agent\.region, \{[\s\S]*?agentCategory: agent\.agentCategory/,
+  );
+  assert.match(appSource, /mpaInstanceId:[\s\S]*?agent\.mpaInstanceId \?\? agent\.runtimeId/);
+  assert.match(appSource, /mpaInstanceId: result\.mpaInstanceId/);
+  assert.match(appSource, /mpaInstanceId: entry\.runtimeId[\s\S]*?libraryRuntimePermissions\[entry\.runtimeId\]\?\.mpaInstanceId/);
   assert.match(appSource, /const selectedRuntimeId = runtimeIdForSelection\(connections, appName\)/);
   assert.match(appSource, /deletedCurrentSelection[\s\S]*?deletedRuntimeIds\.has\(selectedRuntimeId\)/);
   assert.doesNotMatch(
@@ -624,7 +1084,7 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
   );
   assert.match(
     appSource,
-    /deletedRuntimeIds\.has\(agentDetailTarget\.runtime\.runtimeId\)[\s\S]*?setManageAgents\(false\)[\s\S]*?setAgentDetailTarget\(null\)[\s\S]*?setMyAgents\(true\)/,
+    /deletedRuntimeIds\.has\(agentDetailTarget\.runtime\.runtimeId\)[\s\S]*?exitAgentDetailContext\(\)[\s\S]*?setMyAgents\(true\)/,
   );
   assert.match(appSource, /onDeleteAgents=\{deleteWorkspaceAgents\}/);
   assert.match(appSource, /const deleteWorkspaceDrafts = useCallback/);
@@ -653,12 +1113,31 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
     /window\.confirm/,
   );
   assert.match(workspaceSource, /const \[deleteConfirmTarget, setDeleteConfirmTarget\]/);
+  assert.match(clientSource, /export interface MpaAgentDeletePreview/);
+  assert.match(clientSource, /export async function getMpaAgentDeletePreview/);
+  assert.match(clientSource, /mpaInstanceId\?: string/);
+  assert.match(clientSource, /\/web\/mpa\/agents\/\$\{encodeURIComponent\(params\.mpaInstanceId\)\}\/delete-preview/);
+  assert.match(clientSource, /agentCategory: opts\.agentCategory/);
+  assert.match(clientSource, /mpaInstanceId: opts\.mpaInstanceId/);
+  assert.match(workspaceSource, /getMpaAgentDeletePreview/);
+  assert.match(workspaceSource, /function MpaDeletePreviewDetails/);
+  assert.match(workspaceSource, /const runtimeDetailMpaInstanceId =[\s\S]*?runtimeDetailForSelectedAgent\?\.mpaInstanceId/);
+  assert.match(workspaceSource, /const selectedMpaInstanceId =[\s\S]*?runtimeDetailMpaInstanceId/);
+  assert.match(workspaceSource, /getMpaAgentView\(\{[\s\S]*?mpaInstanceId,[\s\S]*?runtimeId/);
+  assert.match(workspaceSource, /getMpaProfileStatus\(\{[\s\S]*?mpaInstanceId/);
+  assert.match(workspaceSource, /agent\.agentCategory === "mpa"[\s\S]*?await getMpaAgentDeletePreview/);
+  assert.match(workspaceSource, /canConfirm: preview \? preview\.canDelete : true/);
   assert.match(workspaceSource, /import \{ StudioConfirmDialog \} from "\.\/StudioConfirmDialog"/);
   assert.match(workspaceSource, /<StudioConfirmDialog[\s\S]*?variant="danger"/);
-  assert.match(workspaceSource, /closeLabel="关闭删除确认"/);
+  assert.match(workspaceSource, /confirmDisabled=\{deleteConfirmTarget\.canConfirm === false\}/);
+  assert.match(studioConfirmSource, /confirmDisabled\?: boolean/);
+  assert.match(studioConfirmSource, /disabled=\{busy \|\| confirmDisabled\}/);
+  assert.match(workspaceSource, /closeLabel=\{t\("agentWorkspace\.closeDeleteConfirmation"\)\}/);
   assert.match(studioConfirmSource, /createPortal\(/);
-  assert.match(studioConfirmSource, /function ConfirmWarningIcon\(props: SVGProps<SVGSVGElement>\)/);
-  assert.match(studioConfirmSource, /function ConfirmCloseIcon\(props: SVGProps<SVGSVGElement>\)/);
+  assert.match(studioConfirmSource, /@openai\/apps-sdk-ui\/components\/Alert/);
+  assert.match(studioConfirmSource, /@openai\/apps-sdk-ui\/components\/Button/);
+  assert.match(studioConfirmSource, /import \{ Warning, X \} from "@openai\/apps-sdk-ui\/components\/Icon"/);
+  assert.doesNotMatch(studioConfirmSource, /function ConfirmWarningIcon|function ConfirmCloseIcon/);
   assert.doesNotMatch(
     workspaceSource.slice(0, workspaceSource.indexOf("} from \"lucide-react\"")),
     /\bAlertTriangle\b|^\s*X,\s*$/m,
@@ -686,14 +1165,14 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
   assert.match(workspaceSource, /await onDeleteAgents\(agentsToDelete\)/);
   assert.match(workspaceSource, /onDeleteDrafts\?\.\(draftsToDelete\)/);
   assert.match(workspaceSource, /aria-pressed=\{selectionMode \? isSelectedForDelete : undefined\}/);
-  assert.match(workspaceSource, /删除所选/);
-  assert.match(workspaceSource, /const deleteSingleAgent = \(agent: AgentEntry\) =>/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.deleteSelected"\)/);
+  assert.match(workspaceSource, /const deleteSingleAgent = async \(agent: AgentEntry\) =>/);
   assert.match(workspaceSource, /const deleteSingleDraft = /);
-  assert.equal(workspaceSource.match(/aria-label="删除 Agent"/g)?.length, 1);
-  assert.match(workspaceSource, /删除草稿/);
+  assert.equal(workspaceSource.match(/aria-label=\{t\("agentWorkspace\.deleteAgent"\)\}/g)?.length, 1);
+  assert.match(workspaceSource, /aria-label=\{t\("myAgents\.deleteDraft"\)\}/);
   assert.match(workspaceStyles, /\.aw-selection-toolbar/);
   assert.match(workspaceStyles, /\.aw-select-marker\.is-checked/);
-  assert.match(workspaceStyles, /\.aw-head-delete/);
+  assert.doesNotMatch(workspaceStyles, /\.aw-head-action(?:\s|\.|:|\{)/);
   assert.doesNotMatch(workspaceStyles, /\.aw-delete-confirm/);
   assert.match(appStyles, /\.studio-confirm-dialog\s*\{[\s\S]*?width:\s*min\(420px, calc\(100vw - 40px\)\)/);
   assert.match(appStyles, /\.studio-confirm-head\s*\{[\s\S]*?flex:\s*0 0 58px/);
@@ -703,19 +1182,15 @@ test("workspace keeps agent deletion in selection mode and the floating detail a
     appStyles,
     /\.studio-confirm-actions\s*\{[\s\S]*?padding:\s*12px 16px;[\s\S]*?border-top:\s*1px solid hsl\(var\(--border\)\)/,
   );
-  assert.match(appStyles, /\.studio-confirm-close:focus-visible/);
-  assert.match(appStyles, /\.studio-confirm-dialog--danger \.studio-confirm-actions \.studio-confirm-primary/);
-  assert.match(
-    workspaceStyles,
-    /\.aw-head-delete\.studio-update-action:hover:not\(:disabled\)[\s\S]*?color:\s*#fff;/,
-  );
+  assert.doesNotMatch(appStyles, /\.studio-confirm-close:focus-visible/);
+  assert.doesNotMatch(appStyles, /\.studio-confirm-dialog--danger \.studio-confirm-actions \.studio-confirm-primary/);
   assert.match(
     workspaceSource,
-    /className="aw-head-delete"[\s\S]*?aria-label="删除 Agent"/,
+    /<Button[\s\S]*?color="danger"[\s\S]*?aria-label=\{t\("agentWorkspace\.deleteAgent"\)\}/,
   );
   assert.doesNotMatch(
     workspaceSource,
-    /className="aw-basic-actions"[\s\S]*?className="aw-head-delete studio-update-action"/,
+    /className="aw-basic-actions"[\s\S]*?className="aw-head-action studio-update-action"/,
   );
 });
 
@@ -732,6 +1207,22 @@ test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(clientSource, /export function clearMessageFeedbackCache/);
   assert.match(clientSource, /\/web\/evaluation\/feedback-cases\?\$\{query\.toString\(\)\}/);
   assert.match(clientSource, /\/web\/evaluation\/feedback-cases\/delete/);
+  assert.match(
+    clientSource,
+    /function selectedRuntimeRegionCandidates\(region\?: string\)[\s\S]*?return explicit \? \[explicit\] : runtimeRegionCandidates\(\)/,
+  );
+  assert.match(
+    clientSource,
+    /getAgentFeedbackCases[\s\S]*?for \(const region of selectedRuntimeRegionCandidates\(args\.region\)\)/,
+  );
+  assert.match(
+    clientSource,
+    /getAutomaticEvaluationStatuses[\s\S]*?for \(const region of selectedRuntimeRegionCandidates\(args\.region\)\)/,
+  );
+  assert.match(
+    clientSource,
+    /getAgentOptimizations[\s\S]*?for \(const region of selectedRuntimeRegionCandidates\(args\.region\)\)/,
+  );
   assert.match(workspaceSource, /getAgentFeedbackCases\(\{/);
   assert.match(workspaceSource, /deleteAgentFeedbackCases\(\{/);
   assert.match(
@@ -768,7 +1259,7 @@ test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(appSource, /focusedWorkspaceAgentSection/);
   assert.match(appSource, /focusedWorkspaceCaseKind/);
   assert.match(appSource, /focusedCaseKind=\{focusedWorkspaceCaseKind\}/);
-  assert.match(appSource, /返回评测案例/);
+  assert.match(appSource, /t\("actions\.backToEvaluationCase"\)/);
   assert.match(appSource, /clearDeletedFeedbackCases/);
   assert.match(appSource, /clearMessageFeedbackCache/);
   assert.match(appSource, /onFeedbackCasesDeleted=\{clearDeletedFeedbackCases\}/);
@@ -783,31 +1274,34 @@ test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(workspaceSource, /const count = previewCase \? localCount : set\?\.itemCount \?\? localCount/);
   assert.doesNotMatch(workspaceSource, /Math\.max\(\s*set\?\.itemCount/);
   assert.match(workspaceSource, /loading=\{feedbackCasesLoading && visibleCases\.length === 0\}/);
-  assert.match(workspaceSource, /Good cases/);
-  assert.match(workspaceSource, /Bad cases/);
-  assert.match(workspaceSource, /AgentKit 评测集/);
+  assert.match(workspaceSource, /"agentWorkspace\.goodCases"/);
+  assert.match(workspaceSource, /"agentWorkspace\.badCases"/);
+  assert.match(workspaceSource, /"agentWorkspace\.goodCase"/);
+  assert.match(workspaceSource, /"agentWorkspace\.badCase"/);
+  assert.doesNotMatch(workspaceSource, />Good cases</);
+  assert.doesNotMatch(workspaceSource, />Bad cases</);
   assert.match(
     workspaceSource,
-    /<span>用户输入<\/span>[\s\S]*?<span>Agent 输出<\/span>[\s\S]*?<span>评分<\/span>[\s\S]*?<span>评分理由<\/span>[\s\S]*?<span className="aw-case-action-head">操作<\/span>/,
+    /<span>\{t\("agentWorkspace\.userInput"\)\}<\/span>[\s\S]*?<span>\{t\("agentWorkspace\.agentOutput"\)\}<\/span>[\s\S]*?<span>\{t\("agentWorkspace\.score"\)\}<\/span>[\s\S]*?<span>\{t\("agentWorkspace\.scoreReason"\)\}<\/span>[\s\S]*?<span className="aw-case-action-head">\{t\("skillCenter\.actions"\)\}<\/span>/,
   );
   assert.match(
     workspaceSource,
-    /className="aw-case-actions aw-case-cell"[\s\S]*?data-label="操作"[\s\S]*?className="aw-case-delete"/,
+    /className="aw-case-actions aw-case-cell"[\s\S]*?data-label=\{t\("skillCenter\.actions"\)\}[\s\S]*?className="aw-case-delete"/,
   );
   assert.match(workspaceSource, /function DeleteCaseIcon\(\)/);
   assert.doesNotMatch(workspaceSource, /<span>来源<\/span>/);
-  assert.match(workspaceSource, /自动回流/);
-  assert.match(workspaceSource, /手动回流/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.automaticFeedback"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.manualFeedback"\)/);
   assert.match(workspaceSource, /useState<AgentFeedbackSource>\("auto"\)/);
   assert.match(workspaceSource, /source !== caseSourceFilter/);
   assert.match(workspaceSource, /caseSourceFilter === source/);
   assert.match(workspaceSource, /setCaseSourceFilter\(source\)/);
-  assert.match(workspaceSource, /formatCaseTime\(item\.createdAt\)/);
+  assert.match(workspaceSource, /formatCaseTime\(item\.createdAt, i18n\.resolvedLanguage \?\? i18n\.language, t\)/);
   assert.doesNotMatch(workspaceSource, /item\.source !== "auto"/);
   assert.match(workspaceSource, /Math\.round\(item\.score \* 100\)/);
   assert.match(workspaceSource, /item\.reason \|\| "—"/);
   assert.match(workspaceSource, /item\.comment\.trim\(\) !== item\.reason\?\.trim\(\)/);
-  assert.match(workspaceSource, /showComment && <small title=\{item\.comment\}>备注：\{item\.comment\}<\/small>/);
+  assert.match(workspaceSource, /showComment && <small title=\{item\.comment\}>\{t\("agentWorkspace\.note"\)\}\{item\.comment\}<\/small>/);
   assert.match(workspaceStyles, /\.aw-case-summary/);
   assert.match(workspaceStyles, /\.aw-case-filter-bar/);
   assert.match(workspaceStyles, /\.aw-case-source-filters/);
@@ -826,6 +1320,55 @@ test("agent detail evaluation tab reads feedback datasets", () => {
   assert.match(workspaceStyles, /\.aw-case-error/);
 });
 
+test("Agent workspace-owned labels and sample cases are fully localized", () => {
+  const defaultCasesSource = workspaceSource.slice(
+    workspaceSource.indexOf("function buildDefaultCases"),
+    workspaceSource.indexOf("const DEFAULT_EVALUATION_GROUPS"),
+  );
+
+  assert.match(defaultCasesSource, /function buildDefaultCases\(t: TFunction\): AgentCase\[\]/);
+  assert.match(defaultCasesSource, /agentWorkspace\.defaultCases\.weeklyFeedback\.input/);
+  assert.match(defaultCasesSource, /agentWorkspace\.defaultCases\.repeatedTool\.output/);
+  assert.doesNotMatch(defaultCasesSource, /[\u3400-\u9fff]/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.agentCountLabel"\)/);
+  assert.doesNotMatch(workspaceSource, /<dt>\{t\("agentWorkspace\.agentCount"\)\}<\/dt>/);
+  assert.match(
+    workspaceSource,
+    /\{t\("agentWorkspace\.reference"\)\}: \{item\.referenceOutput\}/,
+  );
+  assert.doesNotMatch(workspaceSource, /Reference: \{item\.referenceOutput\}/);
+
+  for (const catalog of [enUiCatalog, zhUiCatalog]) {
+    assert.equal(typeof catalog.agentWorkspace.agentCountLabel, "string");
+    assert.equal(typeof catalog.agentWorkspace.goodCases, "string");
+    assert.equal(typeof catalog.agentWorkspace.badCases, "string");
+    assert.equal(typeof catalog.agentWorkspace.reference, "string");
+    assert.equal(typeof catalog.agentWorkspace.defaultCases.weeklyFeedback.input, "string");
+    assert.equal(typeof catalog.agentWorkspace.defaultCases.uncertainConclusion.reason, "string");
+  }
+  assert.match(enUiCatalog.agentWorkspace.defaultCases.weeklyFeedback.input, /customer feedback/i);
+  assert.match(zhUiCatalog.agentWorkspace.defaultCases.weeklyFeedback.input, /客户反馈/);
+});
+
+test("Agent detail request failures use localized messages instead of raw backend responses", () => {
+  assert.match(
+    workspaceSource,
+    /setAgentUsageError\(t\("agentWorkspace\.errors\.loadUsage"\)\)/,
+  );
+  assert.match(
+    workspaceSource,
+    /setFeedbackCasesError\(t\("agentWorkspace\.errors\.loadEvaluations"\)\)/,
+  );
+  assert.match(
+    workspaceSource,
+    /setOptimizationsError\(t\("agentWorkspace\.errors\.loadOptimizations"\)\)/,
+  );
+  assert.match(
+    workspaceSource,
+    /setIntegrationError\(t\("agentWorkspace\.errors\.probeIntegration"\)\)/,
+  );
+});
+
 test("agent detail exposes optimization recommendations between evaluations and integrations", () => {
   assert.match(clientSource, /export type AgentOptimizationModule =/);
   assert.match(clientSource, /export interface AgentOptimizationSuggestion/);
@@ -839,13 +1382,13 @@ test("agent detail exposes optimization recommendations between evaluations and 
   assert.match(workspaceSource, /getAgentOptimizations\(\{/);
   assert.match(workspaceSource, /setOptimizationGroups\(response\.groups\)/);
   assert.match(workspaceSource, /<OptimizationTable groups=\{optimizationGroups\} \/>/);
-  assert.match(workspaceSource, /暂无优化项，自动评测完成后会在这里生成建议/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.noOptimizations"\)/);
   assert.match(workspaceSource, /setOptimizationsReloadToken/);
-  assert.match(workspaceSource, /<th scope="col">修复优先级<\/th>/);
-  assert.match(workspaceSource, /<th scope="col">建议优化模块<\/th>/);
-  assert.match(workspaceSource, /<th scope="col">优化建议和理由<\/th>/);
-  assert.match(workspaceSource, /optimizationPriorityLabel\(group\.priority\)/);
-  assert.match(workspaceSource, /optimizationModuleLabel\(group\)/);
+  assert.match(workspaceSource, /<th scope="col">\{t\("agentWorkspace\.fixPriority"\)\}<\/th>/);
+  assert.match(workspaceSource, /<th scope="col">\{t\("agentWorkspace\.suggestedModule"\)\}<\/th>/);
+  assert.match(workspaceSource, /<th scope="col">\{t\("agentWorkspace\.suggestionAndReason"\)\}<\/th>/);
+  assert.match(workspaceSource, /optimizationPriorityLabel\(group\.priority, t\)/);
+  assert.match(workspaceSource, /optimizationModuleLabel\(group, t\)/);
   assert.match(workspaceSource, /group\.items\.map/);
   assert.doesNotMatch(workspaceSource, /aw-option-glass/);
   assert.match(workspaceStyles, /\.aw-optimization-table/);
@@ -860,5 +1403,23 @@ test("agent detail exposes optimization recommendations between evaluations and 
 test("evaluation tab remains the PR 748 placeholder until the real feature lands", () => {
   assert.match(workspaceSource, /view === "evaluation"/);
   assert.match(workspaceSource, /aw-evaluation-glass/);
-  assert.match(workspaceSource, /敬请期待/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.comingSoon"\)/);
+});
+
+test("message channels moves from agent detail to its own automation", () => {
+  assert.doesNotMatch(workspaceSource, /<RuntimeChannels/);
+  assert.doesNotMatch(workspaceSource, /section === "channels"/);
+  assert.match(appSource, /applicationsView === "mpa-channels"/);
+  assert.match(appSource, /<MpaChannelsAutomation/);
+});
+
+test("runtime category reaches detail entries through both live and cached cards", () => {
+  const cards = readFileSync(new URL("../src/ui/MyAgents.tsx", import.meta.url), "utf8");
+  assert.match(cards, /agentCategory: runtime\.agentCategory \?\? agentCategory/);
+  assert.equal((cards.match(/runtimeToAgent\(runtime, t, agentCategory\)/g) || []).length, 2);
+  assert.match(
+    appSource,
+    /agentCategory: agentDetailTarget\.agentCategory \?\? agentDetailTarget\.runtime\.agentCategory/,
+  );
+  assert.match(connectionsSource, /agentCategory\?: "general" \| "mpa"/);
 });

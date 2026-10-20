@@ -12,32 +12,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""VeADK extension facade for Harness plugins."""
+"""VeADK extension facade for legacy plugins and the managed Sidecar."""
 
 from __future__ import annotations
 
 import os
 from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Any
 
-from google.adk.plugins import BasePlugin
 from pydantic import Field
+from typing_extensions import Self
 
-from veadk.extensions.harness.plugins import build_harness_plugins
 from veadk.extensions.harness.env import (
     build_harness_plugins_from_env,
     harness_enabled_from_env,
 )
-from veadk.extensions.harness.modules.final_response_verifier import (
-    FinalResponseVerifierConfig,
-)
-from veadk.extensions.harness.modules.invocation_context import (
-    HarnessInvocationContextConfig,
-)
-from veadk.extensions.harness.modules.tool_result_compactor import (
-    ToolResultCompactorConfig,
-)
 from veadk.extensions.harness.schemas import HarnessBaseModel
-from veadk.extensions.harness.stores import HarnessStoreProtocol
+from veadk.extensions.harness.sidecar import (
+    ManagedHarnessSidecar,
+    normalize_sidecar_config,
+    sidecar_config_from_env,
+)
+
+if TYPE_CHECKING:
+    from google.adk.plugins import BasePlugin
+
+    from veadk.extensions.harness.modules.final_response_verifier import (
+        FinalResponseVerifierConfig,
+    )
+    from veadk.extensions.harness.modules.invocation_context import (
+        HarnessInvocationContextConfig,
+    )
+    from veadk.extensions.harness.modules.tool_result_compactor import (
+        ToolResultCompactorConfig,
+    )
+    from veadk.extensions.harness.stores import HarnessStoreProtocol
 
 
 class HarnessExtensionConfig(HarnessBaseModel):
@@ -52,63 +61,101 @@ class HarnessExtensionConfig(HarnessBaseModel):
         ]
     )
     profile: str = "default"
+    sidecar: bool | dict[str, Any] = False
 
 
 class HarnessExtension:
-    """Small VeADK-facing wrapper for Harness plugin assembly.
+    """Small VeADK-facing wrapper for Harness lifecycle integration.
 
-    The extension owns no core Harness logic. It keeps the public VeADK entry
-    point compact while delegating atomic behavior to the modules in this
-    package.
+    Managed Sidecar mode only starts the private Runtime and applies its model
+    and MCP bindings. It never assembles application-process Harness plugins.
+    Legacy plugin assembly remains available only when Sidecar mode is disabled.
     """
 
     def __init__(
         self,
         *,
-        enabled: bool = True,
+        enabled: bool | None = None,
         components: Iterable[str] | str | None = None,
         profile: str = "default",
         store: HarnessStoreProtocol | None = None,
         context_config: HarnessInvocationContextConfig | None = None,
         compaction_config: ToolResultCompactorConfig | None = None,
         verifier_config: FinalResponseVerifierConfig | None = None,
+        sidecar: bool | Mapping[str, Any] | Any | None = None,
         env: Mapping[str, str] | None = None,
     ) -> None:
-        if components is None:
-            component_list = HarnessExtensionConfig().components
+        normalized_sidecar = normalize_sidecar_config(sidecar)
+        self.sidecar = ManagedHarnessSidecar(
+            normalized_sidecar,
+            profile=profile,
+            process_env=dict(env) if env is not None else None,
+        )
+        if self.sidecar.enabled:
+            if components is not None:
+                raise ValueError(
+                    "components cannot be combined with Harness Sidecar; "
+                    "use component_overrides with Product Component IDs"
+                )
+            plan = self.sidecar.plan
+            if plan is None:
+                raise RuntimeError("Harness Sidecar enabled without a resolved plan")
+            component_list = []
+            plugin_enabled = False
+        elif components is None:
+            component_list = _default_components(profile)
+            plugin_enabled = True if enabled is None else enabled
         elif isinstance(components, str):
             component_list = [
                 item.strip() for item in components.split(",") if item.strip()
             ]
+            plugin_enabled = True if enabled is None else enabled
         else:
             component_list = [
                 str(item).strip() for item in components if str(item).strip()
             ]
+            plugin_enabled = True if enabled is None else enabled
         self.config = HarnessExtensionConfig(
-            enabled=enabled,
+            enabled=plugin_enabled,
             components=component_list,
             profile=profile,
+            sidecar=normalized_sidecar,
         )
         self.store = store
         self.context_config = context_config
         self.compaction_config = compaction_config
         self.verifier_config = verifier_config
         self.env = dict(env) if env is not None else None
+        self.sidecar.start()
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> HarnessExtension:
         """Create an extension controlled by Harness environment variables."""
 
-        values = dict(env or os.environ)
-        return cls(enabled=harness_enabled_from_env(values), env=values)
+        values = dict(env if env is not None else os.environ)
+        return cls(
+            enabled=harness_enabled_from_env(values),
+            profile=(
+                values.get("HARNESS_ENHANCE_PROFILE")
+                or values.get("HARNESS_PROFILE")
+                or "default"
+            ),
+            sidecar=sidecar_config_from_env(values),
+            env=values,
+        )
 
     def plugins(self) -> list[BasePlugin]:
-        """Build plugins for ``Runner(..., plugins=...)``."""
+        """Build legacy plugins, or return none for managed Sidecar mode."""
 
+        self.sidecar.start()
+        if self.sidecar.enabled:
+            return []
         if self.env is not None:
             return build_harness_plugins_from_env(self.env)
         if not self.config.enabled:
             return []
+        from veadk.extensions.harness.plugins import build_harness_plugins
+
         return build_harness_plugins(
             components=self.config.components,
             profile=self.config.profile,
@@ -117,6 +164,52 @@ class HarnessExtension:
             compaction_config=self.compaction_config,
             verifier_config=self.verifier_config,
         )
+
+    @property
+    def sidecar_status(self) -> str:
+        """Return ``ok``, ``degraded``, ``disabled``, or runtime status."""
+
+        return self.sidecar.status
+
+    @property
+    def sidecar_env(self) -> dict[str, str]:
+        """Return environment bindings injected by the managed Sidecar."""
+
+        return self.sidecar.env
+
+    def sidecar_status_payload(self) -> dict[str, Any]:
+        """Return a safe status snapshot suitable for the application route."""
+
+        spec = getattr(self.sidecar.binding, "spec", None)
+        effective = list(
+            getattr(spec, "effective_components", None)
+            or getattr(self.sidecar.plan, "effective_components", None)
+            or []
+        )
+        return {
+            "enabled": self.sidecar.enabled,
+            "status": self.sidecar_status,
+            "planHash": self.sidecar.plan_hash,
+            "effectiveComponents": effective,
+        }
+
+    def close(self) -> None:
+        """Stop the managed Sidecar before the application process exits."""
+
+        self.sidecar.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
+
+
+def _default_components(profile: str) -> list[str]:
+    components = HarnessExtensionConfig().components
+    if profile == "ops":
+        return [*components, "long_run_control"]
+    return components
 
 
 __all__ = ["HarnessExtension", "HarnessExtensionConfig"]

@@ -55,29 +55,51 @@ test("creation and deployment keep friendly context and the original error", () 
   );
   assert.match(
     clientSource,
-    /if \(!res\.ok\) \{[\s\S]*?httpErrorMessage\(res, "部署失败"\)[\s\S]*?throw new Error\(detail\)/,
+    /if \(!res\.ok\) \{[\s\S]*?httpErrorMessage\(res, adkT\("client\.deploymentFailed"\)\)[\s\S]*?throw new Error\(detail\)/,
   );
   assert.match(
     clientSource,
-    /if \(!final\.success\) throw new Error\(final\.error \|\| "部署失败"\)/,
+    /if \(!final\.success\) \{[\s\S]*?isDeploymentStatusUnconfirmedError\(error\)[\s\S]*?throw error/,
   );
   assert.match(
     projectPreviewSource,
-    /<DeploymentErrorMessage[\s\S]*?className="pp-error"[\s\S]*?\$\{deployError\}/,
+    /<DeploymentErrorMessage[\s\S]*?className="pp-error"[\s\S]*?message=\{[\s\S]*?deployError/,
+  );
+  assert.match(clientSource, /adkT\("common\.fallbackWithHttpStatus"/);
+  assert.match(clientSource, /adkT\("client\.errorWithRawResponse"/);
+  assert.match(
+    projectPreviewSource,
+    /const statusUnconfirmed = isDeploymentStatusUnconfirmedError\(err\)[\s\S]*?status: "running"[\s\S]*?statusUnconfirmed: true[\s\S]*?deploymentStatusUnconfirmed/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /failedInBuild[\s\S]*?t\("projectPreview\.task\.buildFailedHint"\)[\s\S]*?failedInGithub[\s\S]*?t\("projectPreview\.task\.githubMountFailedHint"\)[\s\S]*?: message/,
   );
   assert.match(
     clientSource,
-    /const context = `\$\{fallback\}（HTTP \$\{res\.status\}）`/,
+    /const recoverFinal = async \(cause\?: unknown\)[\s\S]*?isDeploymentAbortError\(cause\)[\s\S]*?new DeploymentStatusUnconfirmedError\(\{ taskId, cause \}\)/,
   );
-  assert.match(clientSource, /原始响应：\\n\$\{text\}/);
+  assert.match(
+    clientSource,
+    /catch \(error\) \{[\s\S]*?final = await recoverFinal\(error\)[\s\S]*?if \(!final\) \{[\s\S]*?final = await recoverFinal\(\)/,
+  );
+  assert.match(
+    clientSource,
+    /pollDeploymentRecovery<DeployFrame>[\s\S]*?\/web\/deploy-agentkit\/status[\s\S]*?baseRuntimeVersion: opts\.baseRuntimeVersion/,
+  );
   assert.match(
     projectPreviewSource,
-    /label: "部署失败",\s*message,\s*\.\.\.\(buildLog/,
+    /statusUnconfirmed[\s\S]*?latestBuildLog \? \{ buildLog: latestBuildLog \}[\s\S]*?return;[\s\S]*?finalizeBuildFailureLog\(\)/,
   );
-  assert.doesNotMatch(
+  assert.match(
     projectPreviewSource,
-    /message: failedInBuild \? "构建镜像失败，详见构建日志。" : message/,
+    /deploymentStatusUnconfirmed && \([\s\S]*?className="pp-status-unconfirmed"[\s\S]*?role="status"/,
   );
+  assert.match(
+    projectPreviewSource,
+    /disabled=\{[\s\S]*?deploying \|\|[\s\S]*?deploymentStatusUnconfirmed/,
+  );
+  assert.doesNotMatch(projectPreviewSource, /BUILD_STATUS_CONFIRMATION_ERROR_MESSAGE/);
 });
 
 test("generated-agent debug requests preserve backend error details", () => {
@@ -85,16 +107,16 @@ test("generated-agent debug requests preserve backend error details", () => {
     clientSource,
     /if \(typeof detail === "string"\) return detail/,
   );
-  for (const fallback of [
-    "创建调试运行失败",
-    "创建调试会话失败",
-    "加载调试调用链路失败",
-    "调试运行失败",
-    "清理调试运行失败",
+  for (const fallbackKey of [
+    "createDebugRunFailed",
+    "createDebugSessionFailed",
+    "loadDebugTraceFailed",
+    "debugRunFailed",
+    "cleanupDebugRunFailed",
   ]) {
     assert.match(
       clientSource,
-      new RegExp(`new Error\\(await httpErrorMessage\\(res, "${fallback}"\\)\\)`),
+      new RegExp(`new Error\\(await httpErrorMessage\\(res, adkT\\("client\\.${fallbackKey}"\\)\\)\\)`),
     );
   }
 });

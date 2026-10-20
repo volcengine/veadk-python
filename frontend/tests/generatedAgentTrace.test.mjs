@@ -35,3 +35,10 @@ test("shows a per-variant trace action only after a completed debug turn", () =>
   assert.match(customCreateSource, /onClick=\{\(\) => onOpenTrace\(variant\.id\)\}/);
   assert.match(customCreateSource, /testRunId=\{debugTraceTarget\.runId\}/);
 });
+
+test("trace drawer retries collecting traces and offers a manual retry", () => {
+  assert.match(traceDrawerSource, /TRACE_COLLECTING_RETRIES/);
+  assert.match(traceDrawerSource, /window\.setTimeout/);
+  assert.match(traceDrawerSource, /t\("trace\.errors\.collecting"\)/);
+  assert.match(traceDrawerSource, /t\("trace\.reload"\)/);
+});

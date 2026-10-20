@@ -16,8 +16,19 @@ import os
 
 import pytest
 
-from veadk.knowledgebase import KnowledgeBase
-from veadk.knowledgebase.backends.in_memory_backend import InMemoryKnowledgeBackend
+# `veadk.knowledgebase.backends.in_memory_backend` imports `llama_index.core` at
+# module scope, so without the `extensions` extra this module cannot even be
+# collected. Skip the module on that one import rather than guarding the whole
+# file, so an unrelated ImportError still surfaces as an error.
+pytest.importorskip(
+    "llama_index.core",
+    reason='KnowledgeBase needs llama-index: pip install "veadk-python[extensions]"',
+)
+
+from veadk.knowledgebase import KnowledgeBase  # noqa: E402
+from veadk.knowledgebase.backends.in_memory_backend import (  # noqa: E402
+    InMemoryKnowledgeBackend,
+)
 
 
 @pytest.mark.asyncio

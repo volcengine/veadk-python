@@ -1,5 +1,6 @@
 import { studioFetch } from "../adk/client";
 import type { ArtifactMetadataUpdate } from "./ArtifactEditDialog";
+import { workspaceToolsT } from "./workspaceToolsI18n";
 import type {
   ArtifactIngestCandidate,
   ArtifactLibraryItem,
@@ -25,7 +26,10 @@ async function requireOk(response: Response, fallback: string): Promise<Response
   } catch {
     payload = undefined;
   }
-  throw new Error(messageFromPayload(payload, `${fallback}（${response.status}）`));
+  throw new Error(messageFromPayload(payload, workspaceToolsT("artifactLibrary.api.withStatus", {
+    message: fallback,
+    status: response.status,
+  })));
 }
 
 function timestamp(value: unknown): number {
@@ -57,7 +61,7 @@ async function itemsFromResponse(response: Response): Promise<ArtifactLibraryIte
 export async function listStoredArtifacts(): Promise<ArtifactLibraryItem[]> {
   const response = await requireOk(
     await studioFetch("/web/artifacts"),
-    "读取产物库失败",
+    workspaceToolsT("artifactLibrary.api.listFailed"),
   );
   return itemsFromResponse(response);
 }
@@ -72,7 +76,7 @@ export async function syncStoredArtifacts(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ candidates }),
     }, 240_000),
-    "同步聊天产物失败",
+    workspaceToolsT("artifactLibrary.api.syncFailed"),
   );
   return itemsFromResponse(response);
 }
@@ -87,7 +91,7 @@ export async function updateStoredArtifact(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(update),
     }),
-    "更新产物失败",
+    workspaceToolsT("artifactLibrary.api.updateFailed"),
   );
   return itemFromApi(await response.json());
 }
@@ -99,7 +103,7 @@ export async function deleteStoredArtifact(
     await studioFetch(`/web/artifacts/${encodeURIComponent(artifact.id)}`, {
       method: "DELETE",
     }),
-    "删除产物失败",
+    workspaceToolsT("artifactLibrary.api.deleteFailed"),
   );
 }
 
@@ -112,7 +116,7 @@ export async function downloadStoredArtifact(
       {},
       240_000,
     ),
-    "下载产物失败",
+    workspaceToolsT("artifactLibrary.api.downloadFailed"),
   );
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);

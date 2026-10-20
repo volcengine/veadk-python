@@ -23,10 +23,25 @@ export interface McpTool {
   authToken?: string;
   /** Environment variable used by generated code for the bearer token. */
   authTokenEnv?: string;
+  /** Server-confirmed configured state; recovered values stay editor-only. */
+  credentialConfigured?: boolean;
+  /** Original published endpoint for a server-managed credential. Editor-only. */
+  credentialSourceUrl?: string;
+  /** Original published credential reference. Editor-only and never a value. */
+  credentialSourceAuthTokenEnv?: string;
   /** stdio transport: the command to launch (e.g. "npx"). */
   command?: string;
   /** stdio transport: command args (e.g. ["-y", "@playwright/mcp@latest"]). */
   args?: string[];
+}
+
+/** One server-authorized MCP credential restored into the in-memory editor. */
+export interface McpCredentialValue {
+  agentName: string;
+  name: string;
+  url: string;
+  authTokenEnv: string;
+  value: string;
 }
 
 // Import and re-export the multi-source SelectedSkill (and related types) from
@@ -35,6 +50,7 @@ export interface McpTool {
 // makes them available to external importers of "./types" unchanged.
 import type { SelectedSkill, SkillHit, SkillSource } from "./skills/types";
 import { DEFAULT_KB_BACKEND } from "./veadkCatalog";
+import { createT } from "./i18n";
 import {
   defaultModelName,
   VOLCENGINE_DEFAULT_MODEL_NAME,
@@ -85,11 +101,40 @@ export type CloudCliToolId = "lark-cli" | "github-cli" | "pandoc";
 export const MAX_CLOUD_DOCKERFILE_LENGTH = 65_536;
 
 export interface CloudEnvironmentConfig {
-  /** Official command-line tools baked into the deployment image. */
-  cliTools: CloudCliToolId[];
-  /** User-edited Dockerfile. Omitted while Studio should generate it. */
+  /** User-owned environment selected for this Agent. */
+  environmentId: string;
+  /** Immutable build version selected with the environment. */
+  environmentVersionId: string;
+  /** Legacy inline environment fields kept for draft migration only. */
+  cliTools?: CloudCliToolId[];
   dockerfile?: string;
 }
+
+export type HarnessSidecarOptionId =
+  | "context_engine"
+  | "compressor"
+  | "verifier"
+  | "long_run_control"
+  | "mcp_resilience";
+
+export type HarnessSidecarProfileId = "default" | "ops";
+
+export interface HarnessSidecarIntent {
+  enabled: boolean;
+  profile: HarnessSidecarProfileId;
+  componentOverrides: Record<HarnessSidecarOptionId, boolean>;
+  catalogVersion?: string;
+  planHash?: string;
+}
+
+export interface ModelFallbackEndpointDraft {
+  modelName: string;
+  modelProvider?: string;
+  modelApiBase?: string;
+  modelApiKeyEnv?: string;
+}
+
+export type ModelFallbackDraft = string | ModelFallbackEndpointDraft;
 
 /** A draft VeADK agent configuration produced by a creation flow. */
 export interface AgentDraft {
@@ -97,6 +142,8 @@ export interface AgentDraft {
   description: string;
   /** System prompt. */
   instruction: string;
+  /** Enable runtime resource discovery and dynamic sub-Agent delegation. */
+  dynamicAgentDelegation?: boolean;
   /**
    * Agent kind for the custom flow. "llm" is a VeADK `Agent` (LlmAgent);
    * "sequential"/"parallel"/"loop" are orchestrators from `google.adk.agents`
@@ -115,6 +162,8 @@ export interface AgentDraft {
   /** Model configuration (optional). Empty values fall back to veadk config/env. */
   modelSource?: "ark" | "custom";
   modelName?: string;
+  /** Fallback models tried in order after modelName. Strings reuse the primary provider. */
+  modelFallbacks?: ModelFallbackDraft[];
   modelProvider?: string;
   modelApiBase?: string;
   /** Free-text tool names (legacy; intelligent/template modes still use these). */
@@ -139,6 +188,8 @@ export interface AgentDraft {
   /** Chosen backends when memory is enabled. */
   shortTermBackend?: string;
   longTermBackend?: string;
+  /** Existing long-term memory collection/index selected for managed backends. */
+  longTermMemoryIndex?: string;
   /** Persist finished sessions into long-term memory. */
   autoSaveSession?: boolean;
   /** Chosen knowledgebase backend when knowledgebase is enabled. */
@@ -159,27 +210,21 @@ export interface AgentDraft {
   deployment?: DeploymentConfig;
   /** Optional command-line tools installed into the cloud runtime image. */
   cloudEnvironment?: CloudEnvironmentConfig;
+  /** Root Runtime-level Harness Sidecar selection. Never set on sub-Agents. */
+  harnessSidecar?: HarnessSidecarIntent;
 }
 
 // Pre-filled defaults so description / system prompt / model are never empty
 // when the custom wizard opens. `DEFAULT_MODEL_NAME` mirrors veadk's
 // DEFAULT_MODEL_AGENT_NAME (veadk/consts.py).
 export const DEFAULT_MODEL_NAME = VOLCENGINE_DEFAULT_MODEL_NAME;
-const DEFAULT_DESCRIPTION =
-  "一个基于 VeADK 构建的智能助手，理解用户意图并调用合适的工具完成任务。";
-const DEFAULT_INSTRUCTION =
-  "你是一个专业、可靠的智能助手。\n\n" +
-  "你的目标是准确理解用户的需求，并给出条理清晰、简洁有用的回答。\n\n" +
-  "约束：\n" +
-  "- 信息不足时主动提问澄清，不要臆造事实。\n" +
-  "- 需要时合理调用可用的工具，并说明关键结论。\n" +
-  "- 保持礼貌、专业的语气。";
 
 export function emptyDraft(cloudProvider: CloudProvider = "volcengine"): AgentDraft {
   return {
     name: "",
-    description: DEFAULT_DESCRIPTION,
-    instruction: DEFAULT_INSTRUCTION,
+    description: createT("defaults.description"),
+    instruction: createT("defaults.instruction"),
+    dynamicAgentDelegation: false,
     agentType: "llm",
     cloudProvider,
     maxIterations: 3,
@@ -201,17 +246,19 @@ export function emptyDraft(cloudProvider: CloudProvider = "volcengine"): AgentDr
       registryEndpoint: "",
     },
     modelName: defaultModelName(cloudProvider),
+    modelFallbacks: [],
     modelSource: "ark",
     modelProvider: "",
     modelApiBase: "",
     shortTermBackend: "local",
     longTermBackend: "local",
+    longTermMemoryIndex: "",
     autoSaveSession: false,
     knowledgebaseBackend: DEFAULT_KB_BACKEND,
     knowledgebaseIndex: "",
     tracingExporters: [],
     selectedSkills: [],
-    cloudEnvironment: { cliTools: [] },
+    cloudEnvironment: { environmentId: "", environmentVersionId: "" },
     deployment: {
       feishuEnabled: false,
       modelApiKeyId: "",

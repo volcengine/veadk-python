@@ -26,7 +26,6 @@ from html.parser import HTMLParser
 from urllib.parse import SplitResult, urljoin, urlsplit, urlunsplit
 
 import httpx
-from trafilatura import extract, extract_metadata
 
 MAX_REDIRECTS = 3
 MAX_HTML_BYTES = 5 * 1024 * 1024
@@ -179,6 +178,8 @@ def _decode_html(html: bytes) -> str:
 
 
 def _extract_markdown(html: bytes, final_url: str) -> tuple[str, str]:
+    from trafilatura import extract, extract_metadata
+
     decoded_html = _decode_html(html)
     markdown = extract(
         decoded_html,

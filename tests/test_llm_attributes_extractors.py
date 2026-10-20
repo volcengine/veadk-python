@@ -16,11 +16,17 @@ import json
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 
+import pytest
 from google.adk.models.llm_request import LlmRequest
+from google.adk.models.llm_response import LlmResponse
 from google.adk.tools.function_tool import FunctionTool
+from google.genai import types
+from opentelemetry.sdk.trace import TracerProvider
 
 from veadk.tracing.telemetry.attributes.extractors.llm_attributes_extractors import (
     llm_gen_ai_request_functions,
+    llm_gen_ai_usage_cache_creation_input_tokens,
+    llm_gen_ai_usage_cache_read_input_tokens,
     llm_gen_ai_usage_output_tokens,
 )
 from veadk.tracing.telemetry.attributes.extractors.types import ExtractorResponse
@@ -117,6 +123,45 @@ def test_missing_output_token_count_is_not_written_to_span():
     span.set_attribute.assert_not_called()
 
 
+@pytest.mark.parametrize("cached_tokens", [600, 0, None])
+def test_cached_tokens_are_only_reported_as_cache_reads(cached_tokens):
+    params = SimpleNamespace(
+        llm_response=LlmResponse(
+            usage_metadata=types.GenerateContentResponseUsageMetadata(
+                cached_content_token_count=cached_tokens,
+            )
+        )
+    )
+    provider = TracerProvider()
+    try:
+        with provider.get_tracer(__name__).start_as_current_span("cache-usage") as span:
+            ExtractorResponse.update_span(
+                span,
+                "gen_ai.usage.cache_read_input_tokens",
+                llm_gen_ai_usage_cache_read_input_tokens(params),
+            )
+            ExtractorResponse.update_span(
+                span,
+                "gen_ai.usage.cache_creation_input_tokens",
+                llm_gen_ai_usage_cache_creation_input_tokens(params),
+            )
+            expected = (
+                {"gen_ai.usage.cache_read_input_tokens": cached_tokens}
+                if cached_tokens is not None
+                else {}
+            )
+            assert dict(span.attributes) == expected
+    finally:
+        provider.shutdown()
+
+
+def test_missing_usage_omits_cache_attributes():
+    params = SimpleNamespace(llm_response=LlmResponse())
+
+    assert llm_gen_ai_usage_cache_read_input_tokens(params).content is None
+    assert llm_gen_ai_usage_cache_creation_input_tokens(params).content is None
+
+
 def test_falsy_attribute_values_are_written_to_span():
     span = Mock()
 
@@ -128,8 +173,113 @@ def test_falsy_attribute_values_are_written_to_span():
 
 def test_none_values_in_attribute_mappings_are_not_written_to_span():
     span = Mock()
-    response = ExtractorResponse(content=[{"present": 0, "missing": None}])
+    response = ExtractorResponse(
+        content=[
+            {
+                "zero": 0,
+                "false": False,
+                "empty": "",
+                "text": "present",
+                "missing": None,
+            }
+        ]
+    )
 
     ExtractorResponse.update_span(span, "unused", response)
 
-    span.set_attribute.assert_called_once_with("present", 0)
+    assert span.set_attribute.call_args_list == [
+        call("zero", 0),
+        call("false", False),
+        call("empty", ""),
+        call("text", "present"),
+    ]
+
+
+def test_none_values_in_event_mapping_are_not_written_to_span():
+    span = Mock()
+    response = ExtractorResponse(
+        type="event",
+        content={
+            "zero": 0,
+            "false": False,
+            "empty": "",
+            "text": "present",
+            "missing": None,
+        },
+    )
+
+    ExtractorResponse.update_span(span, "event.name", response)
+
+    span.add_event.assert_called_once_with(
+        "event.name",
+        {"zero": 0, "false": False, "empty": "", "text": "present"},
+    )
+
+
+def test_none_values_in_event_mapping_list_are_not_written_to_span():
+    span = Mock()
+    response = ExtractorResponse(
+        type="event",
+        content=[
+            {"zero": 0, "missing": None},
+            {"false": False, "empty": "", "text": "present"},
+        ],
+    )
+
+    ExtractorResponse.update_span(span, "event.name", response)
+
+    assert span.add_event.call_args_list == [
+        call("event.name", {"zero": 0}),
+        call("event.name", {"false": False, "empty": "", "text": "present"}),
+    ]
+
+
+def test_none_values_in_event_list_mappings_are_not_written_to_span():
+    span = Mock()
+    response = ExtractorResponse(
+        type="event_list",
+        content=[
+            {
+                "event.one": {
+                    "zero": 0,
+                    "false": False,
+                    "empty": "",
+                    "missing": None,
+                }
+            },
+            {"event.two": {"text": "present", "missing": None}},
+        ],
+    )
+
+    ExtractorResponse.update_span(span, "unused", response)
+
+    assert span.add_event.call_args_list == [
+        call("event.one", {"zero": 0, "false": False, "empty": ""}),
+        call("event.two", {"text": "present"}),
+    ]
+
+
+def test_none_values_are_filtered_before_reaching_real_otel_span():
+    provider = TracerProvider()
+    span = provider.get_tracer(__name__).start_span("extractor-response")
+
+    ExtractorResponse.update_span(
+        span,
+        "event.one",
+        ExtractorResponse(type="event", content={"zero": 0, "missing": None}),
+    )
+    ExtractorResponse.update_span(
+        span,
+        "unused",
+        ExtractorResponse(
+            type="event_list",
+            content=[{"event.two": {"false": False, "missing": None}}],
+        ),
+    )
+
+    assert [(event.name, dict(event.attributes)) for event in span.events] == [
+        ("event.one", {"zero": 0}),
+        ("event.two", {"false": False}),
+    ]
+    span.end()
+    provider.shutdown()

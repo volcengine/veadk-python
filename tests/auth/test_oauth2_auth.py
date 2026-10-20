@@ -12,18 +12,56 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
+import time
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 from starlette.applications import Starlette
 from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from veadk.auth.middleware.oauth2_auth import (
+    OIDCDiscoveryConfig,
+    OAuth2Config,
     OAuth2Handler,
+    OAuth2Session,
     _resolve_redirect_after_auth,
     register_oauth2_routes,
+    setup_oauth2,
 )
+
+
+def oauth2_config() -> OAuth2Config:
+    return OAuth2Config(
+        authorize_url="https://identity.example.com/authorize",
+        token_url="https://identity.example.com/token",
+        client_id="studio-client",
+        client_secret="studio-secret",
+        redirect_uri="https://studio.example.com/oauth2/callback",
+        session_timeout_seconds=30 * 24 * 60 * 60,
+    )
+
+
+def session_request(handler: OAuth2Handler, session: OAuth2Session) -> Request:
+    cookie = handler.encode_session(session)
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "server": ("studio.example.com", 443),
+            "path": "/api/test",
+            "raw_path": b"/api/test",
+            "query_string": b"",
+            "headers": [
+                (b"host", b"studio.example.com"),
+                (b"cookie", f"veadk_session={cookie}".encode()),
+            ],
+        }
+    )
 
 
 @pytest.fixture
@@ -165,3 +203,565 @@ def test_oauth2_callback_revalidates_stored_redirect(
 
     assert response.status_code == 302
     assert response.headers["location"] == expected
+
+
+@pytest.mark.asyncio
+async def test_fetch_user_info_keeps_only_cookie_safe_fields() -> None:
+    config = oauth2_config()
+    config.userinfo_url = "https://identity.example.com/userinfo"
+    config.user_id_field = "employee_id"
+    handler = OAuth2Handler(config)
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "sub": "user-1",
+        "email": "user@example.com",
+        "name": "Example User",
+        "picture": "https://identity.example.com/avatar.png",
+        "employee_id": "employee-1",
+        "tenant_id": "tenant-1",
+        "roles": ["admin"],
+        "external.claims": {"opaque": "x" * 10_000},
+    }
+    handler._http_client.get = AsyncMock(return_value=response)
+
+    user_info = await handler._fetch_user_info("access-token")
+    cookie = handler.encode_session(
+        OAuth2Session(
+            access_token="access-token",
+            expires_at=time.time() + 3600,
+            user_info=user_info,
+        )
+    )
+
+    assert user_info == {
+        "sub": "user-1",
+        "email": "user@example.com",
+        "name": "Example User",
+        "picture": "https://identity.example.com/avatar.png",
+        "employee_id": "employee-1",
+    }
+    assert len(cookie) < 4096
+
+
+def test_refresh_token_keeps_browser_cookie_beyond_access_token_lifetime() -> None:
+    handler = OAuth2Handler(oauth2_config())
+    now = time.time()
+    session = OAuth2Session(
+        access_token="access-token",
+        expires_at=now + 3600,
+        refresh_token="refresh-token",
+        session_expires_at=now + 30 * 24 * 60 * 60,
+    )
+
+    max_age = handler.create_session_cookie(session)["max_age"]
+
+    assert 29 * 24 * 60 * 60 < max_age <= 30 * 24 * 60 * 60
+
+
+def test_expired_access_token_remains_available_for_refresh() -> None:
+    handler = OAuth2Handler(oauth2_config())
+    session = OAuth2Session(
+        access_token="expired-access-token",
+        expires_at=time.time() - 1,
+        refresh_token="refresh-token",
+        session_expires_at=time.time() + 3600,
+    )
+
+    restored = handler.get_session_from_request(session_request(handler, session))
+
+    assert restored is not None
+    assert restored.refresh_token == "refresh-token"
+    assert restored.id_token is None
+
+
+@pytest.mark.asyncio
+async def test_code_exchange_keeps_id_token_out_of_session_cookie() -> None:
+    handler = OAuth2Handler(oauth2_config())
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "access_token": "access-token",
+        "refresh_token": "refresh-token",
+        "id_token": "id-token",
+        "expires_in": 3600,
+    }
+    handler._http_client.post = AsyncMock(return_value=response)
+
+    session = await handler.exchange_code_for_token("code")
+    restored = handler.decode_session(handler.encode_session(session))
+
+    assert session.id_token == "id-token"
+    assert restored is not None
+    assert restored.id_token is None
+
+
+def test_expired_browser_session_is_not_available_for_refresh() -> None:
+    handler = OAuth2Handler(oauth2_config())
+    session = OAuth2Session(
+        access_token="expired-access-token",
+        expires_at=time.time() - 1,
+        refresh_token="expired-refresh-token",
+        session_expires_at=time.time() - 1,
+    )
+
+    restored = handler.get_session_from_request(session_request(handler, session))
+
+    assert restored is None
+
+
+@pytest.mark.asyncio
+async def test_legacy_refresh_session_is_upgraded_before_access_token_expiry() -> None:
+    handler = OAuth2Handler(oauth2_config())
+    legacy = OAuth2Session(
+        access_token="access-token",
+        expires_at=time.time() + 3600,
+        refresh_token="refresh-token",
+    )
+
+    upgraded, cookie_changed = await handler.get_or_refresh_session(
+        session_request(handler, legacy)
+    )
+
+    assert upgraded is not None
+    assert upgraded.session_expires_at is not None
+    assert 29 * 24 * 60 * 60 < upgraded.session_expires_at - time.time()
+    assert cookie_changed is True
+
+
+@pytest.mark.asyncio
+async def test_legacy_session_without_refresh_token_is_not_extended() -> None:
+    handler = OAuth2Handler(oauth2_config())
+    legacy = OAuth2Session(
+        access_token="access-token",
+        expires_at=time.time() + 3600,
+    )
+
+    restored, cookie_changed = await handler.get_or_refresh_session(
+        session_request(handler, legacy)
+    )
+
+    assert restored == legacy
+    assert restored.session_expires_at is None
+    assert cookie_changed is False
+
+
+def test_legacy_session_upgrade_is_portable_across_instances() -> None:
+    async def protected(_: Request) -> JSONResponse:
+        return JSONResponse({"ok": True})
+
+    first_app = Starlette(routes=[Route("/api/test", protected)])
+    first_handler = setup_oauth2(first_app, oauth2_config())
+    legacy = OAuth2Session(
+        access_token="access-token",
+        expires_at=time.time() + 3600,
+        refresh_token="refresh-token",
+        user_info={"sub": "user-1"},
+    )
+    first_handler.validate_access_token = AsyncMock(return_value={"sub": "user-1"})
+
+    with TestClient(first_app, base_url="https://studio.example.com") as client:
+        client.cookies.set(
+            "veadk_session",
+            first_handler.encode_session(legacy),
+            domain="studio.example.com",
+            path="/",
+        )
+        response = client.get("/api/test", headers={"Accept": "application/json"})
+        upgraded_cookie = client.cookies["veadk_session"]
+
+    second_handler = OAuth2Handler(oauth2_config())
+    restored = second_handler.decode_session(upgraded_cookie)
+
+    assert response.status_code == 200
+    assert "veadk_session=" in response.headers["set-cookie"]
+    assert restored is not None
+    assert restored.refresh_token == "refresh-token"
+    assert restored.session_expires_at is not None
+    assert 29 * 24 * 60 * 60 < restored.session_expires_at - time.time()
+
+
+@pytest.mark.asyncio
+async def test_get_or_refresh_session_recovers_expired_access_token() -> None:
+    handler = OAuth2Handler(oauth2_config())
+    absolute_expiry = time.time() + 3600
+    expired = OAuth2Session(
+        access_token="expired-access-token",
+        expires_at=time.time() - 1,
+        refresh_token="refresh-token-1",
+        session_expires_at=absolute_expiry,
+        user_info={"sub": "user-1"},
+    )
+    refreshed = OAuth2Session(
+        access_token="access-token-2",
+        expires_at=time.time() + 3600,
+        refresh_token="refresh-token-2",
+        session_expires_at=absolute_expiry,
+        user_info=expired.user_info,
+    )
+    handler.refresh_access_token = AsyncMock(return_value=refreshed)
+
+    result, cookie_changed = await handler.get_or_refresh_session(
+        session_request(handler, expired)
+    )
+
+    assert result == refreshed
+    assert cookie_changed is True
+    handler.refresh_access_token.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_refresh_access_token_coalesces_rotating_token_requests() -> None:
+    handler = OAuth2Handler(oauth2_config())
+    session = OAuth2Session(
+        access_token="expired-access-token",
+        expires_at=time.time() - 1,
+        refresh_token="refresh-token-1",
+        session_expires_at=time.time() + 3600,
+    )
+    refreshed = OAuth2Session(
+        access_token="access-token-2",
+        expires_at=time.time() + 3600,
+        refresh_token="refresh-token-2",
+        session_expires_at=session.session_expires_at,
+    )
+
+    async def refresh_once(_: OAuth2Session) -> OAuth2Session:
+        await asyncio.sleep(0)
+        return refreshed
+
+    handler._refresh_access_token_once = AsyncMock(side_effect=refresh_once)
+
+    first, second = await asyncio.gather(
+        handler.refresh_access_token(session),
+        handler.refresh_access_token(session),
+    )
+
+    assert first == refreshed
+    assert second == refreshed
+    handler._refresh_access_token_once.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_refresh_access_token_preserves_absolute_session_expiry() -> None:
+    handler = OAuth2Handler(oauth2_config())
+    absolute_expiry = time.time() + 3600
+    session = OAuth2Session(
+        access_token="expired-access-token",
+        expires_at=time.time() - 1,
+        refresh_token="refresh-token-1",
+        session_expires_at=absolute_expiry,
+        user_info={"sub": "user-1"},
+    )
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "access_token": "access-token-2",
+        "refresh_token": "refresh-token-2",
+        "expires_in": 3600,
+    }
+    handler._http_client.post = AsyncMock(return_value=response)
+
+    refreshed = await handler.refresh_access_token(session)
+
+    assert refreshed is not None
+    assert refreshed.access_token == "access-token-2"
+    assert refreshed.refresh_token == "refresh-token-2"
+    assert refreshed.session_expires_at == absolute_expiry
+    assert refreshed.user_info == {"sub": "user-1"}
+    handler._http_client.post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response_id_token", "expected_id_token"),
+    [("new-id-token", "new-id-token"), (None, None)],
+)
+async def test_refresh_retains_or_replaces_id_token(
+    response_id_token: str | None, expected_id_token: str | None
+) -> None:
+    handler = OAuth2Handler(oauth2_config())
+    session = OAuth2Session(
+        access_token="old-access-token",
+        expires_at=time.time() - 1,
+        refresh_token="old-refresh-token",
+        id_token="old-id-token",
+    )
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "access_token": "new-access-token",
+        "refresh_token": "new-refresh-token",
+        "expires_in": 3600,
+        **({"id_token": response_id_token} if response_id_token else {}),
+    }
+    handler._http_client.post = AsyncMock(return_value=response)
+
+    refreshed = await handler.refresh_access_token(session)
+
+    assert refreshed is not None
+    assert refreshed.id_token == expected_id_token
+    assert refreshed.refresh_token == "new-refresh-token"
+
+
+def test_userinfo_refreshes_expired_access_token_and_rotates_cookie() -> None:
+    handler = OAuth2Handler(oauth2_config())
+    absolute_expiry = time.time() + 3600
+    expired = OAuth2Session(
+        access_token="expired-access-token",
+        expires_at=time.time() - 1,
+        refresh_token="refresh-token-1",
+        session_expires_at=absolute_expiry,
+        user_info={"sub": "user-1"},
+    )
+    refreshed = OAuth2Session(
+        access_token="access-token-2",
+        expires_at=time.time() + 3600,
+        refresh_token="refresh-token-2",
+        session_expires_at=absolute_expiry,
+        user_info=expired.user_info,
+    )
+    handler.refresh_access_token = AsyncMock(return_value=refreshed)
+    handler.validate_access_token = AsyncMock(return_value={"sub": "user-1"})
+
+    app = Starlette()
+    register_oauth2_routes(app, handler)
+
+    with TestClient(app, base_url="https://studio.example.com") as client:
+        client.cookies.set(
+            "veadk_session",
+            handler.encode_session(expired),
+            domain="studio.example.com",
+            path="/",
+        )
+        response = client.get("/oauth2/userinfo")
+        rotated = handler.decode_session(client.cookies["veadk_session"])
+
+    assert response.status_code == 200
+    assert response.json() == {"sub": "user-1"}
+    assert rotated is not None
+    assert rotated.access_token == "access-token-2"
+    assert rotated.refresh_token == "refresh-token-2"
+
+
+def test_userinfo_marks_failed_rotating_refresh_as_retryable() -> None:
+    handler = OAuth2Handler(oauth2_config())
+    expired = OAuth2Session(
+        access_token="expired-access-token",
+        expires_at=time.time() - 1,
+        refresh_token="refresh-token-used-by-another-instance",
+        session_expires_at=time.time() + 3600,
+        user_info={"sub": "user-1"},
+    )
+    handler.refresh_access_token = AsyncMock(return_value=None)
+
+    app = Starlette()
+    register_oauth2_routes(app, handler)
+
+    with TestClient(app, base_url="https://studio.example.com") as client:
+        client.cookies.set(
+            "veadk_session",
+            handler.encode_session(expired),
+            domain="studio.example.com",
+            path="/",
+        )
+        response = client.get("/oauth2/userinfo")
+
+    assert response.status_code == 401
+    assert response.headers["X-VeADK-OAuth-Refresh-Retry"] == "1"
+
+
+def test_protected_request_refreshes_expired_access_token() -> None:
+    async def protected(_: Request) -> JSONResponse:
+        return JSONResponse({"ok": True})
+
+    app = Starlette(routes=[Route("/api/test", protected)])
+    handler = setup_oauth2(app, oauth2_config())
+    absolute_expiry = time.time() + 3600
+    expired = OAuth2Session(
+        access_token="expired-access-token",
+        expires_at=time.time() - 1,
+        refresh_token="refresh-token-1",
+        session_expires_at=absolute_expiry,
+        user_info={"sub": "user-1"},
+    )
+    refreshed = OAuth2Session(
+        access_token="access-token-2",
+        expires_at=time.time() + 3600,
+        refresh_token="refresh-token-2",
+        session_expires_at=absolute_expiry,
+        user_info=expired.user_info,
+    )
+    handler.refresh_access_token = AsyncMock(return_value=refreshed)
+    handler.validate_access_token = AsyncMock(return_value={"sub": "user-1"})
+
+    with TestClient(app, base_url="https://studio.example.com") as client:
+        client.cookies.set("veadk_session", handler.encode_session(expired))
+        response = client.get("/api/test", headers={"Accept": "application/json"})
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert "veadk_session=" in response.headers["set-cookie"]
+
+
+def test_downstream_refresh_override_wins_and_stays_cookie_safe() -> None:
+    async def protected(request: Request) -> JSONResponse:
+        current = request.state.oauth2_session
+        request.state.oauth2_session_override = current.model_copy(
+            update={"refresh_token": "rotated-token", "id_token": "x" * 2000}
+        )
+        return JSONResponse({"ok": True})
+
+    app = Starlette(routes=[Route("/api/test", protected)])
+    handler = setup_oauth2(app, oauth2_config())
+    handler.validate_access_token = AsyncMock(return_value={"sub": "user-1"})
+    session = OAuth2Session(
+        access_token="access-token",
+        expires_at=time.time() + 3600,
+        refresh_token="first-token",
+        user_info={"sub": "user-1"},
+    )
+
+    with TestClient(app, base_url="https://studio.example.com") as client:
+        client.cookies.set("veadk_session", handler.encode_session(session))
+        response = client.get("/api/test", headers={"Accept": "application/json"})
+        persisted = handler.decode_session(response.cookies["veadk_session"])
+
+    assert response.status_code == 200
+    assert persisted is not None
+    assert persisted.refresh_token == "rotated-token"
+    assert persisted.id_token is None
+    assert len(response.cookies["veadk_session"]) < 4096
+
+
+@pytest.mark.asyncio
+async def test_id_token_validation_requires_studio_client_audience() -> None:
+    handler = OAuth2Handler(oauth2_config())
+    handler._validate_with_jwks = AsyncMock(
+        return_value={
+            "sub": "user-1",
+            "aud": ["studio-client"],
+        }
+    )
+
+    assert (await handler.validate_id_token("signed-token"))["sub"] == "user-1"
+    handler._validate_with_jwks = AsyncMock(
+        return_value={
+            "sub": "user-1",
+            "aud": "other-client",
+        }
+    )
+    with pytest.raises(Exception, match="ID token client mismatch"):
+        await handler.validate_id_token("signed-token")
+
+
+def test_from_veidentity_uses_refresh_token_absolute_lifetime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity_client = Mock()
+    identity_client.get_user_pool.return_value = (
+        "pool-id",
+        "identity.example.com",
+    )
+    identity_client.get_user_pool_client.return_value = (
+        "client-id",
+        "client-secret",
+    )
+    identity_client.get_user_pool_client_refresh_token_lifetime.return_value = (
+        30 * 24 * 60 * 60
+    )
+    monkeypatch.setattr(
+        "veadk.auth.middleware.oauth2_auth._fetch_oidc_discovery",
+        lambda _: OIDCDiscoveryConfig(
+            issuer="https://identity.example.com",
+            authorization_endpoint="https://identity.example.com/authorize",
+            token_endpoint="https://identity.example.com/token",
+        ),
+    )
+
+    config = OAuth2Config.from_veidentity(
+        user_pool_uid="pool-id",
+        client_uid="client-id",
+        redirect_uri="https://studio.example.com/oauth2/callback",
+        auto_create=False,
+        auto_register_callback=False,
+        identity_client=identity_client,
+    )
+
+    assert config.session_timeout_seconds == 30 * 24 * 60 * 60
+
+
+def test_from_veidentity_uses_existing_client_secret_without_client_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity_client = Mock()
+    identity_client.get_user_pool.return_value = (
+        "pool-id",
+        "identity.example.com",
+    )
+    identity_client.get_user_pool_client_refresh_token_lifetime.return_value = 3600
+    monkeypatch.setattr(
+        "veadk.auth.middleware.oauth2_auth._fetch_oidc_discovery",
+        lambda _: OIDCDiscoveryConfig(
+            issuer="https://identity.example.com",
+            authorization_endpoint="https://identity.example.com/authorize",
+            token_endpoint="https://identity.example.com/token",
+        ),
+    )
+
+    config = OAuth2Config.from_veidentity(
+        user_pool_uid="pool-id",
+        client_uid="client-id",
+        client_secret="existing-secret",
+        redirect_uri="https://studio.example.com/oauth2/callback",
+        auto_create=False,
+        auto_register_callback=False,
+        identity_client=identity_client,
+    )
+
+    identity_client.get_user_pool_client.assert_not_called()
+    assert config.client_id == "client-id"
+    assert config.client_secret == "existing-secret"
+    assert config.cookie_signing_secret == "existing-secret"
+
+
+def test_from_veidentity_supports_vestack_oidc_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity_client = Mock()
+    identity_client.get_user_pool.return_value = (
+        "pool-id",
+        "auth.example.com",
+    )
+    identity_client.get_user_pool_client.return_value = (
+        "client-id",
+        "client-secret",
+    )
+    identity_client.get_user_pool_client_refresh_token_lifetime.return_value = None
+    observed: list[str] = []
+    monkeypatch.setenv(
+        "VEIDENTITY_OIDC_BASE_URL",
+        "http://{user_pool_domain}/userpool/{user_pool_uid}",
+    )
+    monkeypatch.setattr(
+        "veadk.auth.middleware.oauth2_auth._fetch_oidc_discovery",
+        lambda base_url: (
+            observed.append(base_url)
+            or OIDCDiscoveryConfig(
+                issuer=f"{base_url}/issuer",
+                authorization_endpoint=f"{base_url}/authorize",
+                token_endpoint=f"{base_url}/oauth/token",
+            )
+        ),
+    )
+
+    OAuth2Config.from_veidentity(
+        user_pool_uid="pool-id",
+        client_uid="client-id",
+        redirect_uri="http://studio.example.com/oauth2/callback",
+        auto_create=False,
+        auto_register_callback=False,
+        identity_client=identity_client,
+    )
+
+    assert observed == ["http://auth.example.com/userpool/pool-id"]

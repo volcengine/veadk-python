@@ -14,6 +14,7 @@
 
 import importlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call
 
@@ -27,6 +28,22 @@ from veadk.cli.studio_deploy_serverless_iam import (
     SYSTEM_POLICIES,
     ensure_serverless_application_role,
 )
+from veadk.cli.studio_dependencies import STUDIO_AGENTKIT_CLI_ARTIFACT
+
+
+def _stage_test_agentkit_cli_archive(destination: Path, **_kwargs: object) -> Path:
+    destination.mkdir(parents=True, exist_ok=True)
+    archive = destination / STUDIO_AGENTKIT_CLI_ARTIFACT.filename
+    archive.write_bytes(b"test-agentkit-cli")
+    return archive
+
+
+@pytest.fixture(autouse=True)
+def _avoid_network_cli_archive_download(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.stage_studio_agentkit_cli_archive",
+        _stage_test_agentkit_cli_archive,
+    )
 
 
 def _install_iam_service(monkeypatch: pytest.MonkeyPatch, service: MagicMock) -> None:
@@ -43,16 +60,65 @@ def _iam_error(code: str, message: str) -> Exception:
 def test_existing_role_is_reused(monkeypatch: pytest.MonkeyPatch) -> None:
     service = MagicMock()
     service.get_role.return_value = {"Result": {"Role": {"RoleName": ROLE_NAME}}}
+    service.get_policy.return_value = {
+        "Result": {"Policy": {"PolicyName": CUSTOM_POLICY_NAME}}
+    }
+    service.list_attached_role_policies.return_value = {
+        "Result": {
+            "AttachedPolicyMetadata": [
+                {"PolicyName": CUSTOM_POLICY_NAME},
+                *[{"PolicyName": policy_name} for policy_name in SYSTEM_POLICIES],
+            ]
+        }
+    }
     _install_iam_service(monkeypatch, service)
 
     created = ensure_serverless_application_role("ak", "sk")
 
     assert created is False
     service.set_session_token.assert_not_called()
-    service.get_policy.assert_not_called()
+    service.get_policy.assert_called_once()
+    service.list_attached_role_policies.assert_called_once_with({"RoleName": ROLE_NAME})
     service.create_policy.assert_not_called()
     service.create_role.assert_not_called()
     service.attach_role_policy.assert_not_called()
+
+
+def test_volcengine_existing_role_syncs_missing_policies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = MagicMock()
+    service.get_role.return_value = {"Result": {"Role": {"RoleName": ROLE_NAME}}}
+    service.get_policy.return_value = {
+        "Result": {"Policy": {"PolicyName": CUSTOM_POLICY_NAME}}
+    }
+    service.list_attached_role_policies.return_value = {
+        "Result": {
+            "AttachedPolicyMetadata": [
+                {"PolicyName": CUSTOM_POLICY_NAME},
+                *[
+                    {"PolicyName": policy_name}
+                    for policy_name in SYSTEM_POLICIES
+                    if policy_name != "APIGFullAccess"
+                ],
+            ]
+        }
+    }
+    service.attach_role_policy.return_value = {"Result": {}}
+    _install_iam_service(monkeypatch, service)
+
+    created = ensure_serverless_application_role("ak", "sk")
+
+    assert created is False
+    service.set_host.assert_not_called()
+    service.set_scheme.assert_not_called()
+    service.attach_role_policy.assert_called_once_with(
+        {
+            "RoleName": ROLE_NAME,
+            "PolicyName": "APIGFullAccess",
+            "PolicyType": "System",
+        }
+    )
 
 
 def test_byteplus_existing_role_setup_uses_byteplus_iam_host_and_syncs_policies(
@@ -81,6 +147,17 @@ def test_serverless_role_uses_session_token(
 ) -> None:
     service = MagicMock()
     service.get_role.return_value = {"Result": {"Role": {"RoleName": ROLE_NAME}}}
+    service.get_policy.return_value = {
+        "Result": {"Policy": {"PolicyName": CUSTOM_POLICY_NAME}}
+    }
+    service.list_attached_role_policies.return_value = {
+        "Result": {
+            "AttachedPolicyMetadata": [
+                {"PolicyName": CUSTOM_POLICY_NAME},
+                *[{"PolicyName": policy_name} for policy_name in SYSTEM_POLICIES],
+            ]
+        }
+    }
     _install_iam_service(monkeypatch, service)
 
     ensure_serverless_application_role("ak", "sk", session_token="sts-token")
@@ -235,6 +312,29 @@ def test_studio_deploy_checks_serverless_role_with_custom_function_role(
         "veadk.cli.frontend_skill_creator.ensure_skill_creator_model_credential",
         lambda **_: None,
     )
+    workspace_calls = []
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.prepare_identity_roles",
+        lambda **kwargs: {"VEADK_STUDIO_IDENTITY_ROLES": "1"},
+    )
+
+    def provision_workspace(**kwargs):
+        workspace_calls.append(kwargs)
+        return "studio-workspace-tool"
+
+    monkeypatch.setattr(
+        "frontend.server.workspace_tool.provision_workspace_tool",
+        provision_workspace,
+    )
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.deploy_scheduler",
+        lambda *_args, **_kwargs: (
+            "scheduler-function",
+            "scheduler-timer",
+            "worker-function",
+            "worker-timer",
+        ),
+    )
 
     result = CliRunner().invoke(
         studio,
@@ -258,4 +358,7 @@ def test_studio_deploy_checks_serverless_role_with_custom_function_role(
     )
 
     assert result.exit_code == 0, result.output
+    assert len(workspace_calls) == 1
+    assert workspace_calls[0]["provider"] == "volcengine"
+    assert workspace_calls[0]["access_key"] == "ak"
     assert checked_credentials == [("ak", "sk", "", "volcengine")]

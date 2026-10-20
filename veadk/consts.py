@@ -15,7 +15,6 @@
 import os
 import time
 
-from veadk.utils.misc import getenv
 from veadk.version import VERSION
 
 DEFAULT_AGENT_NAME = "veAgent"
@@ -25,15 +24,16 @@ DEFAULT_MODEL_AGENT_PROVIDER = "openai"
 DEFAULT_MODEL_AGENT_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
 DEFAULT_MODEL_EXTRA_CONFIG = {
     "extra_headers": {
-        "x-is-encrypted": getenv("MODEL_AGENT_ENCRYPTED", "true"),
+        "x-is-encrypted": os.getenv("MODEL_AGENT_ENCRYPTED") or "true",
         "veadk-source": "veadk",
         "veadk-version": VERSION,
         "User-Agent": f"VeADK/{VERSION}",
-        "X-Client-Request-Id": getenv("MODEL_AGENT_CLIENT_REQ_ID", f"veadk/{VERSION}"),
+        "X-Client-Request-Id": os.getenv("MODEL_AGENT_CLIENT_REQ_ID")
+        or f"veadk/{VERSION}",
     },
     "extra_body": {
         "caching": {
-            "type": getenv("MODEL_AGENT_CACHING", "enabled"),
+            "type": os.getenv("MODEL_AGENT_CACHING") or "enabled",
         },
         # "thinking": {
         #     "type": "disabled"

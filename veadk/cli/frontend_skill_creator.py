@@ -51,6 +51,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from frontend.server.agentkit_clients import create_agentkit_client
 from veadk.cli.agentkit_sandbox_region import (
     is_agentkit_resource_not_found,
     sandbox_region_candidates,
@@ -1013,7 +1014,14 @@ class SkillCreatorService:
             )
             tos_url = upload_skill_archive(hashed_path, storage, credentials)
 
-        client = AgentkitSkillsClient(region=self._region)
+        client = create_agentkit_client(
+            AgentkitSkillsClient,
+            provider=storage.provider,
+            access_key=credentials.access_key,
+            secret_key=credentials.secret_key,
+            session_token=credentials.session_token or "",
+            region=self._region,
+        )
         effective_project = (
             project_name or os.getenv("VEADK_SKILL_CREATOR_PROJECT_NAME") or None
         )

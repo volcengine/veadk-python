@@ -1,0 +1,222 @@
+/* Figma: Ig6wLTUxhfAxb20bKrXqh1 / 740:296907 */
+.studio-button {
+  --studio-button-height: var(--studio-size-button-default);
+  --studio-button-icon-only-size: var(--studio-size-icon-button-default);
+  --studio-button-icon-size: calc(1em + 2px);
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 80px;
+  height: var(--studio-button-height);
+  padding: 5px 12px;
+  border: 0;
+  border-radius: var(--studio-radius-md);
+  background: #ffffff;
+  color: #101013;
+  font-family: var(--studio-font-family-ui);
+  font-size: var(--studio-font-size-md);
+  font-style: normal;
+  font-weight: var(--studio-font-weight-regular);
+  font-synthesis: none;
+  line-height: var(--studio-line-height-md);
+  letter-spacing: 0;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--studio-motion-duration-fast, 140ms) ease-out, color var(--studio-motion-duration-fast, 140ms) ease-out;
+}
+
+.studio-button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+/* Figma: 632:252803 */
+.studio-button--secondary {
+  background: #262626;
+  color: #ffffff;
+}
+
+/* Figma 740:296898: translucent outlined secondary action */
+.studio-button--outline {
+  background: var(--studio-surface-node-selected, rgba(38, 38, 46, .45));
+  color: var(--studio-text-primary, #dbdee7);
+  box-shadow: inset 0 0 0 .5px var(--studio-border-control, rgba(219, 222, 231, .2));
+}
+
+.studio-button__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 var(--studio-button-icon-size);
+  width: var(--studio-button-icon-size);
+  height: var(--studio-button-icon-size);
+}
+
+/* Rounded action, using the same size options as other buttons */
+.studio-button--pill {
+  min-width: 65px;
+  border-radius: var(--studio-radius-pill);
+  background: var(--studio-surface-update);
+  color: var(--studio-text-strong);
+}
+.studio-button--pill.studio-button--size-default {
+  --studio-button-height: var(--studio-size-control-pill);
+}
+.studio-button--pill:not(:disabled):hover { background: color-mix(in srgb, var(--studio-surface-update), var(--studio-text-primary) 10%); }
+.studio-button--pill:not(:disabled):active { background: color-mix(in srgb, var(--studio-surface-update), var(--studio-text-primary) 16%); }
+.studio-button--pill:focus-visible { outline: 2px solid var(--studio-focus-ring); outline-offset: 2px; }
+.studio-button--pill:disabled { opacity: .45; cursor: not-allowed; }
+
+.studio-button__icon > svg,
+.studio-button__icon > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.studio-button__label {
+  flex-shrink: 0;
+}
+
+/* Figma 849:443358 */
+.studio-button--ghost {
+  justify-content: flex-start;
+  min-width: 86.5px;
+  padding: 0;
+  gap: 8px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--studio-text-secondary, rgba(219, 222, 231, .6));
+}
+.studio-button--link {
+  justify-content: flex-start;
+  min-width: 0;
+  padding: 0;
+  gap: 4px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--studio-text-secondary, rgba(219, 222, 231, .6));
+}
+
+.studio-button--link .studio-button__label {
+  position: relative;
+}
+
+.studio-button--link .studio-button__label::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  border-bottom: 1px dashed currentColor;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease-out;
+  content: "";
+}
+
+.studio-button--link .studio-button__end-icon {
+  opacity: 0;
+  transition: opacity 160ms ease-out;
+}
+
+.studio-button--link:not(.studio-button--icon-only):not(:disabled):focus-visible {
+  outline: none;
+}
+
+.studio-button--link:not(:disabled):focus-visible .studio-button__label::after,
+.studio-button--link:not(:disabled):focus-visible .studio-button__end-icon {
+  opacity: 1;
+}
+
+.studio-button--link:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.studio-button--size-compact {
+  --studio-button-height: var(--studio-size-button-compact);
+  --studio-button-icon-only-size: var(--studio-size-icon-button-compact);
+  padding: 3px 10px;
+  font-size: var(--studio-font-size-xs);
+  line-height: var(--studio-line-height-sm);
+}
+
+.studio-button--size-large {
+  --studio-button-height: var(--studio-size-button-large);
+  --studio-button-icon-only-size: var(--studio-size-icon-button-large);
+  padding: 6px 12px;
+  font-size: var(--studio-font-size-lg);
+  line-height: var(--studio-line-height-lg);
+}
+
+.studio-button--ghost,
+.studio-button--link {
+  padding: 0;
+}
+
+.studio-button--icon-only {
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--studio-button-icon-only-size);
+  min-width: var(--studio-button-icon-only-size);
+  height: var(--studio-button-icon-only-size);
+  padding: 0;
+  gap: 0;
+  border-radius: var(--studio-radius-sm);
+}
+
+.studio-button--icon-only:focus-visible {
+  outline: 1px solid var(--studio-focus-ring, #ffffff);
+  outline-offset: 2px;
+}
+
+.studio-button--icon-only:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.studio-button--loading:disabled {
+  position: relative;
+  opacity: .65;
+  cursor: not-allowed;
+}
+
+/* Keep original dimensions and the accessible name while the ring is visible */
+.studio-button--loading > .studio-button__icon,
+.studio-button--loading > .studio-button__label {
+  opacity: 0;
+}
+
+.studio-button__loading {
+  --studio-loading-track: color-mix(in srgb, currentColor 22%, transparent);
+  --studio-loading-color: currentColor;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
+@media (hover: hover) {
+  .studio-button--primary:not(:disabled):hover { background: var(--studio-action-hover, #e9e9ec); }
+  .studio-button--secondary:not(:disabled):hover { background: var(--studio-secondary-hover, #323234); }
+  .studio-button--ghost:not(:disabled):hover { color: var(--studio-text-primary, #dbdee7); }
+  .studio-button--icon-only.studio-button--ghost[data-hover-effect="background"]:not(:disabled):hover { background: var(--studio-fill-hover, rgba(255, 255, 255, .06)); }
+  .studio-button--link:not(:disabled):hover .studio-button__label::after,
+  .studio-button--link:not(:disabled):hover .studio-button__end-icon { opacity: 1; }
+}
+
+.studio-button--primary:not(:disabled):active { background: var(--studio-action-active, #dbdee7); }
+.studio-button--secondary:not(:disabled):active { background: var(--studio-secondary-active, #3b3b3e); }
+.studio-button--ghost:not(:disabled):active { color: var(--studio-text-strong, #ffffff); }
+.studio-button--icon-only.studio-button--ghost[data-hover-effect="background"]:not(:disabled):active { background: var(--studio-fill-selected, rgba(170, 163, 225, .1)); }
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-button { transition: none; }
+  .studio-button--link .studio-button__label::after,
+  .studio-button--link .studio-button__end-icon { transition: none; }
+}

@@ -3,34 +3,35 @@ const SESSION_DETAIL_PATTERN = /session not found/i;
 const ROUTE_NOT_FOUND_PATTERN = /(?:^|[：:\s])not found\s*$/i;
 const TOOL_ARGUMENT_JSON_PATTERN =
   /Expecting (?:'[^']+'|\w+)(?: delimiter)?: line \d+ column \d+ \(char \d+\)/i;
+const RESOURCE_COLLECTION_EXPIRED_PATTERN =
+  /Unknown or expired collection_id\s+'[^']+'\.\s*Call collect_resources first\./i;
+const MODEL_QUOTA_PATTERN =
+  /(?:RateLimitError|\bTPM\b|\bRPM\b|tokens? per minute|requests? per minute)[\s\S]*(?:\b429\b|limit|quota)|\b429\b[\s\S]*(?:model|RateLimitError|\bTPM\b|\bRPM\b)/i;
 
-const PERSISTENT_MEMORY_HINT =
-  "提示：会话已不存在。使用 in-memory 或 SQLite 短期记忆时，多实例、进程重启或滚动发布都可能导致会话丢失；建议改用基于数据库的持久化短期记忆存储。";
-const UNSUPPORTED_ROUTE_HINT =
-  "提示：该 Runtime 未提供会话能力运行接口，可能是 Runtime 版本与当前 Studio 不兼容。";
-const TOOL_ARGUMENT_JSON_HINT =
-  "提示：模型生成的工具参数格式不完整，请重新发送一次。";
+function appendHint(message: string, hint: string): string {
+  return message.includes(hint) ? message : `${message}\n\n${hint}`;
+}
 
-/** Preserve the upstream error and add guidance only when its cause is known. */
+/** Preserve the upstream error before appending diagnosis and recovery guidance. */
 export function formatRunSseError(error: unknown): string {
   const message = String(error);
+  const rawResponseLabel = adkT("runSse.rawResponseLabel");
+  let formatted = message.includes(rawResponseLabel)
+    ? message
+    : `${rawResponseLabel}${message}`;
   if (TOOL_ARGUMENT_JSON_PATTERN.test(message)) {
-    return message.includes(TOOL_ARGUMENT_JSON_HINT)
-      ? message
-      : `${message}\n\n${TOOL_ARGUMENT_JSON_HINT}`;
+    formatted = appendHint(formatted, adkT("runSse.toolArgumentHint"));
+  } else if (RESOURCE_COLLECTION_EXPIRED_PATTERN.test(message)) {
+    return appendHint(formatted, adkT("runSse.resourceCollectionExpiredHint"));
+  } else if (MODEL_QUOTA_PATTERN.test(message)) {
+    return appendHint(formatted, adkT("runSse.modelQuotaHint"));
+  } else if (SESSION_NOT_FOUND_PATTERN.test(message)) {
+    if (SESSION_DETAIL_PATTERN.test(message)) {
+      formatted = appendHint(formatted, adkT("runSse.persistentMemoryHint"));
+    } else if (ROUTE_NOT_FOUND_PATTERN.test(message)) {
+      formatted = appendHint(formatted, adkT("runSse.unsupportedRouteHint"));
+    }
   }
-  if (!SESSION_NOT_FOUND_PATTERN.test(message)) {
-    return message;
-  }
-  if (SESSION_DETAIL_PATTERN.test(message)) {
-    return message.includes(PERSISTENT_MEMORY_HINT)
-      ? message
-      : `${message}\n\n${PERSISTENT_MEMORY_HINT}`;
-  }
-  if (ROUTE_NOT_FOUND_PATTERN.test(message)) {
-    return message.includes(UNSUPPORTED_ROUTE_HINT)
-      ? message
-      : `${message}\n\n${UNSUPPORTED_ROUTE_HINT}`;
-  }
-  return message;
+  return appendHint(formatted, adkT("runSse.networkConfigurationHint"));
 }
+import { adkT } from "./i18n";

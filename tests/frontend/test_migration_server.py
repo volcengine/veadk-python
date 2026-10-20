@@ -14,11 +14,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import json
 import stat
 import subprocess
+import threading
+import time
 import zipfile
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -40,20 +43,42 @@ from frontend.server.migration.models import (
     CreateMigrationTaskBody,
     SubmitAnalysisAnswersBody,
 )
+from frontend.server.migration import service as migration_service
 from frontend.server.migration.routes import mount_migration_routes
 from frontend.server.migration.service import (
+    EVALUATION_SESSION_TTL_SECONDS,
     MIGRATION_ROOT,
     MIGRATION_SESSION_TTL_SECONDS,
+    MIGRATION_UNSUPPORTED_MODEL_IDS,
     MIGRATION_UPLOAD_MAX_BYTES,
     MigrationError,
     MigrationService,
+    _activity_payload,
+    _activity_secret_values,
     _analysis_result_message,
-    _codex_event_extractor,
-    _command_activity_title,
+    _start_analysis_command,
+    _analysis_result_extractor_script,
+    _parse_activity_log,
     _public_environment_defaults,
     validate_source_archive,
 )
+from veadk.cli.codex_app_server import CodexAppServerEvent
 from veadk.cli.frontend_skill_creator import _sandbox_model_config
+from veadk.cli.studio_model_catalog import VOLCENGINE_STUDIO_AGENT_MODEL_NAME
+
+# The model a site provisioned by this repository runs its Sandbox with, and therefore
+# the one every default-model fixture has to use.
+DEFAULT_MODEL_ID = VOLCENGINE_STUDIO_AGENT_MODEL_NAME
+
+
+@pytest.fixture(autouse=True)
+def _pin_scripted_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These suites cover the in-Sandbox ``codex exec`` driver.
+
+    The app-server driver has its own suite and its own background-worker test; pin
+    the scripted driver here so every command assertion stays deterministic.
+    """
+    monkeypatch.setenv("AGENTKIT_MIGRATION_APP_SERVER", "0")
 
 
 def source_zip(
@@ -185,19 +210,23 @@ def test_public_environment_defaults_require_integrity_and_hide_secrets() -> Non
 class FakeMigrationGateway:
     def __init__(self) -> None:
         self.enabled = True
+        self.provider = "volcengine"
+        self.model_id = DEFAULT_MODEL_ID
         self.sessions: dict[str, MigrationSandboxSession] = {}
         self.files: dict[tuple[str, str], bytes] = {}
         self.commands: list[tuple[str, str, str]] = []
         self.command_timeouts: list[tuple[str, int]] = []
         self.created: list[str] = []
+        self.created_models: list[str | None] = []
+        self.created_ttls: list[int] = []
         self.deleted: list[str] = []
 
     def capabilities(self) -> dict[str, object]:
         return {
             "enabled": self.enabled,
             "reason": "" if self.enabled else "Dev Sandbox 暂不可用",
-            "provider": "volcengine",
-            "model": {"configured": True, "id": "doubao-test"},
+            "provider": self.provider,
+            "model": {"configured": True, "id": self.model_id},
         }
 
     def create_session(
@@ -208,11 +237,17 @@ class FakeMigrationGateway:
         creator_name: str,
         display_name: str,
         ttl_seconds: int,
+        model_id: str | None = None,
     ) -> MigrationSandboxSession:
         assert creator_name == "Owner"
         assert display_name == "存量迁移"
-        assert ttl_seconds == MIGRATION_SESSION_TTL_SECONDS
+        assert ttl_seconds in {
+            MIGRATION_SESSION_TTL_SECONDS,
+            EVALUATION_SESSION_TTL_SECONDS,
+        }
         self.created.append(task_id)
+        self.created_models.append(model_id)
+        self.created_ttls.append(ttl_seconds)
         existing = self.sessions.get(task_id)
         if existing is not None:
             return existing
@@ -224,7 +259,11 @@ class FakeMigrationGateway:
             region="cn-beijing",
             status="Ready",
             created_at="2099-01-01T00:00:00Z",
-            expire_at="2099-01-01T01:00:00Z",
+            expire_at=(
+                "2099-01-01T02:00:00Z"
+                if ttl_seconds == EVALUATION_SESSION_TTL_SECONDS
+                else "2099-01-01T01:00:00Z"
+            ),
             owner_id=owner_id,
         )
         self.sessions[task_id] = session
@@ -589,9 +628,11 @@ def test_migration_capability_and_session_contract_are_bounded() -> None:
         "enabled": True,
         "reason": "",
         "provider": "volcengine",
-        "model": {"configured": True, "id": "doubao-test"},
-        "maxUploadBytes": 50 * 1024 * 1024,
+        "model": {"configured": True, "id": DEFAULT_MODEL_ID},
+        "unsupportedModelIds": ["deepseek-v4-pro-260425"],
+        "maxUploadBytes": 20 * 1024 * 1024,
         "sessionTtlSeconds": 3600,
+        "evaluationSessionTtlSeconds": 7200,
         "frameworks": [
             "langchain",
             "langgraph",
@@ -618,7 +659,7 @@ def test_migration_capability_and_session_contract_are_bounded() -> None:
             "frameworks": ["dify", "any"],
         },
     }
-    assert MIGRATION_UPLOAD_MAX_BYTES == 50 * 1024 * 1024
+    assert MIGRATION_UPLOAD_MAX_BYTES == 20 * 1024 * 1024
     assert created["state"] == "awaiting_upload"
     request = json.loads(
         gateway.files[(str(created["id"]), f"{MIGRATION_ROOT}/request/task.json")]
@@ -626,7 +667,150 @@ def test_migration_capability_and_session_contract_are_bounded() -> None:
     assert request["source_file_name"] == "support-agent.zip"
     assert request["instruction"] == "保留原有行为。"
     assert request["session_ttl_seconds"] == 3600
+    assert "model_id" not in request
+    assert "modelId" not in created
+    assert gateway.created_models == [None]
+    assert gateway.created_ttls == [3600]
     assert "owner-1" not in json.dumps(request)
+
+
+def test_evaluation_enabled_task_uses_two_hour_session_and_locked_config() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+
+    created = service.create_task(
+        CreateMigrationTaskBody.model_validate(
+            {
+                "sourceFileName": "support-agent.zip",
+                "evaluation": {"enabled": True, "locale": "en-US"},
+            }
+        ),
+        "owner-1",
+        "Owner",
+    )
+
+    task_id = str(created["id"])
+    request = json.loads(
+        gateway.files[(task_id, f"{MIGRATION_ROOT}/request/task.json")]
+    )
+    assert gateway.created_ttls == [7200]
+    assert created["sessionTtlSeconds"] == 7200
+    assert created["evaluation"] == {
+        "enabled": True,
+        "preset": "standard",
+        "dimensions": [
+            "semantic_fidelity",
+            "output_contract",
+            "workflow_tool_fidelity",
+        ],
+        "locale": "en-US",
+    }
+    assert request["session_ttl_seconds"] == 7200
+    assert request["evaluation"] == created["evaluation"]
+
+
+def test_selected_model_is_immutable_session_configuration() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+
+    created = service.create_task(
+        CreateMigrationTaskBody(
+            sourceFileName="support-agent.zip",
+            modelId=DEFAULT_MODEL_ID,
+        ),
+        "owner-1",
+        "Owner",
+    )
+    task_id = str(created["id"])
+    request = json.loads(
+        gateway.files[(task_id, f"{MIGRATION_ROOT}/request/task.json")]
+    )
+
+    assert request["model_id"] == DEFAULT_MODEL_ID
+    assert created["modelId"] == DEFAULT_MODEL_ID
+    assert gateway.created_models == [DEFAULT_MODEL_ID]
+    assert service.get_task(task_id, "owner-1")["modelId"] == request["model_id"]
+
+
+def test_migration_rejects_a_known_incompatible_codex_model() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+
+    with pytest.raises(MigrationError) as unsupported:
+        service.create_task(
+            CreateMigrationTaskBody(
+                sourceFileName="support-agent.zip",
+                modelId="deepseek-v4-pro-260425",
+            ),
+            "owner-1",
+            "Owner",
+        )
+
+    assert unsupported.value.code == "MIGRATION_MODEL_UNSUPPORTED"
+    assert unsupported.value.status_code == 400
+    assert gateway.created_models == []
+
+
+def test_migration_rejects_any_model_outside_provider_allowlist() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+
+    with pytest.raises(MigrationError) as unsupported:
+        service.create_task(
+            CreateMigrationTaskBody(
+                sourceFileName="support-agent.zip",
+                modelId="unlisted-model",
+            ),
+            "owner-1",
+            "Owner",
+        )
+
+    assert unsupported.value.code == "MIGRATION_MODEL_UNSUPPORTED"
+    assert unsupported.value.status_code == 400
+    assert gateway.created_models == []
+
+
+def test_migration_uses_byteplus_specific_model_allowlist() -> None:
+    gateway = FakeMigrationGateway()
+    gateway.provider = "byteplus"
+    gateway.model_id = "dola-seed-2-1-turbo-260628"
+    service = MigrationService(gateway)
+
+    created = service.create_task(
+        CreateMigrationTaskBody(
+            sourceFileName="support-agent.zip",
+            modelId="deepseek-v4-pro-ga-260813",
+        ),
+        "owner-1",
+        "Owner",
+    )
+
+    assert created["modelId"] == "deepseek-v4-pro-ga-260813"
+    assert gateway.created_models == ["deepseek-v4-pro-ga-260813"]
+
+
+def test_migration_rejects_default_model_outside_provider_allowlist() -> None:
+    gateway = FakeMigrationGateway()
+    gateway.model_id = "unlisted-default-model"
+    service = MigrationService(gateway)
+
+    with pytest.raises(MigrationError) as unsupported:
+        service.create_task(
+            CreateMigrationTaskBody(sourceFileName="support-agent.zip"),
+            "owner-1",
+            "Owner",
+        )
+
+    assert unsupported.value.code == "MIGRATION_MODEL_UNSUPPORTED"
+    assert gateway.created_models == []
+
+
+def test_migration_model_rejects_an_invalid_identifier() -> None:
+    with pytest.raises(ValueError, match="模型 ID 格式无效"):
+        CreateMigrationTaskBody(
+            sourceFileName="support-agent.zip",
+            modelId="model; export SECRET=value",
+        )
 
 
 def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
@@ -678,7 +862,12 @@ def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
                 "text": "正在修复配置，API_KEY=raw-secret。",
             },
         },
-        {"type": "turn.completed", "usage": {"input_tokens": 10}},
+        {"type": "thread.started", "thread_id": "thread-migration"},
+        {"type": "turn.started"},
+        {
+            "type": "turn.completed",
+            "usage": {"input_tokens": 10, "output_tokens": 4},
+        },
     ]
     gateway.files[
         (
@@ -713,19 +902,31 @@ def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
             "status": "completed",
             "title": "Codex 思考",
             "detail": "正在分析源项目结构。",
+            "itemType": "reasoning",
         },
         {
             "id": "migration:1:plan-1",
             "kind": "plan",
             "status": "running",
-            "title": "Codex 正在按计划迁移",
+            "title": "项目迁移计划",
             "detail": "已完成 1/2 项",
+            "plan": [
+                {"text": "inspect", "status": "completed"},
+                {"text": "migrate", "status": "in_progress"},
+            ],
         },
         {
             "id": "migration:1:command-1",
             "kind": "command",
             "status": "completed",
-            "title": "已验证迁移结果",
+            "title": "命令执行完成",
+            "itemType": "commandExecution",
+            "tool": {
+                "name": "命令执行完成",
+                "input": {"command": "API_KEY=[已隐藏] bash validate_runtime.sh"},
+                "output": "[已隐藏]",
+                "exitCode": 0,
+            },
         },
         {
             "id": "migration:1:message-1",
@@ -733,12 +934,20 @@ def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
             "status": "completed",
             "title": "Codex 更新",
             "detail": "正在修复配置，API_KEY=[已隐藏]",
+            "itemType": "agentMessage",
         },
         {
-            "id": "migration:1:turn",
-            "kind": "status",
+            "id": "migration:1:turn-summary",
+            "kind": "summary",
             "status": "completed",
-            "title": "Codex 已完成本轮执行",
+            "title": "本轮执行完成",
+            "turn": {
+                "turnId": "thread-migration",
+                "status": "completed",
+                "toolCalls": 1,
+                "toolDurationComplete": False,
+                "usage": {"totalTokens": 14, "inputTokens": 10, "outputTokens": 4},
+            },
         },
     ]
     serialized = json.dumps(activity, ensure_ascii=False)
@@ -851,18 +1060,34 @@ def test_agentic_activity_handles_incremental_and_malformed_events() -> None:
         "id": "migration:2:package",
         "kind": "command",
         "status": "failed",
-        "title": "打包迁移产物未完成",
+        "title": "命令执行失败",
+        "itemType": "commandExecution",
+        "tool": {
+            "name": "命令执行失败",
+            "input": {"command": "zip result.zip output"},
+        },
     }
     assert next(item for item in items if item["id"] == "migration:2:install")[
         "title"
-    ] == ("正在准备项目依赖")
+    ] == ("正在执行命令")
     assert next(item for item in items if item["id"] == "migration:2:3")["title"] == (
-        "已运行迁移脚本"
+        "命令执行完成"
     )
-    assert next(item for item in items if item["id"] == "migration:2:plan")[
-        "status"
-    ] == ("completed")
-    assert items[-1]["title"] == "Codex 本轮执行未完成"
+    assert not any(item["id"] == "migration:2:plan" for item in items)
+    assert next(item for item in items if item["id"] == "migration:2:turn-summary") == {
+        "id": "migration:2:turn-summary",
+        "kind": "summary",
+        "status": "failed",
+        "title": "本轮执行未完成",
+        "turn": {
+            "turnId": "",
+            "status": "failed",
+            "toolCalls": 3,
+            "toolDurationComplete": False,
+        },
+    }
+    assert items[-1]["title"] == "Codex 项目迁移未完成"
+    assert items[-1]["detail"] == "Codex 本轮执行未完成。"
     assert "private-token-value" not in json.dumps(activity)
 
     status_path = f"{MIGRATION_ROOT}/delivery/migration-status.json"
@@ -889,6 +1114,229 @@ def test_agentic_activity_handles_incremental_and_malformed_events() -> None:
         }
     ).encode()
     assert service.activity(task_id, "owner-1")["complete"] is True
+
+
+def test_activity_parser_preserves_useful_codex_events_and_redacts_payloads() -> None:
+    events = [
+        {
+            "type": "item.started",
+            "item": {
+                "id": "command",
+                "type": "command_execution",
+                "status": "in_progress",
+                "command": "custom-tool --token=private-token-value",
+                "aggregated_output": "",
+                "exit_code": None,
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "command",
+                "type": "command_execution",
+                "status": "failed",
+                "command": "custom-tool --token=private-token-value",
+                "aggregated_output": "request failed with password=private-password",
+                "exit_code": 7,
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "files",
+                "type": "file_change",
+                "status": "completed",
+                "changes": [
+                    {"path": "assistant/agent.py", "kind": "update"},
+                    {"path": "main.py", "kind": "add"},
+                ],
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "mcp",
+                "type": "mcp_tool_call",
+                "server": "project",
+                "tool": "inspect",
+                "arguments": {
+                    "path": "assistant/agent.py",
+                    "nested": {"api_key": "private-api-key"},
+                },
+                "result": {"structured_content": {"entry": "root_agent"}},
+                "error": None,
+                "status": "completed",
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "mcp-error",
+                "type": "mcp_tool_call",
+                "server": "project",
+                "tool": "inspect",
+                "arguments": {},
+                "result": None,
+                "error": {"message": "failed with token=private-mcp-token"},
+                "status": "failed",
+            },
+        },
+        {
+            "type": "item.started",
+            "item": {
+                "id": "collab",
+                "type": "collab_tool_call",
+                "tool": "spawn_agent",
+                "sender_thread_id": "root",
+                "receiver_thread_ids": ["worker"],
+                "prompt": "Inspect tools",
+                "agents_states": {"worker": {"status": "running"}},
+                "status": "in_progress",
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "search",
+                "type": "web_search",
+                "query": "AgentKit runtime contract",
+                "action": {"type": "search"},
+            },
+        },
+        {
+            "type": "item.updated",
+            "item": {
+                "id": "plan",
+                "type": "todo_list",
+                "items": [
+                    {"text": "识别入口", "completed": True},
+                    {"text": "迁移工具", "status": "in_progress"},
+                    {"text": "验证行为", "completed": False},
+                    {"text": "部署检查", "status": "failed"},
+                    "ignored",
+                ],
+            },
+        },
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "item-error",
+                "type": "error",
+                "message": "tool failed with Authorization: Bearer private-bearer",
+            },
+        },
+        {"type": "error", "message": "stream failed with token=private-stream-token"},
+        {"type": "turn.completed", "usage": {"input_tokens": 10}},
+    ]
+
+    items = _parse_activity_log(
+        "\n".join(json.dumps(event, ensure_ascii=False) for event in events).encode(),
+        1,
+        phase="migration",
+    )
+
+    assert [item["id"] for item in items] == [
+        "migration:1:command",
+        "migration:1:files",
+        "migration:1:mcp",
+        "migration:1:mcp-error",
+        "migration:1:collab",
+        "migration:1:search",
+        "migration:1:plan",
+        "migration:1:item-error",
+        "migration:1:error-10",
+        "migration:1:turn-summary",
+    ]
+    summary = next(item for item in items if item["id"] == "migration:1:turn-summary")
+    assert summary["turn"]["status"] == "completed"
+    assert summary["turn"]["usage"] == {"totalTokens": 10, "inputTokens": 10}
+    assert items[0] == {
+        "id": "migration:1:command",
+        "kind": "command",
+        "status": "failed",
+        "title": "命令执行失败",
+        "itemType": "commandExecution",
+        "tool": {
+            "name": "命令执行失败",
+            "input": {"command": "custom-tool --token=[已隐藏]"},
+            "output": "request failed with password=[已隐藏]",
+            "exitCode": 7,
+        },
+    }
+    # 页面按智能构建同一套 Codex 行渲染这些工具项，所以每一项都要带原生 itemType。
+    assert [item.get("itemType") for item in items[1:6]] == [
+        "fileChange",
+        "mcpToolCall",
+        "mcpToolCall",
+        "collabToolCall",
+        "webSearch",
+    ]
+    assert items[1]["tool"] == {
+        "name": "已更新2个项目文件",
+        "input": {
+            "changes": [
+                {"path": "assistant/agent.py", "kind": "update"},
+                {"path": "main.py", "kind": "add"},
+            ]
+        },
+    }
+    assert items[2]["tool"] == {
+        "name": "已调用工具 project/inspect",
+        "input": {
+            "path": "assistant/agent.py",
+            "nested": {"api_key": "[已隐藏]"},
+        },
+        "output": {"structured_content": {"entry": "root_agent"}},
+    }
+    assert items[3]["status"] == "failed"
+    failed_tool = items[3]["tool"]
+    assert isinstance(failed_tool, dict)
+    assert failed_tool["error"] == "failed with token=[已隐藏]"
+    assert items[4]["status"] == "running"
+    collaboration_tool = items[4]["tool"]
+    search_tool = items[5]["tool"]
+    assert isinstance(collaboration_tool, dict)
+    assert collaboration_tool["name"] == "正在启动子任务"
+    assert isinstance(collaboration_tool["input"], dict)
+    assert collaboration_tool["input"]["prompt"] == "Inspect tools"
+    assert isinstance(search_tool, dict)
+    assert isinstance(search_tool["input"], dict)
+    assert search_tool["input"]["query"] == "AgentKit runtime contract"
+    assert items[6]["plan"] == [
+        {"text": "识别入口", "status": "completed"},
+        {"text": "迁移工具", "status": "in_progress"},
+        {"text": "验证行为", "status": "pending"},
+        {"text": "部署检查", "status": "failed"},
+    ]
+    assert items[6]["detail"] == "已完成 1/4 项"
+    assert items[7]["status"] == "failed"
+    assert items[8]["status"] == "failed"
+    serialized = json.dumps(items, ensure_ascii=False)
+    assert "private-" not in serialized
+    assert "Codex 已完成本轮执行" not in serialized
+
+
+def test_activity_payload_bounds_nested_and_untrusted_values() -> None:
+    deep: object = "token=private-deep-token"
+    for _ in range(8):
+        deep = {"value": deep}
+    wide = {f"field-{index}": index for index in range(55)}
+
+    assert _activity_secret_values(deep) == ()
+    assert len(_activity_secret_values(wide)) == 0
+    assert _activity_payload(None) is None
+    bounded_list = _activity_payload([*range(55)])
+    bounded_mapping = _activity_payload(wide)
+    assert isinstance(bounded_list, list)
+    assert bounded_list[-1] == "…内容已截断"
+    assert isinstance(bounded_mapping, dict)
+    assert bounded_mapping["…"] == "内容已截断"
+    assert "内容已截断" in json.dumps(_activity_payload(deep), ensure_ascii=False)
+    with pytest.raises(TypeError, match="non-JSON value"):
+        _activity_payload(SimpleNamespace(value="unsafe"))
+    bounded = _activity_payload({"output": "x" * 12_001})
+    assert isinstance(bounded, str)
+    assert bounded.endswith("…内容已截断")
 
 
 def test_analysis_activity_is_visible_before_route_confirmation() -> None:
@@ -973,38 +1421,64 @@ def test_analysis_activity_is_visible_before_route_confirmation() -> None:
                 "kind": "message",
                 "status": "completed",
                 "title": "Codex 更新",
+                "itemType": "agentMessage",
                 "detail": "发现项目包含两个独立入口，正在核对调用关系。",
-            },
-            {
-                "id": "analysis:1:analysis-plan",
-                "kind": "plan",
-                "status": "completed",
-                "title": "Codex 正在按计划分析",
-                "detail": "已完成 1/1 项",
             },
             {
                 "id": "analysis:1:analysis-done",
                 "kind": "command",
                 "status": "completed",
-                "title": "已检查项目结构",
+                "title": "命令执行完成",
+                "itemType": "commandExecution",
+                "tool": {
+                    "name": "命令执行完成",
+                    "input": {"command": "rg -n 'Agent|Workflow' ."},
+                },
             },
             {
                 "id": "analysis:1:analysis-failed",
                 "kind": "command",
                 "status": "failed",
-                "title": "读取项目文件未完成",
+                "title": "命令执行失败",
+                "itemType": "commandExecution",
+                "tool": {
+                    "name": "命令执行失败",
+                    "input": {"command": "cat pyproject.toml"},
+                },
             },
             {
                 "id": "analysis:1:analysis-running",
                 "kind": "command",
                 "status": "running",
-                "title": "正在运行分析脚本",
+                "title": "正在执行命令",
+                "itemType": "commandExecution",
+                "tool": {
+                    "name": "正在执行命令",
+                    "input": {"command": "python3 scripts/inspect_project.py"},
+                },
             },
             {
-                "id": "analysis:1:turn",
-                "kind": "status",
+                "id": "analysis:1:analysis-unknown",
+                "kind": "command",
                 "status": "completed",
-                "title": "Codex 已完成本轮分析",
+                "title": "命令执行完成",
+                "itemType": "commandExecution",
+                "tool": {
+                    "name": "命令执行完成",
+                    "input": {"command": "custom-tool --run"},
+                },
+            },
+            {
+                "id": "analysis:1:turn-summary",
+                "kind": "summary",
+                "status": "completed",
+                "title": "本轮执行完成",
+                "turn": {
+                    "turnId": "",
+                    "status": "completed",
+                    "toolCalls": 4,
+                    "toolDurationComplete": False,
+                },
             },
         ],
     }
@@ -1144,38 +1618,275 @@ def test_structured_activity_stops_after_route_confirmation() -> None:
     }
 
 
+def test_a_tool_row_is_labelled_the_way_the_app_server_named_it() -> None:
+    def parse(item: dict[str, object]) -> dict[str, object]:
+        return _parse_activity_log(
+            json.dumps({"type": "item.completed", "item": item}).encode(),
+            1,
+            phase="migration",
+        )[0]
+
+    def command_item(**extra: object) -> dict[str, object]:
+        return {
+            "id": "command",
+            "type": "command_execution",
+            "status": "completed",
+            "command": "ak migrate any source",
+            "exit_code": 0,
+            **extra,
+        }
+
+    # app-server 驱动会把行名写进日志（codex_app_server 给工具行起的名字），页面就
+    # 按智能构建同一套标签规则显示；脚本驱动（codex exec --json）没有这个名字，才
+    # 用迁移自己的状态标题。
+    named = parse(command_item(name="运行命令"))
+    assert named["tool"]["name"] == "运行命令"
+    assert named["title"] == "命令执行完成"
+
+    unnamed = parse(command_item())
+    assert unnamed["tool"]["name"] == "命令执行完成"
+
+
 @pytest.mark.parametrize(
     ("command", "phase", "status", "expected"),
     [
-        ("find . -maxdepth 3 -type f", "analysis", "completed", "已检查项目结构"),
-        ("sed -n '1,120p' agent.py", "analysis", "running", "正在读取项目文件"),
-        ("cat package.json", "analysis", "completed", "已读取项目文件"),
-        ("git diff --check", "migration", "completed", "已检查代码改动"),
-        ("apply_patch < change.diff", "migration", "completed", "已生成迁移代码"),
+        ("find . -maxdepth 3 -type f", "analysis", "completed", "命令执行完成"),
+        ("sed -n '1,120p' agent.py", "analysis", "running", "正在执行命令"),
+        ("cat package.json", "analysis", "completed", "命令执行完成"),
+        ("git diff --check", "migration", "completed", "命令执行完成"),
+        ("apply_patch < change.diff", "migration", "completed", "命令执行完成"),
         (
             "mkdir -p output && cp agent.py output/",
             "migration",
             "completed",
-            "已整理迁移文件",
+            "命令执行完成",
         ),
-        ("docker build .", "migration", "running", "正在检查运行配置"),
-        ("python -m compileall output", "migration", "completed", "已检查代码语法"),
-        ("pnpm test", "migration", "failed", "验证迁移结果未完成"),
-        ("ak migrate any source", "migration", "running", "正在执行 AgentKit 迁移"),
-        ("tar -czf result.tar.gz output", "migration", "completed", "已打包迁移产物"),
-        ("uv sync", "migration", "running", "正在准备项目依赖"),
-        ("node scripts/migrate.mjs", "migration", "completed", "已运行迁移脚本"),
-        ("custom-tool --run", "analysis", "completed", None),
-        ("custom-tool --run", "migration", "running", None),
+        ("docker build .", "migration", "running", "正在执行命令"),
+        ("python -m compileall output", "migration", "completed", "命令执行完成"),
+        ("pnpm test", "migration", "failed", "命令执行失败"),
+        ("ak migrate any source", "migration", "in_progress", "正在执行命令"),
+        ("tar -czf result.tar.gz output", "migration", "completed", "命令执行完成"),
+        ("uv sync", "migration", "running", "正在执行命令"),
+        ("node scripts/migrate.mjs", "migration", "completed", "命令执行完成"),
+        ("custom-tool --run", "analysis", "completed", "命令执行完成"),
+        ("custom-tool --run", "migration", "running", "正在执行命令"),
     ],
 )
-def test_command_activity_titles_describe_actual_work(
+def test_command_activity_titles_use_native_status_without_guessing_semantics(
     command: str,
     phase: str,
     status: str,
-    expected: str | None,
+    expected: str,
 ) -> None:
-    assert _command_activity_title(command, status, phase) == expected
+    event_type = (
+        "item.started" if status in {"in_progress", "running"} else "item.completed"
+    )
+    items = _parse_activity_log(
+        json.dumps(
+            {
+                "type": event_type,
+                "item": {
+                    "id": "command",
+                    "type": "command_execution",
+                    "status": status,
+                    "command": command,
+                },
+            }
+        ).encode(),
+        1,
+        phase=phase,
+    )
+
+    assert items[0]["title"] == expected
+    assert items[0]["tool"] == {
+        "name": expected,
+        "input": {"command": command},
+    }
+
+
+@pytest.mark.parametrize(
+    ("tool", "status", "expected"),
+    [
+        ("spawn_agent", "in_progress", "正在启动子任务"),
+        ("spawn_agent", "completed", "子任务已启动"),
+        ("spawn_agent", "failed", "子任务启动失败"),
+        ("send_input", "in_progress", "正在向子任务发送信息"),
+        ("send_input", "completed", "已向子任务发送信息"),
+        ("send_input", "failed", "向子任务发送信息失败"),
+        ("wait", "in_progress", "正在等待子任务"),
+        ("wait", "completed", "子任务等待已结束"),
+        ("wait", "failed", "等待子任务失败"),
+        ("close_agent", "in_progress", "正在结束子任务"),
+        ("close_agent", "completed", "子任务已结束"),
+        ("close_agent", "failed", "结束子任务失败"),
+        ("future_tool", "in_progress", "正在协调子任务"),
+        ("future_tool", "completed", "子任务协作已完成"),
+        ("future_tool", "failed", "子任务协作失败"),
+    ],
+)
+def test_collab_activity_titles_use_native_tool_and_status(
+    tool: str,
+    status: str,
+    expected: str,
+) -> None:
+    event_type = "item.started" if status == "in_progress" else "item.completed"
+    items = _parse_activity_log(
+        json.dumps(
+            {
+                "type": event_type,
+                "item": {
+                    "id": "collab",
+                    "type": "collab_tool_call",
+                    "tool": tool,
+                    "status": status,
+                },
+            }
+        ).encode(),
+        1,
+        phase="migration",
+    )
+
+    assert items[0]["title"] == expected
+    assert items[0]["tool"] == {
+        "name": expected,
+        "input": {"tool": tool},
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "changes", "expected"),
+    [
+        (
+            "in_progress",
+            [{"path": "agent.py", "kind": "update"}],
+            "正在更新1个项目文件",
+        ),
+        ("completed", [{"path": "agent.py", "kind": "update"}], "已更新1个项目文件"),
+        ("failed", [{"path": "agent.py", "kind": "update"}], "更新1个项目文件失败"),
+        ("completed", None, "已更新项目文件"),
+    ],
+)
+def test_file_change_activity_summarizes_native_changes(
+    status: str,
+    changes: list[dict[str, str]] | None,
+    expected: str,
+) -> None:
+    event_type = "item.started" if status == "in_progress" else "item.completed"
+    item: dict[str, object] = {
+        "id": "files",
+        "type": "file_change",
+        "status": status,
+    }
+    if changes is not None:
+        item["changes"] = changes
+    items = _parse_activity_log(
+        json.dumps({"type": event_type, "item": item}).encode(),
+        1,
+        phase="migration",
+    )
+
+    assert items[0]["title"] == expected
+    assert items[0]["tool"]["name"] == expected
+
+
+def test_the_sandbox_exec_turn_reports_tokens_without_double_settling() -> None:
+    """The migration main turn is written by `codex exec --json` in the Sandbox.
+
+    That stream carries no turn object and no timing, only the turn's token counts;
+    the page still gets the same summary row the intelligent build shows.
+    """
+
+    def parse(*events: dict[str, object]) -> list[dict[str, object]]:
+        return _parse_activity_log(
+            "\n".join(json.dumps(event) for event in events).encode(),
+            1,
+            phase="migration",
+        )
+
+    exec_turn = parse(
+        {"type": "thread.started", "thread_id": "thread-1"},
+        {"type": "turn.started"},
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "command-1",
+                "type": "command_execution",
+                "command": "ak migrate any source",
+                "exit_code": 0,
+            },
+        },
+        {
+            "type": "turn.completed",
+            "usage": {
+                "input_tokens": 300,
+                "cached_input_tokens": 200,
+                "output_tokens": 40,
+                "reasoning_output_tokens": 7,
+            },
+        },
+    )
+
+    # 输入 + 输出就是总量，和 app-server 报的 totalTokens 是同一个数。
+    assert exec_turn[-1] == {
+        "id": "migration:1:turn-summary",
+        "kind": "summary",
+        "status": "completed",
+        "title": "本轮执行完成",
+        "turn": {
+            "turnId": "thread-1",
+            "status": "completed",
+            "toolCalls": 1,
+            "toolDurationComplete": False,
+            "usage": {
+                "totalTokens": 340,
+                "inputTokens": 300,
+                "outputTokens": 40,
+                "cachedInputTokens": 200,
+                "reasoningOutputTokens": 7,
+            },
+        },
+    }
+
+    reported = parse(
+        {
+            "type": "turn.completed",
+            "usage": {"total_tokens": 900, "input_tokens": 300, "output_tokens": 40},
+        }
+    )
+    assert reported[-1]["turn"]["usage"] == {
+        "totalTokens": 900,
+        "inputTokens": 300,
+        "outputTokens": 40,
+    }
+
+    # app-server 的回合行自带 turn 对象，同一行不会再结算出第二个回合。
+    app_server = parse(
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "command-1",
+                "type": "command_execution",
+                "command": "ak migrate any source",
+                "exit_code": 0,
+            },
+        },
+        {
+            "type": "turn.completed",
+            "turn": {
+                "id": "turn-1",
+                "status": "completed",
+                "durationMs": 1000,
+                "model": "doubao-seed-2-1-pro-260628",
+            },
+            "usage": {"totalTokens": 5},
+        },
+    )
+    assert [item["id"] for item in app_server] == [
+        "migration:1:command-1",
+        "migration:1:turn-summary",
+    ]
+    assert app_server[-1]["turn"]["turnId"] == "turn-1"
+    assert app_server[-1]["turn"]["durationMs"] == 1000
 
 
 def test_analysis_result_message_only_matches_the_delivery_contract() -> None:
@@ -1232,7 +1943,11 @@ def test_capabilities_expose_provider_model_and_per_session_runtime_checks() -> 
     capability = MigrationService(FakeMigrationGateway()).capabilities()
 
     assert capability["provider"] == "volcengine"
-    assert capability["model"] == {"configured": True, "id": "doubao-test"}
+    assert capability["model"] == {
+        "configured": True,
+        "id": DEFAULT_MODEL_ID,
+    }
+    assert capability["unsupportedModelIds"] == sorted(MIGRATION_UNSUPPORTED_MODEL_IDS)
     assert capability["cli"] == {
         "minimumVersion": "0.52.1",
         "check": "per_session",
@@ -1316,6 +2031,19 @@ def test_create_task_is_idempotent_for_a_caller_owned_task_id() -> None:
     assert task_id in gateway.sessions
     assert gateway.deleted == []
 
+    with pytest.raises(MigrationError) as model_conflict:
+        service.create_task(
+            CreateMigrationTaskBody(
+                taskId=task_id,
+                sourceFileName="support-agent.zip",
+                instruction="保留原有行为。",
+                modelId=DEFAULT_MODEL_ID,
+            ),
+            "owner-1",
+            "Owner",
+        )
+    assert model_conflict.value.code == "MIGRATION_REQUEST_CONFLICT"
+
 
 def test_service_rejects_a_malformed_request_state_file() -> None:
     gateway = FakeMigrationGateway()
@@ -1329,6 +2057,27 @@ def test_service_rejects_a_malformed_request_state_file() -> None:
     path = (task_id, f"{MIGRATION_ROOT}/request/task.json")
     request = json.loads(gateway.files[path])
     request["unexpected"] = True
+    gateway.files[path] = json.dumps(request).encode()
+
+    with pytest.raises(MigrationError) as raised:
+        service.get_task(task_id, "owner-1")
+
+    assert raised.value.code == "MIGRATION_REQUEST_INVALID"
+    assert raised.value.retryable is False
+
+
+def test_service_rejects_an_invalid_model_in_the_remote_request() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    created = service.create_task(
+        CreateMigrationTaskBody(sourceFileName="support-agent.zip"),
+        "owner-1",
+        "Owner",
+    )
+    task_id = str(created["id"])
+    path = (task_id, f"{MIGRATION_ROOT}/request/task.json")
+    request = json.loads(gateway.files[path])
+    request["model_id"] = "model; export SECRET=value"
     gateway.files[path] = json.dumps(request).encode()
 
     with pytest.raises(MigrationError) as raised:
@@ -1529,6 +2278,85 @@ def test_agentkit_gateway_creates_one_dev_session_without_snapshots(
     assert request.user_session_id == "migration-v1-" + "1" * 32
     assert request.envs is None
     assert client.snapshot_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("provider", "region", "model_id"),
+    [
+        ("volcengine", "cn-beijing", "doubao-seed-2-1-pro-260628"),
+        ("byteplus", "ap-southeast-1", "dola-seed-2-1-turbo-260628"),
+    ],
+)
+def test_agentkit_gateway_overrides_only_non_secret_session_model_config(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    region: str,
+    model_id: str,
+) -> None:
+    task_id = "migration-v1-" + "9" * 32
+    captured: list[object] = []
+
+    class ToolsClient:
+        def get_tool(self, request: object) -> SimpleNamespace:
+            del request
+            _, base_url = _sandbox_model_config(provider)
+            return SimpleNamespace(
+                tool_type="DevEnv",
+                status="Ready",
+                image_url="",
+                envs=[
+                    SimpleNamespace(key="CODEX_MODEL", value="default-model"),
+                    SimpleNamespace(key="CODEX_API_KEY", value="tool-secret"),
+                    SimpleNamespace(key="CODEX_BASE_URL", value=base_url),
+                ],
+            )
+
+        def list_sessions(self, request: object) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(session_infos=[], next_token=None)
+
+        def create_session(self, request: object) -> SimpleNamespace:
+            captured.append(request)
+            return SimpleNamespace(
+                session_id="session-model",
+                user_session_id=task_id,
+                endpoint="https://sandbox.invalid",
+                status="Ready",
+                created_at="2026-08-11T08:00:00Z",
+                expire_at="2026-08-11T09:00:00Z",
+            )
+
+    monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", provider)
+    monkeypatch.setenv("CLOUD_PROVIDER", provider)
+    gateway = MigrationSandboxGateway(
+        tool_id="tool-dev",
+        region=region,
+        tools_client_factory=lambda _region: ToolsClient(),
+    )
+
+    gateway.create_session(
+        task_id=task_id,
+        owner_id="owner-1",
+        creator_name="Owner",
+        display_name="存量迁移",
+        ttl_seconds=3600,
+        model_id=model_id,
+    )
+
+    assert len(captured) == 1
+    request = captured[0]
+    envs = {item.key: item.value for item in request.envs}
+    _, expected_base_url = _sandbox_model_config(provider)
+    assert envs["CODEX_MODEL"] == model_id
+    assert envs["CODEX_BASE_URL"] == expected_base_url
+    assert envs["OPENCODE_MODEL"] == model_id
+    assert envs["ANTHROPIC_MODEL"] == model_id
+    assert model_id in envs["CODEX_CONFIG_TOML"]
+    assert {
+        "ANTHROPIC_AUTH_TOKEN",
+        "CODEX_API_KEY",
+        "OPENCODE_API_KEY",
+    }.isdisjoint(envs)
 
 
 def test_agentkit_gateway_waits_for_the_created_session_endpoint(
@@ -1851,25 +2679,44 @@ def test_agentkit_gateway_waits_for_running_bash_command(
     assert calls[2][1]["stderr_offset"] == 2
 
 
-def test_agentkit_gateway_accepts_confirmed_background_launch(
+def test_agentkit_gateway_waits_for_confirmed_migration_launch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[dict[str, object]] = []
+    responses = [
+        {
+            "data": {
+                "session_id": "bash-session",
+                "command_id": "command-1",
+                "status": "running",
+                "stdout": "",
+                "offset": 0,
+                "stderr_offset": 0,
+            }
+        },
+        {
+            "data": {
+                "session_id": "bash-session",
+                "command": {
+                    "command_id": "command-1",
+                    "status": "running",
+                    "exit_code": None,
+                },
+                "stdout": "VEADK_MIGRATION_EXECUTION_STARTED_V1\n",
+                "offset": 39,
+                "stderr_offset": 0,
+            }
+        },
+    ]
 
     class Response:
         status_code = 200
 
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
         def json(self) -> dict[str, object]:
-            return {
-                "data": {
-                    "session_id": "bash-session",
-                    "command_id": "command-1",
-                    "status": "running",
-                    "stdout": "VEADK_MIGRATION_ANALYSIS_STARTED_V1\n",
-                    "offset": 36,
-                    "stderr_offset": 0,
-                }
-            }
+            return self._payload
 
     def post(
         _url: str,
@@ -1878,7 +2725,7 @@ def test_agentkit_gateway_accepts_confirmed_background_launch(
         timeout: object,
     ) -> Response:
         calls.append({"json": json, "timeout": timeout})
-        return Response()
+        return Response(responses.pop(0))
 
     monkeypatch.setattr("frontend.server.migration.gateway.requests.post", post)
     gateway = MigrationSandboxGateway(
@@ -1900,18 +2747,98 @@ def test_agentkit_gateway_accepts_confirmed_background_launch(
 
     result = gateway.execute_bash(
         session,
-        "start-analysis",
-        operation="start_analysis",
+        "start-migration",
+        operation="start_migration",
         timeout_seconds=30,
     )
 
     assert result["status"] == "accepted"
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert calls[0]["json"] == {
         "timeout": 1,
         "hard_timeout": 30,
-        "command": "start-analysis",
+        "command": "start-migration",
     }
+    assert calls[1]["json"] == {
+        "session_id": "bash-session",
+        "command_id": "command-1",
+        "offset": 0,
+        "stderr_offset": 0,
+        "wait": True,
+        "wait_timeout": 30,
+    }
+
+
+def test_agentkit_gateway_observes_migration_launch_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = [
+        {
+            "data": {
+                "session_id": "bash-session",
+                "command_id": "command-1",
+                "status": "running",
+                "stdout": "",
+                "offset": 0,
+                "stderr_offset": 0,
+            }
+        },
+        {
+            "data": {
+                "session_id": "bash-session",
+                "command": {
+                    "command_id": "command-1",
+                    "status": "completed",
+                    "exit_code": 1,
+                },
+                "stdout": "",
+                "stderr": "failed to launch migration",
+                "offset": 0,
+                "stderr_offset": 27,
+            }
+        },
+    ]
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    monkeypatch.setattr(
+        "frontend.server.migration.gateway.requests.post",
+        lambda *_args, **_kwargs: Response(responses.pop(0)),
+    )
+    gateway = MigrationSandboxGateway(
+        tool_id="tool-dev",
+        region="cn-beijing",
+        tools_client_factory=lambda region: None,
+    )
+    session = MigrationSandboxSession(
+        tool_id="tool-dev",
+        session_id="session-1",
+        task_id="migration-v1-" + "1" * 32,
+        endpoint="https://sandbox.invalid/proxy",
+        region="cn-beijing",
+        status="Ready",
+        created_at="2026-08-11T08:00:00Z",
+        expire_at="2026-08-11T09:00:00Z",
+        owner_id="owner-1",
+    )
+
+    with pytest.raises(MigrationGatewayError) as raised:
+        gateway.execute_bash(
+            session,
+            "start-migration",
+            operation="start_migration",
+            timeout_seconds=30,
+        )
+
+    assert raised.value.code == "MIGRATION_REMOTE_EXEC_FAILED"
+    assert responses == []
 
 
 @pytest.mark.parametrize(
@@ -1973,8 +2900,10 @@ def test_agentkit_gateway_rejects_unsuccessful_bash_terminal_states(
     assert raised.value.retryable is False
 
 
+@pytest.mark.parametrize("operation", ["prepare_source", "start_migration"])
 def test_agentkit_gateway_rejects_incomplete_running_bash_identity(
     monkeypatch: pytest.MonkeyPatch,
+    operation: str,
 ) -> None:
     class Response:
         status_code = 200
@@ -2014,7 +2943,7 @@ def test_agentkit_gateway_rejects_incomplete_running_bash_identity(
         gateway.execute_bash(
             session,
             "prepare-project",
-            operation="prepare_source",
+            operation=operation,
             timeout_seconds=120,
         )
 
@@ -2040,6 +2969,127 @@ def test_source_archive_validation_accepts_projects_and_rejects_unsafe_entries()
         validate_source_archive(source_zip({"agent.py": b"x"}, symlink="latest"))
     with pytest.raises(MigrationError, match="有效的 ZIP"):
         validate_source_archive(b"not-a-zip")
+
+
+def test_upload_starts_the_app_server_analysis_on_a_background_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """默认走 App Server：上传立刻返回，分析在后台线程完成后落盘。"""
+    monkeypatch.delenv("AGENTKIT_MIGRATION_APP_SERVER", raising=False)
+    release = threading.Event()
+    source = source_zip()
+    digest = hashlib.sha256(source).hexdigest()
+
+    async def _run(**_kwargs: object) -> dict[str, object]:
+        await asyncio.to_thread(release.wait, 10)
+        return {
+            "schema_version": 1,
+            "status": "recommendation_ready",
+            "attempt": 1,
+            "input_sha256": digest,
+            "summary": "这是一个 LangChain 客服智能体。",
+            "frameworks": [
+                {
+                    "id": "langchain",
+                    "confidence": "high",
+                    "evidence": [
+                        {"path": "agent.py", "line": 1, "reason": "导入 Runnables。"}
+                    ],
+                }
+            ],
+            "recommended": {
+                "framework": "langchain",
+                "entry": None,
+                "reason": "入口为模块级 Agent 对象。",
+            },
+            "entries": [],
+            "boundary": {"include": ["agent.py"], "exclude": []},
+            "assumptions": [],
+            "questions": [],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(migration_service, "run_route_analysis", _run)
+
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+
+    created = service.create_task(
+        CreateMigrationTaskBody(
+            sourceFileName="support-agent.zip",
+            instruction="请保留客服流程，并使用中文输出迁移报告。",
+        ),
+        "owner-1",
+        "Owner",
+    )
+    task_id = str(created["id"])
+    uploaded = service.upload_source(task_id, "owner-1", source)
+
+    # 请求没有被 Codex 阻塞：仍然在读「正在分析」，由后台线程去完成这一轮。
+    assert uploaded["state"] == "analyzing"
+    assert [operation for _, operation, _ in gateway.commands] == [
+        "accept_request",
+        "preflight",
+        "prepare_source",
+    ]
+    status = json.loads(
+        gateway.files[(task_id, f"{MIGRATION_ROOT}/control/task-status.json")]
+    )
+    assert status == {
+        "schema_version": 1,
+        "attempt": 1,
+        "state": "analyzing",
+        "message": "正在分析项目框架、入口与迁移边界",
+    }
+    lease = json.loads(
+        gateway.files[(task_id, f"{MIGRATION_ROOT}/control/analysis-driver.json")]
+    )
+    assert lease["driver"] == "app-server"
+    assert lease["state"] == "running"
+    assert f"{MIGRATION_ROOT}/analysis/route.json" not in dict(gateway.files)
+
+    release.set()
+    deadline = time.monotonic() + 10
+    while service._analysis_drivers and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not service._analysis_drivers
+
+    task = service.get_task(task_id, "owner-1")
+    assert task["state"] == "analysis_ready"
+    assert task["analysis"]["status"] == "recommendation_ready"
+    assert task["analysis"]["frameworks"][0]["id"] == "langchain"
+
+
+def test_a_stalled_app_server_analysis_is_recovered_on_the_next_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Studio 重启后租约过期：下一次读取任务时交回沙箱内的脚本继续分析。"""
+    monkeypatch.delenv("AGENTKIT_MIGRATION_APP_SERVER", raising=False)
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _uploaded = create_uploaded_task(service)
+    service._analysis_drivers.clear()
+
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/control/analysis-driver.json")] = (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "driver": "app-server",
+                "state": "running",
+                "attempt": 1,
+                "input_sha256": hashlib.sha256(source_zip()).hexdigest(),
+                "started_at": 1.0,
+                "heartbeat_at": 1.0,
+                "owner_process": "gone",
+            }
+        ).encode("utf-8")
+    )
+
+    assert service.recover_stalled_analysis(task_id, "owner-1") is True
+    operations = [operation for _, operation, _ in gateway.commands]
+    assert operations[-2:] == ["clear_analysis", "start_analysis"]
+    assert "codex exec" in gateway.commands[-1][2]
+    assert service.recover_stalled_analysis(task_id, "owner-1") is False
 
 
 def test_upload_starts_read_only_codex_analysis_without_cli_inspection() -> None:
@@ -2095,9 +3145,10 @@ def test_upload_starts_read_only_codex_analysis_without_cli_inspection() -> None
     assert "不得据此改用英文" in prompt
     assert "Dify 和 Any 的 recommended.entry 必须为 null" in prompt
     assert "entries 只能列出 Structured" in prompt
-    assert "顶层字段必须且只能是" in prompt
-    assert "entries 必须与" in prompt
-    assert "绝不能嵌套在 recommended 中" in prompt
+    # 交付协议：脚本驱动只输出一个 JSON，且不再要求模型回显协议字段。
+    assert "只输出一个 JSON 对象" in prompt
+    assert "不要输出 schema_version、attempt、input_sha256 等簿记字段" in prompt
+    assert "不要输出 schema_version" in prompt
     assert "用户补充要求明确使用其他语言时" in prompt
     assert "相对项目根目录的文件入口" in prompt
     assert "agent.py:agent" in prompt
@@ -2106,6 +3157,10 @@ def test_upload_starts_read_only_codex_analysis_without_cli_inspection() -> None
     assert "只有编译产物、构建产物" in prompt
     assert "缺少凭证、环境变量" in prompt
     assert "不能作为 unsupported 的理由" in prompt
+    assert "用户可见执行动态" in prompt
+    assert "第一个未完成项始终代表当前工作" in prompt
+    assert "没有事实内容的固定句式" in prompt
+    assert "执行动态不得改变 JSON 字段" in prompt
     assert "用户无需替换 ZIP 就能回答" in prompt
     assert "先说明在 ZIP 中发现了什么" in prompt
     assert "recommended 必须为 null" in prompt
@@ -2126,55 +3181,55 @@ def test_upload_starts_read_only_codex_analysis_without_cli_inspection() -> None
     assert "不得回显密钥" in prompt
     assert "不得判断或声称项目“违法”" in prompt
     assert "不得建议用户提交安全复核" in prompt
-    assert schema["properties"]["frameworks"]["maxItems"] == 20
-    assert (
-        schema["properties"]["frameworks"]["items"]["properties"]["evidence"][
-            "maxItems"
-        ]
-        == 100
-    )
-    assert (
-        schema["properties"]["frameworks"]["items"]["properties"]["evidence"]["items"][
-            "properties"
-        ]["path"]["maxLength"]
-        == 4096
-    )
-    recommended_variants = schema["properties"]["recommended"]["anyOf"]
-    assert recommended_variants[0]["properties"]["framework"]["enum"] == [
-        "langchain",
-        "langgraph",
-        "adk",
-        "strands",
-        "agentcore",
+    # 交付契约只要求模型给出它真正知道的判断：protocol 簿记由 Studio 注入。
+    assert schema["required"] == ["status", "summary"]
+    assert "schema_version" not in schema["properties"]
+    assert "attempt" not in schema["properties"]
+    assert "input_sha256" not in schema["properties"]
+    assert schema["properties"]["status"]["enum"] == [
+        "recommendation_ready",
+        "needs_input",
+        "unsupported",
     ]
-    structured_entry = recommended_variants[0]["properties"]["entry"]
-    assert structured_entry["type"] == "string"
-    assert structured_entry["pattern"] == (
-        r"^[A-Za-z0-9_./-]+\.(?:py|json)(?::[A-Za-z_][A-Za-z0-9_]*)?$"
-    )
-    assert recommended_variants[1]["properties"]["framework"]["enum"] == [
-        "dify",
-        "any",
+    # 三种结论各自的要求写在契约里，而不是靠散文约定：这也是 unsupported 必须带证据的地方。
+    branch_requirements = {
+        branch["if"]["properties"]["status"]["const"]: branch["then"]["required"]
+        for branch in schema["allOf"]
+    }
+    assert branch_requirements == {
+        "needs_input": ["questions"],
+        "unsupported": ["evidence"],
+    }
+    assert schema["properties"]["evidence"]["items"]["required"] == ["path", "reason"]
+    assert schema["properties"]["frameworks"]["items"]["required"] == ["id"]
+    assert schema["properties"]["entries"]["items"]["required"] == [
+        "value",
+        "framework",
+        "evidence",
     ]
-    assert recommended_variants[1]["properties"]["entry"]["type"] == "null"
-    assert recommended_variants[2] == {"type": "null"}
-    assert schema["allOf"][0]["then"]["properties"]["recommended"] == {"type": "null"}
-    assert schema["properties"]["entries"]["items"]["properties"]["framework"][
-        "enum"
-    ] == ["langchain", "langgraph", "adk", "strands", "agentcore"]
-    assert (
-        schema["properties"]["entries"]["items"]["properties"]["value"]["pattern"]
-        == structured_entry["pattern"]
-    )
-    assert schema["properties"]["questions"]["maxItems"] == 50
-    assert schema["properties"]["warnings"]["maxItems"] == 100
+    assert schema["properties"]["recommended"]["required"] == ["framework"]
 
 
-def test_codex_analysis_uses_the_last_completed_agent_message(
+def test_codex_analysis_selects_the_result_that_matches_the_contract(
     tmp_path: Path,
 ) -> None:
     events = tmp_path / "events.jsonl"
     result = tmp_path / "result.json"
+    diagnostics = tmp_path / "diagnostics.json"
+    contract = {
+        "schema_version": 1,
+        "status": "recommendation_ready",
+        "attempt": 1,
+        "input_sha256": "a" * 64,
+        "summary": "摘要",
+        "frameworks": [],
+        "recommended": {"framework": "dify", "entry": None, "reason": "理由"},
+        "entries": [],
+        "boundary": {"include": [], "exclude": []},
+        "assumptions": [],
+        "questions": [],
+        "warnings": [],
+    }
     events.write_text(
         "\n".join(
             [
@@ -2185,16 +3240,34 @@ def test_codex_analysis_uses_the_last_completed_agent_message(
                         "item": {"type": "reasoning", "text": "ignored"},
                     }
                 ),
+                # 进度更新不是结果，必须被跳过而不是当成结果。
                 json.dumps(
                     {
                         "type": "item.completed",
-                        "item": {"type": "agent_message", "text": '{"attempt": 1}'},
+                        "item": {
+                            "type": "agent_message",
+                            "phase": "commentary",
+                            "text": "已完成步骤 1：扫描项目结构",
+                        },
                     }
                 ),
                 json.dumps(
                     {
                         "type": "item.completed",
-                        "item": {"type": "agent_message", "text": '{"attempt": 2}'},
+                        "item": {
+                            "type": "agent_message",
+                            "text": json.dumps(contract, ensure_ascii=False),
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {
+                            "type": "agent_message",
+                            "phase": "commentary",
+                            "text": "已完成步骤 2：确认迁移边界",
+                        },
                     }
                 ),
             ]
@@ -2203,14 +3276,37 @@ def test_codex_analysis_uses_the_last_completed_agent_message(
     )
 
     extracted = subprocess.run(
-        ["python3", "-c", _codex_event_extractor(), str(events), str(result)],
+        [
+            "python3",
+            "-c",
+            _analysis_result_extractor_script(),
+            str(events),
+            str(result),
+            str(diagnostics),
+        ],
         capture_output=True,
         check=False,
         text=True,
     )
 
     assert extracted.returncode == 0, extracted.stderr
-    assert json.loads(result.read_text(encoding="utf-8")) == {"attempt": 2}
+    assert json.loads(result.read_text(encoding="utf-8"))["status"] == (
+        "recommendation_ready"
+    )
+    assert json.loads(diagnostics.read_text(encoding="utf-8")) == {
+        "reason": "extracted",
+        "answer_messages": 1,
+        "commentary_messages": 2,
+    }
+
+
+def test_codex_analysis_accepts_a_valid_final_message_after_nonzero_cli_exit() -> None:
+    command = _start_analysis_command("migration-v1-" + "1" * 32, 1)
+
+    assert 'if [ "$code" -eq 0 ] &&' not in command
+    assert "python3 -c" in command
+    assert "analysis_result_status=" in command
+    assert "code=0" in command
 
 
 def test_codex_analysis_rejects_an_event_stream_without_an_agent_message(
@@ -2218,6 +3314,7 @@ def test_codex_analysis_rejects_an_event_stream_without_an_agent_message(
 ) -> None:
     events = tmp_path / "events.jsonl"
     result = tmp_path / "result.json"
+    diagnostics = tmp_path / "diagnostics.json"
     events.write_text(
         json.dumps(
             {
@@ -2229,15 +3326,25 @@ def test_codex_analysis_rejects_an_event_stream_without_an_agent_message(
     )
 
     extracted = subprocess.run(
-        ["python3", "-c", _codex_event_extractor(), str(events), str(result)],
+        [
+            "python3",
+            "-c",
+            _analysis_result_extractor_script(),
+            str(events),
+            str(result),
+            str(diagnostics),
+        ],
         capture_output=True,
         check=False,
         text=True,
     )
 
     assert extracted.returncode != 0
-    assert "agent_message event is missing" in extracted.stderr
+    assert "no_agent_message" in extracted.stderr
     assert not result.exists()
+    assert json.loads(diagnostics.read_text(encoding="utf-8"))["reason"] == (
+        "no_agent_message"
+    )
 
 
 def test_upload_can_resume_analysis_start_after_source_was_accepted() -> None:
@@ -2475,17 +3582,53 @@ def test_confirmed_migration_uses_the_one_cli_contract(
     )
     instruction_text = " ".join(instruction.split())
     assert "missing source credentials or environment variables" in instruction_text
+    assert "Treat the deterministic migration contract as blocking" in instruction_text
+    assert "no completion may be reported" in instruction_text
+    assert (
+        "Never rewrite the .agentkit/agentkit.yaml that ak init recorded"
+        in instruction_text
+    )
+    assert "sha256 is the config baseline" in instruction_text
     assert "Never replace or monkeypatch Agent/root_agent run" in instruction_text
     assert "assignments to Agent/root_agent run or run_async" in instruction_text
     assert "Keep ENABLE_APMPLUS enabled by default" in instruction_text
     assert "Keep ENABLE_LLM_SHIELD configurable" in instruction_text
     assert "use Simplified Chinese" in instruction_text
+    assert "Keep a concise ordered Codex todo list" in instruction_text
+    assert "first incomplete step represents the current work" in instruction_text
+    assert "concrete finding, confirmed result, or next action" in instruction_text
+    assert "Do not emit generic fixed completion notices" in instruction_text
     if framework == "dify":
         assert 'export MODEL_AGENT_API_KEY="$CODEX_API_KEY"' in command
         assert 'export MODEL_AGENT_API_BASE="$CODEX_BASE_URL"' in command
         assert 'export MODEL_AGENT_NAME="$CODEX_MODEL"' in command
     else:
         assert "CODEX_API_KEY" not in command
+
+
+def test_confirm_returns_after_dispatch_without_refreshing_remote_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id, framework="dify", entry=None)
+    body = confirmation_body(
+        gateway,
+        task_id,
+        framework="dify",
+        entry=None,
+    )
+
+    def unexpected_refresh(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise AssertionError("confirm must not refresh remote state after dispatch")
+
+    monkeypatch.setattr(service, "get_task", unexpected_refresh)
+
+    started = service.confirm(task_id, "owner-1", body)
+
+    assert started["state"] == "migrating"
+    assert gateway.commands[-1][1] == "start_migration"
 
 
 def test_analysis_answers_reject_missing_or_unknown_question_ids() -> None:
@@ -2560,7 +3703,7 @@ def test_analysis_answers_reject_missing_or_unknown_question_ids() -> None:
     ) == 1
 
 
-def test_structured_migration_runs_in_the_isolated_delivery_project() -> None:
+def test_structured_migration_prepares_the_delivery_project_in_the_background() -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)
     task_id, _ = create_uploaded_task(service)
@@ -2575,9 +3718,21 @@ def test_structured_migration_runs_in_the_isolated_delivery_project() -> None:
     command = gateway.commands[-1][2]
     assert f"ak migrate {MIGRATION_ROOT}/output/veadk --framework langchain" in command
     assert "--output ." in command
-    assert (
+    copy_command = (
         f"cp -a {MIGRATION_ROOT}/workspace/source {MIGRATION_ROOT}/output/veadk"
-    ) in command
+    )
+    background_launch = command[
+        command.index("setsid bash -c ") : command.index(
+            " </dev/null >/dev/null 2>&1 &"
+        )
+    ]
+    outer_launch = (
+        command[: command.index("setsid bash -c ")]
+        + command[command.index(" </dev/null >/dev/null 2>&1 &") :]
+    )
+    assert copy_command in background_launch
+    assert copy_command not in outer_launch
+    assert "process-exit.json" in background_launch
 
 
 def test_structured_migration_does_not_prepare_a_verification_runtime() -> None:
@@ -2917,7 +4072,7 @@ def test_service_recovers_terminal_state_and_verified_artifact_from_session() ->
 
 
 @pytest.mark.parametrize(
-    ("delivery_state", "verification"),
+    ("delivery_state", "verification", "cli_deploy_ready", "deploy_ready"),
     [
         (
             "succeeded",
@@ -2925,6 +4080,8 @@ def test_service_recovers_terminal_state_and_verified_artifact_from_session() ->
                 "status": "passed",
                 "checks": [{"name": "import", "status": "passed"}],
             },
+            False,
+            True,
         ),
         (
             "partial",
@@ -2938,13 +4095,17 @@ def test_service_recovers_terminal_state_and_verified_artifact_from_session() ->
                     }
                 ],
             },
+            False,
+            False,
         ),
     ],
 )
-def test_materialize_deployment_accepts_complete_artifact_and_verifies_owner(
+def test_materialize_deployment_applies_structured_terminal_readiness(
     tmp_path: Path,
     delivery_state: str,
     verification: dict[str, object],
+    cli_deploy_ready: bool,
+    deploy_ready: bool,
 ) -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)
@@ -3019,7 +4180,7 @@ def test_materialize_deployment_accepts_complete_artifact_and_verifies_owner(
                 "state": "ready",
                 "preview_ready": True,
                 "download_ready": True,
-                "deploy_ready": False,
+                "deploy_ready": cli_deploy_ready,
             },
             "updated_at": "2026-08-11T08:20:00Z",
         }
@@ -3029,6 +4190,18 @@ def test_materialize_deployment_accepts_complete_artifact_and_verifies_owner(
     with pytest.raises(MigrationError) as wrong_owner:
         service.materialize_deployment(task_id, "owner-2", tmp_path)
 
+    assert task["artifact"]["deployReady"] is deploy_ready
+    assert wrong_owner.value.status_code == 404
+    if not deploy_ready:
+        downloaded, _ = service.download(task_id, "owner-1")
+        with pytest.raises(MigrationError) as not_deployable:
+            service.materialize_deployment(task_id, "owner-1", tmp_path)
+
+        assert downloaded == artifact
+        assert not_deployable.value.code == "MIGRATION_ARTIFACT_NOT_DEPLOYABLE"
+        assert str(not_deployable.value) == "尚未确认迁移产物可部署到 Runtime。"
+        return
+
     target = tmp_path / "deploy"
     target.mkdir()
     entry_point = service.materialize_deployment(
@@ -3037,8 +4210,6 @@ def test_materialize_deployment_accepts_complete_artifact_and_verifies_owner(
         target,
     )
 
-    assert task["artifact"]["deployReady"] is True
-    assert wrong_owner.value.status_code == 404
     assert entry_point == "runtime/agentkit_app.py"
     assert (target / entry_point).read_bytes() == project_files[entry_point]
     assert (target / "agentkit.yaml").read_bytes() == project_files["agentkit.yaml"]
@@ -3252,6 +4423,73 @@ def test_recent_process_exit_waits_for_remote_delivery_state_visibility() -> Non
     assert expired_settle_window["error"]["code"] == "MIGRATION_DELIVERY_MISSING"
 
 
+def test_recent_process_exit_preserves_visible_active_delivery_state() -> None:
+    now = datetime(2026, 8, 11, 8, 30, tzinfo=timezone.utc).timestamp()
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway, clock=lambda: now)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    gateway.files[
+        (task_id, f"{MIGRATION_ROOT}/diagnostics/migration/process-exit.json")
+    ] = json.dumps(
+        {"schema_version": 1, "exit_code": 0, "finished_at": int(now)}
+    ).encode()
+
+    task = MigrationService(
+        gateway,
+        clock=lambda: now + 29,
+    ).get_task(task_id, "owner-1")
+
+    assert task["state"] == "migrating"
+    assert task["message"] == "正在迁移项目"
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "expected_code"),
+    [
+        (0, "MIGRATION_DELIVERY_MISSING"),
+        (1, "MIGRATION_PROCESS_FAILED"),
+    ],
+)
+def test_process_exit_overrides_stale_active_delivery_after_settle_window(
+    exit_code: int,
+    expected_code: str,
+) -> None:
+    now = datetime(2026, 8, 11, 8, 30, tzinfo=timezone.utc).timestamp()
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway, clock=lambda: now)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    gateway.files[
+        (task_id, f"{MIGRATION_ROOT}/diagnostics/migration/process-exit.json")
+    ] = json.dumps(
+        {
+            "schema_version": 1,
+            "exit_code": exit_code,
+            "finished_at": int(now),
+        }
+    ).encode()
+
+    task = MigrationService(
+        gateway,
+        clock=lambda: now + 30,
+    ).get_task(task_id, "owner-1")
+
+    assert task["state"] == "failed"
+    assert task["error"]["code"] == expected_code
+    assert task["error"]["retryable"] is False
+
+
 def test_started_migration_waits_for_its_first_delivery_status() -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)
@@ -3370,6 +4608,89 @@ def test_terminal_delivery_requires_a_ready_artifact_contract() -> None:
     assert raised.value.retryable is False
 
 
+@pytest.mark.parametrize("state", ["succeeded", "succeeded_with_warnings"])
+def test_structured_success_is_deployable_without_cli_verification(state: str) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-status.json")] = (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": task_id,
+                "sequence": 4,
+                "state": state,
+                "phase": "completed",
+                "message": "Migration artifact is ready",
+                "artifact": {
+                    "state": "ready",
+                    "preview_ready": True,
+                    "download_ready": True,
+                    "deploy_ready": False,
+                },
+                "updated_at": "2026-08-11T08:20:00Z",
+            }
+        ).encode()
+    )
+    gateway.files[
+        (task_id, f"{MIGRATION_ROOT}/diagnostics/migration/process-exit.json")
+    ] = json.dumps({"schema_version": 1, "exit_code": 1}).encode()
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["state"] == state
+    assert task["artifact"] == {
+        "state": "ready",
+        "previewReady": True,
+        "downloadReady": True,
+        "deployReady": True,
+    }
+
+
+@pytest.mark.parametrize("cli_deploy_ready", [False, True])
+def test_agentic_success_preserves_cli_deployment_readiness(
+    cli_deploy_ready: bool,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id, framework="any", entry=None)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id, framework="any", entry=None),
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-status.json")] = (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": task_id,
+                "sequence": 4,
+                "state": "succeeded",
+                "phase": "completed",
+                "message": "Migration artifact is ready",
+                "artifact": {
+                    "state": "ready",
+                    "preview_ready": True,
+                    "download_ready": True,
+                    "deploy_ready": cli_deploy_ready,
+                },
+                "updated_at": "2026-08-11T08:20:00Z",
+            }
+        ).encode()
+    )
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["artifact"]["deployReady"] is cli_deploy_ready
+
+
 def test_partial_delivery_cannot_advertise_deployment_readiness() -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)
@@ -3479,6 +4800,34 @@ def test_broken_session_does_not_fail_the_entire_task_list() -> None:
     broken = next(task for task in listed if task["id"] == broken_id)
     assert broken["state"] == "failed"
     assert broken["error"]["retryable"] is False
+
+
+def test_retryable_session_read_does_not_fake_a_failed_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    service.create_task(
+        CreateMigrationTaskBody(sourceFileName="support-agent.zip"),
+        "owner-1",
+        "Owner",
+    )
+
+    def fail_temporarily(_session: MigrationSandboxSession) -> dict[str, object]:
+        raise MigrationError(
+            "MIGRATION_REMOTE_READ_FAILED",
+            "远端状态暂时不可读。",
+            status_code=502,
+            retryable=True,
+        )
+
+    monkeypatch.setattr(service, "_task_from_session", fail_temporarily)
+
+    with pytest.raises(MigrationError) as raised:
+        service.list_tasks("owner-1")
+
+    assert raised.value.code == "MIGRATION_REMOTE_READ_FAILED"
+    assert raised.value.retryable is True
 
 
 def test_invalid_analysis_keeps_immutable_request_metadata_in_task_list() -> None:
@@ -3664,3 +5013,840 @@ def test_service_rejects_runtime_incompatible_agent_name_in_confirmation() -> No
 
     assert raised.value.code == "MIGRATION_CONFIRMATION_INVALID"
     assert raised.value.retryable is False
+
+
+def driver_lease(
+    task_id: str,
+    *,
+    state: str = "running",
+    heartbeat_at: int,
+    exit_code: int | None = None,
+    artifact: dict[str, object] | None = None,
+) -> dict[str, object]:
+    finished = state == "finished"
+    return {
+        "schema_version": 1,
+        "run_id": task_id,
+        "state": state,
+        "heartbeat_at": heartbeat_at,
+        "finished_at": heartbeat_at if finished else None,
+        "exit_code": exit_code if finished else None,
+        "artifact": artifact if finished else None,
+    }
+
+
+def mark_driver_lease(
+    gateway: FakeMigrationGateway,
+    task_id: str,
+    payload: dict[str, object],
+) -> None:
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/control/migration-driver.json")] = (
+        json.dumps(payload, ensure_ascii=False).encode()
+    )
+
+
+def mark_delivery_succeeded(
+    gateway: FakeMigrationGateway,
+    task_id: str,
+) -> tuple[bytes, str]:
+    """Stage the delivery contract a finished migration leaves in the Sandbox."""
+    app = b"app = object()\n"
+    report = b'{"status":"succeeded"}\n'
+    artifact = artifact_zip({"agentkit_app.py": app})
+    digest = hashlib.sha256(artifact).hexdigest()
+    result = {
+        "schema_version": 1,
+        "run_id": task_id,
+        "cli": {"name": "agentkit-cli", "version": "0.52.0"},
+        "migration": {
+            "engine": "structured",
+            "framework": "langchain",
+            "entry": "agent.py:agent",
+            "source_sha256": "1" * 64,
+            "provenance_sha256": hashlib.sha256(
+                gateway.files[
+                    (task_id, f"{MIGRATION_ROOT}/control/route-selection.json")
+                ]
+            ).hexdigest(),
+        },
+        "status": "succeeded",
+        "files": [
+            {
+                "path": "agentkit_app.py",
+                "size": len(app),
+                "sha256": hashlib.sha256(app).hexdigest(),
+                "mode": "0644",
+            },
+            {
+                "path": ".agentkit/migration-plan.json",
+                "size": len(report),
+                "sha256": hashlib.sha256(report).hexdigest(),
+                "mode": "0644",
+            },
+        ],
+        "startup": {"module": "agentkit_app.py", "object": "app"},
+        "environment": {"required": ["ARK_API_KEY"], "optional": []},
+        "verification": {
+            "status": "passed",
+            "checks": [{"name": "import", "status": "passed"}],
+        },
+        "warnings": [],
+        "report": {"path": ".agentkit/migration-plan.json"},
+        "artifact": {
+            "path": "migration-result.zip",
+            "size": len(artifact),
+            "sha256": digest,
+        },
+        "created_at": "2026-08-11T08:20:00Z",
+    }
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-result.json")] = (
+        json.dumps(result).encode()
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-result.zip")] = (
+        artifact
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-status.json")] = (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": task_id,
+                "sequence": 4,
+                "state": "succeeded",
+                "phase": "completed",
+                "message": "Migration artifact is ready",
+                "artifact": {
+                    "state": "ready",
+                    "preview_ready": True,
+                    "download_ready": True,
+                    "deploy_ready": True,
+                },
+                "updated_at": "2026-08-11T08:20:00Z",
+            }
+        ).encode()
+    )
+    return artifact, digest
+
+
+def test_delivery_driver_that_stopped_heartbeating_fails_the_task() -> None:
+    now = datetime(2026, 8, 11, 8, 30, tzinfo=timezone.utc).timestamp()
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway, clock=lambda: now)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    mark_driver_lease(
+        gateway,
+        task_id,
+        driver_lease(task_id, heartbeat_at=int(now) - 600),
+    )
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["state"] == "failed"
+    assert task["message"] == "迁移执行进程已中断，请重新发起迁移。"
+    assert task["error"]["code"] == "MIGRATION_DELIVERY_INTERRUPTED"
+    assert task["error"]["retryable"] is False
+
+
+def test_delivery_driver_heartbeat_inside_the_window_keeps_migrating() -> None:
+    now = datetime(2026, 8, 11, 8, 30, tzinfo=timezone.utc).timestamp()
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway, clock=lambda: now)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    mark_driver_lease(
+        gateway,
+        task_id,
+        driver_lease(task_id, heartbeat_at=int(now) - 30),
+    )
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["state"] == "migrating"
+    assert task["message"] == "正在迁移项目"
+
+
+def test_terminal_delivery_state_wins_over_a_stale_driver_lease() -> None:
+    now = datetime(2026, 8, 11, 8, 30, tzinfo=timezone.utc).timestamp()
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway, clock=lambda: now)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    mark_delivery_succeeded(gateway, task_id)
+    mark_driver_lease(
+        gateway,
+        task_id,
+        driver_lease(task_id, heartbeat_at=int(now) - 600),
+    )
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["state"] == "succeeded"
+    assert task["artifact"]["downloadReady"] is True
+
+
+def test_finished_driver_without_delivery_state_still_reports_missing_delivery() -> (
+    None
+):
+    now = datetime(2026, 8, 11, 8, 30, tzinfo=timezone.utc).timestamp()
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway, clock=lambda: now)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    gateway.files.pop((task_id, f"{MIGRATION_ROOT}/delivery/migration-status.json"))
+    mark_driver_lease(
+        gateway,
+        task_id,
+        driver_lease(
+            task_id,
+            state="finished",
+            heartbeat_at=int(now),
+            exit_code=0,
+        ),
+    )
+    gateway.files[
+        (task_id, f"{MIGRATION_ROOT}/diagnostics/migration/process-exit.json")
+    ] = json.dumps(
+        {"schema_version": 1, "exit_code": 0, "finished_at": int(now) - 60}
+    ).encode()
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["state"] == "failed"
+    assert task["error"]["code"] == "MIGRATION_DELIVERY_MISSING"
+
+
+def test_delivery_artifact_must_match_the_published_driver_digest() -> None:
+    now = datetime(2026, 8, 11, 8, 30, tzinfo=timezone.utc).timestamp()
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway, clock=lambda: now)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    artifact, digest = mark_delivery_succeeded(gateway, task_id)
+    mark_driver_lease(
+        gateway,
+        task_id,
+        driver_lease(
+            task_id,
+            state="finished",
+            heartbeat_at=int(now),
+            exit_code=0,
+            artifact={
+                "path": "migration-result.zip",
+                "sha256": digest,
+                "size": len(artifact),
+            },
+        ),
+    )
+
+    content, filename = service.download(task_id, "owner-1")
+    assert content == artifact
+    assert filename == "support-agent-migrated.zip"
+
+    mark_driver_lease(
+        gateway,
+        task_id,
+        driver_lease(
+            task_id,
+            state="finished",
+            heartbeat_at=int(now),
+            exit_code=0,
+            artifact={
+                "path": "migration-result.zip",
+                "sha256": "0" * 64,
+                "size": len(artifact),
+            },
+        ),
+    )
+
+    with pytest.raises(MigrationError) as raised:
+        service.download(task_id, "owner-1")
+
+    assert raised.value.code == "MIGRATION_ARTIFACT_INTEGRITY_FAILED"
+    assert str(raised.value) == "迁移产物与交付发布清单不一致。"
+
+
+def test_confirmed_migration_supervises_the_run_with_a_driver_lease() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+
+    command = gateway.commands[-1][2]
+    assert f"{MIGRATION_ROOT}/control/migration-driver.py" in command
+    assert f"{MIGRATION_ROOT}/control/migration-driver.json" in command
+    assert f"{MIGRATION_ROOT}/delivery/migration-result.zip" in command
+    assert "STUDIO_MIGRATION_DRIVER" in command
+    assert f"{MIGRATION_ROOT}/control/migration-cli.pid" in command
+    assert " heartbeat " in command
+    assert f'finish {MIGRATION_ROOT}/control/migration-cli.pid "$code"' in command
+    assert 'kill "$driver_pid" 2>/dev/null' in command
+    # 心跳要盯住 CLI 自己：CLI 先走了就必须说 lost，而不是一直替它报活。
+    assert "cli_pid=$!" in command
+    assert 'wait "$cli_pid"' in command
+    syntax = subprocess.run(
+        ["bash", "-n"],
+        input=command,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert syntax.returncode == 0, syntax.stderr
+
+    script = migration_service._migration_driver_script()
+    compile(script, "migration-driver.py", "exec")
+    assert "HEARTBEAT_SECONDS = 15.0" in script
+    assert 'publish(lease("running", int(time.time())))' in script
+    assert 'publish(lease("lost", int(time.time())))' in script
+    assert "os.kill(cli_pid, 0)" in script
+    assert "artifact_entry=manifest()" in script
+
+
+def agentic_delivery_succeeded(
+    gateway: FakeMigrationGateway,
+    task_id: str,
+    *,
+    status: str = "succeeded_with_warnings",
+    warnings: list[str] | None = None,
+) -> tuple[bytes, str]:
+    """Stage the delivery triple a finished agentic migration leaves in the Sandbox."""
+    app = b"app = object()\n"
+    artifact = artifact_zip({"app.py": app})
+    digest = hashlib.sha256(artifact).hexdigest()
+    source = json.loads(
+        gateway.files[(task_id, f"{MIGRATION_ROOT}/request/source.json")]
+    )
+    result = {
+        "schema_version": 1,
+        "run_id": task_id,
+        "cli": {"name": "agentkit-cli", "version": "0.52.0"},
+        "migration": {
+            "engine": "agentic",
+            "framework": "any",
+            "source_sha256": source["sha256"],
+            "provenance_sha256": hashlib.sha256(
+                gateway.files[
+                    (task_id, f"{MIGRATION_ROOT}/control/route-selection.json")
+                ]
+            ).hexdigest(),
+        },
+        "status": status,
+        "files": [
+            {
+                "path": "app.py",
+                "size": len(app),
+                "sha256": hashlib.sha256(app).hexdigest(),
+                "mode": "0644",
+            }
+        ],
+        "startup": {"module": "app.py", "object": "app"},
+        "environment": {"required": [], "optional": []},
+        "verification": {"status": "passed", "checks": []},
+        "warnings": warnings if warnings is not None else ["APM 未配置"],
+        "report": {"path": "app.py"},
+        "artifact": {
+            "path": "migration-result.zip",
+            "size": len(artifact),
+            "sha256": digest,
+        },
+        "created_at": "2026-08-11T08:20:00Z",
+    }
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-result.json")] = (
+        json.dumps(result).encode()
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-result.zip")] = (
+        artifact
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-status.json")] = (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": task_id,
+                "sequence": 6,
+                "state": status,
+                "phase": "completed",
+                "message": "Migration artifact is ready",
+                "artifact": {
+                    "state": "ready",
+                    "preview_ready": True,
+                    "download_ready": True,
+                    "deploy_ready": status != "partial",
+                },
+                "updated_at": "2026-08-11T08:20:00Z",
+            }
+        ).encode()
+    )
+    return artifact, digest
+
+
+def agentic_delivery_task(
+    service: MigrationService,
+    gateway: FakeMigrationGateway,
+) -> tuple[str, bytes, str]:
+    """Finish one agentic migration up to the delivery triple."""
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id, framework="any", entry=None)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id, framework="any", entry=None),
+    )
+    artifact, digest = agentic_delivery_succeeded(gateway, task_id)
+    return task_id, artifact, digest
+
+
+def wait_for_sandbox_file(
+    gateway: FakeMigrationGateway,
+    task_id: str,
+    path: str,
+    *,
+    timeout: float = 5.0,
+) -> bytes:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        content = gateway.files.get((task_id, path))
+        if content is not None:
+            return content
+        time.sleep(0.01)
+    raise AssertionError(f"{path} was never published")
+
+
+def delivery_report_payload(
+    task_id: str,
+    artifact: bytes,
+    digest: str,
+    *,
+    state: str = "succeeded_with_warnings",
+    message: str = "迁移产物已生成（1 个文件），有 1 条提示：APM 未配置。",
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "run_id": task_id,
+        "driver": "app-server",
+        "state": state,
+        "message": message,
+        "warnings": ["APM 未配置"],
+        "artifact": {
+            "path": "migration-result.zip",
+            "sha256": digest,
+            "size": len(artifact),
+        },
+        "created_at": "2026-08-11T08:25:00Z",
+    }
+
+
+def test_delivery_turn_closes_a_settled_agentic_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, artifact, digest = agentic_delivery_task(service, gateway)
+    report = delivery_report_payload(task_id, artifact, digest)
+
+    async def fake_turn(
+        _self: object,
+        _session: object,
+        *,
+        target: str,
+    ) -> dict[str, object]:
+        assert target == "succeeded_with_warnings"
+        return report
+
+    monkeypatch.setattr(MigrationService, "_run_app_server_delivery_turn", fake_turn)
+
+    task = service.get_task(task_id, "owner-1")
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is True
+
+    published = wait_for_sandbox_file(
+        gateway,
+        task_id,
+        f"{MIGRATION_ROOT}/delivery/delivery-report.json",
+    )
+    assert json.loads(published)["state"] == "succeeded_with_warnings"
+    closed = service.get_task(task_id, "owner-1")
+    assert closed["state"] == "succeeded_with_warnings"
+    assert closed["message"] == report["message"]
+    # 收尾回合是叠加的：交付状态和产物仍然来自 CLI 的交付合同。
+    assert closed["artifact"]["downloadReady"] is True
+    assert service.drive_delivery_turn(task_id, "owner-1", task=closed) is False
+
+
+def test_delivery_turn_activity_shows_the_studio_tool_that_pulled_the_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """收尾回合拉产物这一步要像智能构建那样出现在迁移页的活动流里。"""
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, artifact, digest = agentic_delivery_task(service, gateway)
+    session = service._session(task_id, "owner-1")
+
+    async def fake_turn(**kwargs: object) -> dict[str, object]:
+        sink = kwargs["event_sink"]
+        assert callable(sink)
+        sink(
+            CodexAppServerEvent(
+                kind="tool",
+                item_id="tool-1",
+                item_type="dynamicToolCall",
+                status="in_progress",
+                name="publishArtifact",
+                arguments={"path": "migration-result.zip"},
+            )
+        )
+        sink(
+            CodexAppServerEvent(
+                kind="tool",
+                item_id="tool-1",
+                item_type="dynamicToolCall",
+                status="completed",
+                name="publishArtifact",
+                arguments={"path": "migration-result.zip"},
+                response={
+                    "success": True,
+                    "contentItems": [
+                        {
+                            "type": "inputText",
+                            "text": "产物已核对：path=migration-result.zip。",
+                        }
+                    ],
+                },
+            )
+        )
+        sink(
+            CodexAppServerEvent(
+                kind="tool",
+                item_id="tool-2",
+                item_type="dynamicToolCall",
+                status="in_progress",
+                name="reportDelivery",
+                arguments={"state": "succeeded_with_warnings"},
+            )
+        )
+        return delivery_report_payload(task_id, artifact, digest)
+
+    monkeypatch.setattr(migration_service, "run_delivery_turn", fake_turn)
+
+    asyncio.run(
+        service._run_app_server_delivery_turn(session, target="succeeded_with_warnings")
+    )
+
+    activity = service.activity(task_id, "owner-1")
+    rows = [item for item in activity["items"] if item["id"].startswith("delivery:")]
+    assert [row["title"] for row in rows] == [
+        "已拉取迁移产物并核对字节",
+        "已提交交付结论",
+    ]
+    assert [row["status"] for row in rows] == ["completed", "completed"]
+    assert rows[0]["kind"] == "command"
+    assert rows[0]["tool"]["output"].startswith("产物已核对：path=migration-result.zip")
+    assert rows[1]["tool"]["input"] == {"state": "succeeded_with_warnings"}
+
+
+def test_delivery_turn_rejects_a_verdict_that_does_not_match_the_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, artifact, digest = agentic_delivery_task(service, gateway)
+    report = delivery_report_payload(
+        task_id,
+        artifact,
+        digest,
+        state="failed",
+        message="迁移失败",
+    )
+    report["artifact"] = None
+
+    async def fake_turn(
+        _self: object,
+        _session: object,
+        *,
+        target: str,
+    ) -> dict[str, object]:
+        return report
+
+    monkeypatch.setattr(MigrationService, "_run_app_server_delivery_turn", fake_turn)
+
+    task = service.get_task(task_id, "owner-1")
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is True
+    time.sleep(0.2)
+
+    assert (
+        task_id,
+        f"{MIGRATION_ROOT}/delivery/delivery-report.json",
+    ) not in gateway.files
+    assert service.get_task(task_id, "owner-1")["message"] != report["message"]
+
+
+def test_delivery_turn_keeps_the_cli_state_when_the_app_server_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _artifact, _digest = agentic_delivery_task(service, gateway)
+
+    async def fake_turn(
+        _self: object,
+        _session: object,
+        *,
+        target: str,
+    ) -> dict[str, object]:
+        del target
+        raise migration_service.DeliveryTurnUnavailable("app-server 不可用")
+
+    monkeypatch.setattr(MigrationService, "_run_app_server_delivery_turn", fake_turn)
+
+    task = service.get_task(task_id, "owner-1")
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is True
+    time.sleep(0.2)
+
+    assert (
+        task_id,
+        f"{MIGRATION_ROOT}/delivery/delivery-report.json",
+    ) not in gateway.files
+    assert service.get_task(task_id, "owner-1")["state"] == "succeeded_with_warnings"
+
+
+def test_delivery_turn_waits_for_the_delivery_to_settle() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id, framework="any", entry=None)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id, framework="any", entry=None),
+    )
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["state"] == "migrating"
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is False
+
+
+def test_delivery_turn_ignores_a_structured_delivery() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(task_id, "owner-1", confirmation_body(gateway, task_id))
+    mark_delivery_succeeded(gateway, task_id)
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["state"] == "succeeded"
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is False
+
+
+def test_delivery_turn_is_switched_off_by_its_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTKIT_MIGRATION_DELIVERY_APP_SERVER", "0")
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _artifact, _digest = agentic_delivery_task(service, gateway)
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is False
+
+
+def test_delivery_turn_waits_for_a_fresh_lease_and_takes_over_a_stale_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 收尾回合的租约用墙钟判断新鲜度，所以这里按当前时间构造心跳。
+    wall_clock = int(time.time())
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, artifact, digest = agentic_delivery_task(service, gateway)
+    report = delivery_report_payload(task_id, artifact, digest)
+    calls: list[str] = []
+
+    async def fake_turn(
+        _self: object,
+        _session: object,
+        *,
+        target: str,
+    ) -> dict[str, object]:
+        calls.append(target)
+        return report
+
+    monkeypatch.setattr(MigrationService, "_run_app_server_delivery_turn", fake_turn)
+    lease_path = f"{MIGRATION_ROOT}/control/delivery-turn.json"
+
+    gateway.files[(task_id, lease_path)] = json.dumps(
+        {
+            "schema_version": 1,
+            "driver": "app-server",
+            "state": "running",
+            "started_at": wall_clock - 5,
+            "heartbeat_at": wall_clock - 5,
+            "owner_process": "another-studio-process",
+        }
+    ).encode()
+    task = service.get_task(task_id, "owner-1")
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is False
+
+    gateway.files[(task_id, lease_path)] = json.dumps(
+        {
+            "schema_version": 1,
+            "driver": "app-server",
+            "state": "running",
+            "started_at": wall_clock - 600,
+            "heartbeat_at": wall_clock - 600,
+            "owner_process": "another-studio-process",
+        }
+    ).encode()
+
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is True
+    wait_for_sandbox_file(
+        gateway,
+        task_id,
+        f"{MIGRATION_ROOT}/delivery/delivery-report.json",
+    )
+    assert calls == ["succeeded_with_warnings"]
+
+
+def test_delivery_turn_resumes_after_a_lost_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, artifact, digest = agentic_delivery_task(service, gateway)
+    report = delivery_report_payload(task_id, artifact, digest)
+
+    async def fake_turn(
+        _self: object,
+        _session: object,
+        *,
+        target: str,
+    ) -> dict[str, object]:
+        del target
+        return report
+
+    monkeypatch.setattr(MigrationService, "_run_app_server_delivery_turn", fake_turn)
+    task = service.get_task(task_id, "owner-1")
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is True
+    wait_for_sandbox_file(
+        gateway,
+        task_id,
+        f"{MIGRATION_ROOT}/delivery/delivery-report.json",
+    )
+
+    # 报告一旦落盘，再看任务不会再收尾一次。
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is False
+
+
+def test_publishing_the_artifact_requires_the_manifest_to_match_the_bytes() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, artifact, digest = agentic_delivery_task(service, gateway)
+    session = service._session(task_id, "owner-1")
+
+    published = service._publish_delivery_artifact(
+        session,
+        "migration-result.zip",
+        expected_state="succeeded_with_warnings",
+    )
+
+    assert published.sha256 == digest
+    assert published.size == len(artifact)
+
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-result.zip")] = (
+        artifact_zip({"app.py": b"tampered\n"})
+    )
+    with pytest.raises(migration_service.DeliveryContractError):
+        service._publish_delivery_artifact(
+            session,
+            "migration-result.zip",
+            expected_state="succeeded_with_warnings",
+        )
+
+
+def test_the_delivery_report_never_overrides_another_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, artifact, digest = agentic_delivery_task(service, gateway)
+    report = delivery_report_payload(
+        task_id,
+        artifact,
+        digest,
+        state="partial",
+        message="这次交付不完整。",
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/delivery-report.json")] = (
+        json.dumps(report).encode()
+    )
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["state"] == "succeeded_with_warnings"
+    assert task["message"] == "迁移产物已生成，请查看迁移提示"
+
+
+def test_delivery_turn_gives_up_after_its_attempt_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _artifact, _digest = agentic_delivery_task(service, gateway)
+    calls: list[int] = []
+
+    async def fake_turn(
+        _self: object,
+        _session: object,
+        *,
+        target: str,
+    ) -> dict[str, object]:
+        del target
+        calls.append(1)
+        return None
+
+    monkeypatch.setattr(MigrationService, "_run_app_server_delivery_turn", fake_turn)
+    task = service.get_task(task_id, "owner-1")
+
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is True
+    deadline = time.time() + 5
+    while not calls and time.time() < deadline:
+        time.sleep(0.01)
+    for _ in range(50):
+        if service.drive_delivery_turn(task_id, "owner-1", task=task):
+            break
+        time.sleep(0.02)
+    time.sleep(0.2)
+
+    # 一个没有结论的收尾最多再试一次，不能每次读任务都重新烧一个回合。
+    assert calls == [1, 1]
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is False

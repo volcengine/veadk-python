@@ -136,12 +136,14 @@ model:
     api_key: ${MODEL_AGENT_API_KEY}
 
 volcengine:
-  # Viking DB and embedding require Volcengine ak/sk
+  # Viking DB and embedding can use Volcengine ak/sk
   access_key: ${VOLCENGINE_ACCESS_KEY}
   secret_key: ${VOLCENGINE_SECRET_KEY}
 
 database:
   viking:
+    # Optional; used to search existing VikingDB knowledgebase collections
+    api_key: ${DATABASE_VIKING_API_KEY}
     project: default    # project in Volcengine Viking DB
     region: cn-beijing
   tos:
@@ -167,11 +169,14 @@ Provide those secrets in environment variables:
 
 ```bash
 export MODEL_AGENT_API_KEY="<your Ark API key>"
+export DATABASE_VIKING_API_KEY="<your VikingDB knowledgebase API key>"
 export VOLCENGINE_ACCESS_KEY="<your AK>"
 export VOLCENGINE_SECRET_KEY="<your SK>"
 export DATABASE_OPENSEARCH_PASSWORD="<your OpenSearch password>"
 export DATABASE_OPENVIKING_API_KEY="<your OpenViking API key>"
 ```
+
+`DATABASE_VIKING_API_KEY` is preferred for searching existing VikingDB knowledgebase collections. Creating, deleting, or listing collections, managing documents/chunks, and operations such as `add_from_text` / `add_from_files` that upload through TOS still require usable `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY` or VeFaaS IAM credentials.
 
 ### Demo scenario
 

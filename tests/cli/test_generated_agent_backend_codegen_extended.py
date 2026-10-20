@@ -15,20 +15,25 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import io
 import json
 import secrets
+import shlex
 import socket
+import sys
 import zipfile
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any, ClassVar, Literal
 
 import pytest
 import yaml
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from veadk.cli import cli_frontend
 from veadk.cli.cli_frontend import (
     _redact_debug_text,
     _run_frontend_server,
@@ -65,26 +70,34 @@ from veadk.cli.generated_agent_skills import (
 # These hashes lock the complete generated project contents, not just Python
 # syntax or selected snippets.
 _MINIMAL_FRONTEND_GOLDEN = {
-    "app.py": "3a5838b3c702202c0a26d8560e396e3c3c46e223b99e2e1d74eb434d653474df",
+    "Dockerfile": "d260ed284c060834ef0ddb36cd5438a116259d9884e1997127ff36c7721ad95d",
+    "app.py": "48a85b8eaa87d836e6dabc41bae6bdc0c587e1d55093bc8aaa7bcb62a362ad21",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/demo_agent/agent.py": "3c28f3e63f185d1ee8402d58b62c8654cf18fe4180a1f348abaa63547d91446c",
     "agents/demo_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/demo_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "ec3258da9bef4e74333376d8554c265ccb12a4a1e5d4e1e1b0acdf5c9ae93ab6",
-    "requirements.txt": "9a04e5f16e94d5e751681082776f1c99f13da7a577c8753c3835e0ea507245e4",
+    "requirements.txt": "9f55ba1a16ae8199165fde7de39f5f93133963634ebb6d1bdb241cc3cefa10ee",
     "README.md": "a34208314cf9061c02662028d7a9dd97448e6b73c1d732cb4aeaa8f70dbbc684",
 }
 
 _FULL_FRONTEND_GOLDEN = {
-    "app.py": "56183a125e505c543294356fc9c7662a5eedb3b8661070f6be1df9b579e35ed4",
+    "Dockerfile": "d260ed284c060834ef0ddb36cd5438a116259d9884e1997127ff36c7721ad95d",
+    "app.py": "47c87fd54ac00e208030a7a370f0dbd52a872a9adf8ecd2e2e4f2e1b56188854",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/full_agent/agent.py": "35560cfa5ea93955244482d727c8f8369599fa5b9560ba1f3804df7273e245ce",
     "agents/full_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/full_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "2bfd3afda4e661fbb71588ec5f0d584ce6682363cacc81b0394f8da09f7977e8",
-    "requirements.txt": "4a941e1bf7efb43d57f608649ac238f2e5ea833f9e0aae92f8bc3fef67b8874e",
+    "requirements.txt": "3372cfe49df006b3d0e5bdc4f7b4fcc152a16f663d9e10770f09c708e6daa32b",
     "README.md": "1bf4dc889c7d1076f50784d253b53412ba7c49bcb69a5d948f9092dbbecb18ac",
 }
+
+
+@pytest.fixture(autouse=True)
+def _default_to_volcengine_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
 
 
 def _file_map(project: GeneratedProject) -> dict[str, str]:
@@ -240,6 +253,20 @@ def test_retired_a2ui_option_is_accepted_but_not_generated() -> None:
     assert "[a2ui]" not in files["requirements.txt"]
 
 
+@pytest.mark.parametrize("agent_type", ["llm", "sequential", "parallel", "loop"])
+def test_codegen_studio_tools_follow_root_type(agent_type: str) -> None:
+    draft = AgentDraft.model_validate(
+        {
+            "name": "workflow",
+            "agentType": agent_type,
+            "subAgents": [{"name": "worker", "agentType": "llm"}],
+        }
+    )
+    files = _file_map(generate_project_from_draft(draft))
+    expected = agent_type == "llm"
+    assert f'"enable_studio_tools": {expected!r}' in files["app.py"]
+
+
 def test_codegen_preserves_agent_display_names_for_topology() -> None:
     project = generate_project_from_draft(
         AgentDraft(
@@ -256,10 +283,74 @@ def test_codegen_preserves_agent_display_names_for_topology() -> None:
     assert "create_agentkit_app(" in app_py
     assert "AGENT_DISPLAY_NAMES" in app_py
     assert "AGENT_DRAFT" in app_py
+    assert '"enable_studio_tools": True' in app_py
     assert '"agent_draft" in signature(create_agentkit_app).parameters' in app_py
     assert '_app_options["agent_draft"] = AGENT_DRAFT' in app_py
     assert '@app.get("/web/agent-info/{app_name}")' in app_py
     assert '"draft": AGENT_DRAFT' in app_py
+    assert '@app.get("/web/agent-draft/{app_name}")' in app_py
+    assert 'return {"draft": AGENT_DRAFT}' in app_py
+    assert 'getattr(route, "path", "") == "/web/agent-draft/{app_name}"' in app_py
+    assert "_agent_draft_route = app.router.routes.pop(_agent_draft_index)" in app_py
+    assert (
+        "app.router.routes.insert(_agent_info_index + 1, _agent_draft_route)" in app_py
+    )
+
+
+def test_generated_compat_draft_route_precedes_a_root_mount(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = generate_project_from_draft(AgentDraft(name="demo"))
+    app_py = _file_map(project)["app.py"]
+
+    def legacy_create_agentkit_app(
+        _root_agent: object,
+        _display_names: object,
+        *,
+        enable_feishu: bool,
+        enable_studio_tools: bool,
+    ) -> FastAPI:
+        del enable_feishu, enable_studio_tools
+        app = FastAPI()
+
+        @app.get("/web/agent-info/{app_name}")
+        def agent_info(app_name: str) -> dict[str, str]:
+            return {"name": app_name}
+
+        app.mount("/", FastAPI())
+        return app
+
+    import veadk.integrations.agentkit as agentkit_integration
+
+    monkeypatch.setattr(
+        agentkit_integration,
+        "create_agentkit_app",
+        legacy_create_agentkit_app,
+    )
+    agent_module = ModuleType("agents.demo.agent")
+    agent_module.AGENT_DISPLAY_NAMES = {"demo": "demo"}
+    agent_module.AGENT_DRAFT = {"name": "demo", "instruction": "Editable."}
+    agent_module.root_agent = object()
+    dynamic_module = ModuleType("agents.demo.dynamic_a2a")
+    dynamic_module.enable_dynamic_a2a_tools = lambda _app, _agent: None
+    agents_package = ModuleType("agents")
+    agents_package.__path__ = []
+    demo_package = ModuleType("agents.demo")
+    demo_package.__path__ = []
+    monkeypatch.setitem(sys.modules, "agents", agents_package)
+    monkeypatch.setitem(sys.modules, "agents.demo", demo_package)
+    monkeypatch.setitem(sys.modules, "agents.demo.agent", agent_module)
+    monkeypatch.setitem(sys.modules, "agents.demo.dynamic_a2a", dynamic_module)
+
+    namespace: dict[str, Any] = {"__name__": "generated_app"}
+    exec(compile(app_py, "generated-app.py", "exec"), namespace)
+    app = namespace["app"]
+    paths = [getattr(route, "path", None) for route in app.router.routes]
+
+    assert paths.index("/web/agent-draft/{app_name}") < paths.index("")
+    assert TestClient(app).get("/web/agent-draft/demo").json() == {
+        "draft": agent_module.AGENT_DRAFT
+    }
 
 
 def test_codegen_enables_feishu_without_exposing_lifecycle_code() -> None:
@@ -276,6 +367,8 @@ def test_codegen_enables_feishu_without_exposing_lifecycle_code() -> None:
     assert "FeishuChannelExtension" not in app_py
     assert "asynccontextmanager" not in app_py
     assert "veadk-python[extensions]" in files["requirements.txt"]
+    assert "lark-channel-sdk==1.2.0" in files["requirements.txt"]
+    assert "lark-oapi==1.7.3" in files["requirements.txt"]
     assert "FEISHU_APP_ID=" in files[".env.example"]
     assert "FEISHU_APP_SECRET=" in files[".env.example"]
 
@@ -670,7 +763,7 @@ async def test_skillspace_materialization_normalizes_legacy_frontmatter() -> Non
     )
 
 
-def _skill_zip(files: dict[str, str]) -> bytes:
+def _skill_zip(files: dict[str, str | bytes]) -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
         for path, content in files.items():
@@ -702,6 +795,66 @@ def test_skillhub_zip_accepts_safe_files_without_metadata_validation() -> None:
             "demo-skill",
             "test skill",
         )
+
+
+def test_remote_skill_zip_ignores_macos_metadata() -> None:
+    skill_md = "---\nname: demo-skill\ndescription: Demo.\n---\n"
+    files = _files_from_zip(
+        _skill_zip(
+            {
+                "demo-skill/SKILL.md": skill_md,
+                "demo-skill/scripts/run.py": "print('ok')\n",
+                "__MACOSX/demo-skill/._SKILL.md": b"\x00\x05AppleDouble",
+                "demo-skill/.DS_Store": b"\x00\x01desktop",
+                "demo-skill/scripts/._run.py": b"\x00\x05AppleDouble",
+            }
+        ),
+        "demo-skill",
+        "SkillSpace skill s-123",
+    )
+
+    assert [file.path for file in files] == [
+        "skills/demo-skill/SKILL.md",
+        "skills/demo-skill/scripts/run.py",
+    ]
+
+
+def test_remote_skill_zip_rejects_binary_files_by_default() -> None:
+    skill_md = "---\nname: demo-skill\ndescription: Demo.\n---\n"
+
+    with pytest.raises(DebugPolicyError, match="must be UTF-8 or GB18030 text"):
+        _files_from_zip(
+            _skill_zip(
+                {
+                    "demo-skill/SKILL.md": skill_md,
+                    "demo-skill/assets/font.ttf": b"\x00\x01\x00\x00binary-font",
+                }
+            ),
+            "demo-skill",
+            "SkillSpace skill s-123",
+        )
+
+
+def test_remote_skill_zip_can_ignore_binary_files_for_text_detail() -> None:
+    skill_md = "---\nname: demo-skill\ndescription: Demo.\n---\n"
+    files = _files_from_zip(
+        _skill_zip(
+            {
+                "demo-skill/SKILL.md": skill_md,
+                "demo-skill/scripts/run.py": "print('ok')\n",
+                "demo-skill/assets/font.ttf": b"\x00\x01\x00\x00binary-font",
+                "demo-skill/assets/preview.png": b"\x89PNG\r\n\x1a\n\x00binary-image",
+            }
+        ),
+        "demo-skill",
+        "SkillSpace skill s-123",
+        ignore_binary=True,
+    )
+
+    assert [file.path for file in files] == [
+        "skills/demo-skill/SKILL.md",
+        "skills/demo-skill/scripts/run.py",
+    ]
 
 
 def test_remote_skill_zip_accepts_existing_skills_wrapper() -> None:
@@ -817,6 +970,8 @@ class _FakeAsyncClient:
     streamed_payloads: list[dict[str, Any]] = []
     trace_requests: ClassVar[list[str]] = []
     listed_apps: ClassVar[list[str]] = ["demo_agent"]
+    sidecar_status: ClassVar[dict[str, Any] | None] = None
+    gateway_requests: ClassVar[list[dict[str, str]]] = []
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
@@ -827,9 +982,14 @@ class _FakeAsyncClient:
     async def __aexit__(self, *args: Any) -> None:
         return None
 
-    async def get(self, url: str) -> _FakeResponse:
+    async def get(self, url: str, **kwargs: Any) -> _FakeResponse:
         if url.endswith("/list-apps"):
             return _FakeResponse(json_data=self.listed_apps)
+        if url.endswith("/web/harness-sidecar/status"):
+            return _FakeResponse(json_data=self.sidecar_status)
+        if url.endswith("/healthz"):
+            self.gateway_requests.append(dict(kwargs.get("headers") or {}))
+            return _FakeResponse(json_data={"status": "ok"})
         assert url.endswith("/dev/apps/demo_agent/debug/trace/session/session-1")
         self.trace_requests.append(url)
         return _FakeResponse(
@@ -908,6 +1068,545 @@ class _FakeSocket:
 
     def getsockname(self) -> tuple[str, int]:
         return ("127.0.0.1", 54321)
+
+
+def _generated_debug_app(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> Any:
+    captured: dict[str, Any] = {}
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        "uvicorn.run",
+        lambda app, **kwargs: captured.setdefault("app", app),
+    )
+    _run_frontend_server(
+        agents_dir=str(tmp_path),
+        frontend_dir=None,
+        site_logo=None,
+        site_title=None,
+        host="127.0.0.1",
+        port=8765,
+        dev=True,
+        vite=True,
+        oauth2_user_pool=None,
+        oauth2_user_pool_client=None,
+        oauth2_user_pool_uid=None,
+        oauth2_user_pool_client_uid=None,
+        oauth2_redirect_uri=None,
+        oauth2_provider=None,
+        oauth2_provider_label=None,
+        auth_mode="frontend",
+        generated_agent_test_run_ttl=60,
+        open_browser=False,
+    )
+    return captured["app"]
+
+
+@pytest.mark.parametrize(
+    "system_root", [r"D:\Custom Windows", "", None], ids=["present", "empty", "absent"]
+)
+def test_generated_debug_runner_preserves_systemroot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    system_root: str | None,
+) -> None:
+    """调试子进程保留 Windows 系统目录，同时继续过滤无关环境变量。"""
+    app = _generated_debug_app(monkeypatch, tmp_path)
+    if system_root is None:
+        monkeypatch.delenv("SYSTEMROOT", raising=False)
+    else:
+        monkeypatch.setenv("SYSTEMROOT", system_root)
+    monkeypatch.setenv("TEMP", str(tmp_path))
+    monkeypatch.setenv("UNRELATED_SERVICE_SECRET", "unrelated-test-value")
+    _FakeProcess.created.clear()
+    monkeypatch.setattr(_FakeAsyncClient, "listed_apps", ["demo_agent"])
+    monkeypatch.setattr("subprocess.Popen", _FakeProcess)
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+    real_socket = socket.socket
+    monkeypatch.setattr(
+        "socket.socket",
+        lambda *args, **kwargs: (
+            real_socket(*args, **kwargs)
+            if len(args) >= 4 or "fileno" in kwargs
+            else _FakeSocket(*args, **kwargs)
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/generated-agent-test-runs",
+            json={"draft": {"name": "demo-agent", "instruction": "Answer hello."}},
+        )
+        assert response.status_code == 200
+        process = _FakeProcess.created[-1]
+        run_id = response.json()["runId"]
+        assert (
+            client.delete(f"/web/generated-agent-test-runs/{run_id}").status_code == 200
+        )
+
+    if system_root:
+        assert process.env.get("SYSTEMROOT") == system_root
+    else:
+        assert "SYSTEMROOT" not in process.env
+    assert process.env["TEMP"] == str(tmp_path)
+    assert "UNRELATED_SERVICE_SECRET" not in process.env
+
+
+def test_local_generated_debug_allows_private_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("VEADK_STUDIO_FUNCTION_ID", raising=False)
+    monkeypatch.delenv("_FAAS_FUNC_ID", raising=False)
+
+    async def keep_mcp_endpoints(draft, env_values=None):
+        assert env_values == {}
+        return draft
+
+    monkeypatch.setattr(
+        "veadk.cli.generated_agent_mcp.resolve_debug_mcp_endpoints",
+        keep_mcp_endpoints,
+    )
+    app = _generated_debug_app(monkeypatch, tmp_path)
+    _FakeProcess.created.clear()
+    monkeypatch.setattr(_FakeAsyncClient, "listed_apps", ["private_mcp_agent"])
+    monkeypatch.setattr("subprocess.Popen", _FakeProcess)
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+    real_socket = socket.socket
+    monkeypatch.setattr(
+        "socket.socket",
+        lambda *args, **kwargs: (
+            real_socket(*args, **kwargs)
+            if len(args) >= 4 or "fileno" in kwargs
+            else _FakeSocket(*args, **kwargs)
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/generated-agent-test-runs",
+            json={
+                "draft": {
+                    "name": "private-mcp-agent",
+                    "instruction": "Use MCP.",
+                    "mcpTools": [
+                        {
+                            "name": "private",
+                            "transport": "http",
+                            "url": "http://10.1.2.3/mcp",
+                        }
+                    ],
+                }
+            },
+        )
+
+    assert response.status_code == 200
+    assert _FakeProcess.created
+
+
+def test_cloud_generated_debug_rejects_private_mcp_outside_vpc(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("_FAAS_FUNC_ID", "function-test")
+    monkeypatch.setattr(
+        cli_frontend,
+        "discover_studio_vpc_networks",
+        lambda **kwargs: (ipaddress.ip_network("10.20.0.0/16"),),
+    )
+    app = _generated_debug_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/generated-agent-test-runs",
+            json={
+                "draft": {
+                    "name": "private-mcp-agent",
+                    "instruction": "Use MCP.",
+                    "mcpTools": [
+                        {
+                            "name": "private",
+                            "transport": "http",
+                            "url": "http://10.30.1.8/mcp",
+                        }
+                    ],
+                }
+            },
+        )
+
+    assert response.status_code == 400
+    assert "不属于当前云上 Studio 所连接的 VPC 网段" in response.json()["detail"]
+    assert "PrivateLink" in response.json()["detail"]
+
+
+def test_cloud_generated_debug_preserves_mcp_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from veadk.cli.generated_agent_mcp import McpDebugConnectionError
+
+    monkeypatch.setenv("_FAAS_FUNC_ID", "function-test")
+    original_detail = "MCP 工具 `offline` 连接失败：原始连接错误"
+
+    async def fail_mcp_discovery(draft, env_values=None):
+        del draft
+        assert env_values == {}
+        raise McpDebugConnectionError(original_detail)
+
+    monkeypatch.setattr(
+        "veadk.cli.generated_agent_mcp.resolve_debug_mcp_endpoints",
+        fail_mcp_discovery,
+    )
+    app = _generated_debug_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/generated-agent-test-runs",
+            json={
+                "draft": {
+                    "name": "offline-mcp-agent",
+                    "instruction": "Use MCP.",
+                    "mcpTools": [
+                        {
+                            "name": "offline",
+                            "transport": "http",
+                            "url": "https://8.8.8.8/mcp",
+                        }
+                    ],
+                }
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == original_detail
+
+
+@pytest.mark.parametrize(
+    (
+        "credential_storage",
+        "tool_name",
+        "published_url",
+        "edited_url",
+        "expected_status",
+        "expect_credential",
+        "explicit_reuse",
+        "has_published_draft",
+        "submitted_credential",
+    ),
+    [
+        (
+            "reference-env",
+            "jvmdiag",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+            False,
+        ),
+        (
+            "reference-env",
+            "jvmdiag",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+            True,
+        ),
+        (
+            "reference-env",
+            "",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+            False,
+        ),
+        (
+            "servers-json",
+            "jvmdiag",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+            False,
+        ),
+        (
+            "servers-json",
+            "",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+            False,
+        ),
+        (
+            "servers-json",
+            "jvmdiag",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/changed-mcp",
+            409,
+            False,
+            False,
+            True,
+            False,
+        ),
+        (
+            "missing",
+            "",
+            "https://8.8.8.8/mysqldiag",
+            "https://8.8.8.8/mysqldiag",
+            409,
+            False,
+            False,
+            True,
+            False,
+        ),
+        (
+            "missing",
+            "",
+            "https://8.8.8.8/mysqldiag",
+            "https://8.8.8.8/mysqldiag",
+            200,
+            True,
+            False,
+            True,
+            True,
+        ),
+        (
+            "servers-json",
+            "",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/changed-mcp",
+            200,
+            True,
+            True,
+            True,
+            False,
+        ),
+        (
+            "reference-env",
+            "",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/changed-mcp",
+            409,
+            False,
+            True,
+            False,
+            False,
+        ),
+        (
+            "reference-env",
+            "",
+            "https://8.8.8.8/mcp?legacy=1",
+            "https://8.8.8.8/changed-mcp",
+            409,
+            False,
+            True,
+            True,
+            False,
+        ),
+    ],
+)
+def test_generated_debug_applies_published_mcp_credential_contract_before_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    credential_storage: str,
+    tool_name: str,
+    published_url: str,
+    edited_url: str,
+    expected_status: int,
+    expect_credential: bool,
+    explicit_reuse: bool,
+    has_published_draft: bool,
+    submitted_credential: bool,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+    from veadk.cli.generated_agent_mcp import McpDebugConnectionError
+
+    credential_reference = "MCP_LEGACY_AGENT_JVMDIAG_AUTH_TOKEN"
+    credential_value = "server-retained-debug-secret"
+    submitted_credential_value = "browser-submitted-debug-secret"
+    secondary_credential_reference = "MCP_LEGACY_AGENT_ATHENA_AUTH_TOKEN"
+    secondary_credential_value = "browser-submitted-secondary-secret"
+    published_draft = {
+        "name": "legacy_agent",
+        "description": "Existing Agent",
+        "instruction": "Use the diagnostic MCP.",
+        "mcpTools": [
+            {
+                "name": tool_name,
+                "transport": "http",
+                "url": published_url,
+                "authTokenEnv": credential_reference,
+            }
+        ],
+    }
+    runtime_envs = [SimpleNamespace(key=credential_reference, value=credential_value)]
+    if credential_storage == "servers-json":
+        runtime_envs = [
+            SimpleNamespace(
+                key="MCP_SERVERS_JSON",
+                value=json.dumps(
+                    [
+                        {
+                            "name": tool_name or "mcp",
+                            "url": published_url,
+                            "headers": {"Authorization": f"Bearer {credential_value}"},
+                        }
+                    ]
+                ),
+            )
+        ]
+    elif credential_storage == "missing":
+        runtime_envs = []
+    runtime = SimpleNamespace(
+        runtime_id="runtime-debug-mcp",
+        runtime_name="legacy-agent-runtime",
+        current_version_number=3,
+        tags=[],
+        envs=runtime_envs,
+        network_configurations=[
+            SimpleNamespace(
+                endpoint="https://runtime.example.com",
+                network_type="public",
+            )
+        ],
+        authorizer_configuration=SimpleNamespace(
+            key_auth=SimpleNamespace(api_key="runtime-api-key"),
+            custom_jwt_authorizer=None,
+        ),
+    )
+
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: runtime,
+    )
+
+    captured_discovery_env: dict[str, str] = {}
+    discovery_calls: list[bool] = []
+
+    async def capture_mcp_discovery(draft, env_values=None):
+        discovery_calls.append(True)
+        captured_discovery_env.update(env_values or {})
+        if not expect_credential:
+            raise McpDebugConnectionError("changed MCP endpoint rejected")
+        return draft
+
+    monkeypatch.setattr(
+        "veadk.cli.generated_agent_mcp.resolve_debug_mcp_endpoints",
+        capture_mcp_discovery,
+    )
+
+    class RuntimeDebugClient(_FakeAsyncClient):
+        async def request(self, _method: str, url: str, **_kwargs: Any):
+            if url.endswith("/list-apps"):
+                return _FakeResponse(json_data=["legacy_agent"])
+            if url.endswith("/web/agent-info/legacy_agent"):
+                agent_info: dict[str, Any] = {
+                    "name": "legacy_agent",
+                    "description": "Existing Agent",
+                }
+                if has_published_draft:
+                    agent_info["draft"] = published_draft
+                return _FakeResponse(json_data=agent_info)
+            if url.endswith("/web/agent-draft/legacy_agent"):
+                return _FakeResponse(status_code=404)
+            raise AssertionError(f"unexpected Runtime request path: {url}")
+
+    monkeypatch.setenv("_FAAS_FUNC_ID", "function-test")
+    app = _generated_debug_app(monkeypatch, tmp_path)
+    _FakeProcess.created.clear()
+    _FakeAsyncClient.listed_apps = ["legacy_agent"]
+    monkeypatch.setattr("subprocess.Popen", _FakeProcess)
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeDebugClient)
+    real_socket = socket.socket
+    monkeypatch.setattr(
+        "socket.socket",
+        lambda *args, **kwargs: (
+            real_socket(*args, **kwargs)
+            if len(args) >= 4 or "fileno" in kwargs
+            else _FakeSocket(*args, **kwargs)
+        ),
+    )
+
+    with TestClient(app) as client:
+        edited_draft = json.loads(json.dumps(published_draft))
+        edited_draft["mcpTools"][0]["url"] = edited_url
+        payload = {
+            "draft": edited_draft,
+            "runtimeId": runtime.runtime_id,
+            "runtimeRegion": "cn-shanghai",
+        }
+        if submitted_credential:
+            edited_draft["mcpTools"].append(
+                {
+                    "name": "athena",
+                    "transport": "http",
+                    "url": "https://8.8.4.4/athena-mcp",
+                    "authTokenEnv": secondary_credential_reference,
+                }
+            )
+            edited_draft["deployment"] = {
+                "envValues": {
+                    credential_reference: submitted_credential_value,
+                    secondary_credential_reference: secondary_credential_value,
+                    "UNRELATED_SECRET": "must-not-reach-mcp-discovery",
+                }
+            }
+        if explicit_reuse:
+            payload["mcpCredentialReuses"] = [
+                {
+                    "agentName": "legacy_agent",
+                    "name": tool_name,
+                    "url": edited_url,
+                    "sourceAuthTokenEnv": credential_reference,
+                }
+            ]
+        response = client.post(
+            "/web/generated-agent-test-runs",
+            json=payload,
+        )
+
+    assert response.status_code == expected_status, response.text
+    if expected_status != 200:
+        assert _FakeProcess.created == []
+    assert bool(discovery_calls) is (expected_status in {200, 422})
+    if "?" in published_url:
+        assert "MCP 地址无效" in response.json()["detail"]
+        assert "LegacyRecoveryError" not in response.text
+        assert "错误 ID" not in response.text
+    if expect_credential:
+        expected_credential = (
+            submitted_credential_value if submitted_credential else credential_value
+        )
+        assert captured_discovery_env[credential_reference] == expected_credential
+        if submitted_credential:
+            assert (
+                captured_discovery_env[secondary_credential_reference]
+                == secondary_credential_value
+            )
+        assert "UNRELATED_SECRET" not in captured_discovery_env
+    else:
+        assert credential_reference not in captured_discovery_env
+    if credential_storage == "missing" and not submitted_credential:
+        assert "缺少可用凭证" in response.json()["detail"]
+    assert credential_value not in response.text
+    assert submitted_credential_value not in response.text
+    assert secondary_credential_value not in response.text
 
 
 def test_debug_text_redacts_environment_and_inline_markers(
@@ -1343,6 +2042,266 @@ def test_generated_agent_debug_omits_stdio_mcp_on_remote_bind(
         assert delete_response.status_code == 200
 
 
+def test_generated_agent_sidecar_debug_uses_runtime_apig_and_active_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    if sys.version_info[:2] != (3, 12):
+        pytest.skip("managed Sidecar debug Runtime requires CPython 3.12")
+
+    from veadk.extensions.harness import sidecar
+
+    captured: dict[str, Any] = {}
+    runtime_key = secrets.token_urlsafe(18)
+    runtime_endpoint = "https://runtime.example.com"
+    _FakeProcess.created.clear()
+    monkeypatch.setattr(_FakeAsyncClient, "listed_apps", ["sidecar_agent"])
+    monkeypatch.setattr(
+        _FakeAsyncClient,
+        "sidecar_status",
+        {
+            "status": "ready",
+            "planHash": "sha256:test-plan",
+            "effectiveComponents": ["mcp_resilience", "sql_readonly"],
+        },
+    )
+    monkeypatch.setattr(_FakeAsyncClient, "gateway_requests", [])
+    monkeypatch.setenv("VEADK_STUDIO_HARNESS_SIDECAR_DEBUG_ENABLED", "true")
+    monkeypatch.setenv("HARNESS_SIDECAR_APIG_ENDPOINT", runtime_endpoint)
+    monkeypatch.setenv("HARNESS_SIDECAR_APIG_API_KEY", runtime_key)
+    monkeypatch.setattr(
+        cli_frontend,
+        "installed_harness_sidecar_runtime_command",
+        lambda: (
+            sys.executable,
+            "-m",
+            "veadk.cli.generated_agent_sidecar_runtime",
+        ),
+    )
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+    monkeypatch.setattr(
+        sidecar,
+        "studio_harness_runtime_env",
+        lambda _intent, *, transport: (
+            {
+                "HARNESS_SIDECAR_ENABLED": "true",
+                "HARNESS_SIDECAR_TRANSPORT": transport,
+                "HARNESS_MODEL_PROXY_PORT": "18787",
+            },
+            {
+                "planHash": "sha256:test-plan",
+                "effectiveComponents": ["mcp_resilience", "sql_readonly"],
+            },
+        ),
+    )
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        "uvicorn.run",
+        lambda app, **kwargs: captured.setdefault("app", app),
+    )
+
+    async def preserve_debug_mcp_endpoints(draft, env_values=None):
+        return draft
+
+    monkeypatch.setattr(
+        "veadk.cli.generated_agent_mcp.resolve_debug_mcp_endpoints",
+        preserve_debug_mcp_endpoints,
+    )
+
+    _run_frontend_server(
+        agents_dir=str(tmp_path),
+        frontend_dir=None,
+        site_logo=None,
+        site_title=None,
+        host="127.0.0.1",
+        port=8765,
+        dev=True,
+        vite=True,
+        oauth2_user_pool=None,
+        oauth2_user_pool_client=None,
+        oauth2_user_pool_uid=None,
+        oauth2_user_pool_client_uid=None,
+        oauth2_redirect_uri=None,
+        oauth2_provider=None,
+        oauth2_provider_label=None,
+        auth_mode="frontend",
+        generated_agent_test_run_ttl=60,
+        open_browser=False,
+    )
+
+    monkeypatch.setattr("subprocess.Popen", _FakeProcess)
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+    real_socket = socket.socket
+    monkeypatch.setattr(
+        "socket.socket",
+        lambda *args, **kwargs: (
+            real_socket(*args, **kwargs)
+            if len(args) >= 4 or "fileno" in kwargs
+            else _FakeSocket(*args, **kwargs)
+        ),
+    )
+
+    with TestClient(captured["app"]) as client:
+        run_response = client.post(
+            "/web/generated-agent-test-runs",
+            json={
+                "draft": {
+                    "name": "sidecar-agent",
+                    "instruction": "Answer briefly.",
+                    "mcpTools": [
+                        {
+                            "name": "catalog",
+                            "transport": "http",
+                            "url": "https://mcp.example.test/catalog/mcp",
+                            "authTokenEnv": "MCP_CATALOG_AUTH_TOKEN",
+                        },
+                        {
+                            "name": "fulfillment",
+                            "transport": "http",
+                            "url": "https://mcp.example.test/fulfillment/mcp",
+                            "authTokenEnv": "MCP_FULFILLMENT_AUTH_TOKEN",
+                        },
+                    ],
+                    "harnessSidecar": {
+                        "componentOverrides": {"mcp_resilience": True},
+                    },
+                    "deployment": {
+                        "envValues": {
+                            "MCP_CATALOG_AUTH_TOKEN": "catalog-test-token",
+                            "MCP_FULFILLMENT_AUTH_TOKEN": ("fulfillment-test-token"),
+                        }
+                    },
+                }
+            },
+        )
+
+    assert run_response.status_code == 200
+    assert run_response.json()["planHash"] == "sha256:test-plan"
+    process_env = _FakeProcess.created[-1].env
+    assert shlex.split(process_env["AGENTKIT_HARNESS_RUNTIME_COMMAND"]) == [
+        sys.executable,
+        "-m",
+        "veadk.cli.generated_agent_sidecar_runtime",
+    ]
+    assert process_env["HARNESS_SIDECAR_TRANSPORT"] == "apig_runtime_port"
+    assert process_env["HARNESS_SIDECAR_APIG_ENDPOINT"] == runtime_endpoint
+    assert process_env["HARNESS_SIDECAR_APIG_API_KEY"] == runtime_key
+    assert json.loads(process_env["MCP_SERVERS_JSON"]) == [
+        {
+            "name": "catalog",
+            "url": "https://mcp.example.test/catalog/mcp",
+            "headers": {"Authorization": "Bearer catalog-test-token"},
+        },
+        {
+            "name": "fulfillment",
+            "url": "https://mcp.example.test/fulfillment/mcp",
+            "headers": {"Authorization": "Bearer fulfillment-test-token"},
+        },
+    ]
+    assert "MCP_CATALOG_AUTH_TOKEN" not in process_env
+    assert "MCP_FULFILLMENT_AUTH_TOKEN" not in process_env
+    assert runtime_key not in run_response.text
+    assert _FakeAsyncClient.gateway_requests == [
+        {
+            "Authorization": f"Bearer {runtime_key}",
+            "X-Faas-Proxy-Port": "18787",
+        },
+        {
+            "Authorization": f"Bearer {runtime_key}",
+            "X-Faas-Proxy-Port": "18788",
+        },
+    ]
+
+
+def test_generated_agent_sidecar_debug_fails_before_runner_without_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    if sys.version_info[:2] != (3, 12):
+        pytest.skip("managed Sidecar debug Runtime requires CPython 3.12")
+
+    from veadk.extensions.harness import sidecar
+
+    captured: dict[str, Any] = {}
+    _FakeProcess.created.clear()
+    monkeypatch.setenv("VEADK_STUDIO_HARNESS_SIDECAR_DEBUG_ENABLED", "true")
+    monkeypatch.setenv(
+        "HARNESS_SIDECAR_APIG_ENDPOINT",
+        "https://runtime.example.com",
+    )
+    monkeypatch.setenv("HARNESS_SIDECAR_APIG_API_KEY", "fixture-runtime-key")
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+
+    def missing_runtime() -> tuple[str, ...]:
+        raise cli_frontend.GeneratedAgentSidecarRuntimeUnavailable
+
+    monkeypatch.setattr(
+        cli_frontend,
+        "installed_harness_sidecar_runtime_command",
+        missing_runtime,
+    )
+    monkeypatch.setattr(
+        sidecar,
+        "studio_harness_runtime_env",
+        lambda *_args, **_kwargs: pytest.fail(
+            "missing runtime must fail before Sidecar environment generation"
+        ),
+    )
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        "uvicorn.run",
+        lambda app, **kwargs: captured.setdefault("app", app),
+    )
+
+    _run_frontend_server(
+        agents_dir=str(tmp_path),
+        frontend_dir=None,
+        site_logo=None,
+        site_title=None,
+        host="127.0.0.1",
+        port=8765,
+        dev=True,
+        vite=True,
+        oauth2_user_pool=None,
+        oauth2_user_pool_client=None,
+        oauth2_user_pool_uid=None,
+        oauth2_user_pool_client_uid=None,
+        oauth2_redirect_uri=None,
+        oauth2_provider=None,
+        oauth2_provider_label=None,
+        auth_mode="frontend",
+        generated_agent_test_run_ttl=60,
+        open_browser=False,
+    )
+    monkeypatch.setattr("subprocess.Popen", _FakeProcess)
+
+    with TestClient(captured["app"]) as client:
+        run_response = client.post(
+            "/web/generated-agent-test-runs",
+            json={
+                "draft": {
+                    "name": "sidecar-agent",
+                    "instruction": "Answer briefly.",
+                    "harnessSidecar": {
+                        "componentOverrides": {"mcp_resilience": True},
+                    },
+                }
+            },
+        )
+
+    assert run_response.status_code == 409
+    assert run_response.json() == {
+        "detail": "当前 Studio 环境未安装 Harness Sidecar 调试运行时。"
+    }
+    assert _FakeProcess.created == []
+
+
 def test_generated_agent_debug_allows_large_skill_projects(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1435,7 +2394,11 @@ def test_studio_deploy_run_script_allows_generated_agent_debug() -> None:
     run_script = _studio_deploy_run_script("site-logo.png")
 
     assert "HOST=0.0.0.0" in run_script
-    assert "studio --provider volcengine --auth-mode frontend" in run_script
+    assert (
+        "veadk.cli.studio_start --provider volcengine --auth-mode frontend"
+        in run_script
+    )
+    assert "veadk.cli.cli studio" not in run_script
     assert '--site-logo "$ROOT_DIR/site-logo.png"' in run_script
     assert "--allow-remote-generated-agent-test-run" not in run_script
 

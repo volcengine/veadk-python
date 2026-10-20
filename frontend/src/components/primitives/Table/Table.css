@@ -1,0 +1,48 @@
+.studio-table-scroll { width: 100%; max-width: 100%; }
+.studio-table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; color: var(--studio-text-primary); font: 400 13px/20px var(--studio-font-family-ui, "Century Gothic", sans-serif); }
+.studio-table caption { padding: 0 0 8px; text-align: left; color: var(--studio-text-secondary); font-size: 14px; line-height: 22px; }
+.studio-table th, .studio-table td { height: 34px; padding: 7px 10px; border-bottom: .5px solid var(--studio-fill-subtle); vertical-align: middle; overflow-wrap: anywhere; }
+.studio-table th { color: var(--studio-text-tertiary); font-weight: 400; }
+.studio-table__header-content { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.studio-table__header-content[data-align="center"] { justify-content: center; }
+.studio-table__header-content[data-align="right"] { justify-content: flex-end; }
+.studio-table__header-title { min-width: 0; }
+.studio-table .studio-table__sort-button { color: inherit; }
+.studio-table .studio-table__sort-button[data-active] { color: var(--studio-text-primary); }
+.studio-table .studio-table__filter { flex: 0 0 96px; width: 96px; height: 28px; border-radius: 6px; font: inherit; color: var(--studio-text-primary); }
+.studio-table__filter .studio-select__display { padding: 3px 8px; }
+.studio-table tbody tr { transition: background-color 160ms ease-out; }
+@media (hover: hover) { .studio-table tbody tr:hover { background: var(--studio-fill-hover); } }
+.studio-table .studio-table__empty { height: 102px; text-align: center; color: var(--studio-text-tertiary); }
+.studio-table-status { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.studio-table-status svg { flex: none; }
+.studio-table-status[data-status="pass"] { color: #8cdbab; }
+.studio-table-status[data-status="fail"] { color: #ed9696; }
+[data-theme="light"] .studio-table-status[data-status="pass"] { color: var(--studio-success); }
+[data-theme="light"] .studio-table-status[data-status="fail"] { color: var(--studio-danger); }
+@media (prefers-reduced-motion: reduce) { .studio-table tbody tr { transition: none; } }
+.studio-table-scroll[data-orientation] > .studio-scroll-area__content { width: 100%; }
+
+.studio-table-container { width: 100%; min-width: 0; }
+.studio-table-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+.studio-table-toolbar__start { display: flex; align-items: center; flex: 1 1 220px; min-width: 0; gap: 8px; }
+.studio-table-toolbar__start:empty { flex-basis: 0; }
+.studio-table-toolbar__end { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; margin-left: auto; }
+.studio-table[data-sticky-header] thead th { position: sticky; top: 0; z-index: 2; background: var(--studio-bg-canvas); }
+.studio-table__cell-value { min-width: 0; }
+.studio-table__cell-value[data-overflow="wrap"] { white-space: normal; overflow-wrap: anywhere; }
+.studio-table__cell-value[data-overflow="ellipsis"] { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.studio-table-cell-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; white-space: normal; }
+.studio-table-cell-text__title { color: var(--studio-text-primary); font: inherit; overflow-wrap: anywhere; }
+.studio-table-cell-text__title[data-truncate] { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.studio-table-cell-text__description { color: var(--studio-text-secondary); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+.studio-table-cell-text__description[data-clamped] { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+
+.studio-table [data-fixed] { position: sticky; z-index: 1; background-color: var(--studio-bg-canvas); }
+.studio-table[data-sticky-header] thead [data-fixed] { z-index: 3; }
+.studio-table [data-fixed-boundary]::after { content: ""; position: absolute; top: 0; bottom: 0; width: .5px; background: var(--studio-border-subtle); pointer-events: none; }
+.studio-table [data-fixed-boundary="left"]::after { right: 0; }
+.studio-table [data-fixed-boundary="right"]::after { left: 0; }
+@media (hover: hover) {
+  .studio-table tbody tr:hover > [data-fixed] { background-image: linear-gradient(var(--studio-fill-hover), var(--studio-fill-hover)); }
+}

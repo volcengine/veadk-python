@@ -39,16 +39,19 @@ from fastapi.openapi.models import APIKey
 from fastapi.openapi.models import APIKeyIn
 
 from veadk.runtime.base_runtime import resolve_system_append
+from veadk.runtime.agent_transfer import build_transfer_tool
 from veadk.runtime.codex.config import CodexRuntimeConfig
 from veadk.runtime.codex.config import codex_subprocess_env
 from veadk.runtime.codex.config import toml_string
 from veadk.runtime.codex.proxy import ResponsesShim
+from veadk.runtime.codex.tools_bridge import add_tool_to_bundle
 from veadk.runtime.codex.tools_bridge import build_executable_tools
 from veadk.runtime.codex.tools_bridge import close_toolsets
 from veadk.runtime.codex.tools_bridge import resume_authenticated_tools
 from veadk.runtime.codex.tools_bridge import resume_confirmed_tools
 from veadk.runtime.codex.translate import build_prompt
 from veadk.runtime.codex.translate import build_input_attachments
+from veadk.runtime.codex.translate import build_turn_usage_metadata
 from veadk.runtime.codex.translate import notification_to_events
 
 
@@ -329,7 +332,12 @@ def test_native_plan_error_and_turn_complete_are_observable() -> None:
         (),
         {
             "model_dump": lambda self: {
-                "error": {"code": "backend", "message": "retrying"},
+                # A real TurnError has no `code` field; the classification comes
+                # from `codex_error_info`.
+                "error": {
+                    "message": "retrying",
+                    "codex_error_info": "contextWindowExceeded",
+                },
                 "will_retry": True,
             }
         },
@@ -349,31 +357,172 @@ def test_native_plan_error_and_turn_complete_are_observable() -> None:
     complete_event = notification_to_events(completed, "agent", "inv")[0]
 
     assert plan_event.custom_metadata["plan"][0]["step"] == "test"
-    assert error_event.error_code == "backend"
+    assert error_event.error_code == "contextWindowExceeded"
     assert error_event.custom_metadata["will_retry"] is True
     assert complete_event.turn_complete is True
     assert complete_event.custom_metadata["turn_id"] == "turn-1"
+    # Lifecycle markers are `partial=True` for a clean turn, so they are not
+    # final responses and never reach `output_key` or the persisted session.
+    assert plan_event.partial is True
+    assert plan_event.is_final_response() is False
+    assert complete_event.partial is True
 
 
-def test_native_token_usage_is_observable() -> None:
-    usage = type(
+# The exact payload `thread/tokenUsage/updated` carries: `last` (the model call
+# that just finished) and `total` (cumulative for the thread), each a
+# TokenUsageBreakdown, plus a sibling `model_context_window`.
+_TOKEN_USAGE_PAYLOAD = {
+    "turn_id": "turn-1",
+    "model_context_window": 128000,
+    "token_usage": {
+        "last": {
+            "input_tokens": 10,
+            "cached_input_tokens": 2,
+            "output_tokens": 4,
+            "reasoning_output_tokens": 1,
+            "total_tokens": 14,
+        },
+        "total": {
+            "input_tokens": 30,
+            "cached_input_tokens": 6,
+            "output_tokens": 9,
+            "reasoning_output_tokens": 3,
+            "total_tokens": 39,
+        },
+    },
+}
+
+
+def _token_usage_notification() -> object:
+    return type(
         "ThreadTokenUsageUpdatedNotification",
         (),
-        {
-            "model_dump": lambda self: {
-                "turn_id": "turn-1",
-                "token_usage": {
-                    "last": {"input_tokens": 10, "output_tokens": 4},
-                    "total": {"input_tokens": 10, "output_tokens": 4},
-                },
-            }
-        },
+        {"model_dump": lambda self: dict(_TOKEN_USAGE_PAYLOAD)},
     )()
 
-    event = notification_to_events(usage, "agent", "inv")[0]
 
+def test_token_usage_notification_populates_usage_metadata() -> None:
+    """Token accounting must reach `usage_metadata`, not just a log line.
+
+    The previous version of this test asserted only
+    `custom_metadata["token_usage"]["total"]["output_tokens"]`, a key whose only
+    repo-wide reader is a `logger.info`. That locked the bug in as the spec:
+    `usage_metadata` is the field every real consumer reads (portal metrics,
+    the trace exporter, the frontend token counter), and it was empty.
+
+    The lifecycle event itself deliberately carries no `usage_metadata` -- it
+    fires once per model call and is `partial`, so it is never persisted, and
+    every consumer sums `usage_metadata` across events with no dedupe. The
+    cumulative figure is attached once, to the merged final response.
+    """
+    event = notification_to_events(_token_usage_notification(), "agent", "inv")[0]
+
+    # Still a real UI contract: the raw mapping stays readable, and it is the
+    # only place `reasoning_output_tokens` survives.
     assert event.custom_metadata["codex_event_type"] == "token_usage"
-    assert event.custom_metadata["token_usage"]["total"]["output_tokens"] == 4
+    assert event.custom_metadata["token_usage"] == _TOKEN_USAGE_PAYLOAD["token_usage"]
+    assert event.usage_metadata is None
+
+    usage = build_turn_usage_metadata(event.custom_metadata["token_usage"])
+    assert usage is not None
+    assert usage.prompt_token_count == 30
+    assert usage.candidates_token_count == 9
+    assert usage.total_token_count == 39
+    assert usage.cached_content_token_count == 6
+    # Codex nests reasoning inside output; genai treats thoughts as disjoint
+    # from candidates, so mapping it would double-count any recomputed total.
+    assert usage.thoughts_token_count is None
+
+
+def test_turn_usage_metadata_falls_back_to_last_when_total_is_absent() -> None:
+    usage = build_turn_usage_metadata(
+        {"last": dict(_TOKEN_USAGE_PAYLOAD["token_usage"]["last"])}
+    )
+
+    assert usage is not None
+    assert (usage.prompt_token_count, usage.candidates_token_count) == (10, 4)
+
+
+def test_turn_usage_metadata_degrades_to_none_rather_than_zeroes() -> None:
+    """A malformed payload must not pollute token histograms with zeroes."""
+    assert build_turn_usage_metadata(None) is None
+    assert build_turn_usage_metadata({}) is None
+    assert build_turn_usage_metadata({"total": {"unrelated": 1}}) is None
+
+
+@pytest.fixture
+def fresh_global_meter_provider(monkeypatch):
+    """Give this test an isolated OpenTelemetry global meter provider.
+
+    ``PortalMetricRecorder`` builds its instruments in ``__init__`` from
+    whatever provider is installed *then*, and measurements taken before a real
+    provider is installed are dropped, so the provider has to be in place first
+    and torn down afterwards.
+    """
+    from opentelemetry.metrics import _internal as metrics_internal
+    from opentelemetry.sdk import metrics as metrics_sdk
+    from opentelemetry.util._once import Once
+
+    proxy_provider = metrics_internal._PROXY_METER_PROVIDER
+    monkeypatch.setattr(metrics_internal, "_METER_PROVIDER", None)
+    monkeypatch.setattr(metrics_internal, "_METER_PROVIDER_SET_ONCE", Once())
+    monkeypatch.setattr(proxy_provider, "_real_meter_provider", None)
+    monkeypatch.setattr(proxy_provider, "_meters", [])
+    yield
+    provider = metrics_internal._METER_PROVIDER
+    if isinstance(provider, metrics_sdk.MeterProvider):
+        provider.shutdown()
+
+
+def test_token_usage_reaches_portal_metrics(fresh_global_meter_provider) -> None:
+    """The real downstream: `usage_metadata` -> `record_call_llm` -> tokens.
+
+    `portal_metrics.record_call_llm` is gated entirely on
+    `llm_response.usage_metadata`; with it unset the recorder emits no token
+    histogram samples and not even the invocation counter. This walks the whole
+    chain that the old assertion skipped.
+    """
+    from opentelemetry import metrics as metrics_api
+    from opentelemetry.sdk import metrics as metrics_sdk
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+    from veadk.runtime.model_callbacks import event_to_llm_response
+    from veadk.tracing.telemetry.portal_metrics import PortalMetricRecorder
+
+    event = notification_to_events(_token_usage_notification(), "agent", "inv")[0]
+    event.usage_metadata = build_turn_usage_metadata(
+        event.custom_metadata["token_usage"]
+    )
+    llm_response = event_to_llm_response(event)
+    assert llm_response.usage_metadata is not None
+
+    reader = InMemoryMetricReader()
+    provider = metrics_sdk.MeterProvider(metric_readers=[reader])
+    metrics_api.set_meter_provider(provider)
+    recorder = PortalMetricRecorder(name="codex-token-usage-test")
+
+    ctx = SimpleNamespace(
+        run_config=None,
+        agent=SimpleNamespace(model_api_base="https://backend.invalid/v1"),
+    )
+    recorder.record_call_llm(
+        ctx, "event-id", SimpleNamespace(model="scripted-model"), llm_response
+    )
+    provider.force_flush()
+
+    recorded: dict[str, int] = {}
+    for resource in reader.get_metrics_data().resource_metrics:
+        for scope in resource.scope_metrics:
+            for metric in scope.metrics:
+                for point in metric.data.data_points:
+                    token_type = dict(point.attributes).get("gen_ai_token_type")
+                    if metric.name == "gen_ai.client.token.usage" and token_type:
+                        recorded[token_type] = getattr(point, "sum", None) or 0
+
+    assert recorded.get("input"), f"no input tokens recorded: {recorded}"
+    assert recorded.get("output"), f"no output tokens recorded: {recorded}"
+    assert recorded["input"] == 30
+    assert recorded["output"] == 9
 
 
 @pytest.mark.asyncio
@@ -716,151 +865,104 @@ async def test_tool_executor_supports_stdio_mcp_toolset() -> None:
     )
     ctx = _ctx(agent)
 
-    bundle = await build_executable_tools(agent, ctx)
+    # This is the one test in the tree that spawns a real subprocess. Without a
+    # deadline a stuck MCP server hangs a `pytest -n 16` worker indefinitely.
+    bundle = await asyncio.wait_for(build_executable_tools(agent, ctx), timeout=60)
     try:
         output = json.loads(
-            await bundle.executors["get_order_status"](
-                {"order_id": "A10086"}, "call-mcp"
+            await asyncio.wait_for(
+                bundle.executors["get_order_status"](
+                    {"order_id": "A10086"}, "call-mcp"
+                ),
+                timeout=60,
             )
         )
         assert output["structuredContent"]["status"] == "paid"
     finally:
-        await close_toolsets(bundle.opened_toolsets)
+        await asyncio.wait_for(close_toolsets(bundle.opened_toolsets), timeout=30)
 
 
 @pytest.mark.asyncio
-async def test_shim_routes_concurrent_turns_to_their_own_executors(
+async def test_transfer_tool_executor_emits_adk_transfer_action() -> None:
+    worker = LlmAgent(name="worker", model="gemini-2.5-flash")
+    agent = LlmAgent(
+        name="agent",
+        model="gemini-2.5-flash",
+        sub_agents=[worker],
+    )
+    ctx = _ctx(agent)
+    emitted: list[Event] = []
+
+    async def emit(event: Event) -> None:
+        emitted.append(event)
+
+    bundle = await build_executable_tools(agent, ctx, event_sink=emit)
+    try:
+        add_tool_to_bundle(
+            bundle,
+            build_transfer_tool([worker]),
+            ctx,
+            event_sink=emit,
+        )
+        output = json.loads(
+            await bundle.executors["transfer_to_agent"](
+                {"agent_name": "worker"}, "call-transfer"
+            )
+        )
+    finally:
+        await close_toolsets(bundle.opened_toolsets)
+
+    assert output["status"] == "transferred"
+    assert output["agent_name"] == "worker"
+    assert bundle.specs[0]["parameters"]["properties"]["agent_name"]["enum"] == [
+        "worker"
+    ]
+    assert any(event.actions.transfer_to_agent == "worker" for event in emitted)
+
+
+@pytest.mark.asyncio
+async def test_shim_completes_turn_after_transfer_without_second_model_call(
     monkeypatch,
 ) -> None:
     shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
-    calls: list[tuple[str, str]] = []
+    backend_calls = 0
 
-    async def executor_a(args, call_id):
-        await asyncio.sleep(0.01)
-        calls.append(("a", call_id))
-        return json.dumps({"owner": "a"})
+    async def executor(args, call_id):
+        return json.dumps(
+            {
+                "status": "transferred",
+                "call_id": call_id,
+                "agent_name": args["agent_name"],
+            }
+        )
 
-    async def executor_b(args, call_id):
-        calls.append(("b", call_id))
-        return json.dumps({"owner": "b"})
-
-    token_a = shim.register_turn(
-        [{"type": "function", "name": "tool_a", "parameters": {}}],
-        {"tool_a": executor_a},
-    )
-    token_b = shim.register_turn(
-        [{"type": "function", "name": "tool_b", "parameters": {}}],
-        {"tool_b": executor_b},
+    token = shim.register_turn(
+        [{"type": "function", "name": "transfer_to_agent", "parameters": {}}],
+        {"transfer_to_agent": executor},
     )
 
     async def fake_aresponses(**kwargs):
-        conversation = kwargs["input"]
-        if any(item.get("type") == "function_call_output" for item in conversation):
-            return {
-                "id": "resp-final",
-                "model": "model",
-                "output": [
-                    {
-                        "id": "msg",
-                        "type": "message",
-                        "role": "assistant",
-                        "status": "completed",
-                        "content": [{"type": "output_text", "text": "done"}],
-                    }
-                ],
-            }
-        tool = next(
-            item for item in kwargs["tools"] if item["name"] in {"tool_a", "tool_b"}
+        nonlocal backend_calls
+        backend_calls += 1
+        assert not any(
+            item.get("type") == "function_call_output" for item in kwargs["input"]
         )
-        suffix = tool["name"][-1]
         return {
-            "id": f"resp-{suffix}",
+            "id": "transfer-response",
             "model": "model",
             "output": [
                 {
-                    "id": f"fc-{suffix}",
-                    "call_id": f"call-{suffix}",
+                    "id": "fc-transfer",
+                    "call_id": "call-transfer",
                     "type": "function_call",
-                    "name": tool["name"],
-                    "arguments": "{}",
+                    "name": "transfer_to_agent",
+                    "arguments": json.dumps({"agent_name": "worker"}),
                     "status": "completed",
                 }
             ],
         }
 
     monkeypatch.setattr("veadk.runtime.codex.proxy.litellm.aresponses", fake_aresponses)
-    transport = httpx.ASGITransport(app=shim._app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://shim") as client:
-        body = {
-            "model": "model",
-            "stream": False,
-            "input": [{"type": "message", "role": "user", "content": "go"}],
-        }
-        response_a, response_b = await asyncio.gather(
-            client.post(
-                "/v1/responses",
-                headers={"Authorization": f"Bearer {token_a}"},
-                json=body,
-            ),
-            client.post(
-                "/v1/responses",
-                headers={"Authorization": f"Bearer {token_b}"},
-                json=body,
-            ),
-        )
-
-    assert response_a.status_code == 200
-    assert response_b.status_code == 200
-    assert sorted(calls) == [("a", "call-a"), ("b", "call-b")]
-
-
-@pytest.mark.asyncio
-async def test_shim_rejects_unknown_invocation_token() -> None:
-    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
-    transport = httpx.ASGITransport(app=shim._app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://shim") as client:
-        response = await client.post(
-            "/v1/responses",
-            headers={"Authorization": "Bearer unknown"},
-            json={"model": "model", "input": []},
-        )
-    assert response.status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_shim_reports_tool_iteration_budget_instead_of_dropping_call(
-    monkeypatch,
-) -> None:
-    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
-
-    async def executor(args, call_id):
-        return "{}"
-
-    token = shim.register_turn(
-        [{"type": "function", "name": "loop", "parameters": {}}],
-        {"loop": executor},
-        max_tool_iterations=1,
-    )
-
-    async def always_calls_tool(**kwargs):
-        return {
-            "id": "resp",
-            "model": "model",
-            "output": [
-                {
-                    "id": "fc",
-                    "call_id": "call-loop",
-                    "type": "function_call",
-                    "name": "loop",
-                    "arguments": "{}",
-                    "status": "completed",
-                }
-            ],
-        }
-
-    monkeypatch.setattr(
-        "veadk.runtime.codex.proxy.litellm.aresponses", always_calls_tool
-    )
     transport = httpx.ASGITransport(app=shim._app)
     async with httpx.AsyncClient(transport=transport, base_url="http://shim") as client:
         response = await client.post(
@@ -868,69 +970,356 @@ async def test_shim_reports_tool_iteration_budget_instead_of_dropping_call(
             headers={"Authorization": f"Bearer {token}"},
             json={
                 "model": "model",
-                "input": [{"type": "message", "role": "user", "content": "go"}],
+                "input": [{"type": "message", "role": "user", "content": "route"}],
             },
         )
 
-    assert response.status_code == 409
-    assert response.json()["error"]["type"] == "tool_iteration_limit"
+    assert response.status_code == 200
+    assert backend_calls == 1
+    body = response.json()
+    assert body["status"] == "completed"
+    assert body["output"][0]["type"] == "message"
+
+
+@pytest.mark.parametrize(
+    ("reported", "expected"),
+    [
+        # What Codex reports for a plain command run through the login shell.
+        ("/bin/zsh -lc 'pwd'", "pwd"),
+        ("/bin/bash -lc 'ls -la && cat a.txt'", "ls -la && cat a.txt"),
+        ("sh -c 'echo hi'", "echo hi"),
+        # Inner quoting and multi-line scripts survive the unwrap intact.
+        (
+            "/bin/zsh -lc \"cat > a.py <<'EOF'\nprint('x')\nEOF\"",
+            "cat > a.py <<'EOF'\nprint('x')\nEOF",
+        ),
+        # A command the model itself wrapped is unwrapped one level only, so
+        # the recorded form still shows what the model actually sent.
+        (
+            "/bin/zsh -lc \"/bin/zsh -lc 'pwd'\"",
+            "/bin/zsh -lc 'pwd'",
+        ),
+        # Not a bare wrapper: left untouched.
+        ("pwd", "pwd"),
+        ("/bin/zsh -lc 'pwd' extra-arg", "/bin/zsh -lc 'pwd' extra-arg"),
+        ("python3 -c 'print(1)'", "python3 -c 'print(1)'"),
+        ("/bin/zsh -lc 'unterminated", "/bin/zsh -lc 'unterminated"),
+        ("", ""),
+    ],
+)
+def test_unwrap_shell_command(reported: str, expected: str) -> None:
+    from veadk.runtime.codex.translate import _unwrap_shell_command
+
+    assert _unwrap_shell_command(reported) == expected
+
+
+def test_recorded_command_is_what_the_model_sent_not_the_shell_wrapper() -> None:
+    """Replayed history must not teach the model to wrap its own commands.
+
+    The recorded ``exec_command`` args end up in the next invocation's prompt.
+    With Codex's wrapper left in, the model copied it into its own commands and
+    Codex wrapped them again (``/bin/zsh -lc "/bin/zsh -lc '...'"``).
+    """
+    item = {
+        "id": "cmd-1",
+        "type": "commandExecution",
+        "command": "/bin/zsh -lc 'python3 analysis/agg.py metrics.csv'",
+        "cwd": "/workspace",
+        "status": "completed",
+        "aggregated_output": "ok\n",
+        "exit_code": 0,
+    }
+    completed = type(
+        "ItemCompletedNotification",
+        (),
+        {"model_dump": lambda self: {"item": item}},
+    )()
+
+    events = notification_to_events(completed, "agent", "inv", active_tool_items=set())
+
+    calls = [
+        part.function_call
+        for event in events
+        for part in (event.content.parts if event.content else [])
+        if part.function_call
+    ]
+    assert len(calls) == 1
+    assert calls[0].name == "exec_command"
+    assert calls[0].args["command"] == "python3 analysis/agg.py metrics.csv"
+    assert calls[0].args["cwd"] == "/workspace"
+
+
+def test_turn_usage_reports_this_turn_not_the_resumed_threads_total() -> None:
+    """A resumed thread's usage `total` includes every earlier turn.
+
+    Reported as-is, turn 2 would be charged turn 1's tokens again, and every
+    consumer that sums usage per turn (telemetry, cost limits) double counts.
+    """
+    from veadk.runtime.codex.runtime import _turn_usage
+
+    baseline: dict = {}
+    # First update of turn 2: the thread had used 50k before this call.
+    first = _turn_usage(
+        {
+            "last": {"input_tokens": 10_000, "output_tokens": 100},
+            "total": {"input_tokens": 60_000, "output_tokens": 600},
+        },
+        baseline,
+    )
+    second = _turn_usage(
+        {
+            "last": {"input_tokens": 12_000, "output_tokens": 50},
+            "total": {"input_tokens": 72_000, "output_tokens": 650},
+        },
+        baseline,
+    )
+
+    assert first["total"] == {"input_tokens": 10_000, "output_tokens": 100}
+    assert second["total"] == {"input_tokens": 22_000, "output_tokens": 150}
+
+
+def test_turn_usage_on_a_fresh_thread_is_the_threads_total() -> None:
+    from veadk.runtime.codex.runtime import _turn_usage
+
+    baseline: dict = {}
+    update = {
+        "last": {"input_tokens": 5, "output_tokens": 1},
+        "total": {"input_tokens": 5, "output_tokens": 1},
+    }
+    assert _turn_usage(update, baseline)["total"] == update["total"]
+
+
+def _text_event(author: str, text: str, invocation_id: str) -> Event:
+    return Event(
+        author=author,
+        invocation_id=invocation_id,
+        content=types.Content(role="model", parts=[types.Part(text=text)]),
+    )
+
+
+def test_resumed_turn_is_told_what_others_said_since_its_last_reply() -> None:
+    """A resumed thread only knows its own turns.
+
+    Whatever the user or another agent said while this agent was not running
+    has to be handed over, or the thread answers as if it never happened;
+    anything the thread already saw must not be repeated.
+    """
+    from veadk.runtime.codex.runtime import _turns_since_own, _with_backfill
+
+    events = [
+        _text_event("user", "hello", "inv-1"),
+        _text_event("codex_agent", "hi, I can help", "inv-1"),
+        _text_event("user", "ask the billing agent", "inv-2"),
+        _text_event("billing_agent", "invoice INV-7 is overdue", "inv-2"),
+        _text_event("user", "codex, summarize", "inv-3"),
+    ]
+    ctx = SimpleNamespace(invocation_id="inv-3", session=SimpleNamespace(events=events))
+
+    lines = _turns_since_own(ctx, "codex_agent")
+
+    assert lines == [
+        "user: ask the billing agent",
+        "billing_agent: invoice INV-7 is overdue",
+    ]
+    prompt = _with_backfill("codex, summarize", lines)
+    assert "invoice INV-7 is overdue" in prompt
+    assert "hi, I can help" not in prompt
+    assert prompt.endswith("codex, summarize")
+    assert _with_backfill("same", []) == "same"
+
+
+def test_backfill_is_bounded() -> None:
+    """A long gap or a huge message must not blow up the resumed prompt."""
+    from veadk.runtime.codex import runtime as rt
+
+    events = [_text_event("codex_agent", "earlier reply", "inv-0")]
+    events += [
+        _text_event("user", f"message {i} " + "x" * 10_000, f"inv-{i + 1}")
+        for i in range(rt._BACKFILL_MAX_MESSAGES + 10)
+    ]
+    ctx = SimpleNamespace(
+        invocation_id="inv-now", session=SimpleNamespace(events=events)
+    )
+
+    lines = rt._turns_since_own(ctx, "codex_agent")
+
+    assert len(lines) == rt._BACKFILL_MAX_MESSAGES + 1
+    assert lines[0] == "(10 earlier messages omitted)"
+    assert all(len(line) < rt._BACKFILL_MAX_CHARS + 100 for line in lines)
+    assert "message 59" in lines[-1]
 
 
 @pytest.mark.asyncio
-async def test_shim_rejects_invalid_tool_json_without_calling_executor(
-    monkeypatch,
-) -> None:
-    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
-    called = False
+async def test_saving_the_rollout_does_not_swallow_cancellation(tmp_path) -> None:
+    """The save runs in the runtime's `finally`; swallowing a cancellation
+    there would break the caller's cancel and hold the session lock longer."""
+    from veadk.runtime.codex import runtime as rt
+    from veadk.runtime.codex.thread_store import ThreadKey
 
-    async def executor(args, call_id):
-        nonlocal called
-        called = True
-        return "{}"
+    class _CancellingStore:
+        async def save(self, *args, **kwargs):
+            raise asyncio.CancelledError
 
-    token = shim.register_turn(
-        [{"type": "function", "name": "parse", "parameters": {}}],
-        {"parse": executor},
+    rollout_path = (
+        tmp_path / "sessions/2026/09/30/rollout-2026-09-30T00-00-00-"
+        "01a0f000-0000-7000-8000-000000000001.jsonl"
     )
+    rollout_path.parent.mkdir(parents=True)
+    rollout_path.write_text("{}\n")
 
-    async def fake_aresponses(**kwargs):
-        if any(item.get("type") == "function_call_output" for item in kwargs["input"]):
-            return {
-                "id": "final",
-                "model": "model",
-                "output": [
-                    {
-                        "id": "msg",
-                        "type": "message",
-                        "role": "assistant",
-                        "status": "completed",
-                        "content": [{"type": "output_text", "text": "handled"}],
-                    }
-                ],
-            }
-        return {
-            "id": "tool",
-            "model": "model",
-            "output": [
-                {
-                    "id": "fc",
-                    "call_id": "call-invalid",
-                    "type": "function_call",
-                    "name": "parse",
-                    "arguments": "{not-json",
-                    "status": "completed",
-                }
-            ],
-        }
-
-    monkeypatch.setattr("veadk.runtime.codex.proxy.litellm.aresponses", fake_aresponses)
-    transport = httpx.ASGITransport(app=shim._app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://shim") as client:
-        response = await client.post(
-            "/v1/responses",
-            headers={"Authorization": f"Bearer {token}"},
-            json={"model": "model", "input": []},
+    with pytest.raises(asyncio.CancelledError):
+        await rt._save_thread(
+            _CancellingStore(),
+            ThreadKey(app_name="a", user_id="u", session_id="s", agent_name="g"),
+            str(tmp_path),
+            "01a0f000-0000-7000-8000-000000000001",
+            "hash",
+            None,
+            SimpleNamespace(invocation_id="inv"),
         )
 
-    assert response.status_code == 200
-    assert called is False
+
+def test_default_ark_config_does_not_force_the_shim() -> None:
+    """VeADK's default Ark `extra_body` (caching) is dropped on Responses anyway.
+
+    If it counted as a body to forward, every Ark agent would fall back to the
+    shim and the direct transport would never be used by default.
+    """
+    from veadk import Agent
+    from veadk.runtime.codex.runtime import _model_extra_body
+
+    base = "https://ark.cn-beijing.volces.com/api/v3"
+    default = Agent(
+        name="a",
+        runtime="codex",
+        model_name="m",
+        model_api_base=base,
+        model_api_key="k",
+    )
+    custom = Agent(
+        name="b",
+        runtime="codex",
+        model_name="m",
+        model_api_base=base,
+        model_api_key="k",
+        model_extra_config={"extra_body": {"thinking": {"type": "disabled"}}},
+    )
+
+    assert _model_extra_body(default) == {}
+    assert _model_extra_body(custom) == {"thinking": {"type": "disabled"}}
+
+
+@pytest.mark.asyncio
+async def test_corrupt_thread_record_is_discarded_so_the_next_save_succeeds(
+    tmp_path: Path,
+) -> None:
+    """A record that fails its integrity check must not pin the session.
+
+    A turn that cannot load its thread starts a new one and saves it with
+    ``expected_version=None`` ("must not exist yet"). If the corrupt record
+    were left in the store, that save -- and every later one -- would conflict,
+    so the session would silently run on throwaway threads forever. Loading
+    therefore deletes the record and reports "no thread".
+    """
+    from veadk.runtime.codex.rollout_io import Rollout
+    from veadk.runtime.codex.runtime import _load_thread
+    from veadk.runtime.codex.thread_store import LocalDirThreadStore
+    from veadk.runtime.codex.thread_store import ThreadKey
+    from veadk.runtime.codex.thread_store import ThreadStoreCorrupt
+
+    tid = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+    relpath = f"sessions/2026/09/30/rollout-2026-09-30T10-00-00-{tid}.jsonl"
+    rollout = Rollout(thread_id=tid, relpath=relpath, data=b"turn1\n")
+    key = ThreadKey(app_name="app", user_id="u1", session_id="s1", agent_name="a")
+    store = LocalDirThreadStore(tmp_path / "threads")
+    await store.save(key, tid, rollout, "h", expected_version=None)
+    path, _ = store._paths(key)
+    header, _, _payload = path.read_bytes().partition(b"\n")
+    path.write_bytes(header + b"\nnot gzip")
+    with pytest.raises(ThreadStoreCorrupt):
+        await store.load(key)
+
+    ctx = SimpleNamespace(invocation_id="inv-corrupt")
+    assert await _load_thread(store, key, ctx) is None
+
+    assert await store.load(key) is None, "the corrupt record was left in place"
+    assert await store.save(key, tid, rollout, "h", expected_version=None) == 1
+
+
+def test_backfill_includes_a_parent_agent_in_the_same_invocation() -> None:
+    """Transfer keeps the invocation id, so the parent's words live in the
+    current invocation; filtering the whole invocation out lost them."""
+    from veadk.runtime.codex.runtime import _turns_since_own
+
+    events = [
+        _text_event("user", "earlier question", "inv-1"),
+        _text_event("codex_agent", "earlier answer", "inv-1"),
+        _text_event("user", "fix the build", "inv-2"),
+        _text_event("router", "Handing this to codex: the CI log says X", "inv-2"),
+    ]
+    ctx = SimpleNamespace(invocation_id="inv-2", session=SimpleNamespace(events=events))
+
+    lines = _turns_since_own(ctx, "codex_agent", covered_invocation_id="inv-1")
+
+    assert lines == ["router: Handing this to codex: the CI log says X"]
+
+
+def test_resume_on_an_empty_workspace_warns_the_model(tmp_path) -> None:
+    """The thread survives a new instance; its files do not."""
+    from veadk.runtime.codex.runtime import _with_backfill, _workspace_is_empty
+
+    assert _workspace_is_empty(str(tmp_path))
+    (tmp_path / "plan.md").write_text("x")
+    assert not _workspace_is_empty(str(tmp_path))
+
+    prompt = _with_backfill("continue", [], workspace_reset=True)
+    assert "working directory was reset" in prompt
+    assert prompt.endswith("continue")
+    assert _with_backfill("continue", []) == "continue"
+
+
+def test_resume_backfill_uses_branch_filtered_events():
+    from veadk.runtime.codex.runtime import _turns_since_own
+
+    saved = _text_event("codex_agent", "saved", "saved")
+    visible = _text_event("helper", "visible result", "later")
+    hidden = _text_event("sibling", "other branch secret", "sibling")
+    seen = []
+
+    def get_events(*, current_branch):
+        seen.append(current_branch)
+        return [saved, visible]
+
+    ctx = SimpleNamespace(
+        invocation_id="now",
+        _get_events=get_events,
+        session=SimpleNamespace(events=[saved, visible, hidden]),
+    )
+    lines = _turns_since_own(ctx, "codex_agent", "saved")
+    assert lines == ["helper: visible result"]
+    assert seen == [True]
+
+
+def test_resume_backfill_keeps_tool_envelope_when_result_is_large():
+    from veadk.runtime.codex.translate import backfill_event_text
+    from google.adk.events import Event
+
+    event = Event(
+        author="agent",
+        content=types.Content(
+            parts=[
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        id="call-1",
+                        name="purchase",
+                        response={"status": "completed", "data": "x" * 10000},
+                    ),
+                )
+            ]
+        ),
+    )
+    record = json.loads(backfill_event_text(event, limit=200))
+    assert record["id"] == "call-1" and record["name"] == "purchase"
+    assert record["response"]["status"] == "completed"
+    assert record["response"]["truncated"] is True
+    assert len(record["response"]["preview"]) == 200

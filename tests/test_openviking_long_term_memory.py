@@ -49,52 +49,64 @@ def _install_fake_openviking_sdk(
         def close(self):
             pass
 
-        def create_session(self, *, session_id=None, **kwargs):
+        def create_session(self, session_id=None, options=None):
             calls.append(
                 {
                     "method": "create_session",
                     "actor_peer_id": self.kwargs.get("actor_peer_id"),
                     "payload": {
                         "session_id": session_id,
-                        **kwargs,
+                        "options": options,
                     },
                 }
             )
             return responses.get("create_session", {})
 
         def add_message(
-            self, session_id, *, role, content=None, peer_id=None, **kwargs
+            self,
+            session_id,
+            role,
+            content=None,
+            parts=None,
+            options=None,
+            peer_id=None,
         ):
+            payload = {
+                "session_id": session_id,
+                "role": role,
+                "content": content,
+                "peer_id": peer_id,
+            }
+            if parts is not None:
+                payload["parts"] = parts
+            if options is not None:
+                payload["options"] = options
             calls.append(
                 {
                     "method": "add_message",
                     "actor_peer_id": self.kwargs.get("actor_peer_id"),
-                    "payload": {
-                        "session_id": session_id,
-                        "role": role,
-                        "content": content,
-                        "peer_id": peer_id,
-                        **kwargs,
-                    },
+                    "payload": payload,
                 }
             )
             return responses.get("add_message", {})
 
-        def commit_session(self, *, session_id, keep_recent_count=0, **kwargs):
+        def commit_session(self, session_id, keep_recent_count=0, options=None):
+            payload = {
+                "session_id": session_id,
+                "keep_recent_count": keep_recent_count,
+            }
+            if options is not None:
+                payload["options"] = options
             calls.append(
                 {
                     "method": "commit_session",
                     "actor_peer_id": self.kwargs.get("actor_peer_id"),
-                    "payload": {
-                        "session_id": session_id,
-                        "keep_recent_count": keep_recent_count,
-                        **kwargs,
-                    },
+                    "payload": payload,
                 }
             )
             return responses.get("commit_session", {})
 
-        def find(self, *, query, target_uri="", limit=10, context_type=None, **kwargs):
+        def find(self, query="", target_uri="", limit=10, image=None, options=None):
             calls.append(
                 {
                     "method": "find",
@@ -102,9 +114,9 @@ def _install_fake_openviking_sdk(
                     "payload": {
                         "query": query,
                         "target_uri": target_uri,
-                        "context_type": context_type,
                         "limit": limit,
-                        **kwargs,
+                        "image": image,
+                        "options": options,
                     },
                 }
             )
@@ -149,51 +161,63 @@ def _install_loop_sensitive_openviking_sdk(
         def close(self):
             self._record("close")
 
-        def create_session(self, *, session_id=None, **kwargs):
+        def create_session(self, session_id=None, options=None):
             self._record(
                 "create_session",
                 {
                     "session_id": session_id,
-                    **kwargs,
+                    "options": options,
                 },
             )
             return responses.get("create_session", {})
 
         def add_message(
-            self, session_id, *, role, content=None, peer_id=None, **kwargs
+            self,
+            session_id,
+            role,
+            content=None,
+            parts=None,
+            options=None,
+            peer_id=None,
         ):
+            payload = {
+                "session_id": session_id,
+                "role": role,
+                "content": content,
+                "peer_id": peer_id,
+            }
+            if parts is not None:
+                payload["parts"] = parts
+            if options is not None:
+                payload["options"] = options
             self._record(
                 "add_message",
-                {
-                    "session_id": session_id,
-                    "role": role,
-                    "content": content,
-                    "peer_id": peer_id,
-                    **kwargs,
-                },
+                payload,
             )
             return responses.get("add_message", {})
 
-        def commit_session(self, *, session_id, keep_recent_count=0, **kwargs):
+        def commit_session(self, session_id, keep_recent_count=0, options=None):
+            payload = {
+                "session_id": session_id,
+                "keep_recent_count": keep_recent_count,
+            }
+            if options is not None:
+                payload["options"] = options
             self._record(
                 "commit_session",
-                {
-                    "session_id": session_id,
-                    "keep_recent_count": keep_recent_count,
-                    **kwargs,
-                },
+                payload,
             )
             return responses.get("commit_session", {})
 
-        def find(self, *, query, target_uri="", limit=10, context_type=None, **kwargs):
+        def find(self, query="", target_uri="", limit=10, image=None, options=None):
             self._record(
                 "find",
                 {
                     "query": query,
                     "target_uri": target_uri,
-                    "context_type": context_type,
                     "limit": limit,
-                    **kwargs,
+                    "image": image,
+                    "options": options,
                 },
             )
             return responses.get("find", {})
@@ -241,7 +265,7 @@ def test_openviking_backend_writes_peer_messages_and_commits(monkeypatch):
     assert calls[0] == {
         "method": "create_session",
         "actor_peer_id": None,
-        "payload": {"session_id": openviking_session_id},
+        "payload": {"session_id": openviking_session_id, "options": None},
     }
     assert calls[1] == {
         "method": "add_message",
@@ -277,7 +301,7 @@ def test_openviking_backend_sdk_create_payload(monkeypatch):
         {
             "method": "create_session",
             "actor_peer_id": None,
-            "payload": {"session_id": "sa1"},
+            "payload": {"session_id": "sa1", "options": None},
         }
     ]
 
@@ -300,7 +324,8 @@ def test_openviking_backend_uses_configured_memory_policy(monkeypatch):
 
     backend._create_session(client=client, session_id="sa1")
 
-    assert calls[0]["payload"]["memory_policy"] == memory_policy
+    assert calls[0]["payload"]["options"]["memory_policy"] == memory_policy
+    assert "memory_policy" not in calls[0]["payload"]
 
 
 def test_openviking_backend_reads_memory_policy_from_env(monkeypatch):
@@ -324,7 +349,8 @@ def test_openviking_backend_reads_memory_policy_from_env(monkeypatch):
 
     backend._create_session(client=client, session_id="sa1")
 
-    assert calls[0]["payload"]["memory_policy"] == memory_policy
+    assert calls[0]["payload"]["options"]["memory_policy"] == memory_policy
+    assert "memory_policy" not in calls[0]["payload"]
 
 
 def test_openviking_backend_sdk_message_payload(monkeypatch):
@@ -391,10 +417,12 @@ def test_openviking_backend_search_uses_find_with_actor_peer(monkeypatch):
         "payload": {
             "query": "用户偏好",
             "target_uri": "viking://user/agent_scene/peers/alice/memories",
-            "context_type": "memory",
             "limit": 3,
+            "image": None,
+            "options": {"context_type": "memory"},
         },
     }
+    assert "context_type" not in calls[0]["payload"]
 
 
 def test_openviking_backend_search_falls_back_to_find_without_session(monkeypatch):
@@ -426,8 +454,9 @@ def test_openviking_backend_search_falls_back_to_find_without_session(monkeypatc
             "payload": {
                 "query": "用户偏好",
                 "target_uri": "viking://user/default/peers/alice/memories",
-                "context_type": "memory",
                 "limit": 3,
+                "image": None,
+                "options": {"context_type": "memory"},
             },
         }
     ]
@@ -510,8 +539,9 @@ def test_openviking_backend_sdk_find_payload(monkeypatch):
             "payload": {
                 "query": "我的专属暗号和回答风格偏好是什么？",
                 "target_uri": "viking://user/default/peers/a1/memories",
-                "context_type": "memory",
                 "limit": 10,
+                "image": None,
+                "options": {"context_type": "memory"},
             },
         }
     ]
@@ -729,8 +759,9 @@ async def test_long_term_memory_openviking_search_runs_sdk_off_event_loop_thread
     assert calls[1]["payload"] == {
         "query": "用户偏好",
         "target_uri": "viking://user/agent_scene/peers/alice/memories",
-        "context_type": "memory",
         "limit": 2,
+        "image": None,
+        "options": {"context_type": "memory"},
     }
 
 

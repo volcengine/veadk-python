@@ -32,19 +32,15 @@ export const VOLCENGINE_DEFAULT_IMAGE_EDIT_MODEL_NAME =
 export const BYTEPLUS_DEFAULT_VIDEO_MODEL_NAME = "dreamina-seedance-2-0-260128";
 export const VOLCENGINE_DEFAULT_VIDEO_MODEL_NAME = "doubao-seedance-2-0-260128";
 
-const VOLCENGINE_REGIONS: CloudRegionOption[] = [
-  { value: "cn-beijing", label: "华北 2（北京）" },
-  { value: "cn-shanghai", label: "华东 2（上海）" },
-];
-
-const BYTEPLUS_REGIONS: CloudRegionOption[] = [
-  { value: BYTEPLUS_DEFAULT_REGION, label: BYTEPLUS_DEFAULT_REGION },
-];
-
 export function cloudRegionOptions(
   provider: CloudProvider,
 ): CloudRegionOption[] {
-  return provider === "byteplus" ? BYTEPLUS_REGIONS : VOLCENGINE_REGIONS;
+  return provider === "byteplus"
+    ? [{ value: BYTEPLUS_DEFAULT_REGION, label: BYTEPLUS_DEFAULT_REGION }]
+    : [
+        { value: "cn-beijing", label: adkT("cloudRegion.cnBeijing") },
+        { value: "cn-shanghai", label: adkT("cloudRegion.cnShanghai") },
+      ];
 }
 
 export function defaultCloudRegion(provider: CloudProvider): CloudRegion {
@@ -67,7 +63,7 @@ export function formatCloudRegion(
 ): string {
   const options = provider
     ? cloudRegionOptions(provider)
-    : [...VOLCENGINE_REGIONS, ...BYTEPLUS_REGIONS];
+    : [...cloudRegionOptions("volcengine"), ...cloudRegionOptions("byteplus")];
   return (
     options.find((option) => option.value === region)?.label || region || "-"
   );
@@ -120,3 +116,4 @@ export function defaultVideoModelName(provider: CloudProvider): string {
     ? BYTEPLUS_DEFAULT_VIDEO_MODEL_NAME
     : VOLCENGINE_DEFAULT_VIDEO_MODEL_NAME;
 }
+import { adkT } from "./i18n";

@@ -20,9 +20,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-import filetype
-import httpx
-
 DEFAULT_SITE_TITLE = "AgentKit Studio"
 MAX_SITE_TITLE_LENGTH = 16
 MAX_SITE_LOGO_BYTES = 5 * 1024 * 1024
@@ -81,6 +78,8 @@ def resolve_site_logo(source: str | None) -> SiteLogo | None:
 
 
 def _download_logo(url: str) -> bytes:
+    import httpx
+
     content = bytearray()
     try:
         with httpx.stream("GET", url, follow_redirects=True, timeout=10.0) as response:
@@ -95,6 +94,8 @@ def _download_logo(url: str) -> bytes:
 
 
 def _validate_logo(content: bytes) -> SiteLogo:
+    import filetype
+
     kind = filetype.guess(content)
     if kind is None or kind.mime not in _SUPPORTED_IMAGE_TYPES:
         raise ValueError("Site logo must be PNG, JPEG, GIF, WebP, AVIF, or ICO.")

@@ -20,21 +20,28 @@ import re
 from datetime import datetime
 from pathlib import PurePosixPath
 
+from frontend.server.source_project_limits import (
+    SOURCE_PROJECT_MAX_BYTES,
+    SOURCE_PROJECT_MAX_FILES,
+)
+
 from .models import (
     MIGRATION_FRAMEWORKS,
     STRUCTURED_MIGRATION_FRAMEWORKS,
+    is_valid_model_id,
     is_valid_structured_entry,
 )
+from .evaluation.dimensions import EVALUATION_DIMENSION_IDS, STANDARD_DIMENSION_IDS
 
 _MAX_PATH_BYTES = 4 * 1024
 _MAX_PATH_DEPTH = 64
 _MAX_TEXT_LENGTH = 20_000
-_MAX_DELIVERY_FILES = 20_000
-_MAX_DELIVERY_BYTES = 512 * 1024 * 1024
-_MAX_DELIVERY_FILE_BYTES = 128 * 1024 * 1024
-_MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
-_MAX_SOURCE_BYTES = 50 * 1024 * 1024
-_MAX_SOURCE_EXPANDED_BYTES = 1024 * 1024 * 1024
+_MAX_DELIVERY_FILES = SOURCE_PROJECT_MAX_FILES
+_MAX_DELIVERY_BYTES = SOURCE_PROJECT_MAX_BYTES
+_MAX_DELIVERY_FILE_BYTES = SOURCE_PROJECT_MAX_BYTES
+_MAX_ARTIFACT_BYTES = SOURCE_PROJECT_MAX_BYTES
+_MAX_SOURCE_BYTES = SOURCE_PROJECT_MAX_BYTES
+_MAX_SOURCE_EXPANDED_BYTES = SOURCE_PROJECT_MAX_BYTES
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _FILE_MODE_RE = re.compile(r"^0[0-7]{1,3}$")
 _ENVIRONMENT_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -154,6 +161,21 @@ def _reject_path_collisions(paths: set[str]) -> None:
                 raise MigrationContractError("file and directory paths collide")
 
 
+def _evidence_list(value: object, *, maximum: int = 100) -> list[dict[str, object]]:
+    if not isinstance(value, list) or len(value) > maximum:
+        raise MigrationContractError("invalid evidence list")
+    evidence: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise MigrationContractError("invalid evidence")
+        _exact_keys(item, required={"path", "line", "reason"})
+        _relative_path(item.get("path"))
+        _bounded_integer(item.get("line"), minimum=1, maximum=10_000_000)
+        _text(item.get("reason"), allow_empty=False, maximum=4_000)
+        evidence.append(item)
+    return evidence
+
+
 def _framework(value: object) -> str:
     if value not in MIGRATION_FRAMEWORKS:
         raise MigrationContractError("unsupported framework")
@@ -178,6 +200,7 @@ def validate_migration_request(
             "session_ttl_seconds",
             "created_at",
         },
+        optional={"model_id", "evaluation"},
     )
     if (
         value.get("schema_version") != 1
@@ -192,6 +215,31 @@ def validate_migration_request(
     ):
         raise MigrationContractError("invalid source file name")
     _text(value.get("instruction"), maximum=_MAX_TEXT_LENGTH)
+    if "model_id" in value and not is_valid_model_id(value.get("model_id")):
+        raise MigrationContractError("invalid model id")
+    evaluation = value.get("evaluation")
+    if evaluation is not None:
+        if not isinstance(evaluation, dict):
+            raise MigrationContractError("invalid evaluation config")
+        _exact_keys(
+            evaluation,
+            required={"enabled", "preset", "dimensions", "locale"},
+        )
+        enabled = evaluation.get("enabled")
+        preset = evaluation.get("preset")
+        dimensions = evaluation.get("dimensions")
+        locale = evaluation.get("locale")
+        if (
+            enabled is not True
+            or preset not in {"standard", "custom"}
+            or locale not in {"zh-CN", "en-US"}
+            or not isinstance(dimensions, list)
+            or not dimensions
+            or len(set(str(item) for item in dimensions)) != len(dimensions)
+            or any(item not in EVALUATION_DIMENSION_IDS for item in dimensions)
+            or (preset == "standard" and tuple(dimensions) != STANDARD_DIMENSION_IDS)
+        ):
+            raise MigrationContractError("invalid evaluation config")
     created_at = value.get("created_at")
     if isinstance(created_at, str):
         _timestamp_text(created_at)
@@ -230,6 +278,98 @@ def validate_source_status(value: object) -> dict[str, object]:
         value.get("expanded_bytes"),
         maximum=_MAX_SOURCE_EXPANDED_BYTES,
     )
+    return {str(key): item for key, item in value.items()}
+
+
+def validate_detection_report(value: object) -> dict[str, object]:
+    """Validate the model-free detection report written before analysis runs.
+
+    Studio authors this document, so it is checked strictly; the analysis verdict is
+    later measured against the file inventory it carries.
+    """
+    if not isinstance(value, dict):
+        raise MigrationContractError("detection report must be an object")
+    _exact_keys(
+        value,
+        required={
+            "schema_version",
+            "files",
+            "documents",
+            "candidates",
+            "unreadable",
+            "degraded",
+            "degraded_reason",
+        },
+    )
+    if value.get("schema_version") != 1:
+        raise MigrationContractError("unsupported detection report schema")
+    files = value.get("files")
+    if not isinstance(files, dict):
+        raise MigrationContractError("invalid detection files")
+    _exact_keys(files, required={"count", "listed"})
+    _bounded_integer(files.get("count"), maximum=_MAX_DELIVERY_FILES)
+    listed = files.get("listed")
+    if not isinstance(listed, list) or len(listed) > 1_000:
+        raise MigrationContractError("invalid detection file list")
+    for item in listed:
+        _relative_path(item)
+
+    documents = value.get("documents")
+    if not isinstance(documents, list) or len(documents) > 1_000:
+        raise MigrationContractError("invalid detection documents")
+    for item in documents:
+        if not isinstance(item, dict):
+            raise MigrationContractError("invalid detection document")
+        _exact_keys(
+            item,
+            required={"path", "format", "status", "dsl", "signals"},
+            optional={"parse_error"},
+        )
+        _relative_path(item.get("path"))
+        if item.get("status") not in {"parsed", "unparsed"}:
+            raise MigrationContractError("invalid detection document status")
+        _text(item.get("format"), allow_empty=False, maximum=32)
+        _text(item.get("dsl"), maximum=64)
+        if "parse_error" in item:
+            _text(item.get("parse_error"), maximum=64)
+        signals = item.get("signals")
+        if not isinstance(signals, list) or len(signals) > 100:
+            raise MigrationContractError("invalid detection signals")
+        for signal in signals:
+            if not isinstance(signal, dict):
+                raise MigrationContractError("invalid detection signal")
+            _exact_keys(signal, required={"path", "line", "reason"})
+            _text(signal.get("path"), maximum=_MAX_PATH_BYTES)
+            _bounded_integer(signal.get("line"), minimum=1, maximum=10_000_000)
+            _text(signal.get("reason"), allow_empty=False, maximum=4_000)
+
+    candidates = value.get("candidates")
+    if not isinstance(candidates, list) or len(candidates) > 20:
+        raise MigrationContractError("invalid detection candidates")
+    for item in candidates:
+        if not isinstance(item, dict):
+            raise MigrationContractError("invalid detection candidate")
+        _exact_keys(item, required={"id", "confidence", "evidence"})
+        _framework(item.get("id"))
+        if item.get("confidence") not in {"high", "medium", "low"}:
+            raise MigrationContractError("invalid detection candidate")
+        _evidence_list(item.get("evidence"))
+
+    unreadable = value.get("unreadable")
+    if not isinstance(unreadable, list) or len(unreadable) > 1_000:
+        raise MigrationContractError("invalid detection unreadable list")
+    for item in unreadable:
+        if not isinstance(item, dict):
+            raise MigrationContractError("invalid detection unreadable entry")
+        _exact_keys(item, required={"path", "reason"})
+        path = item.get("path")
+        if path != "":
+            _relative_path(path)
+        _text(item.get("reason"), allow_empty=False, maximum=64)
+
+    if not isinstance(value.get("degraded"), bool):
+        raise MigrationContractError("invalid detection degraded flag")
+    _text(value.get("degraded_reason"), maximum=128)
     return {str(key): item for key, item in value.items()}
 
 
@@ -331,6 +471,118 @@ def validate_process_exit(value: object) -> dict[str, object]:
     _bounded_integer(value.get("exit_code"), maximum=255)
     if "finished_at" in value:
         _bounded_integer(value.get("finished_at"), maximum=10**12)
+    return {str(key): item for key, item in value.items()}
+
+
+def validate_migration_driver(
+    value: object,
+    *,
+    expected_run_id: str,
+) -> dict[str, object]:
+    """Validate the delivery driver lease, including the published artifact.
+
+    The record is written inside the Sandbox by the launch script that supervises the
+    migration CLI.  It lets Studio tell a driver that is still working from one whose
+    process disappeared, and it carries the artifact digest computed right after the
+    CLI exited, so the bytes Studio later pulls can be checked against it.
+
+    ``lost`` is the heartbeat's own verdict that the CLI it was watching is gone: the
+    run will never write its result, but the agent's work may still be on disk.
+    """
+    if not isinstance(value, dict):
+        raise MigrationContractError("driver lease must be an object")
+    _exact_keys(
+        value,
+        required={
+            "schema_version",
+            "run_id",
+            "state",
+            "heartbeat_at",
+            "finished_at",
+            "exit_code",
+            "artifact",
+        },
+    )
+    state = value.get("state")
+    if (
+        value.get("schema_version") != 1
+        or value.get("run_id") != expected_run_id
+        or state not in {"running", "lost", "finished"}
+    ):
+        raise MigrationContractError("invalid driver lease identity")
+    _bounded_integer(value.get("heartbeat_at"), maximum=10**12)
+    finished_at = value.get("finished_at")
+    exit_code = value.get("exit_code")
+    artifact = value.get("artifact")
+    if state != "finished":
+        if finished_at is not None or exit_code is not None or artifact is not None:
+            raise MigrationContractError("unfinished driver lease published a result")
+    else:
+        _bounded_integer(finished_at, maximum=10**12)
+        _bounded_integer(exit_code, maximum=255)
+        if artifact is not None:
+            if not isinstance(artifact, dict):
+                raise MigrationContractError("invalid artifact descriptor")
+            _exact_keys(artifact, required={"path", "sha256", "size"})
+            if artifact.get("path") != "migration-result.zip":
+                raise MigrationContractError("invalid artifact path")
+            _bounded_integer(artifact.get("size"), maximum=_MAX_ARTIFACT_BYTES)
+            _sha256(artifact.get("sha256"))
+    return {str(key): item for key, item in value.items()}
+
+
+def validate_delivery_report(
+    value: object,
+    *,
+    expected_run_id: str,
+    expected_state: str,
+) -> dict[str, object]:
+    """Validate the verdict the closing delivery turn published.
+
+    The turn explains a delivery; it never decides one.  ``expected_state`` is the
+    state Studio derived from the Sandbox, and a report that disagrees with it is
+    rejected here as well as inside the turn, so a damaged or replayed record cannot
+    describe a delivery other than the one the CLI settled.
+    """
+    if not isinstance(value, dict):
+        raise MigrationContractError("delivery report must be an object")
+    _exact_keys(
+        value,
+        required={
+            "schema_version",
+            "run_id",
+            "driver",
+            "state",
+            "message",
+            "warnings",
+            "artifact",
+            "created_at",
+        },
+    )
+    state = value.get("state")
+    if (
+        value.get("schema_version") != 1
+        or value.get("run_id") != expected_run_id
+        or value.get("driver") != "app-server"
+        or state != expected_state
+        or state not in {"succeeded", "succeeded_with_warnings", "partial", "failed"}
+    ):
+        raise MigrationContractError("delivery report identity does not match")
+    _text(value.get("message"), allow_empty=False, maximum=4_000)
+    _string_list(value.get("warnings"), maximum_items=8)
+    artifact = value.get("artifact")
+    if state == "failed":
+        if artifact is not None:
+            raise MigrationContractError("failed delivery report published an artifact")
+    else:
+        if not isinstance(artifact, dict):
+            raise MigrationContractError("invalid delivery report artifact")
+        _exact_keys(artifact, required={"path", "sha256", "size"})
+        if artifact.get("path") != "migration-result.zip":
+            raise MigrationContractError("invalid delivery report artifact path")
+        _bounded_integer(artifact.get("size"), maximum=_MAX_ARTIFACT_BYTES)
+        _sha256(artifact.get("sha256"))
+    _timestamp_text(value.get("created_at"))
     return {str(key): item for key, item in value.items()}
 
 
@@ -776,10 +1028,13 @@ def validate_delivery_result(
 __all__ = [
     "MigrationContractError",
     "validate_analysis_result",
+    "validate_detection_report",
     "validate_analysis_status",
     "validate_confirmation",
     "validate_delivery_result",
+    "validate_delivery_report",
     "validate_delivery_status",
+    "validate_migration_driver",
     "validate_migration_request",
     "validate_process_exit",
     "validate_source_status",

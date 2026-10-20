@@ -1,4 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+} from "react";
+import { useTranslation } from "react-i18next";
 import "./new-chat-workspace.css";
 
 export interface NewChatCompactSelectOption {
@@ -9,6 +19,11 @@ export interface NewChatCompactSelectOption {
 
 const HOVER_OPEN_DELAY_MS = 120;
 const HOVER_CLOSE_DELAY_MS = 180;
+const MENU_VIEWPORT_MARGIN_PX = 12;
+const MENU_TRIGGER_GAP_PX = 7;
+const MENU_SEARCH_HEIGHT_PX = 43;
+const MENU_MIN_LIST_HEIGHT_PX = 96;
+const MENU_MAX_LIST_HEIGHT_PX = 260;
 
 interface NewChatCompactSelectProps {
   label: string;
@@ -53,9 +68,12 @@ export function NewChatCompactSelect({
   searchable = false,
   onRetry,
 }: NewChatCompactSelectProps) {
+  const { t } = useTranslation("newChat");
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
+  const [menuSide, setMenuSide] = useState<"bottom" | "top">("bottom");
+  const [menuListMaxHeight, setMenuListMaxHeight] = useState(MENU_MAX_LIST_HEIGHT_PX);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -102,6 +120,43 @@ export function NewChatCompactSelect({
     focusSearchOnOpenRef.current = false;
     requestAnimationFrame(() => searchRef.current?.focus());
   }, [open, searchable]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const updateMenuPlacement = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+      const spaceBelow = Math.max(0, viewportHeight - rect.bottom - MENU_VIEWPORT_MARGIN_PX);
+      const spaceAbove = Math.max(0, rect.top - MENU_VIEWPORT_MARGIN_PX);
+      const minimumUsableMenuHeight =
+        MENU_MIN_LIST_HEIGHT_PX +
+        MENU_TRIGGER_GAP_PX +
+        (searchable && options.length > 0 ? MENU_SEARCH_HEIGHT_PX : 0);
+      const nextSide = spaceBelow >= minimumUsableMenuHeight || spaceBelow >= spaceAbove
+        ? "bottom"
+        : "top";
+      const available = nextSide === "bottom" ? spaceBelow : spaceAbove;
+      const searchHeight = searchable && options.length > 0 ? MENU_SEARCH_HEIGHT_PX : 0;
+      const nextListMaxHeight = Math.max(
+        MENU_MIN_LIST_HEIGHT_PX,
+        Math.min(
+          MENU_MAX_LIST_HEIGHT_PX,
+          available - MENU_TRIGGER_GAP_PX - searchHeight,
+        ),
+      );
+      setMenuSide(nextSide);
+      setMenuListMaxHeight(nextListMaxHeight);
+    };
+    updateMenuPlacement();
+    window.addEventListener("resize", updateMenuPlacement);
+    window.addEventListener("scroll", updateMenuPlacement, true);
+    return () => {
+      window.removeEventListener("resize", updateMenuPlacement);
+      window.removeEventListener("scroll", updateMenuPlacement, true);
+    };
+  }, [open, options.length, searchable]);
 
   useEffect(() => () => {
     if (hoverOpenTimerRef.current !== null) window.clearTimeout(hoverOpenTimerRef.current);
@@ -192,8 +247,11 @@ export function NewChatCompactSelect({
 
   const showLoading = loading && options.length === 0;
   const displayLabel = showLoading
-    ? "加载中…"
+    ? t("compactSelect.loading")
     : selected?.label || placeholder;
+  const menuStyle = {
+    "--new-chat-compact-select-list-max-height": `${menuListMaxHeight}px`,
+  } as CSSProperties;
 
   return (
     <div
@@ -211,7 +269,7 @@ export function NewChatCompactSelect({
         ref={triggerRef}
         type="button"
         className="new-chat-compact-select__trigger"
-        aria-label={`${label}：${displayLabel}`}
+        aria-label={t("compactSelect.selection", { label, value: displayLabel })}
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled}
@@ -234,14 +292,18 @@ export function NewChatCompactSelect({
       </button>
 
       {open ? (
-        <div className="new-chat-compact-select__menu">
+        <div
+          className="new-chat-compact-select__menu"
+          data-side={menuSide}
+          style={menuStyle}
+        >
           {searchable && options.length > 0 ? (
             <label className="new-chat-compact-select__search">
-              <span className="sr-only">搜索{label}</span>
+              <span className="sr-only">{t("compactSelect.searchLabel", { label })}</span>
               <input
                 ref={searchRef}
                 value={query}
-                placeholder={`搜索${label}`}
+                placeholder={t("compactSelect.searchPlaceholder", { label })}
                 onChange={(event) => {
                   setQuery(event.currentTarget.value);
                   setActiveIndex(0);
@@ -252,14 +314,16 @@ export function NewChatCompactSelect({
 
           <div className="new-chat-compact-select__list" role="listbox" aria-label={label}>
             {loading && options.length === 0 ? (
-              <div className="new-chat-compact-select__status" role="status">正在加载…</div>
+              <div className="new-chat-compact-select__status" role="status">{t("compactSelect.loading")}</div>
             ) : error ? (
               <div className="new-chat-compact-select__status is-error" role="alert">
                 <span>{error}</span>
-                {onRetry ? <button type="button" onClick={onRetry}>重试</button> : null}
+                {onRetry ? <button type="button" onClick={onRetry}>{t("compactSelect.retry")}</button> : null}
               </div>
             ) : visibleOptions.length === 0 ? (
-              <div className="new-chat-compact-select__status">{query ? "没有匹配项" : "暂无可选项"}</div>
+              <div className="new-chat-compact-select__status">
+                {query ? t("compactSelect.noMatches") : t("compactSelect.noOptions")}
+              </div>
             ) : visibleOptions.map((option, index) => (
               <button
                 key={option.value}

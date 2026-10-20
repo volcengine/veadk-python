@@ -18,6 +18,8 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
+from veadk.utils.cloud_provider import CloudProvider
+
 from veadk.cli.frontend_deploy_iam import (
     ensure_default_frontend_role_policy,
     ensure_frontend_role,
@@ -204,6 +206,27 @@ def test_existing_frontend_role_policy_error_fails_fast(
     service.create_role.assert_not_called()
 
 
+def test_public_cloud_missing_system_policy_fails_fast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = MagicMock()
+    service.get_role.return_value = {
+        "Result": {"Role": {"Trn": "trn:iam::123:role/VeADKFrontendServiceRole"}}
+    }
+    service.update_policy.return_value = {"Result": {}}
+    service.get_policy.return_value = _policy_response()
+    service.list_attached_role_policies.return_value = {
+        "Result": {"AttachedPolicyMetadata": [{"PolicyName": "VeADKFrontendPolicy"}]}
+    }
+    service.attach_role_policy.side_effect = RuntimeError(
+        "PolicyNotExist: Policy does not exist"
+    )
+    _install_iam_service(monkeypatch, service)
+
+    with pytest.raises(RuntimeError, match="PolicyNotExist"):
+        ensure_frontend_role("ak", "sk")
+
+
 def test_existing_frontend_policy_uses_new_document_and_verifies_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -263,11 +286,103 @@ def test_frontend_policy_allows_release_download() -> None:
     assert "vefaas:GetCodeUploadAddress" in actions
     assert "vefaas:GetApplication" in actions
     assert "vefaas:GetApplicationRevisionLog" in actions
+    # Studio now prepares a versioned custom MPA runtime policy.
     assert "iam:CreatePolicy" in actions
-    assert "iam:UpdatePolicy" in actions
+    assert "iam:UpdatePolicy" not in actions
     assert "vefaas:CodeUploadCallback" in actions
     assert "vefaas:UpdateFunction" in actions
+    assert "vefaas:UpdateFunctionResource" in actions
     assert "vefaas:ReleaseApplication" in actions
+    assert "tag:TagResources" in actions
+    assert "tag:UntagResources" in actions
+    assert {
+        "apig:ListGateways",
+        "apig:CreateGateway",
+        "apig:GetGateway",
+        "apig:GetGatewayAvailableZones",
+        "apig:CreateIMChannelGateway",
+        "apig:GetIMChannelGatewayStatus",
+    }.issubset(actions)
+    assert {
+        "ecs:DescribeZones",
+        "vpc:CreateSubnet",
+        "vpc:CreateVpc",
+        "vpc:DescribeSubnetAttributes",
+        "vpc:DescribeSubnets",
+        "vpc:DescribeVpcAttributes",
+        "vpc:DescribeVpcs",
+    }.issubset(actions)
+    assert {
+        "aidap:CreateWorkspace",
+        "aidap:DescribeWorkspaces",
+        "aidap:DescribeWorkspaceDetail",
+        "aidap:DescribeBranches",
+        "aidap:DescribeComputes",
+        "aidap:DescribeWorkspaceEndpoint",
+        "aidap:DescribeDBAccounts",
+        "aidap:DescribeDatabases",
+        "aidap:DescribeDBAccountConnection",
+    }.issubset(actions)
+
+
+def test_frontend_policy_allows_complete_managed_pg_workflow() -> None:
+    actions = set(FRONTEND_DEPLOY_POLICY["Statement"][0]["Action"])
+
+    assert {action for action in actions if action.startswith("aidap:")} == {
+        "aidap:DescribeWorkspaces",
+        "aidap:CreateWorkspace",
+        "aidap:DescribeWorkspaceDetail",
+        "aidap:DescribeBranches",
+        "aidap:DescribeComputes",
+        "aidap:DescribeWorkspaceEndpoint",
+        "aidap:DescribeDBAccounts",
+        "aidap:DescribeDatabases",
+        "aidap:DescribeDBAccountConnection",
+    }
+
+
+def test_frontend_policy_allows_complete_managed_mpa_cloud_workflow() -> None:
+    actions = {
+        action
+        for statement in FRONTEND_DEPLOY_POLICY["Statement"]
+        for action in statement["Action"]
+    }
+    required = {
+        "sts:GetCallerIdentity",
+        "ecs:DescribeZones",
+        "vpc:DescribeVpcs",
+        "vpc:DescribeVpcAttributes",
+        "vpc:DescribeSubnets",
+        "vpc:DescribeSubnetAttributes",
+        "vpc:CreateVpc",
+        "vpc:CreateSubnet",
+        "apig:ListGateways",
+        "apig:CreateGateway",
+        "apig:GetGateway",
+        "apig:GetGatewayAvailableZones",
+        "apig:CreateIMChannelGateway",
+        "apig:GetIMChannelGatewayStatus",
+        "iam:PassRole",
+        "id:GetWorkloadPool",
+        "id:CreateWorkloadPool",
+        "id:GetWorkloadIdentity",
+        "id:CreateWorkloadIdentity",
+        "agentkit:*",
+    }
+
+    assert required <= actions
+    assert {
+        "sts:*",
+        "ecs:*",
+        "vpc:*",
+        "apig:*",
+        "aidap:*",
+    }.isdisjoint(actions)
+    assert {
+        "Effect": "Allow",
+        "Action": ["iam:PassRole"],
+        "Resource": ["trn:iam::*:role/*"],
+    } in FRONTEND_DEPLOY_POLICY["Statement"]
 
 
 @pytest.mark.parametrize(
@@ -284,14 +399,16 @@ def test_default_frontend_role_policy_is_refreshed_for_future_updates(
     calls: list[dict[str, str]] = []
     monkeypatch.setattr(
         "veadk.cli.frontend_deploy_iam.ensure_frontend_role",
-        lambda access_key, secret_key, **kwargs: calls.append(
-            {
-                "access_key": access_key,
-                "secret_key": secret_key,
-                **kwargs,
-            }
-        )
-        or role,
+        lambda access_key, secret_key, **kwargs: (
+            calls.append(
+                {
+                    "access_key": access_key,
+                    "secret_key": secret_key,
+                    **kwargs,
+                }
+            )
+            or role
+        ),
     )
 
     refreshed = ensure_default_frontend_role_policy(
@@ -330,3 +447,55 @@ def test_custom_frontend_role_policy_is_not_replaced(
         )
         is False
     )
+
+
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_frontend_role_provisions_openviking_permissions(
+    monkeypatch: pytest.MonkeyPatch, provider: CloudProvider, existing: bool
+) -> None:
+    service = MagicMock()
+    if existing:
+        service.get_role.return_value = {
+            "Result": {"Role": {"Trn": "trn:iam::123:role/VeADKFrontendServiceRole"}}
+        }
+        service.update_policy.return_value = {"Result": {}}
+    else:
+        service.get_role.return_value = {
+            "ResponseMetadata": {"Error": {"Message": "role not found"}}
+        }
+        service.update_policy.return_value = {
+            "ResponseMetadata": {"Error": {"Message": "policy not found"}}
+        }
+        service.create_policy.return_value = {"Result": {}}
+        service.create_role.return_value = {
+            "Result": {"Role": {"Trn": "trn:iam::123:role/VeADKFrontendServiceRole"}}
+        }
+    service.get_policy.return_value = _policy_response()
+    service.list_attached_role_policies.return_value = {
+        "Result": {"AttachedPolicyMetadata": []}
+    }
+    service.attach_role_policy.return_value = {"Result": {}}
+    _install_iam_service(monkeypatch, service)
+
+    ensure_frontend_role("ak", "sk", provider=provider)
+
+    operation = service.update_policy if existing else service.create_policy
+    document = json.loads(
+        operation.call_args.args[0][
+            "NewPolicyDocument" if existing else "PolicyDocument"
+        ]
+    )
+    actions = {
+        action
+        for statement in document["Statement"]
+        if statement["Effect"] == "Allow"
+        for action in statement["Action"]
+    }
+    assert {
+        "vikingdb:CreateOpenVikingCollection",
+        "vikingdb:GetOpenVikingCollection",
+        "vikingdb:AccessOpenVikingApiKey",
+    } <= actions
+    assert "vikingdb:DeleteOpenVikingCollection" not in actions
+    assert "vikingdb:*" not in actions

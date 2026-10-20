@@ -1,0 +1,99 @@
+.agentkit-promo-card {
+  position: relative;
+  width: calc(100% - 20px);
+  margin: 0 10px;
+  padding: 12px;
+  border: 1px solid hsl(var(--sidebar-border));
+  border-radius: 10px;
+  background: hsl(var(--panel));
+  color: hsl(var(--sidebar-foreground));
+  transition:
+    background 160ms ease-out,
+    border-color 160ms ease-out;
+}
+
+.agentkit-promo-card:hover:not(.is-hover-suppressed),
+.agentkit-promo-card:focus-within {
+  background: hsl(var(--sidebar-item-hover));
+  border-color: transparent;
+}
+
+.agentkit-promo-close {
+  position: absolute;
+  top: 11px;
+  right: 7px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease-out;
+}
+
+.agentkit-promo-card:hover:not(.is-hover-suppressed) .agentkit-promo-close,
+.agentkit-promo-card:focus-within .agentkit-promo-close,
+.agentkit-promo-close:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.agentkit-promo-title {
+  margin: 0;
+  padding-right: 24px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.agentkit-promo-description {
+  margin: 4px 0 0;
+  color: hsl(var(--sidebar-section-title));
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+}
+
+.agentkit-promo-actions {
+  display: flex;
+  justify-content: flex-start;
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.agentkit-promo-action {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  flex: 0 0 auto;
+  color: hsl(var(--sidebar-section-title));
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  text-decoration-line: underline;
+  text-decoration-color: hsl(var(--sidebar-section-title) / 0.45);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition:
+    color 120ms ease-out,
+    text-decoration-color 120ms ease-out;
+}
+
+.agentkit-promo-action:hover {
+  color: hsl(var(--sidebar-foreground));
+  text-decoration-color: currentColor;
+}
+
+.agentkit-promo-action:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid hsl(var(--ring) / 0.45);
+  outline-offset: 3px;
+}
+
+.sidebar.is-collapsed .agentkit-promo-card {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agentkit-promo-card,
+  .agentkit-promo-close,
+  .agentkit-promo-action {
+    transition: none;
+  }
+}

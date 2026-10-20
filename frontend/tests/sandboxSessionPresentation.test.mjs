@@ -71,12 +71,12 @@ test("sandbox errors preserve HTTP status and backend detail", () => {
   assert.match(sandboxClientSource, /const text = await response\.text\(\)\.catch\(\(\) => ""\)/);
   assert.match(sandboxClientSource, /nestedDetail \?\? payload\.error \?\? payload\.message/);
   assert.match(sandboxClientSource, /detail == null[\s\S]*?JSON\.stringify\(detail\)/);
-  assert.match(sandboxClientSource, /`\$\{fallback\}（HTTP \$\{response\.status\}）`/);
-  assert.match(sandboxClientSource, /text \? `\$\{summary\}：\$\{text\}` : summary/);
+  assert.match(sandboxClientSource, /common\.fallbackWithHttpStatus/);
+  assert.match(sandboxClientSource, /common\.fallbackWithDetail/);
 });
 
 test("new-chat built-in agent mode launches the AgentKit sandbox", () => {
-  assert.match(modeSelectorSource, /value: "temporary"[\s\S]*?label: "内置智能体"/);
+  assert.match(modeSelectorSource, /value: "temporary"[\s\S]*?labelKey: "mode\.builtin\.label"/);
   assert.match(appSource, /mode === "temporary"[\s\S]*?openSandboxLaunch\(\)/);
   assert.match(
     appSource,
@@ -87,33 +87,43 @@ test("new-chat built-in agent mode launches the AgentKit sandbox", () => {
 
 test("sandbox launch dialog covers confirmation loading failure and retry", () => {
   assert.match(dialogSource, /role="dialog"/);
-  assert.match(dialogSource, /`创建 \$\{agentLabel\} 智能体`/);
+  assert.match(dialogSource, /t\("launch\.createTitle", \{ agent: agentLabel \}\)/);
   assert.doesNotMatch(dialogSource, /创建一个可重复进入的 AgentKit Session/);
-  assert.match(dialogSource, /<span>智能体名称<\/span>/);
+  assert.match(dialogSource, /t\("launch\.name"\)/);
   assert.match(dialogSource, /type="text"[\s\S]*?required/);
-  assert.match(dialogSource, /`正在创建 \$\{agentLabel\} 智能体`/);
-  assert.match(dialogSource, /正在创建并等待 \{agentLabel\} 智能体就绪，这通常需要半分钟/);
-  assert.match(dialogSource, /启动失败/);
-  assert.match(dialogSource, /重新尝试/);
-  assert.match(dialogSource, /确认创建/);
+  assert.match(dialogSource, /t\("launch\.creatingTitle", \{ agent: agentLabel \}\)/);
+  assert.match(dialogSource, /t\("launch\.creatingDescription", \{ agent: agentLabel \}\)/);
+  assert.match(dialogSource, /t\("launch\.failedTitle"\)/);
+  assert.match(dialogSource, /t\("launch\.retry"\)/);
+  assert.match(dialogSource, /t\("launch\.confirm"\)/);
   assert.match(dialogSource, /nativeEvent\.isComposing/);
   assert.match(dialogSource, /if \(event\.key === "Escape"/);
   assert.match(dialogSource, /const \[persistent, setPersistent\] = useState\(true\)/);
-  assert.match(dialogSource, /setPersistent\(true\)/);
+  assert.match(dialogSource, /setPersistent\(persistentRequired \|\| persistentEnabled\)/);
+  assert.match(dialogSource, /const \[diskGb, setDiskGb\] = useState\(diskGbDefault\)/);
+  assert.match(appSource, /kind === "codex"[\s\S]*?getSandboxCapability\(controller\.signal\)/);
+  assert.match(appSource, /getSandboxAgentCapability\(kind, controller\.signal\)/);
+  assert.match(dialogSource, /persistentReason \|\| t\("launch\.persistenceUnsupported"\)/);
   assert.match(
     dialogSource,
     /@openai\/apps-sdk-ui\/components\/Checkbox/,
   );
   assert.match(
     dialogSource,
-    /<Checkbox[\s\S]*?className="sandbox-dialog-persistence-control"[\s\S]*?checked=\{persistent\}[\s\S]*?label="持久化"/,
+    /<Checkbox[\s\S]*?className="sandbox-dialog-persistence-control"[\s\S]*?checked=\{persistent\}[\s\S]*?label=\{t\("launch\.persistent"\)\}/,
   );
   assert.match(
     dialogSource,
-    /id="sandbox-persistence-description"[\s\S]*?persistent[\s\S]*?保留智能体数据，后续可继续使用。[\s\S]*?智能体将在 8 小时后清空/,
+    /storageMode === "disk"[\s\S]*?t\("launch\.storageSize"\)[\s\S]*?type="number"[\s\S]*?min=\{diskGbMin\}[\s\S]*?max=\{diskGbMax\}/,
+  );
+  assert.match(dialogSource, /storageMode === "disk" \? true : persistent/);
+  assert.match(dialogSource, /storageMode === "disk" \? diskGb : undefined/);
+  assert.match(
+    dialogSource,
+    /id="sandbox-persistence-description"[\s\S]*?persistent[\s\S]*?t\("launch\.persistentHelp"\)[\s\S]*?t\("launch\.temporaryHelp"\)/,
   );
   assert.doesNotMatch(dialogSource, /是否持久化/);
-  assert.match(dialogSource, /智能体将在 8 小时后清空/);
+  assert.match(dialogSource, /t\("launch\.temporaryHelp"\)/);
   assert.match(
     stylesSource,
     /\.sandbox-dialog-persistence-control \{[\s\S]*?justify-self: start/,
@@ -128,20 +138,25 @@ test("sandbox launch dialog covers confirmation loading failure and retry", () =
     /\.sandbox-dialog-persistence-description\.is-warning \{[\s\S]*?color: hsl\(37 72% 36%\)/,
   );
   assert.doesNotMatch(dialogSource, /id="sandbox-persistence-warning"/);
-  assert.match(dialogSource, /onConfirm\(validDisplayName, persistent\)/);
-  assert.match(appSource, /launchSandboxSession\(displayName: string, persistent: boolean\)/);
-  assert.match(appSource, /displayName,[\s\S]*?persistent,[\s\S]*?signal: controller\.signal/);
+  assert.match(appSource, /launchSandboxSession\([\s\S]*?diskGb\?: number/);
+  assert.match(appSource, /displayName,[\s\S]*?persistent,[\s\S]*?diskGb,[\s\S]*?signal: controller\.signal/);
   assert.match(sandboxClientSource, /persistent\?: boolean/);
+  assert.match(sandboxClientSource, /diskGb\?: number/);
+  assert.match(sandboxClientSource, /\{ diskGb: options\.diskGb \}/);
   assert.match(sandboxClientSource, /persistent: options\.persistent \?\? true/g);
   assert.match(appSource, /sandboxLaunchAbortRef\.current\?\.abort\(\)/);
 });
 
 test("active sandbox conversation identifies the selected agent and never uses normal sessions", () => {
-  assert.match(sandboxSessionSource, /当前您在使用 \{agentName\} 智能体/);
+  assert.match(sandboxSessionSource, /t\("session\.usingAgent", \{ agent: agentName \}\)/);
   assert.doesNotMatch(sandboxSessionSource, /退出后对话内容消失/);
-  assert.match(sandboxSessionSource, /退出当前智能体/);
+  assert.match(sandboxSessionSource, /t\("session\.exit"\)/);
   assert.doesNotMatch(sandboxSessionSource, /退出内置智能体/);
-  assert.match(appSource, /sandboxClient\.sendMessage/);
+  assert.match(
+    appSource,
+    /if \(activeSession\?\.intelligentDevelopment\)[\s\S]*?development\.submit[\s\S]*?return;[\s\S]*?const activeClient = sandboxClient/,
+  );
+  assert.match(appSource, /activeClient\.sendMessage/);
   assert.doesNotMatch(sandboxClientSource, /runSSE/);
   assert.match(stylesSource, /\.main\.is-sandbox-session::before/);
   assert.match(stylesSource, /\.sandbox-session-warning/);
@@ -160,19 +175,27 @@ test("active sandbox conversation identifies the selected agent and never uses n
 });
 
 test("sandbox agents expose detail deletion and reusable workspaces", () => {
-  assert.match(detailsSource, /Session 详情/);
-  assert.match(detailsSource, /删除智能体/);
+  assert.match(detailsSource, /t\("agentDetails\.subtitle"/);
+  assert.match(
+    detailsSource,
+    /<PageBackButton[\s\S]*?label=\{t\("agentDetails\.back"\)\}[\s\S]*?onClick=\{onBack\}/,
+  );
+  assert.match(detailsSource, /t\("agentDetails\.delete"\)/);
   assert.match(detailsSource, /role="alertdialog"/);
-  assert.match(detailsSource, /确认删除/);
+  assert.match(detailsSource, /t\("agentDetails\.confirmDelete"\)/);
   assert.match(appSource, /sandboxClient\.deleteSession\(session\.id\)/);
   assert.match(appSource, /sandboxClient\.deleteAgentSession\(session\.toolName, session\.id\)/);
   assert.match(
     appSource,
     /deleteSandboxAgent[\s\S]*?setMyAgentsActiveType\(session\.toolName\)[\s\S]*?setSandboxAgentRefreshKey/,
   );
-  assert.match(workspaceSource, /主界面/);
-  assert.match(workspaceSource, /终端/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.main"\)/);
+  assert.match(workspaceSource, /t\("agentWorkspace\.terminal"\)/);
   assert.match(workspaceSource, /sandboxClient\.launchAgentTerminal/);
+  assert.match(workspaceSource, /hidden=\{surface !== "main"\}/);
+  assert.match(workspaceSource, /hidden=\{surface !== "terminal"\}/);
+  assert.doesNotMatch(workspaceSource, /surface === "main"\s*\?\s*\(\s*<iframe/);
+  assert.match(workspaceStyles, /\.sandbox-agent-workspace-surface \[hidden\][\s\S]*?display: none/);
   assert.match(workspaceSource, /size="lg"/);
   assert.match(workspaceSource, /gutterSize="lg"/);
   assert.match(workspaceSource, /block/);

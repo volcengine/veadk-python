@@ -58,6 +58,10 @@ def _parse_float(value: str | None, default: float | None) -> float | None:
     return float(value)
 
 
+def _compact_options(options: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in options.items() if value is not None}
+
+
 def _default_target_uri(openviking_user_id: str, index: str) -> str:
     openviking_user_id = _validate_safe_path_segment(
         openviking_user_id,
@@ -184,7 +188,7 @@ class OpenVikingKnowledgeBackend(BaseKnowledgebaseBackend):
             except ImportError as second_error:
                 raise ImportError(
                     "OpenViking knowledgebase backend requires 'openviking-sdk'. "
-                    "Please install it via `pip install openviking-sdk>=0.1.3`."
+                    "Please install it via `pip install openviking-sdk>=0.1.9`."
                 ) from second_error
             logger.debug(f"Fallback import used after error: {first_error}")
 
@@ -233,20 +237,23 @@ class OpenVikingKnowledgeBackend(BaseKnowledgebaseBackend):
     @override
     def add_from_directory(self, directory: str, **kwargs) -> bool:
         client = self._ensure_client()
+        options = {
+            "strict": kwargs.get("strict", False),
+            "ignore_dirs": kwargs.get("ignore_dirs"),
+            "include": kwargs.get("include"),
+            "exclude": kwargs.get("exclude"),
+            "directly_upload_media": kwargs.get("directly_upload_media", True),
+            "preserve_structure": kwargs.get("preserve_structure", True),
+            "watch_interval": kwargs.get("watch_interval", 0),
+            "args": kwargs.get("args"),
+            "telemetry": kwargs.get("telemetry", False),
+        }
         client.add_resource(
             path=directory,
             to=kwargs.get("target_uri", self.target_uri),
             wait=kwargs.get("wait", self.wait),
             timeout=kwargs.get("timeout", self.import_timeout),
-            strict=kwargs.get("strict", False),
-            ignore_dirs=kwargs.get("ignore_dirs"),
-            include=kwargs.get("include"),
-            exclude=kwargs.get("exclude"),
-            directly_upload_media=kwargs.get("directly_upload_media", True),
-            preserve_structure=kwargs.get("preserve_structure", True),
-            watch_interval=kwargs.get("watch_interval", 0),
-            args=kwargs.get("args"),
-            telemetry=kwargs.get("telemetry", False),
+            options=_compact_options(options),
         )
         return True
 
@@ -254,16 +261,19 @@ class OpenVikingKnowledgeBackend(BaseKnowledgebaseBackend):
     def add_from_files(self, files: list[str], **kwargs) -> bool:
         client = self._ensure_client()
         for file in files:
+            options = {
+                "strict": kwargs.get("strict", False),
+                "reason": kwargs.get("reason", ""),
+                "instruction": kwargs.get("instruction", ""),
+                "directly_upload_media": kwargs.get("directly_upload_media", True),
+                "telemetry": kwargs.get("telemetry", False),
+            }
             client.add_resource(
                 path=file,
                 parent=kwargs.get("target_uri", self.target_uri),
                 wait=kwargs.get("wait", self.wait),
                 timeout=kwargs.get("timeout", self.import_timeout),
-                strict=kwargs.get("strict", False),
-                reason=kwargs.get("reason", ""),
-                instruction=kwargs.get("instruction", ""),
-                directly_upload_media=kwargs.get("directly_upload_media", True),
-                telemetry=kwargs.get("telemetry", False),
+                options=_compact_options(options),
             )
         return True
 
@@ -286,18 +296,20 @@ class OpenVikingKnowledgeBackend(BaseKnowledgebaseBackend):
         client = self._ensure_client()
         method = client.search if use_context_search else client.find
 
-        call_kwargs = {
-            "query": query,
-            "target_uri": target_uri,
-            "limit": top_k,
+        options = {
             "score_threshold": score_threshold,
             "filter": kwargs.get("filter"),
             "context_type": kwargs.get("context_type"),
             "tags": kwargs.get("tags"),
             "telemetry": kwargs.get("telemetry", False),
         }
+        call_kwargs = {
+            "query": query,
+            "target_uri": target_uri,
+            "limit": top_k,
+            "options": _compact_options(options),
+        }
         if use_context_search:
-            call_kwargs["session"] = kwargs.get("session")
             call_kwargs["session_id"] = kwargs.get("session_id")
 
         result = method(**call_kwargs)

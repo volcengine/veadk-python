@@ -4,8 +4,10 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import type {
   SandboxApproval,
   SandboxApprovalDecision,
@@ -28,28 +30,37 @@ import "./SandboxControls.css";
 
 interface DialogShellProps {
   open: boolean;
+  keepMounted?: boolean;
   title: string;
-  subtitle: string;
+  subtitle?: string;
   icon: ReactNode;
   className?: string;
+  busy?: boolean;
+  initialFocusRef?: RefObject<HTMLElement | null>;
   onClose: () => void;
   children: ReactNode;
 }
 
-function DialogShell({
+export function DialogShell({
   open,
+  keepMounted = false,
   title,
   subtitle,
   icon,
   className = "",
+  busy = false,
+  initialFocusRef,
   onClose,
   children,
 }: DialogShellProps) {
+  const { t } = useTranslation("sandbox");
   const titleId = useId();
   const closeRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
 
   useEffect(() => {
     if (!open) return;
@@ -58,11 +69,11 @@ function DialogShell({
       : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    closeRef.current?.focus();
+    (initialFocusRef?.current ?? closeRef.current)?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onCloseRef.current();
+        if (!busyRef.current) onCloseRef.current();
         return;
       }
       if (event.key !== "Tab") return;
@@ -72,7 +83,10 @@ function DialogShell({
           'button:not(:disabled), input:not(:disabled), iframe, [tabindex]:not([tabindex="-1"])',
         ) ?? [],
       );
-      if (focusable.length === 0) return;
+      if (focusable.length === 0) {
+        event.preventDefault();
+        return;
+      }
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       if (event.shiftKey && document.activeElement === first) {
@@ -89,14 +103,15 @@ function DialogShell({
       window.removeEventListener("keydown", onKeyDown);
       previousFocusRef.current?.focus();
     };
-  }, [open]);
+  }, [open, initialFocusRef]);
 
-  if (!open) return null;
+  if (!open && !keepMounted) return null;
   return createPortal(
     <div
       className="sandbox-control-backdrop"
+      hidden={!open}
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget && !busy) onClose();
       }}
     >
       <section
@@ -104,6 +119,7 @@ function DialogShell({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        aria-busy={busy || undefined}
       >
         <header className="sandbox-control-head">
           <span className="sandbox-control-head-icon" aria-hidden="true">
@@ -111,13 +127,15 @@ function DialogShell({
           </span>
           <div>
             <h2 id={titleId}>{title}</h2>
-            <p>{subtitle}</p>
+            {subtitle ? <p>{subtitle}</p> : null}
           </div>
           <button
             ref={closeRef}
             type="button"
             className="sandbox-control-close"
-            aria-label={`关闭${title}`}
+            aria-label={t("common.closeDialog", { title })}
+            title={t("common.closeDialog", { title })}
+            disabled={busy}
             onClick={onClose}
           >
             <SandboxCloseIcon />
@@ -149,8 +167,9 @@ export function SandboxToolDialog({
   onReload,
   onClose,
 }: SandboxToolDialogProps) {
+  const { t } = useTranslation("sandbox");
   const terminal = kind === "terminal";
-  const title = terminal ? "Terminal" : "Sandbox Browser";
+  const title = terminal ? t("tool.terminalTitle") : t("tool.browserTitle");
 
   return (
     <DialogShell
@@ -158,8 +177,8 @@ export function SandboxToolDialog({
       title={title}
       subtitle={
         terminal
-          ? "连接当前 AgentKit Session 的交互式终端"
-          : "在当前 AgentKit Session 中查看与操作浏览器"
+          ? t("tool.terminalSubtitle")
+          : t("tool.browserSubtitle")
       }
       icon={terminal ? <SandboxTerminalIcon /> : <SandboxBrowserIcon />}
       className={`sandbox-tool-dialog sandbox-tool-dialog--${kind}`}
@@ -168,21 +187,25 @@ export function SandboxToolDialog({
       <div className="sandbox-tool-toolbar">
         <span>
           <i className={loading ? "is-loading" : launch ? "is-ready" : ""} />
-          {loading ? "正在连接…" : launch ? "已连接" : "尚未连接"}
+          {loading
+            ? t("tool.connecting")
+            : launch
+              ? t("tool.connected")
+              : t("tool.notConnected")}
         </span>
       </div>
       <div className="sandbox-tool-surface">
         {loading ? (
           <div className="sandbox-control-state">
             <SandboxSpinnerIcon className="spin" />
-            <strong>正在打开 {title}</strong>
-            <span>工具正在连接当前 AgentKit Session。</span>
+            <strong>{t("tool.opening", { title })}</strong>
+            <span>{t("tool.connectingSession")}</span>
           </div>
         ) : error ? (
           <div className="sandbox-control-state is-error">
-            <strong>{title} 打开失败</strong>
+            <strong>{t("tool.openFailed", { title })}</strong>
             <span>{error}</span>
-            <button type="button" onClick={onReload}>重试</button>
+            <button type="button" onClick={onReload}>{t("common.retry")}</button>
           </div>
         ) : launch ? (
           <iframe
@@ -216,11 +239,12 @@ export function SandboxThreadsDialog({
   onSelect,
   onClose,
 }: SandboxThreadsDialogProps) {
+  const { t, i18n } = useTranslation("sandbox");
   return (
     <DialogShell
       open={open}
-      title="恢复 Codex 对话"
-      subtitle="选择当前 Sandbox Session 中最近更新的 Thread"
+      title={t("threads.title")}
+      subtitle={t("threads.subtitle")}
       icon={<SandboxHistoryIcon />}
       className="sandbox-threads-dialog"
       onClose={onClose}
@@ -229,16 +253,16 @@ export function SandboxThreadsDialog({
         {loading ? (
           <div className="sandbox-control-state">
             <SandboxSpinnerIcon className="spin" />
-            <strong>正在读取历史对话</strong>
+            <strong>{t("threads.loading")}</strong>
           </div>
         ) : error ? (
           <div className="sandbox-control-state is-error">
-            <strong>历史对话读取失败</strong>
+            <strong>{t("threads.loadFailed")}</strong>
             <span>{error}</span>
           </div>
         ) : threads.length === 0 ? (
           <div className="sandbox-control-state">
-            <strong>暂无可恢复的对话</strong>
+            <strong>{t("threads.empty")}</strong>
           </div>
         ) : (
           threads.map((thread) => {
@@ -259,7 +283,9 @@ export function SandboxThreadsDialog({
                 </span>
                 <time>
                   {thread.updatedAt
-                    ? new Date(thread.updatedAt * 1_000).toLocaleString()
+                    ? new Date(thread.updatedAt * 1_000).toLocaleString(
+                        i18n.resolvedLanguage ?? i18n.language,
+                      )
                     : ""}
                 </time>
                 <SandboxChevronIcon />
@@ -275,18 +301,18 @@ export function SandboxThreadsDialog({
 const SANDBOX_CHOICES = [
   {
     value: "read-only",
-    label: "只读",
-    detail: "允许读取文件，不允许写入工作空间。",
+    labelKey: "permissions.sandboxChoices.readOnly.label",
+    detailKey: "permissions.sandboxChoices.readOnly.detail",
   },
   {
     value: "workspace-write",
-    label: "工作区写入",
-    detail: "允许在当前工作空间内读取与修改文件。",
+    labelKey: "permissions.sandboxChoices.workspaceWrite.label",
+    detailKey: "permissions.sandboxChoices.workspaceWrite.detail",
   },
   {
     value: "danger-full-access",
-    label: "完全访问",
-    detail: "不启用沙箱隔离，适合明确可信的任务。",
+    labelKey: "permissions.sandboxChoices.fullAccess.label",
+    detailKey: "permissions.sandboxChoices.fullAccess.detail",
     danger: true,
   },
 ] as const;
@@ -294,18 +320,18 @@ const SANDBOX_CHOICES = [
 const APPROVAL_CHOICES = [
   {
     value: "untrusted",
-    label: "仅不可信命令",
-    detail: "只对 Codex 判断为不可信的操作发起审批。",
+    labelKey: "permissions.approvalChoices.untrusted.label",
+    detailKey: "permissions.approvalChoices.untrusted.detail",
   },
   {
     value: "on-request",
-    label: "按需审批",
-    detail: "Codex 可在必要时请求你确认命令或文件修改。",
+    labelKey: "permissions.approvalChoices.onRequest.label",
+    detailKey: "permissions.approvalChoices.onRequest.detail",
   },
   {
     value: "never",
-    label: "不审批",
-    detail: "Codex 不会暂停并请求人工批准。",
+    labelKey: "permissions.approvalChoices.never.label",
+    detailKey: "permissions.approvalChoices.never.detail",
     danger: true,
   },
 ] as const;
@@ -313,13 +339,13 @@ const APPROVAL_CHOICES = [
 const REVIEWER_CHOICES = [
   {
     value: "user",
-    label: "由我审批",
-    detail: "审批请求会显示在 Studio 中，由你决定。",
+    labelKey: "permissions.reviewerChoices.user.label",
+    detailKey: "permissions.reviewerChoices.user.detail",
   },
   {
     value: "auto_review",
-    label: "自动审查",
-    detail: "使用 Codex 自动审查流程处理审批请求。",
+    labelKey: "permissions.reviewerChoices.autoReview.label",
+    detailKey: "permissions.reviewerChoices.autoReview.detail",
   },
 ] as const;
 
@@ -340,6 +366,7 @@ export function SandboxPermissionsDialog({
   onSave,
   onClose,
 }: SandboxPermissionsDialogProps) {
+  const { t } = useTranslation("sandbox");
   const [draft, setDraft] = useState(value);
   useEffect(() => {
     if (open) setDraft(value);
@@ -348,16 +375,20 @@ export function SandboxPermissionsDialog({
   return (
     <DialogShell
       open={open}
-      title="Codex 权限"
-      subtitle="设置会保存到当前 Sandbox Session，并同步到其中的所有 Thread"
+      title={t("permissions.title")}
+      subtitle={t("permissions.subtitle")}
       icon={<SandboxPermissionsIcon />}
       className="sandbox-settings-dialog"
       onClose={onClose}
     >
       <div className="sandbox-control-body">
         <ChoiceGroup
-          label="沙箱模式"
-          choices={SANDBOX_CHOICES}
+          label={t("permissions.sandboxMode")}
+          choices={SANDBOX_CHOICES.map((choice) => ({
+            ...choice,
+            label: t(choice.labelKey),
+            detail: t(choice.detailKey),
+          }))}
           value={draft.sandboxMode}
           disabled={busy}
           onChange={(sandboxMode) =>
@@ -372,8 +403,12 @@ export function SandboxPermissionsDialog({
           }
         />
         <ChoiceGroup
-          label="审批策略"
-          choices={APPROVAL_CHOICES}
+          label={t("permissions.approvalPolicy")}
+          choices={APPROVAL_CHOICES.map((choice) => ({
+            ...choice,
+            label: t(choice.labelKey),
+            detail: t(choice.detailKey),
+          }))}
           value={draft.approvalPolicy}
           disabled={busy}
           onChange={(approvalPolicy) =>
@@ -381,8 +416,12 @@ export function SandboxPermissionsDialog({
           }
         />
         <ChoiceGroup
-          label="审批方式"
-          choices={REVIEWER_CHOICES}
+          label={t("permissions.approvalMethod")}
+          choices={REVIEWER_CHOICES.map((choice) => ({
+            ...choice,
+            label: t(choice.labelKey),
+            detail: t(choice.detailKey),
+          }))}
           value={draft.approvalsReviewer}
           disabled={busy}
           onChange={(approvalsReviewer) =>
@@ -395,8 +434,8 @@ export function SandboxPermissionsDialog({
           }`}
         >
           <span>
-            <strong>允许网络访问</strong>
-            <small>控制 workspace-write 与只读模式中的外部网络访问。</small>
+            <strong>{t("permissions.networkAccess")}</strong>
+            <small>{t("permissions.networkAccessHelp")}</small>
           </span>
           <input
             type="checkbox"
@@ -412,13 +451,15 @@ export function SandboxPermissionsDialog({
         </label>
         {draft.sandboxMode === "danger-full-access" ? (
           <div className="sandbox-control-note is-danger">
-            完全访问会关闭文件系统与网络隔离，请只在可信任务中使用。
+            {t("permissions.fullAccessWarning")}
           </div>
         ) : null}
         {error ? <div className="sandbox-control-error">{error}</div> : null}
       </div>
       <footer className="sandbox-control-actions">
-        <button type="button" onClick={onClose} disabled={busy}>取消</button>
+        <button type="button" onClick={onClose} disabled={busy}>
+          {t("common.cancel")}
+        </button>
         <button
           type="button"
           className="is-primary"
@@ -426,7 +467,7 @@ export function SandboxPermissionsDialog({
           onClick={() => onSave(draft)}
         >
           {busy ? <SandboxSpinnerIcon className="spin" /> : null}
-          保存权限
+          {t("permissions.save")}
         </button>
       </footer>
     </DialogShell>
@@ -528,6 +569,7 @@ export function SandboxWorkspaceDialog({
   onSave,
   onClose,
 }: SandboxWorkspaceDialogProps) {
+  const { t } = useTranslation("sandbox");
   const [path, setPath] = useState(cwd || "/");
   const [listing, setListing] = useState<SandboxDirectoryListing | null>(null);
   const [loading, setLoading] = useState(false);
@@ -559,15 +601,15 @@ export function SandboxWorkspaceDialog({
   return (
     <DialogShell
       open={open}
-      title="工作空间"
-      subtitle="选择当前 Codex Thread 执行命令与修改文件的目录"
+      title={t("workspace.title")}
+      subtitle={t("workspace.subtitle")}
       icon={<SandboxWorkspaceIcon />}
       className="sandbox-workspace-dialog"
       onClose={onClose}
     >
       <div className="sandbox-control-body">
         <label className="sandbox-workspace-input">
-          <span>绝对路径</span>
+          <span>{t("workspace.absolutePath")}</span>
           <div>
             <input
               value={path}
@@ -586,7 +628,7 @@ export function SandboxWorkspaceDialog({
               disabled={busy || loading || !path.startsWith("/")}
               onClick={() => void load(path)}
             >
-              浏览
+              {t("workspace.browse")}
             </button>
           </div>
         </label>
@@ -603,7 +645,7 @@ export function SandboxWorkspaceDialog({
                 onClick={() => void load(listing.parent ?? "/")}
               >
                 <SandboxWorkspaceIcon />
-                <span>上一级</span>
+                <span>{t("workspace.parent")}</span>
                 <small>{listing.parent}</small>
                 <SandboxChevronIcon />
               </button>
@@ -621,13 +663,13 @@ export function SandboxWorkspaceDialog({
               </button>
             ))}
             {!loading && listing?.directories.length === 0 ? (
-              <div className="sandbox-directory-empty">当前目录没有子目录</div>
+              <div className="sandbox-directory-empty">{t("workspace.empty")}</div>
             ) : null}
           </div>
         </div>
         {locked ? (
           <div className="sandbox-control-note">
-            当前对话已经开始，工作空间已锁定。新建 Sandbox 会话后可重新选择。
+            {t("workspace.locked")}
           </div>
         ) : null}
         {browseError || error ? (
@@ -635,7 +677,9 @@ export function SandboxWorkspaceDialog({
         ) : null}
       </div>
       <footer className="sandbox-control-actions">
-        <button type="button" onClick={onClose} disabled={busy}>取消</button>
+        <button type="button" onClick={onClose} disabled={busy}>
+          {t("common.cancel")}
+        </button>
         <button
           type="button"
           className="is-primary"
@@ -643,7 +687,7 @@ export function SandboxWorkspaceDialog({
           onClick={() => onSave(path)}
         >
           {busy ? <SandboxSpinnerIcon className="spin" /> : null}
-          使用此目录
+          {t("workspace.useDirectory")}
         </button>
       </footer>
     </DialogShell>
@@ -663,6 +707,7 @@ export function SandboxApprovalDialog({
   error,
   onDecision,
 }: SandboxApprovalDialogProps) {
+  const { t } = useTranslation("sandbox");
   const command = approval?.command?.trim();
   const changes = approval?.changes === undefined
     ? ""
@@ -670,8 +715,10 @@ export function SandboxApprovalDialog({
   return (
     <DialogShell
       open={approval !== null}
-      title={approval?.kind === "file" ? "允许修改文件？" : "允许执行命令？"}
-      subtitle="Codex 正在等待你的决定"
+      title={approval?.kind === "file"
+        ? t("approval.fileTitle")
+        : t("approval.commandTitle")}
+      subtitle={t("approval.subtitle")}
       icon={<SandboxPermissionsIcon />}
       className="sandbox-approval-dialog"
       onClose={() => {
@@ -686,7 +733,7 @@ export function SandboxApprovalDialog({
         {changes ? <pre>{changes}</pre> : null}
         {approval?.cwd ? (
           <div className="sandbox-approval-meta">
-            执行目录 <code>{approval.cwd}</code>
+            {t("approval.workingDirectory")} <code>{approval.cwd}</code>
           </div>
         ) : null}
         {error ? <div className="sandbox-control-error">{error}</div> : null}
@@ -697,14 +744,14 @@ export function SandboxApprovalDialog({
           disabled={busy}
           onClick={() => onDecision("decline")}
         >
-          拒绝
+          {t("approval.decline")}
         </button>
         <button
           type="button"
           disabled={busy}
           onClick={() => onDecision("accept")}
         >
-          仅本次允许
+          {t("approval.acceptOnce")}
         </button>
         <button
           type="button"
@@ -713,7 +760,7 @@ export function SandboxApprovalDialog({
           onClick={() => onDecision("acceptForSession")}
         >
           {busy ? <SandboxSpinnerIcon className="spin" /> : null}
-          本会话允许
+          {t("approval.acceptSession")}
         </button>
       </footer>
     </DialogShell>

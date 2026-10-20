@@ -11,11 +11,15 @@ test("proxies the session trace API in development", () => {
   assert.match(source, /["']\/dev["']\s*:\s*localApiProxy\(\)/);
 });
 
-test("proxies session capability APIs in development", () => {
+test("proxies Runtime harness APIs in development", () => {
   assert.match(source, /["']\/harness["']\s*:\s*localApiProxy\(\)/);
 });
 
 test("local API proxy strips browser origin headers before forwarding", () => {
+  assert.match(
+    source,
+    /function localApiProxy\(\): ProxyOptions[\s\S]*?ws:\s*true/,
+  );
   assert.match(
     source,
     /function localApiProxy\(\): ProxyOptions[\s\S]*?proxy\.on\(["']proxyReq["'][\s\S]*?removeHeader\(["']origin["']\)[\s\S]*?removeHeader\(["']referer["']\)/,
@@ -33,4 +37,20 @@ test("local API proxy strips browser origin headers before forwarding", () => {
   ]) {
     assert.match(source, new RegExp(`['"]${route}['"]\\s*:\\s*localApiProxy\\(\\)`));
   }
+});
+
+test("main development server scans only the product entry", () => {
+  assert.match(
+    source,
+    /optimizeDeps:\s*\{[\s\S]*?entries:\s*\["index\.html"\]/,
+  );
+});
+
+test("groups built assets by role and visualization runtime", () => {
+  assert.match(source, /entryFileNames:\s*["']assets\/app\/\[name\]-\[hash\]\.js["']/);
+  assert.match(source, /assets\/visualizations\/mermaid/);
+  assert.match(source, /assets\/visualizations\/echarts/);
+  assert.match(source, /assets\/chunks/);
+  assert.match(source, /assets\/styles\/\[name\]-\[hash\]\[extname\]/);
+  assert.match(source, /assets\/media\/\[name\]-\[hash\]\[extname\]/);
 });

@@ -12,8 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from veadk.skills.exceptions import SkillLoadError, SkillMaterializeError
-from veadk.skills.registry import VeSkillRegistry
+
+if TYPE_CHECKING:
+    from veadk.skills.registry import VeSkillRegistry
+
+
+def __getattr__(name: str) -> Any:
+    if name != "VeSkillRegistry":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from veadk.skills.registry import VeSkillRegistry
+
+    globals()[name] = VeSkillRegistry
+    return VeSkillRegistry
+
 
 __all__ = [
     "SkillLoadError",

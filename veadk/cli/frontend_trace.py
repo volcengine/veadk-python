@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import threading
-
 from collections.abc import Sequence
 
 from opentelemetry.sdk.trace import ReadableSpan
@@ -26,6 +25,8 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 _SESSION_ID_ATTRIBUTES = (
     "gcp.vertex.agent.session_id",
     "gen_ai.conversation.id",
+    "gen_ai.session.id",
+    "session.id",
 )
 
 
@@ -41,8 +42,6 @@ class SessionTraceExporter(SpanExporter):
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         with self._lock:
             for span in spans:
-                if span.name != "call_llm":
-                    continue
                 context = span.context
                 if context is None:
                     continue
