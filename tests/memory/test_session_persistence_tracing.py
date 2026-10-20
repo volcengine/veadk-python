@@ -10,6 +10,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from veadk.memory.short_term_memory_backends.sqlite_backend import SQLiteSTMBackend
+from veadk.memory.short_term_memory import ShortTermMemory
 
 
 @pytest.fixture
@@ -23,10 +24,24 @@ def tracing(monkeypatch):
     provider.shutdown()
 
 
+def _owned_database_service(tmp_path, entry_point):
+    path = str(tmp_path / "session.db")
+    if entry_point == "db_url":
+        return ShortTermMemory(
+            backend="local",
+            db_url=f"sqlite+aiosqlite:///{path}",
+            db_kwargs={"echo": False},
+        ).session_service
+    return SQLiteSTMBackend(local_path=path).session_service
+
+
 @pytest.mark.asyncio
-async def test_real_sqlite_persists_event_state_and_parent(tracing, tmp_path):
+@pytest.mark.parametrize("entry_point", ["factory", "db_url"])
+async def test_real_sqlite_persists_event_state_and_parent(
+    tracing, tmp_path, entry_point
+):
     tracer, exporter = tracing
-    service = SQLiteSTMBackend(local_path=str(tmp_path / "session.db")).session_service
+    service = _owned_database_service(tmp_path, entry_point)
     session = await service.create_session(app_name="app", user_id="user")
     event = Event(
         author="agent", actions=EventActions(state_delta={"answer": "private"})
@@ -52,9 +67,10 @@ async def test_real_sqlite_persists_event_state_and_parent(tracing, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_partial_event_is_not_persistence(tracing, tmp_path):
+@pytest.mark.parametrize("entry_point", ["factory", "db_url"])
+async def test_partial_event_is_not_persistence(tracing, tmp_path, entry_point):
     _, exporter = tracing
-    service = SQLiteSTMBackend(local_path=str(tmp_path / "partial.db")).session_service
+    service = _owned_database_service(tmp_path, entry_point)
     session = await service.create_session(app_name="app", user_id="user")
     await service.append_event(session, Event(author="agent", partial=True))
     assert not exporter.get_finished_spans()
@@ -109,7 +125,10 @@ async def test_telemetry_failure_does_not_skip_or_repeat_persistence(
 
 
 @pytest.mark.asyncio
-async def test_real_runner_persists_events_within_execution(tracing, tmp_path):
+@pytest.mark.parametrize("entry_point", ["factory", "db_url"])
+async def test_real_runner_persists_events_within_execution(
+    tracing, tmp_path, entry_point
+):
     from google.adk.agents import BaseAgent
     from google.adk.runners import Runner
     from google.genai import types
@@ -124,7 +143,7 @@ async def test_real_runner_persists_events_within_execution(tracing, tmp_path):
             )
 
     tracer, exporter = tracing
-    service = SQLiteSTMBackend(local_path=str(tmp_path / "runner.db")).session_service
+    service = _owned_database_service(tmp_path, entry_point)
     session = await service.create_session(app_name="app", user_id="user")
     runner = Runner(
         agent=ProbeAgent(name="probe"), app_name="app", session_service=service

@@ -18,4 +18,4 @@ CON-5（本地已实现，尚未部署）：`veadk.knowledge.search`、`veadk.me
 
 ## 会话持久化
 
-CON-6（本地已实现，未部署）：VeADK 内置 SQLite、MySQL、PostgreSQL 工厂通过内部 DatabaseSessionService 子类，将非 partial 的 append_event 调用记录为 `veadk.session.append_event`。Span 包含 ADK 存储操作中的序列化、状态更新和数据库调用，不拆分各条 SQL，也不证明远端持久化提交。仅记录实际会话／执行标识与错误类型。采样和上报由现有 Provider 管理。参数、返回事件、错误、取消、缓存及调用方自定义 SessionService 保持不变。设计：[会话持久化诊断](../../prd-spec/features/session-persistence-diagnostics/2026-10-10-session-persistence.zh.md)。
+CON-6（包含直接 URL 入口，本地已验证，未部署）：VeADK 内置 SQLite、MySQL、PostgreSQL 工厂及 `ShortTermMemory(db_url=...)` 构造入口通过内部 DatabaseSessionService 子类，将非 partial 的 append_event 调用记录为 `veadk.session.append_event`。显式 `db_url` 的优先级及 `db_kwargs` 透传保持不变。Span 包含 ADK 存储操作中的序列化、状态更新和数据库调用，不拆分各条 SQL，也不证明远端持久化提交。仅记录实际会话／执行标识与错误类型。采样和上报由现有 Provider 管理。参数、返回事件、错误、取消、缓存及调用方自定义 SessionService 保持不变。设计：[会话持久化诊断](../../prd-spec/features/session-persistence-diagnostics/2026-10-10-session-persistence.zh.md)。
