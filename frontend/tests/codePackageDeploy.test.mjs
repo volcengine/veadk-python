@@ -97,13 +97,34 @@ test("validates and previews uploaded zip projects before deployment", () => {
   assert.match(packageCreateSource, /from "\.\/skills\/zip"/);
   assert.match(packageCreateSource, /accept="\.zip,application\/zip"/);
   assert.match(packageCreateSource, /normalizePackageEntries/);
+  assert.match(packageCreateSource, /validatePackageDeployability/);
   assert.match(packageCreateSource, /agentkit\.yaml/);
   assert.match(packageCreateSource, /entry_point/);
   assert.match(packageCreateSource, /app\.py/);
+  assert.match(packageCreateSource, /requirements\.txt/);
   assert.match(
     packageCreateSource,
     /t\("codePackage\.errors\.defaultEntryPointMissing"\)/,
   );
+  assert.match(
+    packageCreateSource,
+    /t\("codePackage\.errors\.missingDefaultApp"\)/,
+  );
+  assert.match(
+    packageCreateSource,
+    /t\("codePackage\.errors\.missingDefaultRequirements"\)/,
+  );
+  assert.match(
+    packageCreateSource,
+    /t\("codePackage\.errors\.binaryOrCacheFile", \{ path: file\.path \}\)/,
+  );
+  assert.match(packageCreateSource, /__pycache__/);
+  assert.match(packageCreateSource, /\.endsWith\("\.pyc"\)/);
+  assert.match(packageCreateSource, /BINARY_TEXT_MARKERS/);
+  assert.match(packageCreateSource, /0\.0\.0\.0/);
+  assert.match(packageCreateSource, /codePackage\.warnings\.missingRuntimeListener/);
+  assert.match(packageCreateSource, /className="package-create-warning"/);
+  assert.match(packageCreateStyles, /\.package-create-warning\s*\{/);
   assert.match(packageCreateSource, /maxUncompressedBytes: MAX_PACKAGE_BYTES/);
   assert.match(zipSource, /options\.maxUncompressedBytes/);
   assert.match(packageCreateSource, /deploymentPrimaryPane=/);
