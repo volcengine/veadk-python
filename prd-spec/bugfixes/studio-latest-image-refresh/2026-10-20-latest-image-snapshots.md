@@ -1,5 +1,7 @@
 # Studio latest image snapshots
 
+> Superseded for current implementation by the approved [read-only resolution design](2026-10-21-readonly-tag-resolution.md). The following records the original registry-writing design and its historical deployment evidence.
+
 [中文版](2026-10-20-latest-image-snapshots.zh.md)
 
 - Change ID: `studio-latest-image-refresh`

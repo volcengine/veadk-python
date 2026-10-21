@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pin Studio latest references before creating any Worker or Runtime intent."""
+"""Pin Studio latest to an existing public tag before Worker/Runtime intents."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ import asyncio
 import hashlib
 import json
 import re
+import time
 from dataclasses import replace
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit
 
 import requests
-from agentkit.toolkit.volcengine.cr import VeCR
 
 from .database import DeploymentError
 
@@ -24,7 +24,10 @@ _MEDIA = (
     "application/vnd.docker.distribution.manifest.v2+json",
 )
 _LIMIT = 1024 * 1024
+_MAX_PAGES = 20
+_MAX_TAGS = 1000
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_TAG = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z")
 
 
 def _reference(image, provider):
@@ -37,62 +40,70 @@ def _reference(image, provider):
     match = re.fullmatch(pattern, image)
     if not match or suffix is None:
         raise DeploymentError(
-            "Latest snapshots require a trusted provider CR reference"
+            "Latest discovery requires a trusted provider CR reference"
         )
     return match.groups()
 
 
-def _read(response):
+def _read(response, deadline):
     try:
         body = bytearray()
         for chunk in response.iter_content(chunk_size=65536):
+            if time.monotonic() >= deadline:
+                raise DeploymentError("Registry discovery exceeded its time budget")
             body.extend(chunk)
             if len(body) > _LIMIT:
-                raise DeploymentError("Registry response exceeds the snapshot limit")
+                raise DeploymentError("Registry response exceeds the discovery limit")
         return bytes(body)
     finally:
         response.close()
 
 
 def snapshot_image(image, cloud, *, selection=None):
-    """Copy manifest bytes to a content-derived tag, or verify a saved selection."""
+    """Select an existing public tag by digest, or verify a persisted selection."""
     host, repository = _reference(image, cloud.provider)
-    base = f"https://{host}/v2/{repository}/manifests/"
-    if selection is not None and (
-        not isinstance(selection, dict)
-        or not isinstance(selection.get("digest"), str)
-        or not _DIGEST.fullmatch(selection["digest"])
-        or selection.get("image")
-        != image.removesuffix("latest") + "mpa-sha256-" + selection["digest"][7:]
-    ):
-        raise DeploymentError("Invalid registered image snapshot")
-    try:
-        credential = cloud._credentials()
-        user, password, _ = VeCR(
-            credential.access_key_id,
-            credential.secret_access_key,
-            region=cloud.region,
-            provider=cloud.provider,
-            session_token=credential.session_token,
-        )._get_authorization_token(
-            host.split(".", 1)[0].removesuffix("-" + cloud.region)
+    prefix = image.removesuffix("latest")
+    saved_tag = ""
+    if selection is not None:
+        if not isinstance(selection, dict):
+            raise DeploymentError("Invalid registered image selection")
+        saved_image = selection.get("image")
+        saved_tag = (
+            saved_image.removeprefix(prefix)
+            if isinstance(saved_image, str) and saved_image.startswith(prefix)
+            else ""
         )
+        if (
+            not isinstance(selection.get("digest"), str)
+            or not _DIGEST.fullmatch(selection["digest"])
+            or not _TAG.fullmatch(saved_tag)
+            or saved_tag == "latest"
+        ):
+            raise DeploymentError("Invalid registered image selection")
+    base = f"https://{host}/v2/{repository}/"
+    deadline = time.monotonic() + 120
+    try:
         with requests.Session() as session:
-            session.auth = (user, password)
+            # Discovery is anonymous: do not inherit netrc credentials or proxy auth.
+            session.trust_env = False
+            session.auth = None
             session.headers["Accept"] = ",".join(_MEDIA)
 
-            def request(method, url, **kwargs):
+            def request(url, **kwargs):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise DeploymentError("Registry discovery exceeded its time budget")
                 return session.request(
-                    method,
+                    "GET",
                     url,
-                    timeout=(10, 30),
+                    timeout=(min(10, remaining), min(30, remaining)),
                     allow_redirects=False,
                     stream=True,
                     **kwargs,
                 )
 
-            def manifest(reference, *, missing=False):
-                response = request("GET", base + reference)
+            def get(url):
+                response = request(url)
                 if response.status_code == 401:
                     challenge = response.headers.get("WWW-Authenticate", "")
                     response.close()
@@ -110,32 +121,39 @@ def snapshot_image(image, cloud, *, selection=None):
                             "Untrusted registry authentication challenge"
                         )
                     auth = request(
-                        "GET",
                         params["realm"],
                         params={
                             "service": params.get("service", host),
-                            "scope": f"repository:{repository}:pull,push",
+                            "scope": f"repository:{repository}:pull",
                         },
                     )
                     if auth.status_code != 200:
                         auth.close()
-                        raise DeploymentError("Registry token request failed")
-                    tokens = json.loads(_read(auth))
+                        raise DeploymentError("Anonymous registry token request failed")
+                    tokens = json.loads(_read(auth, deadline))
                     token = tokens.get("token") or tokens.get("access_token")
-                    if not isinstance(token, str) or not token:
+                    if (
+                        not isinstance(token, str)
+                        or not token.strip()
+                        or "\n" in token
+                        or "\r" in token
+                    ):
                         raise DeploymentError("Registry token response is invalid")
-                    session.auth = None
                     session.headers["Authorization"] = "Bearer " + token
-                    response = request("GET", base + reference)
+                    response = request(url)
+                return response
+
+            def manifest(tag, *, missing=False):
+                response = get(base + "manifests/" + tag)
                 if response.status_code == 404 and missing:
                     response.close()
                     return None
                 if response.status_code != 200:
                     response.close()
-                    raise DeploymentError("Unable to read registry image manifest")
+                    raise DeploymentError("Unable to read public registry manifest")
                 media = response.headers.get("Content-Type", "").split(";", 1)[0]
                 declared = response.headers.get("Docker-Content-Digest")
-                body = _read(response)
+                body = _read(response, deadline)
                 digest = "sha256:" + hashlib.sha256(body).hexdigest()
                 document = json.loads(body)
                 if (
@@ -146,39 +164,89 @@ def snapshot_image(image, cloud, *, selection=None):
                     or document.get("mediaType", media) != media
                 ):
                     raise DeploymentError("Registry manifest validation failed")
-                return body, digest, media
+                return digest
 
             if selection is not None:
-                saved = manifest(selection["image"].rsplit(":", 1)[1])
-                assert saved is not None
-                if saved[1] != selection["digest"]:
-                    raise DeploymentError("Registered image snapshot content changed")
+                if manifest(saved_tag) != selection["digest"]:
+                    raise DeploymentError("Registered image selection content changed")
                 return dict(selection)
-            source = manifest("latest")
-            assert source is not None
-            tag = "mpa-sha256-" + source[1][7:]
-            existing = manifest(tag, missing=True)
-            if existing is None:
-                response = request(
-                    "PUT",
-                    base + tag,
-                    data=source[0],
-                    headers={"Content-Type": source[2]},
-                )
-                response.close()
-                if response.status_code not in (200, 201, 202):
-                    raise DeploymentError("Unable to publish image snapshot tag")
-                existing = manifest(tag)
-            assert existing is not None
-            if existing[1] != source[1]:
-                raise DeploymentError("Image snapshot tag has conflicting content")
-            return {"digest": source[1], "image": image.removesuffix("latest") + tag}
+            digest = manifest("latest")
+            assert digest is not None
+            page = base + "tags/list?n=100"
+            seen, tags = set(), []
+            while page:
+                if page in seen or len(seen) >= _MAX_PAGES:
+                    raise DeploymentError(
+                        "Registry tag pagination exceeds discovery limits"
+                    )
+                seen.add(page)
+                response = get(page)
+                if response.status_code != 200:
+                    response.close()
+                    raise DeploymentError("Unable to list public registry tags")
+                link = response.headers.get("Link", "")
+                document = json.loads(_read(response, deadline))
+                names = document.get("tags") if isinstance(document, dict) else False
+                if names is None:
+                    names = []
+                if not isinstance(names, list) or any(
+                    not isinstance(tag, str) or not _TAG.fullmatch(tag) for tag in names
+                ):
+                    raise DeploymentError("Invalid registry tag list")
+                tags.extend(names)
+                if len(tags) > _MAX_TAGS:
+                    raise DeploymentError("Registry tag list exceeds discovery limits")
+                page = ""
+                if link:
+                    links = requests.utils.parse_header_links(link)
+                    following = [
+                        item["url"] for item in links if item.get("rel") == "next"
+                    ]
+                    if len(following) != 1:
+                        raise DeploymentError("Invalid registry tag pagination")
+                    page = urljoin(base + "tags/list", following[0])
+                    parsed = urlsplit(page)
+                    query = parse_qsl(parsed.query, keep_blank_values=True)
+                    if (
+                        parsed.scheme != "https"
+                        or parsed.hostname != host
+                        or parsed.port not in (None, 443)
+                        or parsed.username is not None
+                        or parsed.password is not None
+                        or parsed.fragment
+                        or parsed.path != f"/v2/{repository}/tags/list"
+                        or len(dict(query)) != len(query)
+                        or any(key not in {"n", "last"} for key, _ in query)
+                        or any(
+                            not value.isdecimal() or not 1 <= int(value) <= 100
+                            for key, value in query
+                            if key == "n"
+                        )
+                        or any(
+                            not _TAG.fullmatch(value)
+                            for key, value in query
+                            if key == "last"
+                        )
+                        or page in seen
+                    ):
+                        raise DeploymentError("Untrusted registry tag pagination")
+            ordered = sorted(set(tags) - {"latest"}, reverse=True)
+            preferred = "mpa-sha256-" + digest[7:]
+            if preferred in ordered:
+                ordered.remove(preferred)
+                ordered.insert(0, preferred)
+            for tag in ordered:
+                if manifest(tag, missing=True) == digest:
+                    return {"digest": digest, "image": prefix + tag}
+            raise DeploymentError(
+                "No existing version tag matches latest; publish a unique tag first"
+            )
     except DeploymentError:
         raise
     except Exception:
-        # SDK/HTTP/parser errors may include credentials or signed request URLs.
+        # HTTP/parser errors may include tokens or arbitrary remote response text.
         raise DeploymentError(
-            "Unable to resolve or verify Studio image snapshot"
+            "Unable to resolve or verify public Studio image selection"
         ) from None
 
 

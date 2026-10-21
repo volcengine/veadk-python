@@ -272,8 +272,8 @@ CON-17 TOS 资源凭据：`/web/deployment-resources` 将当前服务端解析�
 
 ## Studio latest 内容快照（2026-10-21）
 
-已批准的[快照设计](../../prd-spec/bugfixes/studio-latest-image-refresh/2026-10-20-latest-image-snapshots.zh.md)修订 Studio 来源创建的 CON-1/3/6/8/9。UI、配置和任务输入继续保留请求的 latest 引用。在产生任何 Worker/Runtime 创建意图前，持有既有原生部署锁，解析各 latest manifest，把原始字节复制到同仓库 `mpa-sha256-<64 位小写 digest 十六进制>` tag，部署使用该固定引用。保留 Docker/OCI manifest 和 index media type，校验 SHA-256 与仓库响应头一致，并回读目标。已有快照 tag 内容冲突时失败，不覆盖。固定 tag 和独立 CLI 行为不变。
+批准的[只读设计](../../prd-spec/bugfixes/studio-latest-image-refresh/2026-10-21-readonly-tag-resolution.zh.md)修订 Studio 创建的 CON-1/3/6/8/9。输入保留 latest；在 Worker/Runtime 意图前，持有既有部署锁，以匿名 GET 将 latest manifest 解析为同仓库已发布、SHA-256 完全相同的非 latest 标签。先完整读取有界分页，优先已有 digest 命名标签，其余按字典倒序核验。保留并校验 Docker/OCI manifest 和 index。不使用云凭据、仓库管理 API、写权限，不发布标签、不搬运镜像、不新增流水线。发布方必须保留匹配版本标签且不得覆盖；无匹配项明确失败。固定 tag 和独立 CLI 不变。
 
-原生部署 JSON 的 `image_snapshots` 在云创建前保存请求镜像 `requested` 和每个镜像的 `selected` 项 `{digest,image}`。同一 Agent 重试要求原输入一致，只验证已保存快照，不再读取 latest；新 Agent 读取当前 latest。已有 Worker/Runtime 意图却没有快照记录时，不静默改写；保留资源并明确要求新建 Agent。已有运行中的 MPA 不自动升级。
+原生 `image_snapshots` 在云创建前保留原始 `requested` 输入和 `selected` 的 `{digest,image}`。重试验证原输入和保存 tag 的 digest，不读取 latest、不列举标签；兼容原 digest 命名快照。保存内容变更或缺失时失败，不重新选择。不改写缺少选择记录的旧未完成意图，不升级既有运行 MPA。
 
-只信任当前平台的 CR 主机后缀。仓库 token 挑战必须是同主机 HTTPS，禁止重定向，响应限制 1 MiB，请求有界超时。复用已核验账号的轮转凭据并携带 STS。部署身份需要 `cr:GetAuthorizationToken` 和对应仓库拉取/推送权限；本变更不自动扩大 IAM。错误明确失败，不回退 latest；原始 SDK/HTTP 异常和凭据不进入任务或 UI。快照 tag 是保留的发布引用；自动清理不属于本变更。
+仅信任当前平台 CR 后缀。匿名 bearer 挑战须为同主机 HTTPS/默认端口，无用户信息或重定向，token 只有 pull scope。禁用 requests 环境鉴权。单响应最多 1 MiB，发现最多 20 页 / 1000 个标签项，检查 120 秒预算，连接/读取上限为 10/30 秒。分页保持同仓库 tags-list 路径，只允许 n/last 参数，拒绝循环和不安全链接。非法仓库响应及脱敏传输错误不回退 latest。要求凭据的私有 latest 仓库不属于公共发现契约；标签保留和不覆盖由发布方保证。

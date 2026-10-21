@@ -1,4 +1,4 @@
-"""Immutable Studio image selection and trusted registry protocol checks."""
+"""Read-only Studio image discovery and trusted registry protocol checks."""
 
 import asyncio
 import copy
@@ -22,6 +22,7 @@ BODY = json.dumps({"schemaVersion": 2, "mediaType": MEDIA, "config": {}}).encode
 DIGEST = "sha256:" + hashlib.sha256(BODY).hexdigest()
 PINNED = IMAGE.removesuffix("latest") + "mpa-sha256-" + DIGEST[7:]
 SELECTION = {"digest": DIGEST, "image": PINNED}
+BASE = f"https://{HOST}/v2/mpa/worker/"
 
 
 class Response:
@@ -42,14 +43,19 @@ class Response:
         self.closed = True
 
 
+def tags(*names, link="", body=None):
+    return Response(
+        body=body if body is not None else json.dumps({"tags": list(names)}).encode(),
+        headers={"Content-Type": "application/json", "Link": link},
+    )
+
+
 def cloud(provider="byteplus"):
     return SimpleNamespace(
         provider=provider,
         region="ap-southeast-1",
-        _credentials=lambda: SimpleNamespace(
-            access_key_id="test-ak",
-            secret_access_key="test-sk",
-            session_token="test-sts",
+        _credentials=Mock(
+            side_effect=AssertionError("Cloud credentials must not be read")
         ),
     )
 
@@ -60,58 +66,101 @@ def http(monkeypatch, *responses):
     session.__exit__ = Mock(return_value=False)
     session.request.side_effect = responses
     monkeypatch.setattr(snapshots.requests, "Session", lambda: session)
-    factory = Mock()
-    factory.return_value._get_authorization_token.return_value = ("user", "password", 0)
-    monkeypatch.setattr(snapshots, "VeCR", factory)
-    return session, factory
+    return session
 
 
-def test_publish_preserves_bytes_and_rechecks_digest(monkeypatch):
-    session, factory = http(
-        monkeypatch, Response(), Response(404), Response(201), Response()
-    )
-    assert snapshots.snapshot_image(IMAGE, cloud()) == SELECTION
-    assert session.request.call_args_list[2].kwargs["data"] == BODY
+def test_anonymous_selection_never_reads_credentials_or_writes(monkeypatch):
+    responses = [Response(), tags("release-v1"), Response()]
+    session = http(monkeypatch, *responses)
+    identity = cloud()
+    expected = {"digest": DIGEST, "image": IMAGE.removesuffix("latest") + "release-v1"}
+    assert snapshots.snapshot_image(IMAGE, identity) == expected
+    identity._credentials.assert_not_called()
+    assert session.trust_env is False
+    assert session.auth is None
+    assert "Authorization" not in session.headers
+    assert [c.args[0] for c in session.request.call_args_list] == ["GET"] * 3
     assert all(
         c.kwargs["allow_redirects"] is False for c in session.request.call_args_list
     )
-    assert factory.call_args.kwargs["session_token"] == "test-sts"
-    factory.return_value._get_authorization_token.assert_called_once_with(
-        "agentkit-platform-123"
+    assert all(
+        0 < c.kwargs["timeout"][0] <= 10 and 0 < c.kwargs["timeout"][1] <= 30
+        for c in session.request.call_args_list
     )
-    assert session.request.call_args_list[2].args[1].endswith(PINNED.split(":")[-1])
+    assert all(r.closed for r in responses)
 
 
-def test_existing_snapshot_is_verified_without_overwrite(monkeypatch):
-    session, _ = http(monkeypatch, Response(), Response())
+def test_prefer_existing_digest_named_tag_without_publication(monkeypatch):
+    session = http(
+        monkeypatch, Response(), tags("z-release", PINNED.rsplit(":", 1)[1]), Response()
+    )
     assert snapshots.snapshot_image(IMAGE, cloud()) == SELECTION
-    assert [c.args[0] for c in session.request.call_args_list] == ["GET", "GET"]
+    assert (
+        session.request.call_args.args[1]
+        == BASE + "manifests/" + PINNED.rsplit(":", 1)[1]
+    )
+    assert [c.args[0] for c in session.request.call_args_list] == ["GET"] * 3
 
 
-def test_retry_reads_only_pinned_reference(monkeypatch):
-    session, _ = http(monkeypatch, Response())
-    assert snapshots.snapshot_image(IMAGE, cloud(), selection=SELECTION) == SELECTION
+def test_missing_and_nonmatching_candidates_are_skipped_in_stable_order(monkeypatch):
+    session = http(
+        monkeypatch,
+        Response(),
+        tags("release-v1", "y-other", "latest", "z-deleted", "release-v1"),
+        Response(404),
+        Response(body=b'{"schemaVersion":2,"config":{"other":true}}'),
+        Response(),
+    )
+    result = snapshots.snapshot_image(IMAGE, cloud())
+    assert result["image"].endswith(":release-v1")
+    assert [
+        c.args[1].rsplit("/", 1)[1] for c in session.request.call_args_list[2:]
+    ] == ["z-deleted", "y-other", "release-v1"]
+
+
+def test_all_pages_are_read_before_tag_selection(monkeypatch):
+    next_path = "/v2/mpa/worker/tags/list?n=100&last=release-v1"
+    session = http(
+        monkeypatch,
+        Response(),
+        tags("release-v1", link=f'<{next_path}>; rel="next"'),
+        tags("z-release"),
+        Response(),
+    )
+    result = snapshots.snapshot_image(IMAGE, cloud())
+    assert result["image"].endswith(":z-release")
+    assert session.request.call_args_list[2].args[1] == "https://" + HOST + next_path
+
+
+@pytest.mark.parametrize("saved_tag", ["release-v1", PINNED.rsplit(":", 1)[1]])
+def test_retry_reads_only_saved_reference(monkeypatch, saved_tag):
+    session = http(monkeypatch, Response())
+    saved = {"digest": DIGEST, "image": IMAGE.removesuffix("latest") + saved_tag}
+    assert snapshots.snapshot_image(IMAGE, cloud(), selection=saved) == saved
     assert len(session.request.call_args_list) == 1
-    assert not session.request.call_args.args[1].endswith(":latest")
+    assert session.request.call_args.args[1] == BASE + "manifests/" + saved_tag
 
 
-def test_bearer_challenge_is_restricted_and_authorization_replaced(monkeypatch):
+@pytest.mark.parametrize("token_key", ["token", "access_token"])
+def test_bearer_challenge_requests_anonymous_pull_only(monkeypatch, token_key):
     challenge = Response(
         401,
         headers={
             "WWW-Authenticate": f'Bearer realm="https://{HOST}/service/token",service="registry"'
         },
     )
-    token = Response(body=b'{"token":"test-bearer"}')
-    session, _ = http(monkeypatch, challenge, token, Response(), Response())
-    assert snapshots.snapshot_image(IMAGE, cloud()) == SELECTION
+    token = Response(body=json.dumps({token_key: "test-bearer"}).encode())
+    session = http(
+        monkeypatch, challenge, token, Response(), tags("release-v1"), Response()
+    )
+    assert snapshots.snapshot_image(IMAGE, cloud())["image"].endswith(":release-v1")
     assert session.auth is None
     assert session.headers["Authorization"] == "Bearer test-bearer"
-    assert (
-        session.request.call_args_list[1].kwargs["params"]["scope"]
-        == "repository:mpa/worker:pull,push"
-    )
-    assert challenge.closed
+    assert session.request.call_args_list[1].kwargs["params"] == {
+        "service": "registry",
+        "scope": "repository:mpa/worker:pull",
+    }
+    assert challenge.closed and token.closed
 
 
 @pytest.mark.parametrize(
@@ -121,10 +170,11 @@ def test_bearer_challenge_is_restricted_and_authorization_replaced(monkeypatch):
         "https://evil.test",
         "https://user@" + HOST,
         "https://" + HOST + ":444",
+        "https://user:pass@" + HOST,
     ],
 )
-def test_challenge_cannot_forward_credentials(monkeypatch, realm):
-    session, _ = http(
+def test_untrusted_authentication_challenges_are_rejected(monkeypatch, realm):
+    session = http(
         monkeypatch,
         Response(401, headers={"WWW-Authenticate": f'Bearer realm="{realm}"'}),
     )
@@ -134,20 +184,84 @@ def test_challenge_cannot_forward_credentials(monkeypatch, realm):
 
 
 @pytest.mark.parametrize(
-    "image,provider",
+    "link",
     [
-        ("evil.test/mpa:latest", "byteplus"),
-        (IMAGE, "volcengine"),
-        ("https://" + IMAGE, "byteplus"),
-        (IMAGE.replace("/mpa/", "/x/../"), "byteplus"),
+        '<https://evil.test/v2/mpa/worker/tags/list?n=100>; rel="next"',
+        f'<http://{HOST}/v2/mpa/worker/tags/list?n=100>; rel="next"',
+        f'<https://user@{HOST}/v2/mpa/worker/tags/list?n=100>; rel="next"',
+        f'<https://{HOST}:444/v2/mpa/worker/tags/list?n=100>; rel="next"',
+        '</v2/another/worker/tags/list?n=100>; rel="next"',
+        '</v2/mpa/worker/tags/list?n=100#token>; rel="next"',
+        '</v2/mpa/worker/tags/list?n=100&secret=x>; rel="next"',
+        '</v2/mpa/worker/tags/list?n=100&n=1>; rel="next"',
+        '</v2/mpa/worker/tags/list?n=0>; rel="next"',
+        '</v2/mpa/worker/tags/list?n=101>; rel="next"',
+        '</v2/mpa/worker/tags/list?n=bad>; rel="next"',
+        '</v2/mpa/worker/tags/list?last=../evil>; rel="next"',
+        '</v2/mpa/worker/tags/list?last=>; rel="next"',
+        '</v2/mpa/worker/tags/list?n=100>; rel="next"',
+        '</v2/mpa/worker/tags/list?n=1>; rel="next", </v2/mpa/worker/tags/list?n=2>; rel="next"',
+        "invalid",
     ],
 )
-def test_untrusted_reference_rejected_before_credentials(monkeypatch, image, provider):
-    session, factory = http(monkeypatch)
+def test_unsafe_invalid_and_cyclic_pagination_fail_before_following(monkeypatch, link):
+    session = http(monkeypatch, Response(), tags("release-v1", link=link))
     with pytest.raises(DeploymentError):
-        snapshots.snapshot_image(image, cloud(provider))
-    factory.assert_not_called()
-    session.request.assert_not_called()
+        snapshots.snapshot_image(IMAGE, cloud())
+    assert len(session.request.call_args_list) == 2
+
+
+@pytest.mark.parametrize("limit", ["_MAX_PAGES", "_MAX_TAGS"])
+def test_enumeration_limits_fail_without_partial_selection(monkeypatch, limit):
+    monkeypatch.setattr(snapshots, limit, 1)
+    session = http(
+        monkeypatch,
+        Response(),
+        tags("v1", "v2", link='</v2/mpa/worker/tags/list?last=v2>; rel="next"'),
+    )
+    with pytest.raises(DeploymentError):
+        snapshots.snapshot_image(IMAGE, cloud())
+    assert len(session.request.call_args_list) == 2
+
+
+@pytest.mark.parametrize(
+    "body", [b"{}", b'{"tags":null}', b'{"tags":[]}', b'{"tags":["latest"]}']
+)
+def test_no_matching_tag_fails_without_writes(monkeypatch, body):
+    session = http(monkeypatch, Response(), tags(body=body))
+    with pytest.raises(DeploymentError, match="No existing version tag matches latest"):
+        snapshots.snapshot_image(IMAGE, cloud())
+    assert [c.args[0] for c in session.request.call_args_list] == ["GET", "GET"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"[]",
+        b"not-json",
+        b'{"tags":"v1"}',
+        b'{"tags":[1]}',
+        b'{"tags":["../bad"]}',
+        b'{"tags":["bad:tag"]}',
+    ],
+)
+def test_invalid_tag_lists_fail_closed(monkeypatch, body):
+    session = http(monkeypatch, Response(), tags(body=body))
+    with pytest.raises(DeploymentError):
+        snapshots.snapshot_image(IMAGE, cloud())
+    assert len(session.request.call_args_list) == 2
+
+
+def test_no_candidate_with_matching_digest_fails(monkeypatch):
+    session = http(
+        monkeypatch,
+        Response(),
+        tags("v1"),
+        Response(body=b'{"schemaVersion":2,"different":true}'),
+    )
+    with pytest.raises(DeploymentError, match="No existing version tag matches latest"):
+        snapshots.snapshot_image(IMAGE, cloud())
+    assert len(session.request.call_args_list) == 3
 
 
 @pytest.mark.parametrize(
@@ -159,10 +273,11 @@ def test_untrusted_reference_rejected_before_credentials(monkeypatch, image, pro
         [Response(body=b"not-json")],
         [Response(body=b"[]")],
         [Response(body=b'{"schemaVersion":1}')],
+        [Response(body=b'{"schemaVersion":2,"mediaType":"wrong"}')],
         [Response(body=b"x" * (1024 * 1024 + 1))],
-        [Response(), Response(body=b'{"schemaVersion":2,"config":{"other":true}}')],
-        [Response(), Response(404), Response(403)],
-        [Response(), Response(404), Response(201), Response(404)],
+        [Response(), Response(403)],
+        [Response(), tags("v1"), Response(403)],
+        [Response(), tags("v1"), Response(404)],
         [requests.Timeout("sensitive-url")],
         [Response(401)],
         [
@@ -170,24 +285,87 @@ def test_untrusted_reference_rejected_before_credentials(monkeypatch, image, pro
                 401,
                 headers={"WWW-Authenticate": f'Bearer realm="https://{HOST}/token"'},
             ),
+            Response(403),
+        ],
+        [
+            Response(
+                401,
+                headers={"WWW-Authenticate": f'Bearer realm="https://{HOST}/token"'},
+            ),
             Response(body=b"{}"),
+        ],
+        [
+            Response(
+                401,
+                headers={"WWW-Authenticate": f'Bearer realm="https://{HOST}/token"'},
+            ),
+            Response(body=b'{"token":" "}'),
+        ],
+        [
+            Response(
+                401,
+                headers={"WWW-Authenticate": f'Bearer realm="https://{HOST}/token"'},
+            ),
+            Response(body=b'{"token":"a"}'),
+            Response(401),
         ],
     ],
 )
 def test_invalid_registry_responses_fail_closed_and_redact(monkeypatch, responses):
-    http(monkeypatch, *responses)
+    session = http(monkeypatch, *responses)
     with pytest.raises(DeploymentError) as error:
         snapshots.snapshot_image(IMAGE, cloud())
     assert "sensitive-url" not in str(error.value)
-    assert "test-sk" not in str(error.value)
+    assert all(c.args[0] == "GET" for c in session.request.call_args_list)
+
+
+@pytest.mark.parametrize("times", [[0, 121], [0, 0, 121]])
+def test_deadline_is_enforced_before_requests_and_during_response_read(
+    monkeypatch, times
+):
+    monkeypatch.setattr(snapshots.time, "monotonic", Mock(side_effect=times))
+    response = Response()
+    session = http(monkeypatch, response)
+    with pytest.raises(DeploymentError, match="budget"):
+        snapshots.snapshot_image(IMAGE, cloud())
+    if len(times) == 2:
+        session.request.assert_not_called()
+    else:
+        assert response.closed
+
+
+@pytest.mark.parametrize(
+    "image,provider",
+    [
+        ("evil.test/mpa:latest", "byteplus"),
+        (IMAGE, "volcengine"),
+        (IMAGE, "unknown"),
+        ("https://" + IMAGE, "byteplus"),
+        (IMAGE.replace("/mpa/", "/x/../"), "byteplus"),
+    ],
+)
+def test_untrusted_reference_rejected_before_network(monkeypatch, image, provider):
+    session = http(monkeypatch)
+    with pytest.raises(DeploymentError):
+        snapshots.snapshot_image(image, cloud(provider))
+    session.request.assert_not_called()
 
 
 @pytest.mark.parametrize(
     "selection",
-    [{}, {"digest": "bad", "image": PINNED}, {"digest": DIGEST, "image": IMAGE}],
+    [
+        "bad",
+        {},
+        {"digest": "bad", "image": PINNED},
+        {"digest": DIGEST, "image": IMAGE},
+        {"digest": DIGEST, "image": IMAGE.removesuffix("latest") + "../bad"},
+        {"digest": DIGEST, "image": PINNED.replace(HOST, "evil.test")},
+        {"digest": DIGEST, "image": 1},
+        {"digest": None, "image": PINNED},
+    ],
 )
 def test_invalid_saved_selection_does_not_contact_registry(monkeypatch, selection):
-    session, _ = http(monkeypatch)
+    session = http(monkeypatch)
     with pytest.raises(DeploymentError):
         snapshots.snapshot_image(IMAGE, cloud(), selection=selection)
     session.request.assert_not_called()
@@ -333,13 +511,16 @@ def test_only_latest_selection_is_changed(monkeypatch, latest_key):
     assert result.image_defaults()[other] == p.image_defaults()[other]
 
 
-def test_domestic_provider_uses_its_own_registry_and_credentials(monkeypatch):
+def test_domestic_provider_uses_anonymous_registry_reads(monkeypatch):
     image = IMAGE.replace("bytepluses.com", "volces.com")
-    session, factory = http(monkeypatch, Response(), Response())
-    result = snapshots.snapshot_image(image, cloud("volcengine"))
-    assert result["image"].startswith(image.removesuffix("latest"))
-    assert factory.call_args.kwargs["provider"] == "volcengine"
-    assert "bytepluses.com" not in session.request.call_args.args[1]
+    session = http(monkeypatch, Response(), tags("release-v1"), Response())
+    identity = cloud("volcengine")
+    result = snapshots.snapshot_image(image, identity)
+    assert result["image"] == image.removesuffix("latest") + "release-v1"
+    identity._credentials.assert_not_called()
+    assert all(
+        "bytepluses.com" not in c.args[1] for c in session.request.call_args_list
+    )
 
 
 def test_service_pins_images_under_lock_before_worker_and_runtime(monkeypatch):

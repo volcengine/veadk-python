@@ -1,5 +1,7 @@
 # Studio latest 镜像内容快照
 
+> 当前实现已由批准的[只读解析设计](2026-10-21-readonly-tag-resolution.zh.md)替代。下文保留原仓库写入设计及历史部署证据。
+
 [English](2026-10-20-latest-image-snapshots.md)
 
 - 变更 ID：`studio-latest-image-refresh`

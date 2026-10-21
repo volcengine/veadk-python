@@ -379,4 +379,4 @@ BytePlus `veadk studio deploy` 自动设置
 
 ### Studio 镜像新鲜度
 
-Studio 准备新 Agent 时解析配置的各个 `latest`，把原始 manifest 复制到同仓库 `mpa-sha256-<digest>` tag。在创建 Worker/Runtime 前持久化选择；即使 latest 移动，重试也使用同一快照。继续正常发布 latest，无需新增流水线。Studio 部署身份需要 CR 授权 token 和对应仓库拉取/推送权限。已有 Agent 和独立 CLI 部署不变。不支持的 latest 仓库、权限不足、快照内容变化、没有快照记录的旧未完成意图都明确失败。见[快照契约](../../../../specs/studio-mpa-creation/README.zh.md#studio-latest-内容快照2026-10-21)。
+Studio 匿名解析配置的各个 `latest`，选择同一公共仓库中已发布且 manifest digest 完全相同的标签。在创建 Worker/Runtime 前持久化两个选择；即使 latest 移动，重试也验证保存的 tag。无需仓库写权限、镜像搬运或额外流水线。每次发布 latest 都必须保留匹配版本标签，并保证不覆盖。无匹配项、公共读取不可用、非法/过大分页、保存内容变更、无选择记录的旧未完成意图均明确失败。固定 tag、已有 Agent 和独立 CLI 部署不变。发现仅使用匿名 pull token 和有界 GET，不读取云凭据。见[只读契约](../../../../specs/studio-mpa-creation/README.zh.md#studio-latest-内容快照2026-10-21)。
