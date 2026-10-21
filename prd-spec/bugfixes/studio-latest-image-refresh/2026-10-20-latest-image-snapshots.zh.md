@@ -47,8 +47,8 @@
 | FR-1/FR-3 | T-1：可信 CR manifest 快照模块 | AC-1：字节／digest 一致、latest 未变；访问／格式／冲突负例明确失败 | 先写失败回归；模拟 CR／HTTP 模块测试 | pass；本地证据见下文 |
 | FR-2 | T-2：接入 Studio 部署与原生记录 | AC-2：latest 移动后同身份重试保留原快照；独立 MPA 解析新快照；保留旧 pending 状态 | managed service／Worker／Runtime 集成回归 | pass；本地证据见下文 |
 | FR-4/FR-5 | T-3：定位实际 Studio 收尾异常，只修已证实原因 | AC-3：失败回归重现根因；正常最终更新及 readiness 完成 | 定向创建／部署测试和安全在线诊断 | not_run；根因尚未建立 |
-| 全部 | T-4：验证并发布 Studio | AC-4：增量覆盖率高于 95%；如实报告门禁；保留 Studio 原认证／环境 | pytest coverage、Ruff、改动文件 Pyright、全文件 pre-commit、按影响扩大回归；支持的 Studio update | not_run |
-| FR-4 | T-5：复用已授权 Chrome 会话创建全新 MPA | AC-5：Studio 任务成功、Runtime readiness 成功、选中 manifest 对应实际新 Worker 代码、安全功能执行终态 | 浏览器证据及官方云 API／源码探针；不发送真人 IM 消息 | not_run |
+| 全部 | T-4：验证并发布 Studio | AC-4：增量覆盖率高于 95%；如实报告门禁；保留 Studio 原认证／环境 | pytest coverage、Ruff、改动文件 Pyright、全文件 pre-commit、按影响扩大回归；支持的 Studio update | pass；已部署函数 revision 11，证据见下文 |
+| FR-4 | T-5：复用已授权 Chrome 会话创建全新 MPA | AC-5：Studio 任务成功、Runtime readiness 成功、选中 manifest 对应实际新 Worker 代码、安全功能执行终态 | 浏览器证据及官方云 API／源码探针；不发送真人 IM 消息 | pass；新 MPA 与有界 Worker 执行已验证，证据见下文 |
 
 ## 风险与恢复
 
@@ -73,6 +73,29 @@
 - pass：`npm --prefix frontend test`，8 文件、118 用例；`npm --prefix frontend run build`。
 - pass：改动 Python 的 Ruff/Pyright；`pre-commit run --all-files`（含密钥扫描）；`git diff --check`。
 - pass：已授权 BP 真实账号上调用同一实现，解析并回读 Agent/Worker digest 快照，latest 保持不变。
-- not_run：Studio 更新及浏览器新建 MPA、应用就绪/A2A；部署后补记录。独立 Codex/Pi/Harness、国内真实部署、日历/真人 IM 不属于本次验证。
+- pass：Studio 更新、浏览器新建 MPA、应用就绪和有界 Worker 执行；在线证据见下文。独立 Codex/Pi/Harness、完整 A2A 回归、国内真实部署、日历/真人 IM 不属于本次验证。
 
 直接复核：无新增依赖/公开字段；HTTP 凭据主机边界、原生锁/持久选择、取消后固定 tag 副作用、旧 pending 拒绝、CLI 兼容及双语一致性均已检查。快照 tag 保留，不自动清理。
+
+
+## 2026-10-21 在线部署与新 MPA 验证
+
+实现提交 `4f527251a181ac5b3902fad7c97eb3315c9215e0` 已推送至 `polaris/czh/studio-latest-image-refresh`，基于 `origin/main` `5e5deb6a`。支持的 `veadk studio update --provider byteplus --vefaas-app-name czh-agentkit-studio --region ap-southeast-1 --project default --path <checkout> --skip-cronjob-scheduler` 于 Asia/Shanghai 16:46:41 完成。Studio 应用 `3463b27bd210` / 函数 `cst7puxr` 的稳定函数 revision 为 **11**，发布状态 `done`（应用 revision **8** 是独立计数）。所有原环境变量值和 cronjob scheduler 均保留。下载部署源码包，在内嵌 VeADK wheel 中比较生产模块哈希，快照解析与 service 均匹配本地。原 Chrome 登录仍有效。
+
+实际 Studio 页面创建 **`studio-snapshot-1021-a`** 并显示创建成功。原生部署记录为 `ready`，同时保留两个原始 `:latest` 输入及选中引用：
+
+| 资源 | 实测结果 |
+| --- | --- |
+| Agent | `mi-9dde1915ce7a577984364e87` |
+| Runtime | `r-yexqhuek8whyrrzwphfg`，Ready，version 2；带鉴权 `/health`、`/readiness` 均 HTTP 200 |
+| Worker Tool | `t-yexqhssyyohyrrzwi40r`，Ready |
+| Runtime 镜像 | `mpa/mpa_agent:mpa-sha256-63d32384da817cb38b55b6dfeda7d2cd8a851e9d119d18abb30ee8632aec599f` |
+| Worker 镜像 | `mpa/mpa_codex_worker:mpa-sha256-1e40dd91e8c10b067a31ef4113eb9829575baf9101cf9d5e6103144b9491f862` |
+| Worker 函数 / revision / 实际 image ID | `3a0e93hw` / 1 / **`ayk6eadc2t`**，与旧 `vollyz6n0i` 不同 |
+| 实际 Worker 源码 | 215 个 Python 文件；指纹 `30c2b491f1fe460e731627bda9f40f160a6d26f4d7d8398ff91a3056a2943490`，匹配已发布新 Worker；存在 `private_user.py` |
+| 业务 PG / SkillSpace / OpenViking | `snug-lime-8e01240u`，数据库 ready / `ss-yexqhud5ogdlwzgmriry` / `ov-4dcc6e25514a5979`，READY |
+| 功能冒烟 | Studio 会话 `ef433e28-4172-448d-bef8-6533efdca55f`；Worker 执行 `/bin/bash -lc 'printf STUDIO_SNAPSHOT_1021_OK'`，退出码 0，已完成的页面回答返回 `STUDIO_SNAPSHOT_1021_OK` |
+
+两个镜像地址前缀均为 `agentkit-platform-3001037806-ap-southeast-1.cr.bytepluses.com/`。专用源码探针 Session `s-yexqhwxv5shyrrzwfm4d` 已删除。新 MPA 和成功的 Studio 对话保留供核查，其任务 Worker Session 为 `s-yexqifihhcuexbvqlils`（16:58:57 创建）。脱敏部署、原生记录、实际源码和截图证据保留在 Git 外的本地目录；未提交凭据或原始部署记录。
+
+边界：此次证明当前 Studio 创建收尾和有界 Worker 任务成功，未定位先前独立收尾异常的未知根因（T-3），未验证日历授权或完整 A2A 套件。Studio 角色解析并复用了已授权仓库预检生成的快照；尚未单独验证该角色创建一个原本不存在的快照 tag。未检查国内云真实部署和运行中 Agent 容器源码指纹。既有 MPA 保留旧镜像选择；只有新的 Studio 部署身份会选取当时最新内容。

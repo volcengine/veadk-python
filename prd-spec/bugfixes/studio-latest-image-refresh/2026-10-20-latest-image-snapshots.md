@@ -47,8 +47,8 @@ Cloud writes are scoped to the selected repository and newly created deployment 
 | FR-1/FR-3 | T-1: implement trusted CR manifest snapshot helper | AC-1: same bytes/digest, latest untouched; negative access/format/conflict cases fail | Regression tests first; helper tests with mocked CR/HTTP | pass; local evidence below |
 | FR-2 | T-2: wire selection into Studio-owned provisioning and native record | AC-2: retry after latest moves uses original snapshot; independent MPA resolves new snapshot; legacy pending state preserved | Managed service/Worker/Runtime integration regressions | pass; local evidence below |
 | FR-4/FR-5 | T-3: isolate actual Studio completion exception and fix only a proven cause | AC-3: failing regression reproduces confirmed cause; normal final update and readiness complete | Targeted creation/deployment tests and safe live diagnostics | not_run; cause not established |
-| All | T-4: validate and publish corrected Studio | AC-4: changed-line coverage above 95%, required gates honestly reported, original Studio auth/env retained | pytest coverage, Ruff, changed-file Pyright, pre-commit all-files, broader regression as affected; supported Studio update | not_run |
-| FR-4 | T-5: create a new MPA in the existing authorized Chrome session | AC-5: Studio task succeeds; Runtime readiness succeeds; selected manifest maps to actual new Worker code; safe functional execution reaches terminal result | Browser evidence plus official cloud API/source probes; no human IM message | not_run |
+| All | T-4: validate and publish corrected Studio | AC-4: changed-line coverage above 95%, required gates honestly reported, original Studio auth/env retained | pytest coverage, Ruff, changed-file Pyright, pre-commit all-files, broader regression as affected; supported Studio update | pass; deployed function revision 11; evidence below |
+| FR-4 | T-5: create a new MPA in the existing authorized Chrome session | AC-5: Studio task succeeds; Runtime readiness succeeds; selected manifest maps to actual new Worker code; safe functional execution reaches terminal result | Browser evidence plus official cloud API/source probes; no human IM message | pass; new MPA and bounded Worker execution verified; evidence below |
 
 ## Risks and recovery
 
@@ -73,6 +73,29 @@ Environment: Python 3.12.12; `uv sync --frozen --extra dev --python 3.12`; depen
 - pass: `npm --prefix frontend test`: 8 files, 118 cases; `npm --prefix frontend run build`.
 - pass: changed-file Ruff/Pyright; `pre-commit run --all-files` including secret scanning; `git diff --check`.
 - pass: the same implementation resolved and reread Agent/Worker snapshots in the authorized real BP account, preserving latest.
-- not_run: Studio update and browser MPA creation, application readiness/A2A; append deployment evidence afterward. Independent Codex/Pi/Harness, domestic live deployment, calendar and human IM are outside this validation.
+- pass: Studio update, browser MPA creation, application readiness and bounded Worker execution; live evidence below. Independent Codex/Pi/Harness, the full A2A regression suite, domestic live deployment, calendar and human IM are outside this validation.
 
 Direct review covered dependencies/public fields, credential host boundaries, native locking/durable selection, fixed-tag side effects after cancellation, legacy pending rejection, CLI compatibility and bilingual equivalence. Snapshot tags are retained without automatic garbage collection.
+
+
+## 2026-10-21 live deployment and new MPA verification
+
+Implementation commit `4f527251a181ac5b3902fad7c97eb3315c9215e0` was pushed to `polaris/czh/studio-latest-image-refresh`, based on `origin/main` `5e5deb6a`. The supported `veadk studio update --provider byteplus --vefaas-app-name czh-agentkit-studio --region ap-southeast-1 --project default --path <checkout> --skip-cronjob-scheduler` completed at 16:46:41 Asia/Shanghai. Studio application `3463b27bd210` / function `cst7puxr` is at stable function revision **11**, release status `done` (application revision **8** is a separate counter). All existing environment values and the cronjob scheduler were retained. The deployed source bundle's nested VeADK wheel was compared with local production-module hashes; both snapshot resolver and service matched. The existing Chrome login remained valid.
+
+The actual Studio UI created **`studio-snapshot-1021-a`** and displayed creation success. Its native deployment record is `ready`, and preserves both original `:latest` inputs plus their selected references:
+
+| Resource | Observed result |
+| --- | --- |
+| Agent | `mi-9dde1915ce7a577984364e87` |
+| Runtime | `r-yexqhuek8whyrrzwphfg`, Ready, version 2; authenticated `/health` and `/readiness` both HTTP 200 |
+| Worker Tool | `t-yexqhssyyohyrrzwi40r`, Ready |
+| Runtime image | `mpa/mpa_agent:mpa-sha256-63d32384da817cb38b55b6dfeda7d2cd8a851e9d119d18abb30ee8632aec599f` |
+| Worker image | `mpa/mpa_codex_worker:mpa-sha256-1e40dd91e8c10b067a31ef4113eb9829575baf9101cf9d5e6103144b9491f862` |
+| Worker function / revision / actual image ID | `3a0e93hw` / 1 / **`ayk6eadc2t`**, distinct from old `vollyz6n0i` |
+| Actual Worker source | 215 Python files; fingerprint `30c2b491f1fe460e731627bda9f40f160a6d26f4d7d8398ff91a3056a2943490`, matching the published new Worker; `private_user.py` present |
+| Business PG / SkillSpace / OpenViking | `snug-lime-8e01240u`, database ready / `ss-yexqhud5ogdlwzgmriry` / `ov-4dcc6e25514a5979`, READY |
+| Functional smoke | Studio session `ef433e28-4172-448d-bef8-6533efdca55f`; Worker ran `/bin/bash -lc 'printf STUDIO_SNAPSHOT_1021_OK'`, exit 0, and the completed UI answer returned `STUDIO_SNAPSHOT_1021_OK` |
+
+Both image references use prefix `agentkit-platform-3001037806-ap-southeast-1.cr.bytepluses.com/`. The dedicated source-probe session `s-yexqhwxv5shyrrzwfm4d` was deleted. The new MPA and successful Studio conversation were retained for review; its task Worker session is `s-yexqifihhcuexbvqlils` (created at 16:58:57). Safe deployment, native-record, actual-source and screenshot evidence is retained locally outside Git; credentials and raw deployment records were not committed.
+
+Limits: this verifies current Studio completion and a bounded Worker task, not the unknown cause of the earlier unrelated completion exception (T-3), calendar authorization or the full A2A suite. The Studio role resolved/reused snapshots created by the authorized registry preflight; creation of a previously absent snapshot tag under that role was not independently exercised. Domestic cloud deployment and the running Agent container's source fingerprint were not inspected. Existing MPAs keep their previous image selections; only new Studio deployment identities select the latest content.
