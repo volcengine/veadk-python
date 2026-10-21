@@ -34,11 +34,11 @@ No review-spec skill is available; reviewed directly before code changes: public
 | RO-1/2/3/5 | Anonymous exact-match selection, strict bounded GET-only protocol, explicit failures | First write failing regression; fake HTTP protocol/security/deadline cases; live anonymous resolution | pass; evidence below |
 | RO-4 | Persist both selections under lock; retry old/new saved tags; preserve CLI and fixed tags | Managed service/integration and CLI regressions | pass; evidence below |
 | All | Incremental coverage above 95%; quality/security gates and synchronized docs | Focused branch coverage, managed/CLI regression, changed-file Ruff/Pyright, all-files pre-commit, frontend test/build | pass; evidence below |
-| All | Deploy exact tested source and create a fresh Studio MPA | Supported Studio update, deployed module hashes, UI success, native ready state and selected tags, application readiness, actual Worker source/image ID, bounded completed Worker task | pending |
+| All | Deploy exact tested source and create a fresh Studio MPA | Supported Studio update, deployed module hashes, UI success, native ready state and selected tags, application readiness, actual Worker source/image ID, bounded completed Worker task | pass for deployment/creation/image adoption and fresh-session smoke; initial functional failure retained below |
 
 ## Risks and recovery
 
-Read access and tag policies may change. Missing matching tags or registry access must produce a safe diagnostic rather than create a stale deployment. The finite enumeration/time budgets may reject a very large or slow repository. Tags are not cryptographically immutable; publisher discipline remains necessary and retry revalidation detects changes. Public network egress is required. Preserve failed cloud resources and the original persisted intent; rollback Studio through its supported release path if necessary. Do not claim cache invalidation or a fix for the earlier unrelated completion exception. Leave live outcomes unverified until observed.
+Read access and tag policies may change. Missing matching tags or registry access must produce a safe diagnostic rather than create a stale deployment. The finite enumeration/time budgets may reject a very large or slow repository. Tags are not cryptographically immutable; publisher discipline remains necessary and retry revalidation detects changes. Public network egress is required; discovery uses direct HTTPS and deliberately ignores environment proxies and netrc. Preserve failed cloud resources and the original persisted intent; rollback Studio through its supported release path if necessary. Do not claim cache invalidation or a fix for the earlier unrelated completion exception. Leave live outcomes unverified until observed.
 
 ## 2026-10-21 local and anonymous live verification
 
@@ -47,4 +47,31 @@ The first three GET-only regressions failed against the previous credential-depe
 - pass: `.venv/bin/python -m pytest tests/integrations/mpa_managed tests/cli/test_cli_mpa.py -n 2 -q`, **1266 passed**.
 - pass: frontend tests **118 passed**, production build, changed-file Pyright (0 errors), all-files pre-commit including Ruff/format/secret scanning, and `git diff --check`.
 - pass: the production resolver performed real anonymous selection and saved-tag revalidation for Agent and Worker on both providers, with cloud credential access replaced by a function that raises. BP selected the existing digest-named tags; domestic selected the existing master tags described above. No tag was created or modified. Safe evidence is stored locally outside Git.
-- not_run yet: updated Studio deployment and fresh MPA/runtime/Worker UI verification; append after observing completion. Full A2A, Codex/Pi/Harness suites, domestic deployment, calendar and human IM are outside this bounded validation.
+- pass: updated BP Studio deployment, new MPA creation, actual Worker code and a fresh-session command smoke, with the initial functional failure preserved below. Full A2A, Codex/Pi/Harness suites, domestic deployment, calendar and human IM remain outside this bounded validation.
+
+## 2026-10-21 deployed source, new MPA and functional limits
+
+Commit `09e124e8be59ae379c6f1a7e87aba2d568cc1282` was pushed to the existing PR #1178 and deployed using the supported BP Studio update path with `--skip-cronjob-scheduler`. Application `3463b27bd210` / function `cst7puxr` reached stable function revision **12**, release status `done`, at 17:46:56 Asia/Shanghai. All existing environment values and scheduler settings were preserved. The deployed wheel resolver hash is `5028f8feb77cadd5b615f0248a23783c5f7798fdb31ccda3d3f8196a6448cc06`; service hash is `a1e21d2dab3e34bcd5d05860eb4d98b3e1e22ef4f8b3e38a4ce5546c423688d1`; both match the tested checkout.
+
+The existing authorized Chrome session created **`studio-readonly-1021-a`** and displayed creation success. Native state is `ready` and retains both requested latest references plus their selected existing tags:
+
+| Resource | Observed result |
+| --- | --- |
+| Agent | `mi-5c74df2575dc5e89ad445d76` |
+| Runtime | `r-yexqmg6z9cy9bkt9hm42`, Ready, version 2; authenticated health/readiness HTTP 200 |
+| Worker Tool | `t-yexqlmcetcy9bkt9ihdf`, Ready; created at 17:48 and reused on the same-request retries |
+| Agent selected tag | `mpa_agent:mpa-sha256-63d32384da817cb38b55b6dfeda7d2cd8a851e9d119d18abb30ee8632aec599f` |
+| Worker selected tag | `mpa_codex_worker:mpa-sha256-1e40dd91e8c10b067a31ef4113eb9829575baf9101cf9d5e6103144b9491f862` |
+| Worker function / revision / actual image ID | `ptlrrzjl` / 1 / **`ayk6eadc2t`**, not old `vollyz6n0i` |
+| Actual Worker source | 215 Python files; fingerprint `30c2b491f1fe460e731627bda9f40f160a6d26f4d7d8398ff91a3056a2943490`, matching the published Worker; private-user module present |
+| Business PG / SkillSpace / OV | `sunny-bluet-3db026cb`, aidb ready / `ss-yexqmg5kowdlwzgmqn9d` / `ov-f54074c915387e15`, READY |
+| Successful bounded smoke | Fresh Studio session `8606260b-eeb7-4752-9782-0a860fc6fd07` ran `/bin/bash -lc 'printf STUDIO_READONLY_1021_FRESH_OK'`; actual stdout matched, exit 0, and the completed answer displayed both |
+
+The two image references use `agentkit-platform-3001037806-ap-southeast-1.cr.bytepluses.com/mpa/`. These tags already existed; discovery published nothing. The dedicated source-probe session `s-yexqlugkxsuexbvqjn6i` was deleted. Safe native/deployment/API evidence and creation/functional screenshots are retained locally outside Git; no secrets or raw cloud records were committed.
+
+Two independent conditions were observed and must not be hidden by the successful fresh-session smoke:
+
+1. Creation task `49556dec-276c-4053-9507-ed08cdb98bf3` initially hit OV `InvalidParameter`. Overseas CloudTrail records for requests `2026102109482052668D9A8D2903007881` and `20261021095118D4C86EA35A3890F6A34D` establish that collection count exceeded the account maximum **20**; the existing UI generalized this as a model/configuration rejection. After explicit user approval, only the previous test `studio-snapshot-1021-a` library `ov-4dcc6e25514a5979` was ownership-checked and deleted; deletion succeeded and a subsequent Get confirmed collection-not-found. That old test MPA now has no usable OV memory library. The same creation request then succeeded, retaining its Worker and both image selections. No OV code, model setting, quota or Runtime configuration workaround was introduced.
+2. Initial Studio session `de1ce841-0f42-4087-be22-8845b1014798` did **not** execute the requested printf. Its UI reported `inactive_worker_dispatch` and `harness invocation plan update was not persisted`; it ended with a failure explanation. The durable harness/control state reported `completed`, which does not prove command execution. Source inspection locates the former in the Agent MainRuntime active-grant check and the latter in guarded plan persistence; the root cause remains unproven and neither path was changed here. No pause mutation was issued because inspection found the task already completed. A separate fresh session with a bounded stop-on-error prompt subsequently executed the command successfully. This is a creation/image/fresh-session smoke pass, **not** proof that all initial-session or explicit Worker-dispatch paths are reliable.
+
+Remaining limits: full A2A/calendar/IM and domestic Runtime deployment are unverified; publisher tag retention/non-overwrite remains required. The successful new MPA and both functional conversations are retained for review. Existing MPAs are not upgraded.
