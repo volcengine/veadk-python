@@ -1,0 +1,41 @@
+.mpa-creation-failure {
+  font-size: 13px;
+  line-height: 1.6;
+  border: 1px solid hsl(var(--destructive) / 0.3);
+  border-radius: 8px;
+  padding: 12px;
+  color: hsl(var(--destructive));
+  background: hsl(var(--destructive) / 0.04);
+  overflow-wrap: anywhere;
+}
+.mpa-creation-failure p {
+  margin: 0 0 8px;
+}
+.mpa-creation-failure summary {
+  cursor: pointer;
+}
+.mpa-creation-failure summary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.mpa-creation-failure dl {
+  color: var(--studio-text-primary);
+  margin-block: 12px;
+}
+.mpa-creation-failure dl > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-block: 4px;
+}
+.mpa-creation-failure dt {
+  color: var(--studio-text-secondary);
+}
+.mpa-creation-failure dd {
+  margin: 0;
+  min-width: 0;
+}
+.mpa-creation-failure [role="status"] {
+  display: block;
+  margin-top: 8px;
+}

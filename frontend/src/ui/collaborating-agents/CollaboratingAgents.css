@@ -1,0 +1,73 @@
+.collaborators {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-block: 4px 24px;
+  min-width: 0;
+  color: var(--studio-text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.collaborators p {
+  margin: 0;
+}
+.collaborators-context,
+.collaborators-url {
+  overflow-wrap: anywhere;
+  color: var(--studio-text-secondary);
+}
+.collaborators-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.collaborators-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-bottom: 1px solid var(--studio-border-default);
+  padding-block: 8px 16px;
+}
+.collaborators-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.collaborators [role="alert"] {
+  color: hsl(var(--destructive));
+}
+/* User-requested form treatment, matching the description field border. */
+.collaborators-form {
+  width: 432px;
+  max-width: 100%;
+}
+.collaborators-input {
+  width: 100%;
+  box-shadow: inset 0 0 0 0.5px var(--studio-border-input);
+}
+.collaborators-field {
+  width: 100%;
+  max-width: 100%;
+}
+.collaborators-input:focus-within {
+  outline: 2px solid var(--studio-border-input);
+  outline-offset: 2px;
+}
+/* The wrapper provides the focus indicator; avoid the workspace's inner ring. */
+.collaborators-form .collaborators-input > input:focus-visible {
+  outline: none;
+}
+.collaborators-secret-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.collaborators-secret-row > .collaborators-input {
+  flex: 1;
+  min-width: 0;
+}
+.collaborators-help {
+  color: var(--studio-text-secondary);
+}

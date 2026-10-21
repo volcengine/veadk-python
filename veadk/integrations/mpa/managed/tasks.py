@@ -29,10 +29,11 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from .diagnostics import classify_error, validate_diagnostic
+from .diagnostics import classify_error, safe_exception_details, validate_diagnostic
 from .iam import ERROR_KEYS
+from .names import ERROR_KEYS as NAME_ERROR_KEYS
+from .names import NameCheckError
 from .openviking import ERROR_KEYS as OPENVIKING_ERROR_KEYS
-from .names import ERROR_KEYS as NAME_ERROR_KEYS, NameCheckError
 
 logger = logging.getLogger(__name__)
 ERROR_KEYS = ERROR_KEYS | OPENVIKING_ERROR_KEYS | NAME_ERROR_KEYS
@@ -125,6 +126,12 @@ class CreationTasks:
                 db.execute(
                     "ALTER TABLE tasks ADD COLUMN name_scope TEXT NOT NULL DEFAULT '{}'"
                 )
+            if "diagnostic_start_id" not in {
+                row[1] for row in db.execute("PRAGMA table_info(tasks)")
+            }:
+                db.execute(
+                    "ALTER TABLE tasks ADD COLUMN diagnostic_start_id INTEGER NOT NULL DEFAULT 0"
+                )
             db.execute(
                 "CREATE TABLE IF NOT EXISTS task_diagnostics (id INTEGER PRIMARY KEY, task_id TEXT NOT NULL, stage TEXT NOT NULL, operation TEXT NOT NULL, category TEXT NOT NULL, attempt INTEGER NOT NULL, outcome TEXT NOT NULL, created REAL NOT NULL)"
             )
@@ -139,6 +146,12 @@ class CreationTasks:
             }:
                 db.execute(
                     "ALTER TABLE task_diagnostics ADD COLUMN error_code TEXT NOT NULL DEFAULT ''"
+                )
+            if "details" not in {
+                row[1] for row in db.execute("PRAGMA table_info(task_diagnostics)")
+            }:
+                db.execute(
+                    "ALTER TABLE task_diagnostics ADD COLUMN details TEXT NOT NULL DEFAULT '{}'"
                 )
             db.execute(
                 "CREATE INDEX IF NOT EXISTS task_diagnostics_task ON task_diagnostics(task_id,id)"
@@ -183,7 +196,7 @@ class CreationTasks:
             stage = row["stage"] if row["stage"] in STAGES else "queued"
             created = time.time()
             db.execute(
-                "INSERT INTO task_diagnostics (task_id,stage,operation,category,attempt,outcome,created,request_id,error_code) VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO task_diagnostics (task_id,stage,operation,category,attempt,outcome,created,request_id,error_code,details) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (
                     task_id,
                     stage,
@@ -194,6 +207,13 @@ class CreationTasks:
                     created,
                     diagnostic.get("requestId", ""),
                     diagnostic.get("errorCode", ""),
+                    json.dumps(
+                        {
+                            k: diagnostic[k]
+                            for k in ("exceptionType", "httpStatus", "responseType")
+                            if k in diagnostic
+                        }
+                    ),
                 ),
             )
             db.execute(
@@ -241,14 +261,16 @@ class CreationTasks:
     def _latest_diagnostic(self, task_id):
         with self.db() as db:
             row = db.execute(
-                "SELECT stage,operation,category,attempt,outcome,request_id,error_code "
-                "FROM task_diagnostics WHERE task_id=? ORDER BY id DESC LIMIT 1",
-                (task_id,),
+                "SELECT stage,operation,category,attempt,outcome,request_id,error_code,details "
+                "FROM task_diagnostics WHERE task_id=? AND id > "
+                "(SELECT diagnostic_start_id FROM tasks WHERE id=?) ORDER BY id DESC LIMIT 1",
+                (task_id, task_id),
             ).fetchone()
         if row is None:
             return {}
         return {
             "latestDiagnostic": {
+                **safe_exception_details(json.loads(row["details"])),
                 "stage": row["stage"],
                 "operation": row["operation"],
                 "category": row["category"],
@@ -372,6 +394,10 @@ class CreationTasks:
                         name_scope or (json.loads(row["name_scope"]) if row else {})
                     ),
                 ),
+            )
+            db.execute(
+                "UPDATE tasks SET diagnostic_start_id=(SELECT COALESCE(MAX(id),0) FROM task_diagnostics WHERE task_id=?) WHERE id=?",
+                (task_id, task_id),
             )
         task = asyncio.create_task(
             self._run(

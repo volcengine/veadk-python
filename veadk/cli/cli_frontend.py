@@ -12876,6 +12876,15 @@ def _run_frontend_server(
             apikey=apikey,
             auth_type=auth_type,
         )
+        from veadk.integrations.mpa.collaborator_proxy import (
+            collaborator_management_headers,
+        )
+
+        headers.update(
+            collaborator_management_headers(
+                path, is_admin=_request_role(request).is_admin, api_key=apikey
+            )
+        )
         # Match scheduled-task ownership and never forward browser identity claims.
         principal = _current_principal(request)
         if principal is not None:

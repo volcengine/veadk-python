@@ -101,10 +101,11 @@ import { Markdown } from "./Markdown";
 import { ResourceDetailLayout } from "./ResourceCollection";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
+import { CollaboratorManager } from "./collaborating-agents/CollaboratingAgents";
 import "./AgentWorkspace.css";
 
 type WorkspaceView = "library" | "evaluation";
-type AgentSection = "basic" | "profileConfig" | "sessionConfig" | "usage" | "diagnostics" | "evaluations" | "optimizations" | "integrations" | "versions";
+type AgentSection = "basic" | "collaborators" | "profileConfig" | "sessionConfig" | "usage" | "diagnostics" | "evaluations" | "optimizations" | "integrations" | "versions";
 type IntegrationProtocol = "api-server" | "a2a";
 type EvaluationSection = "config" | "history";
 type CaseKind = "good" | "bad";
@@ -308,6 +309,7 @@ function evaluationText(value: string, t: TFunction): string {
 
 const AGENT_SECTIONS: AgentSection[] = [
   "basic",
+  "collaborators",
   "profileConfig",
   "sessionConfig",
   "usage",
@@ -1849,6 +1851,7 @@ export interface AgentWorkspaceProps {
   canCreate: boolean;
   canUpdate: boolean;
   canViewUsage?: boolean;
+  canManageCollaborators?: boolean;
   loadingAgents?: boolean;
   agentsError?: string;
   deploymentTasks?: DeploymentTaskUpdate[];
@@ -1885,6 +1888,7 @@ export function AgentWorkspace({
   canCreate,
   canUpdate,
   canViewUsage = false,
+  canManageCollaborators = false,
   loadingAgents = false,
   agentsError = "",
   deploymentTasks = [],
@@ -2122,8 +2126,12 @@ export function AgentWorkspace({
     selectedAgentInfo?.appName || selectedAgent?.runtimeApp || selectedAgent?.app || "";
   const selectedAgentCategory: AgentCategory =
     selectedAgent?.agentCategory ?? "general";
-  // MPA details expose only Basic, including restored/external focus.
-  const section = selectedAgentCategory === "mpa" ? "basic" : requestedSection;
+  const collaboratorsAvailable = selectedAgentCategory === "mpa" &&
+    Boolean(selectedAgent?.runtimeId) && canManageCollaborators;
+  // Gate restored/external focus as well as the visible navigation.
+  const section = requestedSection === "collaborators"
+    ? collaboratorsAvailable ? "collaborators" : "basic"
+    : selectedAgentCategory === "mpa" ? "basic" : requestedSection;
   const runtimeDetailForSelectedAgent = runtimeDetail?.runtimeId === selectedAgent?.runtimeId
     ? runtimeDetail
     : null;
@@ -2135,6 +2143,7 @@ export function AgentWorkspace({
     selectedAgent?.runtimeId ??
     "";
   const visibleAgentSectionIds = AGENT_SECTIONS.filter((item) => {
+    if (item === "collaborators") return collaboratorsAvailable;
     if (selectedAgentCategory === "mpa") return item === "basic";
     if (item === "profileConfig") return false;
     if (item === "usage") return canViewUsage && selectedAgent?.runtimeId;
@@ -2144,7 +2153,7 @@ export function AgentWorkspace({
   });
   const visibleAgentSections = visibleAgentSectionIds.map((id) => ({
     id,
-    label: t(`agentWorkspace.sections.${id}`),
+    label: id === "collaborators" ? t("collaboratingAgents:title") : t(`agentWorkspace.sections.${id}`),
   }));
   const agentUsageRequestKey = JSON.stringify([
     selectedAgent?.runtimeId ?? "",
@@ -4421,6 +4430,16 @@ export function AgentWorkspace({
               </div>
             )}
             <div className="aw-content">
+              {section === "collaborators" && collaboratorsAvailable && selectedAgent?.runtimeId && (
+                <section className="aw-section">
+                  <h3>{t("collaboratingAgents:title")}</h3>
+                  <CollaboratorManager
+                    key={`${selectedAgent.region ?? "cn-beijing"}:${selectedAgent.runtimeId}`}
+                    runtimeId={selectedAgent.runtimeId}
+                    region={selectedAgent.region ?? "cn-beijing"}
+                  />
+                </section>
+              )}
               {section === "basic" && (
                 <div className="aw-basic-stack">
                   {detailAgentInfoUnsupported && (
