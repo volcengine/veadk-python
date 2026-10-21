@@ -32,6 +32,7 @@ from google.adk.skills import load_skill_from_dir
 
 from veadk.skills.exceptions import SkillMaterializeError
 from veadk.skills.skill import Skill
+from veadk.skills.telemetry import download, skill_identity
 from veadk.skills.utils import (
     _get_agentkit_endpoint,
     _get_cloud_credentials,
@@ -73,6 +74,19 @@ def materialize_remote_skill(
     region: str | None = None,
 ) -> Path:
     """Download one remote VeADK skill and return an ADK-loadable skill dir."""
+    with download(skill_identity(skill)) as observation:
+        return _materialize_remote_skill(
+            skill,
+            cache_dir=cache_dir,
+            credentials=credentials,
+            region=region,
+            observation=observation,
+        )
+
+
+def _materialize_remote_skill(
+    skill, *, cache_dir, credentials, region, observation
+) -> Path:
     base_cache_dir = _default_cache_dir() if cache_dir is None else Path(cache_dir)
     _ensure_cache_dir(base_cache_dir)
 
@@ -98,6 +112,7 @@ def materialize_remote_skill(
         try:
             load_skill_from_dir(cached)
             logger.info(f"Using cached ADK skill '{skill.name}' from {cached}")
+            observation["cache_hit"] = True
             return cached
         except Exception as e:
             logger.warning(

@@ -338,6 +338,9 @@ def trace_tool_call(
         args: Dictionary of arguments passed to the tool function
         function_response_event: Event containing the tool's execution response
     """
+    from veadk.skills.telemetry import record_adk_load
+
+    record_adk_load(tool, function_response_event)
     span = trace.get_current_span()
 
     set_common_attributes_on_tool_span(current_span=span)  # type: ignore

@@ -35,6 +35,7 @@ except ImportError:  # google-adk 1.32 does not export the registry base yet.
 
 from veadk.skills.materializer import materialize_remote_skill
 from veadk.skills.skill import Skill as VeADKSkill
+from veadk.skills.telemetry import skill_identity
 from veadk.skills.utils import load_skills_from_cloud
 
 
@@ -78,7 +79,12 @@ class VeSkillRegistry(SkillRegistry):
             skill,
             cache_dir=self.cache_dir,
         )
-        return await asyncio.to_thread(load_compatible_adk_skill_from_dir, skill_dir)
+        loaded = await asyncio.to_thread(load_compatible_adk_skill_from_dir, skill_dir)
+        # Cloud identity is authoritative, including over archive-supplied metadata.
+        loaded.frontmatter.metadata.pop("veadk_skill_identity", None)
+        if identity := skill_identity(skill):
+            loaded.frontmatter.metadata["veadk_skill_identity"] = identity
+        return loaded
 
     def search_tool_description(self) -> str | None:
         return (
