@@ -22,7 +22,7 @@ from veadk.utils.volcengine_sign import volcengine_signed_request
 
 from .config import Profile
 from .database import DeploymentError
-from .diagnostics import CODE_CATEGORIES, classify_error, report
+from .diagnostics import CODE_CATEGORIES, classify_error, report, with_diagnostic
 from .model_key import CredentialSource
 from .openviking import exception_metadata, response_metadata
 
@@ -104,7 +104,7 @@ async def get_runtime_apm_key(profile: Profile, cloud: CredentialSource) -> str:
             "throttled",
             "unavailable",
         }
-        report(
+        diagnostic = report(
             "get_apm_key",
             category,
             attempt=attempt,
@@ -113,8 +113,11 @@ async def get_runtime_apm_key(profile: Profile, cloud: CredentialSource) -> str:
             request_id=request_id,
         )
         if not retrying:
-            raise ApmKeyError(
-                "APM AppKey lookup failed; check deployment APM read permissions and connectivity"
+            raise with_diagnostic(
+                ApmKeyError(
+                    "APM AppKey lookup failed; check deployment APM read permissions and connectivity"
+                ),
+                diagnostic,
             ) from None
         await asyncio.sleep((0.2, 0.5)[attempt - 1])
     raise AssertionError("APM read retry loop exhausted")

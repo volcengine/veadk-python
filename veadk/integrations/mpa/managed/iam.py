@@ -26,6 +26,8 @@ from .diagnostics import (
     CATEGORIES,
     CODE_CATEGORIES,
     classify_error,
+    exception_details,
+    preserve_exception_details,
     report,
     safe_request_id,
 )
@@ -263,11 +265,14 @@ class IamCloud:
                 )
                 if category == "permission":
                     code = "AccessDenied"
-                raise IamError(
-                    code,
-                    category=category,
-                    operation=method,
-                    request_id=metadata.get("RequestId", ""),
+                raise preserve_exception_details(
+                    IamError(
+                        code,
+                        category=category,
+                        operation=method,
+                        request_id=metadata.get("RequestId", ""),
+                    ),
+                    error,
                 ) from None
             finally:
                 if client is not None and hasattr(client, "session"):
@@ -560,13 +565,19 @@ async def ensure_runtime_role(
                         attempt=transient_attempt,
                         outcome="retrying" if retrying else "failed",
                         request_id=error.request_id,
+                        details=exception_details(error),
                     )
                     if not retrying:
                         raise
                     await asyncio.sleep(2 ** (transient_attempt - 1))
                     continue
                 if error.code not in {"RoleNotExist", "PolicyNotExist"}:
-                    report(error.operation, error.category, request_id=error.request_id)
+                    report(
+                        error.operation,
+                        error.category,
+                        request_id=error.request_id,
+                        details=exception_details(error),
+                    )
                     raise
             if time.monotonic() >= deadline:
                 raise IamError(category="timeout")

@@ -4908,3 +4908,62 @@ def test_studio_runtime_proxy_only_schedules_successful_completed_sse(
     assert automation.started[0].runtime_authorization.get_secret_value() == (
         "Bearer runtime-api-key"
     )
+
+
+@pytest.mark.parametrize("user, expected_status", [("admin", 200), ("member", 404)])
+def test_collaborator_proxy_uses_server_key_and_enforces_admin(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, user: str, expected_status: int
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path, admins="admin")
+
+    class RuntimeClient:
+        def __init__(self, **kwargs: Any):
+            pass
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                runtime_id="runtime-1",
+                project_name="default",
+                tags=[],
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example", network_type="public"
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-server-key"),
+                    custom_jwt_authorizer=None,
+                ),
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", RuntimeClient
+    )
+    seen: list[httpx.Request] = []
+
+    class ResponseStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'{"items": []}'
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        assert request.headers["X-MPA-Studio-Key"] == "runtime-server-key"
+        return httpx.Response(
+            200, stream=ResponseStream(), headers={"content-type": "application/json"}
+        )
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: client_type(
+            **{**kwargs, "transport": httpx.MockTransport(handler)}
+        ),
+    )
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-proxy/runtime-1/api/v1/studio/collaborators?_runtime_region=cn-beijing",
+            headers={"X-VeADK-Local-User": user, "X-MPA-Studio-Key": "browser-forgery"},
+        )
+    assert response.status_code == expected_status
+    assert bool(seen) is (expected_status == 200)

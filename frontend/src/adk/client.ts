@@ -6627,3 +6627,10 @@ export function listMpaCronTasks(runtime: MpaRuntime, offset: number, query: str
 
 export function requestMpaTask(runtime: MpaRuntime, method: string, suffix: string, payload?: unknown, signal?: AbortSignal) { return manageMpaTask(apiFetch, runtime, method, suffix, payload, signal); }
 export function listMpaRuns(runtime: MpaRuntime, taskId: string, offset: number, signal?: AbortSignal) { return fetchMpaRuns(apiFetch, runtime, taskId, offset, signal); }
+
+// Registration management deliberately has no task-dispatch endpoint.
+export function requestCollaborators(runtimeId: string, region: string, suffix = "", init: RequestInit = {}) {
+  return apiFetch(`/api/v1/studio/collaborators${suffix}`, {
+    ...init, headers: {"Content-Type": "application/json", ...init.headers},
+  }, {runtimeId, region});
+}

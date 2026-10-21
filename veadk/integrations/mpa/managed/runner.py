@@ -25,10 +25,10 @@ from .config import (
     with_creation_scaling,
     with_creation_tos,
 )
-from .diagnostics import classify_error, diagnostic_scope, report
+from .diagnostics import diagnostic_scope, report_failure
 from .iam import IamError
-from .openviking import OpenVikingError
 from .names import NameCheckError
+from .openviking import OpenVikingError
 from .service import provision
 
 
@@ -83,7 +83,7 @@ def run():
         )
         return 0
     except Exception as error:
-        report("provision", classify_error(error))
+        report_failure("provision", error)
         # Error text can contain SDK request payloads, URLs and credentials.
         emit(
             error=error.key

@@ -176,7 +176,7 @@ it("recovers the latest submitted task from local server state", async () => {
   expect(stored.input.name).toBe("restored-agent");
   expect(stored.input.tosBucket).toBe("agentkit-platform-output");
   expect(document.body.textContent).toContain(
-    "myAgents.mpaCreate.configurationChanged",
+    "myAgents.mpaCreate.failureDetails.reasons.configuration_changed",
   );
 });
 
@@ -1147,7 +1147,7 @@ it("keeps disabled and loading appearance consistent across shared Button varian
 });
 
 it.each(["iamPermissionDenied", "iamTemporaryFailure"])(
-  "preserves the runtime role stage and actionable IAM error %s for retry",
+  "preserves the runtime role stage and specific IAM error %s for retry",
   async (errorKey) => {
     const input = {
       region: "cn-beijing",
@@ -1175,7 +1175,7 @@ it.each(["iamPermissionDenied", "iamTemporaryFailure"])(
       "myAgents.mpaCreate.stages.iam_role",
     );
     expect(document.body.textContent).toContain(
-      `myAgents.mpaCreate.${errorKey}`,
+      `myAgents.mpaCreate.failureDetails.reasons.${errorKey === "iamPermissionDenied" ? "permission" : "unavailable"}`,
     );
     expect(button("retry").disabled).toBe(false);
     expect(
@@ -1688,9 +1688,9 @@ it("highlights a late task-level duplicate name error", async () => {
   await act(async () => submitButton().click());
   expect(
     document.querySelector(
-      '[role="alert"][data-color="danger"][data-variant="soft"]',
+      '.mpa-creation-failure[role="alert"]',
     )?.textContent,
-  ).toContain("myAgents.mpaCreate.runtimeNameTaken");
+  ).toContain("myAgents.mpaCreate.failureDetails.reasons.nameConflict");
 });
 
 it("automatically prepares BytePlus personal OV and explains Runtime integration", async () => {

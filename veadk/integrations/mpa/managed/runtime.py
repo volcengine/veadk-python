@@ -29,11 +29,7 @@ import httpx
 from sqlalchemy.engine import make_url
 
 from veadk.integrations.mpa.managed.database import DeploymentError, agent_suffix
-from veadk.integrations.mpa.managed.diagnostics import (
-    classify_error,
-    failure_identifiers,
-    report,
-)
+from veadk.integrations.mpa.managed.diagnostics import failure_boundary, report_failure
 from veadk.integrations.mpa.managed.network import (
     AccountNetworkProvisioner,
     NetworkOptions,
@@ -87,30 +83,32 @@ class RuntimeCloud:
 
         from .provider import managed_host
 
-        credential = (
-            self.credentials()
-            if self.credentials is not None
-            else (
-                load_volcengine_credentials(self.credential_file)
-                if self.provider == "volcengine"
-                else load_provider_credentials(self.provider, self.credential_file)
+        with failure_boundary("load_credentials"):
+            credential = (
+                self.credentials()
+                if self.credentials is not None
+                else (
+                    load_volcengine_credentials(self.credential_file)
+                    if self.provider == "volcengine"
+                    else load_provider_credentials(self.provider, self.credential_file)
+                )
             )
-        )
         with self._identity_lock if self.cache_identity else nullcontext():
             if self.cache_identity and credential == self._verified_credential:
                 return credential
-            account = str(
-                get_caller_identity(
-                    credential.access_key_id,
-                    credential.secret_access_key,
-                    credential.session_token,
-                    region=self.region,
-                    host=managed_host("sts", self.region, self.provider)
-                    if self.provider == "byteplus"
-                    else None,
-                ).get("AccountId")
-                or ""
-            )
+            with failure_boundary("get_caller_identity"):
+                account = str(
+                    get_caller_identity(
+                        credential.access_key_id,
+                        credential.secret_access_key,
+                        credential.session_token,
+                        region=self.region,
+                        host=managed_host("sts", self.region, self.provider)
+                        if self.provider == "byteplus"
+                        else None,
+                    ).get("AccountId")
+                    or ""
+                )
             if not account or self.account and account != self.account:
                 raise DeploymentError(
                     "Cloud credentials changed accounts during deployment"
@@ -128,7 +126,7 @@ class RuntimeCloud:
         client_type = AgentkitSkillsClient if skills else AgentkitRuntimeClient
         from agentkit.platform.context import default_cloud_provider
 
-        with default_cloud_provider(self.provider):
+        with failure_boundary("runtime_client"), default_cloud_provider(self.provider):
             return client_type(
                 region=self.region,
                 access_key=credential.access_key_id,
@@ -149,14 +147,16 @@ class RuntimeCloud:
         try:
             return await asyncio.to_thread(run)
         except Exception as error:
-            if method in {"create_runtime", "update_runtime"}:
-                code, request_id = failure_identifiers(error)
-                report(
-                    method,
-                    classify_error(error),
-                    error_code=code,
-                    request_id=request_id,
-                )
+            if method in {
+                "create_runtime",
+                "update_runtime",
+                "get_runtime",
+                "list_runtimes",
+                "create_skill_space",
+                "get_skill_space",
+                "list_skill_spaces",
+            }:
+                report_failure(method, error)
             raise
 
     async def get_skill_space(self, space_id):

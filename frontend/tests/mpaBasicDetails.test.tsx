@@ -58,3 +58,45 @@ it("preserves general navigation and suppresses stale sections when switching to
   expect(api.getMpaAgentView).not.toHaveBeenCalled();
   expect(api.getMpaProfileStatus).not.toHaveBeenCalled();
 });
+
+function sectionButton(label: string) {
+  return [...host.querySelectorAll("button")].find((button) => button.textContent === label);
+}
+it("opens collaborating Agents below Basic only on demand and cancels on leaving", async () => {
+  vi.mocked(api.requestCollaborators).mockImplementation(() => new Promise(() => {}));
+  await render({ canManageCollaborators: true });
+  const buttons = [...host.querySelectorAll("button")];
+  const basic = sectionButton("agentWorkspace.sections.basic")!;
+  const collaborators = sectionButton("collaboratingAgents:title");
+  expect(collaborators).toBeDefined();
+  expect(buttons.indexOf(collaborators!)).toBe(buttons.indexOf(basic) + 1);
+  expect(api.requestCollaborators).not.toHaveBeenCalled();
+  await act(async () => collaborators!.click());
+  expect(api.requestCollaborators).toHaveBeenCalledWith("r-one", "cn-beijing", "", expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  const signal = vi.mocked(api.requestCollaborators).mock.calls[0][3]!.signal!;
+  await act(async () => basic.click());
+  expect(signal.aborted).toBe(true);
+  expect(host.textContent).toContain("execution-flow");
+});
+it.each([
+  { category: "general" as const, allowed: true },
+  { category: "mpa" as const, allowed: false },
+])("rejects collaborator focus for $category with permission=$allowed", async ({ category, allowed }) => {
+  await render({ agents: [{ ...agent, agentCategory: category }], canManageCollaborators: allowed, focusedAgentSection: "collaborators" });
+  expect(sectionButton("collaboratingAgents:title")).toBeUndefined();
+  expect(host.textContent).toContain("execution-flow");
+  expect(api.requestCollaborators).not.toHaveBeenCalled();
+});
+it("remounts collaboration management for a different Runtime and removes it on permission loss", async () => {
+  vi.mocked(api.requestCollaborators).mockImplementation(() => new Promise(() => {}));
+  await render({ canManageCollaborators: true, focusedAgentSection: "collaborators" });
+  const first = vi.mocked(api.requestCollaborators).mock.calls[0][3]!.signal!;
+  const next = { ...agent, id: "mpa-two", runtimeId: "r-two", region: "ap-southeast-1" };
+  await render({ agents: [next], focusedAgentId: next.id, canManageCollaborators: true, focusedAgentSection: "collaborators" });
+  expect(first.aborted).toBe(true);
+  expect(api.requestCollaborators).toHaveBeenLastCalledWith("r-two", "ap-southeast-1", "", expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  const second = vi.mocked(api.requestCollaborators).mock.calls.at(-1)![3]!.signal!;
+  await render({ agents: [next], focusedAgentId: next.id, canManageCollaborators: false, focusedAgentSection: "collaborators" });
+  expect(second.aborted).toBe(true);
+  expect(sectionButton("collaboratingAgents:title")).toBeUndefined();
+});

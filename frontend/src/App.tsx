@@ -7721,6 +7721,7 @@ export default function App() {
                 loadingAgentInfo={capabilitiesLoading}
                 canCreate={canCreateRuntimeAgents}
                 canUpdate={canCreateRuntimeAgents || canManageAgents}
+                canManageCollaborators={access?.role === "admin" || access?.role === "super_admin"}
                 canViewUsage={canViewAgentUsage}
                 loadingAgents={agentLibraryLoading}
                 agentsError={agentLibraryError}

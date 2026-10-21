@@ -3,6 +3,17 @@
 A React web UI for VeADK / Google ADK agents. It talks to the standard ADK API
 server that `veadk frontend` launches — no separate backend.
 
+## Per-MPA collaborating Agents
+
+Studio administrators can open **Collaborating Agents** under **Agents → MPA → selected agent**, in the tab below **Basic information**. Add, edit, enable/disable, check and remove external
+Agent registrations. Connection checks validate Agent Cards only; task dispatch is
+not implemented here. Credentials are Runtime environment references, not browser
+secret input. See the [configuration and handoff contract](../specs/mpa-collaborating-agents/README.md).
+
+Studio 管理员可进入「智能体 → MPA 智能体 → 选中智能体」，在「基本信息」下的 Tab 打开「协作 Agent」，增删改查、启停并验证
+Agent Card。凭据直接输入，默认隐藏且可切换显示；保存后不回显，编辑留空保留，后端自动加密持久化。启用控制派发资格，停用保留配置；本次不包含任务派发。需同步升级 Runtime。
+参见[配置及交接说明](../specs/mpa-collaborating-agents/README.zh.md)。
+
 ## Release notifications
 
 MPA basic information includes an editable maximum instance count, defaulting to
@@ -1850,9 +1861,9 @@ MPA name validation highlights invalid input and its message in the theme danger
 
 MPA 名称校验使用主题错误色显示非法输入及错误提示，并提供合法名称示例；名称修正前“下一步”明显置灰。共享 Button 的禁用态统一降低透明度，加载态保留原有外观。
 
-MPA Agent details currently expose only Basic information. Other tabs and the Profile configuration action are hidden; this page does not query Profile status or submit Profile operations. General Agent pages and chat session protocols are unchanged.
+MPA Agent details expose Basic information and, for administrators with a Runtime, Collaborating Agents. Other tabs and the Profile configuration action are hidden; this page does not query Profile status or submit Profile operations. General Agent pages and chat session protocols are unchanged.
 
-MPA 智能体详情当前仅显示基本信息。其他页面及 Profile 配置操作隐藏；本页不查询 Profile 状态或提交 Profile 操作。普通智能体页面与聊天会话协议保持不变。
+MPA 智能体详情显示基本信息，有 Runtime 的 MPA 另向管理员显示协作 Agent。其他页面及 Profile 配置操作隐藏；本页不查询 Profile 状态或提交 Profile 操作。普通智能体页面与聊天会话协议保持不变。
 
 ### MPA Feishu multi-bot accounts / MPA 飞书多机器人
 
@@ -1917,3 +1928,12 @@ BytePlus Studio MPA creation now retrieves the deployment-account APM AppKey thr
 BytePlus Studio MPA 创建现通过海外服务 Host 获取部署账号的 APM AppKey，注入 Runtime Envs 的 `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY`。Key 不进入浏览器/任务/部署记录；获取失败时以安全诊断停止资源准备。重启 Studio 后使用新请求。国内/通用智能体创建和 CLI 配置不变。见 [APM Key 设计](../prd-spec/bugfixes/mpa-byteplus-apm/2026-10-14-server-app-key.zh.md)。
 
 MPA 创建的镜像输入继续使用服务端 latest 默认值；部署层匿名只读匹配同公共仓库已有、digest 完全相同的非 latest tag，并持久化选择；重试只验证原选择。无需仓库写权限、手填版本或新增流水线；发布方须保留匹配版本标签且不得覆盖，无匹配项明确失败。详见 [Studio MPA 镜像快照契约](../specs/studio-mpa-creation/README.zh.md#studio-latest-内容快照2026-10-21)。
+
+### MPA creation failure details / MPA 创建失败详情
+
+Volcengine and BytePlus MPA creation failures show a safe reason and expandable/copyable stage, operation, error code and Request ID when available. No advice section or raw response bodies are shown. If the provider supplies no usable details, the page explicitly says so. Success, general agents and retry behavior are unchanged. Retry hides previous-attempt details but retains server diagnostic history. Restart Studio and refresh the browser after updating; old generic errors cannot be reconstructed.
+
+国内与 BytePlus 的 MPA 创建失败时，会显示安全原因，并支持展开/复制阶段、操作及可用的错误码、Request ID。不显示建议部分或原始响应体；平台未提供可用详情时明确说明。成功展示、通用智能体和重试行为不变。重试时隐藏上一轮详情，服务端仍保留诊断历史。更新后需重启 Studio 并刷新浏览器；以前未记录的具体错误无法恢复。
+
+MPA failure details also include bounded exception types, HTTP status and normalized response type when available. Credential loading/STS/client setup failures are labeled separately; raw exception text and response bodies remain excluded. Restart Studio for the additive task-diagnostic schema; old generic failures cannot be reconstructed.
+MPA 失败详情还会展示可用的受限异常类型、HTTP 状态、归一化响应类型。凭据加载、STS、客户端初始化失败独立标识，不展示原始异常文本和响应体。重启 Studio 后启用增量诊断字段，历史泛化错误无法还原。

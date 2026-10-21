@@ -36,6 +36,9 @@ export interface MpaCreationTask
     category: string;
     attempt: number;
     outcome: string;
+    exceptionType?: string;
+    httpStatus?: number;
+    responseType?: string;
     errorCode?: string;
     requestId?: string;
   };

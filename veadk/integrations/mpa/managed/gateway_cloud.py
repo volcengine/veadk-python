@@ -21,11 +21,14 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
+from .diagnostics import report_failure, with_diagnostic
+
 
 class APIGClientError(RuntimeError):
-    def __init__(self, message: str, *, code: str = ""):
+    def __init__(self, message: str, *, code: str = "", request_id: str = ""):
         super().__init__(message)
         self.code = code
+        self.request_id = request_id
 
 
 class GatewayCloud:
@@ -80,6 +83,9 @@ class GatewayCloud:
                     raise APIGClientError(
                         "APIG request rejected",
                         code=error.get("Code", "CloudRequestFailed"),
+                        request_id=(response.get("ResponseMetadata") or {}).get(
+                            "RequestId", ""
+                        ),
                     )
                 result = response.get("Result")
                 if not isinstance(result, dict):
@@ -96,9 +102,16 @@ class GatewayCloud:
                     code = "CloudRequestFailed"
                 if not isinstance(code, str) or not code.replace(".", "").isalnum():
                     code = "CloudRequestFailed"
-                raise APIGClientError(f"{action} failed ({code})", code=code) from None
+                diagnostic = report_failure(action, exc)
+                raise with_diagnostic(
+                    APIGClientError(f"{action} failed ({code})", code=code), diagnostic
+                ) from None
 
-        return await asyncio.to_thread(run)
+        try:
+            return await asyncio.to_thread(run)
+        except Exception as exc:
+            report_failure(action, exc)
+            raise
 
     async def find_gateways(self, name):
         matches = []
