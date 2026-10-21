@@ -15,6 +15,8 @@ import json
 import os
 import time
 import requests
+from urllib.parse import urlsplit
+
 from typing import Optional, List, Dict, Any, Union
 from volcenginesdkllmshield.models.llm_shield_sign import request_sign
 
@@ -29,12 +31,24 @@ from veadk.config import getenv
 from veadk.utils.logger import get_logger
 from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 
+SENTRY_V3_PATH = "/OpenTOP/V3/Lumen/Moderate"
+UNAVAILABLE = "The security service is unavailable. Please try again later."
+
 logger = get_logger(__name__)
 
 
 class LLMShieldPlugin(BasePlugin):
     """
     LLM Shield Plugin for content moderation and safety.
+
+    Private V3: set AGENTSENTRY_URL, AGENTSENTRY_ACCOUNT_ID,
+    AGENTSENTRY_INSTANCE_ID, AGENTSENTRY_AK/SK (endpoint credentials), and
+    optionally AGENTSENTRY_REGION (cn-private). AGENTSENTRY_ENABLED=false
+    disables only this private integration. Attach before_model, after_model
+    and before_tool callbacks. Only current user text and visible tool plans
+    are reviewed; hidden reasoning, final replies and tool results are not.
+    Tool-only model responses need a visible plan under the V3 contract;
+    missing plans and unsupported input types produce explicit local errors.
 
     This plugin integrates with Volcano Engine's LLM Shield service to provide
     real-time content moderation for user inputs, model outputs, and tool interactions.
@@ -64,16 +78,38 @@ class LLMShieldPlugin(BasePlugin):
         self.name = "LLMShieldPlugin"
         super().__init__(name=self.name)
 
-        self.appid = getenv("TOOL_LLM_SHIELD_APP_ID")
-        self.region = (
-            os.getenv("TOOL_LLM_SHIELD_REGION") or os.getenv("REGION") or "cn-beijing"
-        )
         self.timeout = timeout
-        self.url = getenv(
-            "TOOL_LLM_SHIELD_URL",
-            f"https://{self.region}.sdk.access.llm-shield.omini-shield.com",
-        )
-        self.api_key = getenv("TOOL_LLM_SHIELD_API_KEY", allow_false_values=True)
+        self._sentry_v3 = None
+        self._sentry_disabled = False
+        sentry_url = os.getenv("AGENTSENTRY_URL", "").strip()
+        if sentry_url:
+            from .agentsentry_v3 import AgentSentryV3, enabled_from_env
+
+            if not enabled_from_env():
+                self._sentry_disabled = True
+                return
+            self._sentry_v3 = AgentSentryV3.from_env(sentry_url, timeout)
+            self.url = self._sentry_v3.url
+            self.region = self._sentry_v3.region
+            self.appid = ""
+            self.api_key = ""
+        else:
+            self.appid = getenv("TOOL_LLM_SHIELD_APP_ID")
+            self.region = (
+                os.getenv("TOOL_LLM_SHIELD_REGION")
+                or os.getenv("REGION")
+                or "cn-beijing"
+            )
+            self.url = getenv(
+                "TOOL_LLM_SHIELD_URL",
+                f"https://{self.region}.sdk.access.llm-shield.omini-shield.com",
+            )
+            self.api_key = getenv("TOOL_LLM_SHIELD_API_KEY", allow_false_values=True)
+
+            if urlsplit(self.url).path.rstrip("/") == SENTRY_V3_PATH:
+                raise ValueError(
+                    "Configure V3 with AGENTSENTRY_URL, not TOOL_LLM_SHIELD_URL"
+                )
 
         self.category_map = {
             101: "Model Misuse",
@@ -121,6 +157,10 @@ class LLMShieldPlugin(BasePlugin):
             Optional[str]: A blocking message if content violates policies,
                          None if content is safe or on error
         """
+        if self._sentry_v3:
+            return self._sentry_v3.moderate(
+                message, role=role, hook_name=hook_name, session_info=session_info
+            )
         if not self.appid:
             logger.error("LLM Shield app ID not configured")
             return None
@@ -298,6 +338,55 @@ class LLMShieldPlugin(BasePlugin):
             Optional[LlmResponse]: A blocking response if content is unsafe,
                                  None if content is safe to proceed
         """
+        if self._sentry_disabled:
+            return None
+        if self._sentry_v3:
+            state = _v3_state(callback_context)
+            state.pop("plans", None)
+            state.pop("partial", None)
+            if state.get("dispatch_checked"):
+                return (
+                    _blocked_response(state["dispatch_block"])
+                    if state.get("dispatch_block")
+                    else None
+                )
+            invocation = getattr(
+                callback_context, "_invocation_context", callback_context
+            )
+            content = getattr(invocation, "user_content", None)
+            if content is None:
+                # Do not fall back to an older textual message when the latest
+                # input is an image, or mistake ADK tool responses for input.
+                content = next(
+                    (
+                        c
+                        for c in reversed(getattr(llm_request, "contents", []) or [])
+                        if c.role == "user"
+                        and not any(
+                            getattr(p, "function_response", None)
+                            for p in (getattr(c, "parts", None) or [])
+                        )
+                    ),
+                    None,
+                )
+            state["dispatch_checked"] = True
+            if content is None:
+                return None
+            text = _all_text(content)
+            if not text:
+                from .agentsentry_v3 import UNSUPPORTED_INPUT
+
+                block = UNSUPPORTED_INPUT
+            else:
+                block = self._request_llm_shield(
+                    text,
+                    "user",
+                    "before_dispatch",
+                    self._get_session_info(callback_context),
+                )
+            state["dispatch_block"] = block
+            return _blocked_response(block) if block else None
+
         # Extract the last user message for moderation
         last_user_message = None
         contents = getattr(llm_request, "contents", [])
@@ -347,6 +436,26 @@ class LLMShieldPlugin(BasePlugin):
             Optional[LlmResponse]: A blocking response if content is unsafe,
                                  None if content is safe to return
         """
+        if self._sentry_disabled:
+            return None
+        if self._sentry_v3:
+            state = _v3_state(callback_context)
+            content = getattr(llm_response, "content", None)
+            text = _all_text(content)
+            if getattr(llm_response, "partial", False):
+                state["partial"] = state.get("partial", "") + text
+            else:
+                text = text or state.pop("partial", "")
+            for part in getattr(content, "parts", []) or []:
+                call = getattr(part, "function_call", None)
+                if call:
+                    key = _call_key(call.name, call.args or {})
+                    state.setdefault("plans", {})[key] = text or state.get(
+                        "partial", ""
+                    )
+            # Ordinary model output is outside the V3 private detection scope.
+            return None
+
         # Extract the model's response for moderation
         last_model_message = None
         content = getattr(llm_response, "content", [])
@@ -396,6 +505,38 @@ class LLMShieldPlugin(BasePlugin):
             Optional[Dict]: A blocking result if arguments are unsafe,
                           None if arguments are safe to proceed
         """
+        if self._sentry_disabled:
+            return None
+        if self._sentry_v3:
+            plan = (
+                _v3_state(tool_context)
+                .get("plans", {})
+                .pop(_call_key(tool.name, args), "")
+            )
+            if not plan:
+                from .agentsentry_v3 import MISSING_PLAN
+
+                return {
+                    "result": MISSING_PLAN,
+                    "reason": "missing_visible_execution_plan",
+                }
+            call = {
+                "ID": getattr(tool_context, "function_call_id", "") or "",
+                "Type": "function",
+                "Function": {
+                    "Name": tool.name,
+                    "Arguments": json.dumps(args, ensure_ascii=False),
+                },
+            }
+            block = self._sentry_v3.moderate(
+                plan,
+                role="assistant",
+                hook_name="before_tool_call",
+                session_info=self._get_session_info(tool_context),
+                tool_calls=[call],
+            )
+            return {"result": block} if block else None
+
         args_list = []
 
         for key, value in args.items():
@@ -439,6 +580,10 @@ class LLMShieldPlugin(BasePlugin):
             Optional[Dict]: A blocking result if tool output is unsafe,
                           None if output is safe to return
         """
+        if self._sentry_disabled:
+            return None
+        if self._sentry_v3:
+            return None
         message = ""
         if isinstance(tool_response, str):
             message = tool_response
@@ -459,6 +604,35 @@ class LLMShieldPlugin(BasePlugin):
             logger.debug("LLM Shield triggered in after_tool_callback.")
             return {"result": response}
         return None
+
+
+def _all_text(content):
+    return "\n".join(
+        p.text
+        for p in (getattr(content, "parts", None) or [])
+        if getattr(p, "text", None) and not getattr(p, "thought", False)
+    )
+
+
+def _call_key(name, args):
+    return name + ":" + json.dumps(args, sort_keys=True, ensure_ascii=False)
+
+
+def _v3_state(context):
+    # Invocation-owned state avoids leaking plans across sessions/concurrent requests.
+    invocation = getattr(context, "_invocation_context", context)
+    states = getattr(invocation, "agent_states", None)
+    if states is None:
+        states = {}
+        invocation.agent_states = states
+    agent = getattr(getattr(invocation, "agent", None), "name", "default")
+    return states.setdefault("__sentry_v3_" + agent, {})
+
+
+def _blocked_response(text):
+    return LlmResponse(
+        content=types.Content(role="model", parts=[types.Part(text=text)])
+    )
 
 
 content_safety = LLMShieldPlugin()
