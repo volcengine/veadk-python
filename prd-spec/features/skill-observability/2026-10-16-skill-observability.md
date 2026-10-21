@@ -15,12 +15,14 @@ Count package acquisition and successful instruction delivery with the exact sou
 
 ## Requirements and scenarios
 
-- FR-1: A recognized remote package acquisition emits one `gen_ai_skill_download` observation on completion, including validated disk-cache restoration and failure. Invalid cache followed by download is one attempt, with `cache_hit=false`.
-- FR-2: A successful instruction response emits one `gen_ai_skill_load`. Two successful `load_skill` calls in one invocation count twice even when ADK fetches once. Unknown skills, read failures and cancellation never count as successful loads.
+- FR-1: A recognized remote package acquisition emits one `gen_ai_skill_download_count` observation on completion, including validated disk-cache restoration and failure. Invalid cache followed by download is one attempt, with `skill.download.cache_hit=false`.
+- FR-2: A successful instruction response emits one `gen_ai_skill_load_count`. Two successful `load_skill` calls in one invocation count twice even when ADK fetches once. Unknown skills, read failures and cancellation never count as successful loads.
 - FR-3: Cloud identity survives conversion/cache. Sandbox Python distinguishes built-ins, SkillHub slugs, explicit AgentKit IDs and both space kinds. Go retains its existing four-source support. Unattributable local skills are not guessed to be built-ins.
 - FR-4: Use existing process-global OTEL providers; sandbox installs a periodic OTLP metric exporter only when no provider exists. Trace and metric disable switches are independent. Export failures do not affect conversations; shutdown flush is bounded.
 - FR-5: New telemetry never records archive URLs, credentials, instruction bodies, paths or raw exception messages. Existing content telemetry policy remains unchanged.
 - FR-6: Python and Go use the same labels and source semantics for supported sources; prefetch produces downloads only. Existing installed packages/session links are retained.
+
+The current schema follows technical document revision 2419, read on 2026-10-21, plus the subsequent user-requested unit change to `time`: both counters use the `_count` suffix and unit `time`, with `skill_name` added to identity. Outcome is only `skill.download.outcome`, no longer a metric label. Spans are named `download_skill {skill_name}` / `load_skill {skill_name}` and use `skill.consumer` and `skill.download.cache_hit`. Name provenance and empty-value rules are in the component contract. Preserve fixed Counter instruments; fields and record methods do not need a `gen_ai` prefix.
 
 ## Design and affected consumers
 
@@ -28,7 +30,7 @@ Runtime: add a small `veadk/skills/telemetry.py` recorder, instrument the existi
 
 Sandbox: implement a local recorder using already-installed OTEL packages, because the sandbox's released SDK must work independently of unpublished VeADK changes. Instrument `playground_skills/packages.py`, SkillHub reconciliation, and the existing `ObservedSkillsTool`. Persist the installed SkillHub slug alongside its package so a failed replacement cannot relabel an older built-in. The Go package store records downloads; catalog metadata carries identity into the existing tracked tool wrapper. Built-ins produce no download events. Configure metric export in existing telemetry setup and flush with existing shutdown handling.
 
-Counters count acquisition attempts after identity resolution. Metadata-list failures without a resolved skill ID cannot produce a per-skill download. Successful acquisition means a validated usable package, not just HTTP success. Python worker-thread downloads may finish after awaiting-task cancellation; count their actual acquisition result, never a cancelled load. Go context cancellation is an error outcome. Metrics contain only contract dimensions; `consumer`, `cache_hit` and errors are span attributes. Span duration covers acquisition, including validation/installation. Cache hit rates derived from spans are subject to trace sampling.
+Counters count acquisition attempts after identity resolution. Metadata-list failures without a resolved skill ID cannot produce a per-skill download. Successful acquisition means a validated usable package, not just HTTP success. Python worker-thread downloads may finish after awaiting-task cancellation; count their actual acquisition result, never a cancelled load. Go context cancellation is an error outcome. Metrics contain only contract dimensions; `skill.consumer`, `skill.download.cache_hit` and errors are span attributes. Span duration covers acquisition, including validation/installation. Cache hit rates derived from spans are subject to trace sampling.
 
 ## Tasks, tests and acceptance
 

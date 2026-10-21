@@ -2,27 +2,29 @@
 
 [中文版](README.zh.md)
 
-Component: `skill-observability`; status: implemented (local verification; full regression limitations in PRD); revised 2026-10-16.
+Component: `skill-observability`; status: implemented (local verification; full regression limitations in PRD); revised 2026-10-21.
 Change: [skill-observability](../../prd-spec/features/skill-observability/2026-10-16-skill-observability.md).
 
 ## Ownership and interfaces
 
-VeADK owns Runtime package acquisition and ADK instruction-load instrumentation in `veadk/skills/` and `veadk/tracing/telemetry/telemetry.py`. `actb-mono/sandboxes/agentkit-skill` owns Python/Go Sandbox installation, tool adaptation and exporter lifecycle. The maintained wire schema below is shared; the sandbox is independently released and does not import an unpublished SDK recorder. Existing tools/signatures/results and metrics remain compatible. Discovery, resource/script execution, issue reporting and business success are not owned here.
+VeADK owns Runtime package acquisition and ADK instruction-load instrumentation in `veadk/skills/` and `veadk/tracing/telemetry/telemetry.py`. `actb-mono/sandboxes/agentkit-skill` owns Python/Go Sandbox installation, tool adaptation and exporter lifecycle. The maintained wire schema below is shared; the sandbox is independently released and does not import an unpublished SDK recorder. Existing tools/signatures/results remain compatible. Skill metrics use the new names and unit below; consumers must update queries. Old metric names are not emitted in parallel. Discovery, resource/script execution, issue reporting and business success are not owned here.
 
 ## Contracts
 
-- CON-1: `gen_ai_skill_download` is an OTEL counter, unit `count`; dimensions are exactly `skill_source`, `skill_id`, `skill_version`, `skill_space_id`, `outcome`. `outcome` is `success` or `error` (including cancellation). One acquisition completion, including cache restore, adds one. No event for mere discovery or local symlink creation.
-- CON-2: `gen_ai_skill_load` is an OTEL counter, unit `count`; dimensions are exactly the four identity fields above. One successful instruction response adds one. ADK invocation-cache hits still count. Errors, cancellation, forwarding and resource/script access do not.
-- CON-3: Download Span `skill_download` has `skill.source`, `skill.id`, `skill.version`, `skill.space_id`, `outcome`, `cache_hit`, `consumer`. Failures add `error.type` and a safe static `error.description`, with ERROR status. Successful load annotates the existing tool Span with the four dotted identity fields and `consumer`. Consumer is `runtime` or `skill_sandbox`. Span duration is total acquisition time. Never add consumer/cache/error text to metric labels.
+- CON-1: `gen_ai_skill_download_count` is an OTEL counter, unit `time`; dimensions are exactly `skill_source`, `skill_id`, `skill_name`, `skill_version`, `skill_space_id`. One acquisition completion, including cache restore and failure, adds one. No event for mere discovery or local symlink creation; outcome is recorded only on the Span.
+- CON-2: `gen_ai_skill_load_count` is an OTEL counter, unit `time`; dimensions are exactly the five identity fields above. One successful instruction response adds one. ADK invocation-cache hits still count. Errors, cancellation, forwarding and resource/script access do not.
+- CON-3: Download Span `download_skill {skill_name}` has `skill.source`, `skill.id`, `skill.name`, `skill.version`, `skill.space_id`, `skill.consumer`, `skill.download.outcome`, `skill.download.cache_hit`. Outcome is `success` or `error` (including cancellation); failures add `error.type` and a safe static `error.description`, with ERROR status. Successful loading renames the existing tool Span to `load_skill {skill_name}` and adds the five dotted identity fields and `skill.consumer`, without creating a duplicate Span. `skill.consumer` is `runtime` or `skill_sandbox`. Span duration covers the actual operation. Consumer/cache/outcome/error text never becomes a metric label.
 - CON-4: Identity follows the table. Missing version/space is the empty string, never a synthesized cache hash. Remote skills without a trustworthy ID and unclassified local skills are excluded. Registry-owned metadata overrides archive metadata for telemetry identity. SkillHub installation records the slug with the installed package, not just the current desired configuration.
 
-| skill_source | skill_id | skill_version | skill_space_id |
-| --- | --- | --- | --- |
-| builtin_skill | name | empty | empty |
-| skillhub_skill | slug | empty | empty |
-| skillhub_skill_space | s-* | sv-* when supplied | sp-* |
-| agentkit_skill | s-* | vN | empty |
-| agentkit_skill_space | s-* | vN when supplied or present in the legacy package path | ss-* |
+`skill_name` uses the name resolved by the current source: metadata for Runtime/skill spaces, the loaded name for local skills, and the resolved installation name for SkillHub installation. Explicit TOS acquisition first propagates the version API `Name`; when absent, successful acquisition or cache restoration reads the validated package name. Failure before a name is available uses the empty string, never an ID, slug or path as a substitute. Reading a name for telemetry must not change the acquisition result.
+
+| skill_source | skill_id | skill_name | skill_version | skill_space_id |
+| --- | --- | --- | --- | --- |
+| builtin_skill | name | name | empty | empty |
+| skillhub_skill | slug | resolved name or empty | empty | empty |
+| skillhub_skill_space | s-* | resolved name or empty | sv-* when supplied | sp-* |
+| agentkit_skill | s-* | resolved name or empty | vN | empty |
+| agentkit_skill_space | s-* | resolved name or empty | vN when supplied or present in the legacy package path | ss-* |
 
 Python supports all five rows. The pinned Sandbox Go SDK still rejects `sp-*`; the user approved retaining that limitation. Local SkillHub receipts are shared across Python/Go selection.
 

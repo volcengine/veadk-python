@@ -145,8 +145,8 @@ class Meters:
     APMPLUS_TOOL_TOKEN_USAGE = "apmplus_tool_token_usage"
     # skill invoke latency
     GEN_AI_SKILL_INVOKE_LATENCY = "gen_ai_skill_invoke_latency"
-    GEN_AI_SKILL_DOWNLOAD = "gen_ai_skill_download"
-    GEN_AI_SKILL_LOAD = "gen_ai_skill_load"
+    GEN_AI_SKILL_DOWNLOAD_COUNT = "gen_ai_skill_download_count"
+    GEN_AI_SKILL_LOAD_COUNT = "gen_ai_skill_load_count"
 
 
 class PortalMetricRecorder:
@@ -238,10 +238,10 @@ class PortalMetricRecorder:
         )
 
         self.skill_download_counter = self.meter.create_counter(
-            Meters.GEN_AI_SKILL_DOWNLOAD, unit="count"
+            Meters.GEN_AI_SKILL_DOWNLOAD_COUNT, unit="time"
         )
         self.skill_load_counter = self.meter.create_counter(
-            Meters.GEN_AI_SKILL_LOAD, unit="count"
+            Meters.GEN_AI_SKILL_LOAD_COUNT, unit="time"
         )
 
     def record_skill_download(self, attributes: dict[str, str]) -> None:

@@ -37,6 +37,7 @@ def skill_identity(skill) -> dict[str, str] | None:
         if space.startswith("sp-")
         else "agentkit_skill_space",
         "skill_id": skill.id,
+        "skill_name": skill.name,
         "skill_version": version,
         "skill_space_id": space,
     }
@@ -47,7 +48,7 @@ def _span_attributes(identity, consumer):
         **{
             key.replace("skill_", "skill.", 1): value for key, value in identity.items()
         },
-        "consumer": consumer,
+        "skill.consumer": consumer,
     }
 
 
@@ -60,7 +61,8 @@ def download(identity, *, consumer="runtime"):
     span = trace.INVALID_SPAN
     with suppress(Exception):
         span = trace.get_tracer("veadk.skills").start_span(
-            "skill_download", attributes=_span_attributes(identity, consumer)
+            f"download_skill {identity['skill_name']}",
+            attributes=_span_attributes(identity, consumer),
         )
     outcome = "error"
     try:
@@ -79,12 +81,13 @@ def download(identity, *, consumer="runtime"):
             )
         raise
     finally:
-        portal_metrics.portal_metric_recorder.record_skill_download(
-            {**identity, "outcome": outcome}
-        )
+        portal_metrics.portal_metric_recorder.record_skill_download(identity)
         with suppress(Exception):
             span.set_attributes(
-                {"outcome": outcome, "cache_hit": observation["cache_hit"]}
+                {
+                    "skill.download.outcome": outcome,
+                    "skill.download.cache_hit": observation["cache_hit"],
+                }
             )
             span.end()
 
@@ -114,6 +117,7 @@ def record_adk_load(tool, event):
             if not isinstance(identity, dict) or set(identity) != {
                 "skill_source",
                 "skill_id",
+                "skill_name",
                 "skill_version",
                 "skill_space_id",
             }:
@@ -123,6 +127,6 @@ def record_adk_load(tool, event):
             ):
                 continue
             portal_metrics.portal_metric_recorder.record_skill_load(identity)
-            trace.get_current_span().set_attributes(
-                _span_attributes(identity, "runtime")
-            )
+            span = trace.get_current_span()
+            span.update_name(f"load_skill {identity['skill_name']}")
+            span.set_attributes(_span_attributes(identity, "runtime"))

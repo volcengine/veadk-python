@@ -98,15 +98,21 @@ def test_download_cache_and_corruption(observation, remote, tmp_path):
     labels = {
         "skill_source": "skillhub_skill_space",
         "skill_id": "s-demo",
+        "skill_name": "demo",
         "skill_version": "sv-one",
         "skill_space_id": "sp-one",
-        "outcome": "success",
     }
-    assert points(observation[0], "gen_ai_skill_download") == [(labels, 3)]
+    assert points(observation[0], "gen_ai_skill_download_count") == [(labels, 3)]
     spans = observation[1].get_finished_spans()
-    assert [s.attributes["cache_hit"] for s in spans] == [False, True, False]
+    assert all(s.attributes["skill.name"] == "demo" for s in spans)
+    assert all(s.attributes["skill.download.outcome"] == "success" for s in spans)
+    assert [s.attributes["skill.download.cache_hit"] for s in spans] == [
+        False,
+        True,
+        False,
+    ]
     assert all(
-        s.name == "skill_download" and s.attributes["consumer"] == "runtime"
+        s.name == "download_skill demo" and s.attributes["skill.consumer"] == "runtime"
         for s in spans
     )
 
@@ -123,8 +129,12 @@ def test_download_error_does_not_export_exception_text(
     monkeypatch.setattr(materializer, "download_skillhub_skill", fail)
     with pytest.raises(RuntimeError, match="DO_NOT_EXPORT"):
         materializer.materialize_remote_skill(skill, cache_dir=tmp_path)
-    assert points(observation[0], "gen_ai_skill_download")[0][0]["outcome"] == "error"
+    assert points(observation[0], "gen_ai_skill_download_count") == [
+        (skill_telemetry.skill_identity(skill), 1)
+    ]
     span = observation[1].get_finished_spans()[0]
+    assert span.attributes["skill.download.outcome"] == "error"
+    assert span.name == "download_skill demo"
     assert span.status.is_ok is False
     assert span.attributes["error.type"] == "RuntimeError"
     assert "DO_NOT_EXPORT" not in str(
@@ -157,24 +167,29 @@ async def test_real_adk_cached_loads_keep_identity_and_count_each_response(
         with trace.get_tracer("test").start_as_current_span("execute_tool load_skill"):
             telemetry.trace_tool_call(tool, {"skill_name": "demo"}, event)
     assert remote[1] == ["s-demo"]
-    assert points(observation[0], "gen_ai_skill_load") == [
+    assert points(observation[0], "gen_ai_skill_load_count") == [
         (
             {
                 "skill_source": "skillhub_skill_space",
                 "skill_id": "s-demo",
+                "skill_name": "demo",
                 "skill_version": "sv-one",
                 "skill_space_id": "sp-one",
             },
             2,
         )
     ]
-    assert points(observation[0], "gen_ai_skill_download")[0][1] == 1
+    assert points(observation[0], "gen_ai_skill_download_count")[0][1] == 1
     loads = [
-        s
-        for s in observation[1].get_finished_spans()
-        if s.name.startswith("execute_tool")
+        s for s in observation[1].get_finished_spans() if s.name == "load_skill demo"
     ]
-    assert all(s.attributes["skill.id"] == "s-demo" for s in loads)
+    assert len(loads) == 2
+    assert all(
+        s.attributes["skill.id"] == "s-demo"
+        and s.attributes["skill.name"] == "demo"
+        and s.attributes["skill.consumer"] == "runtime"
+        for s in loads
+    )
     await toolset.close()
 
 
@@ -199,7 +214,7 @@ def test_failed_or_incomplete_load_never_counts(
         registry=registry.VeSkillRegistry(skill_source_id="sp-one", cache_dir=tmp_path)
     )
     skill_telemetry.record_adk_load(LoadSkillTool(toolset), event)
-    assert not points(observation[0], "gen_ai_skill_load")
+    assert not points(observation[0], "gen_ai_skill_load_count")
 
 
 def test_unknown_local_identity_and_legacy_version():
@@ -221,6 +236,7 @@ def test_unknown_local_identity_and_legacy_version():
     assert identity == {
         "skill_source": "agentkit_skill_space",
         "skill_id": "s-demo",
+        "skill_name": "demo",
         "skill_version": "v12",
         "skill_space_id": "ss-one",
     }
@@ -242,7 +258,7 @@ async def test_cancelled_registry_wait_does_not_load(
             args={"skill_name": "demo"},
             tool_context=SimpleNamespace(invocation_id="turn"),
         )
-    assert not points(observation[0], "gen_ai_skill_load")
+    assert not points(observation[0], "gen_ai_skill_load_count")
     await toolset.close()
 
 
@@ -280,7 +296,7 @@ def test_non_load_tool_cannot_count_forged_response(observation, remote):
         )
     )
     skill_telemetry.record_adk_load(SimpleNamespace(name="load_skill_resource"), event)
-    assert not points(observation[0], "gen_ai_skill_load")
+    assert not points(observation[0], "gen_ai_skill_load_count")
 
 
 def test_default_proxy_instruments_are_bounded_and_support_late_provider():
@@ -304,10 +320,10 @@ def test_default_proxy_instruments_are_bounded_and_support_late_provider():
         assert recorder.skill_download_counter in recorder.meter._instruments
         initial_meters = tuple(proxy._meters)
         initial_instruments = tuple(tuple(meter._instruments) for meter in initial_meters)
-        labels = {"skill_source": "agentkit_skill_space", "skill_id": "s-test", "skill_version": "v1", "skill_space_id": "ss-test"}
+        labels = {"skill_source": "agentkit_skill_space", "skill_id": "s-test", "skill_name": "demo", "skill_version": "v1", "skill_space_id": "ss-test"}
         for _ in range(1000):
             recorder.record_skill_load(labels)
-            recorder.record_skill_download({**labels, "outcome": "success"})
+            recorder.record_skill_download(labels)
         assert tuple(proxy._meters) == initial_meters
         assert tuple(tuple(meter._instruments) for meter in proxy._meters) == initial_instruments
         reader = InMemoryMetricReader()
@@ -316,13 +332,14 @@ def test_default_proxy_instruments_are_bounded_and_support_late_provider():
             metrics.set_meter_provider(provider)
             for _ in range(3):
                 recorder.record_skill_load(labels)
-                recorder.record_skill_download({**labels, "outcome": "success"})
+                recorder.record_skill_download(labels)
             data = reader.get_metrics_data()
             values = {m.name: [(dict(p.attributes), p.value) for p in m.data.data_points]
                       for r in data.resource_metrics for s in r.scope_metrics for m in s.metrics}
-            assert {s.scope.name for r in data.resource_metrics for s in r.scope_metrics for m in s.metrics if m.name in {"gen_ai_skill_load", "gen_ai_skill_download"}} == {"veadk_portal"}
-            assert values["gen_ai_skill_load"] == [(labels, 3)], values
-            assert values["gen_ai_skill_download"] == [({**labels, "outcome": "success"}, 3)], values
+            assert {s.scope.name for r in data.resource_metrics for s in r.scope_metrics for m in s.metrics if m.name in {"gen_ai_skill_load_count", "gen_ai_skill_download_count"}} == {"veadk_portal"}
+            assert {m.unit for r in data.resource_metrics for s in r.scope_metrics for m in s.metrics if m.name.startswith("gen_ai_skill_")} == {"time"}
+            assert values["gen_ai_skill_load_count"] == [(labels, 3)], values
+            assert values["gen_ai_skill_download_count"] == [(labels, 3)], values
         finally:
             provider.shutdown()
     """)
@@ -341,7 +358,9 @@ def test_default_proxy_instruments_are_bounded_and_support_late_provider():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("metric_name", ["gen_ai_skill_load", "gen_ai_skill_download"])
+@pytest.mark.parametrize(
+    "metric_name", ["gen_ai_skill_load_count", "gen_ai_skill_download_count"]
+)
 def test_recording_failure_does_not_escape(monkeypatch, metric_name):
     from unittest.mock import Mock
 
@@ -349,22 +368,21 @@ def test_recording_failure_does_not_escape(monkeypatch, metric_name):
     recorder = portal_metrics.portal_metric_recorder
     counter = (
         recorder.skill_download_counter
-        if metric_name == "gen_ai_skill_download"
+        if metric_name == "gen_ai_skill_download_count"
         else recorder.skill_load_counter
     )
     record = (
         recorder.record_skill_download
-        if metric_name == "gen_ai_skill_download"
+        if metric_name == "gen_ai_skill_download_count"
         else recorder.record_skill_load
     )
     monkeypatch.setattr(counter, "add", broken_add)
     labels = {
         "skill_source": "builtin_skill",
         "skill_id": "demo",
+        "skill_name": "demo",
         "skill_version": "",
         "skill_space_id": "",
     }
-    if metric_name == "gen_ai_skill_download":
-        labels["outcome"] = "success"
     record(labels)
     broken_add.assert_called_once_with(1, labels)
