@@ -4910,9 +4910,16 @@ def test_studio_runtime_proxy_only_schedules_successful_completed_sse(
     )
 
 
+@pytest.mark.parametrize("path", ["collaborators", "agents-md"])
+@pytest.mark.parametrize("method", ["GET", "POST"])
 @pytest.mark.parametrize("user, expected_status", [("admin", 200), ("member", 404)])
 def test_collaborator_proxy_uses_server_key_and_enforces_admin(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, user: str, expected_status: int
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    user: str,
+    expected_status: int,
+    path: str,
+    method: str,
 ) -> None:
     app = _create_frontend_app(monkeypatch, tmp_path, admins="admin")
 
@@ -4961,8 +4968,9 @@ def test_collaborator_proxy_uses_server_key_and_enforces_admin(
         ),
     )
     with TestClient(app) as client:
-        response = client.get(
-            "/web/runtime-proxy/runtime-1/api/v1/studio/collaborators?_runtime_region=cn-beijing",
+        response = client.request(
+            method,
+            f"/web/runtime-proxy/runtime-1/api/v1/studio/{path}?_runtime_region=cn-beijing",
             headers={"X-VeADK-Local-User": user, "X-MPA-Studio-Key": "browser-forgery"},
         )
     assert response.status_code == expected_status

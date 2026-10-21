@@ -8629,6 +8629,9 @@ export default function App() {
                 {!sandboxSession && agentInfoSelectionRef.current === appName && agentInfo?.agentCategory === "mpa" && (
                   <MpaAgentInfoRail
                     key={`${userId}:${appName}`}
+                    agentsMdTarget={studioToolRuntime && (access.role === "admin" || access.role === "super_admin")
+                      ? { runtimeId: studioToolRuntime.runtimeId, region: studioToolRuntime.region }
+                      : undefined}
                     info={agentInfo}
                     onRefresh={() => {
                       preparedAgentSelectionRef.current = null;

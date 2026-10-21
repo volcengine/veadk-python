@@ -1,0 +1,24 @@
+.mpa-agents-md-editor-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-block: 4px 12px;
+  font-size: 14px;
+}
+.mpa-agents-md-editor-body p {
+  margin: 0;
+}
+.mpa-agents-md-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mpa-agents-md-editor-body .studio-textarea {
+  width: 100%;
+  max-width: 100%;
+  height: min(32dvh, 240px);
+  min-height: 120px;
+  flex-shrink: 0;
+  resize: vertical;
+}

@@ -341,7 +341,18 @@
     "discardDocument": "Discard unsaved changes?",
     "keepEditing": "Keep editing",
     "discardChanges": "Discard changes",
-    "saveDocument": "Save new version"
+    "saveDocument": "Save new version",
+    "editAgentsMd": "Edit",
+    "agentsMdEditHint": "Changes apply to future turns for this agent. Replies in progress keep their current configuration.",
+    "agentsMdConflict": "Another editor changed this configuration. Refresh and review it before saving.",
+    "agentsMdEditUnsupported": "This Runtime cannot edit AGENTS.md. Upgrade its image to enable editing.",
+    "agentsMdClearConfirm": "Saving an empty document removes custom instructions. Continue?",
+    "confirmDocument": "Confirm",
+    "agentsMdSaveUncertain": "Save status is uncertain. Refresh to check the persisted content.",
+    "agentsMdTooLong": "AGENTS.md supports up to 40,000 characters. Shorten it before saving.",
+    "agentsMdLoading": "Loading AGENTS.md…",
+    "agentsMdLoadFailed": "Unable to load AGENTS.md. Refresh to retry.",
+    "saveAgentsMd": "Save"
   },
   "sessionEnvironment": {
     "mountFailed": "Could not mount the environment",
