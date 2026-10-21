@@ -6634,3 +6634,9 @@ export function requestCollaborators(runtimeId: string, region: string, suffix =
     ...init, headers: {"Content-Type": "application/json", ...init.headers},
   }, {runtimeId, region});
 }
+
+export function requestAgentsMd(runtimeId: string, region: string, init: RequestInit = {}) {
+  return apiFetch("/api/v1/studio/agents-md", {
+    ...init, headers: { "Content-Type": "application/json", ...init.headers },
+  }, { runtimeId, region });
+}

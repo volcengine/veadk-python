@@ -1937,3 +1937,28 @@ Volcengine and BytePlus MPA creation failures show a safe reason and expandable/
 
 MPA failure details also include bounded exception types, HTTP status and normalized response type when available. Credential loading/STS/client setup failures are labeled separately; raw exception text and response bodies remain excluded. Restart Studio for the additive task-diagnostic schema; old generic failures cannot be reconstructed.
 MPA 失败详情还会展示可用的受限异常类型、HTTP 状态、归一化响应类型。凭据加载、STS、客户端初始化失败独立标识，不展示原始异常文本和响应体。重启 Studio 后启用增量诊断字段，历史泛化错误无法还原。
+
+
+### Editing MPA AGENTS.md / 编辑 MPA AGENTS.md
+
+Studio administrators can open an MPA conversation, expand its information rail,
+and choose **AGENTS.md → Edit**. Save changes to the selected Runtime; an empty
+saved document removes custom instructions. A running turn keeps its snapshot;
+the next Main turn uses the new content. Worker files receive updates, but an
+already reused Worker thread may retain old instructions; Worker hot reload is
+a known deferred limitation. Model, Skill and MCP settings remain unchanged. Conflicts
+retain the draft and require refreshing the current revision. Older Runtimes
+show an upgrade message; viewing their existing metadata remains available.
+
+Studio 管理员进入 MPA 会话，在右侧信息栏的 **AGENTS.md → 编辑** 中修改并保存。
+配置保存到当前选中的 Runtime；清空并保存会撤销自定义指令。正在执行的轮次保持
+原配置，已有会话的下一轮 Main 使用新内容。Worker 文件会更新，但复用中的
+Worker 线程可能仍使用旧指令；Worker 热更新是已知暂缓项。不会修改模型、Skill 或 MCP 配置。并发冲突会保留草稿，刷新核对后再保存。旧 Runtime
+显示升级提示，原有信息查看功能保留。
+
+This updates the selected Runtime directly. It does not add ArkClaw's separate
+debug/publish environments. Bot Profile overrides and MA remote-host are unchanged.
+这里直接更新选中的 Runtime，不新增 ArkClaw 的调试/发布双环境；Bot Profile
+覆盖规则和 MA remote-host 保持原有行为。
+
+Contracts: [English](../specs/studio-agents-md/README.md) / [中文](../specs/studio-agents-md/README.zh.md).
