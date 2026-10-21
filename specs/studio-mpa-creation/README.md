@@ -4,7 +4,7 @@
 
 - Component ID: `studio-mpa-creation`
 - Status: active
-- Revised: 2026-10-12
+- Revised: 2026-10-21
 - Design and evidence: [Studio MPA creation](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-20-studio-mpa-creation.md)
 - Owned code: `veadk/integrations/mpa/managed/`, `frontend/server/mpa_creation.py`, `frontend/src/adk/mpaCreation.ts`, `frontend/src/ui/mpa-create/`; CLI and directory integration.
 - Tests: `tests/integrations/mpa_managed/`, `frontend/tests/mpaCreation.test.tsx`.
@@ -280,3 +280,11 @@ not claim live cloud verification.
 
 
 CON-17 TOS resource credentials: `/web/deployment-resources` passes the current server-resolved AK/SK/session token to TOS queries as well as CR. Each request resolves credentials anew; clients are not cached across requests. Without complete explicit credentials, existing SDK discovery remains available. Provider endpoint resolution, filtering and credential-redacted failures are preserved.
+
+## Studio latest content snapshots (2026-10-21)
+
+The approved [snapshot design](../../prd-spec/bugfixes/studio-latest-image-refresh/2026-10-20-latest-image-snapshots.md) amends CON-1/3/6/8/9 for Studio-provenance creation. UI/config/task inputs remain the requested latest references. Before any Worker/Runtime creation intent, the existing native deployment lock resolves each latest manifest and copies its exact bytes to the same repository under `mpa-sha256-<64 lowercase digest hex>`; deployment uses these references. Preserve Docker/OCI manifest and index media types, verify the SHA-256 against the registry header, and read back the target. An existing conflicting snapshot tag fails without overwrite. Fixed-tag and standalone CLI behavior remain unchanged.
+
+Native deployment JSON `image_snapshots` stores `requested` image inputs and per-image `selected` entries `{digest,image}` before cloud creation. Same-agent retries require equal inputs and verify saved snapshot references without rereading latest. A new agent reads the current latest. Existing Worker/Runtime intents without a snapshot cannot be silently rewritten; retain resources and explicitly start a new agent. Existing running MPAs are not automatically upgraded.
+
+Only the selected provider's CR host suffix is trusted. Registry token challenges must stay on HTTPS on the same host; redirects are disabled, responses are limited to 1 MiB, and requests use bounded timeouts. Reuse account-verified rotating credentials including STS. Deployment identity requires `cr:GetAuthorizationToken` and repository pull/push access; no automatic IAM widening is added. Fail without falling back to latest; raw SDK/HTTP errors and credentials never reach tasks or UI. Snapshot tags are retained release references; automatic garbage collection is outside this change.

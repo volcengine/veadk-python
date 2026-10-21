@@ -376,3 +376,7 @@ BytePlus `veadk studio deploy` 自动设置
 角色策略，两个平台的策略均补齐三个 OV 准备操作。自定义角色需单独具备等价授权。
 凭据失败行为和前置条件见维护中的
 [云端 IAM 契约](../../../../specs/studio-mpa-creation/README.zh.md#云端-studio-mpa-iam-凭据与-openviking-权限)。
+
+### Studio 镜像新鲜度
+
+Studio 准备新 Agent 时解析配置的各个 `latest`，把原始 manifest 复制到同仓库 `mpa-sha256-<digest>` tag。在创建 Worker/Runtime 前持久化选择；即使 latest 移动，重试也使用同一快照。继续正常发布 latest，无需新增流水线。Studio 部署身份需要 CR 授权 token 和对应仓库拉取/推送权限。已有 Agent 和独立 CLI 部署不变。不支持的 latest 仓库、权限不足、快照内容变化、没有快照记录的旧未完成意图都明确失败。见[快照契约](../../../../specs/studio-mpa-creation/README.zh.md#studio-latest-内容快照2026-10-21)。

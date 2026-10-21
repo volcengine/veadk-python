@@ -391,3 +391,7 @@ now includes the three OV provisioning operations on both providers. Custom role
 need equivalent authorization separately. See the maintained
 [cloud IAM contract](../../../../specs/studio-mpa-creation/README.md#cloud-studio-mpa-iam-credentials-and-openviking-permissions)
 for credential failure behavior and prerequisites.
+
+### Studio image freshness
+
+Studio resolves each configured `latest` when a new agent is prepared and publishes an exact manifest copy to a same-repository `mpa-sha256-<digest>` tag. It persists this selection before creating the Worker or Runtime; retries use the same snapshot even if latest moves. Continue publishing latest normally; no extra pipeline is required. The Studio deployment identity needs CR authorization-token and repository pull/push access. Existing agents and standalone CLI deployments are unchanged. Unsupported latest registries, missing permissions, changed snapshot contents, and legacy unfinished intents without a snapshot fail explicitly. See the [snapshot contract](../../../../specs/studio-mpa-creation/README.md#studio-latest-content-snapshots-2026-10-21).
