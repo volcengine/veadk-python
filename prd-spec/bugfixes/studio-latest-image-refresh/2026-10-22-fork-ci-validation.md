@@ -2,7 +2,7 @@
 
 [中文版](2026-10-22-fork-ci-validation.zh.md)
 
-Change ID: studio-fork-ci-validation. Date: 2026-10-22. Status: approved.
+Change ID: studio-fork-ci-validation. Date: 2026-10-22. Status: implemented.
 
 ## Evidence and scope
 
@@ -72,5 +72,29 @@ The formatter modified one test file and all-files pre-commit passed on rerun.
 An unpinned Ruff invocation and Pyright without the project Python were unsuitable;
 the pinned/project-aware commands above passed without rule suppressions.
 
-Hosted fork CI: pending (AC-3). No cloud MPA creation or application redeployment
-is needed for this CI-only change.
+Hosted fork CI: pass (AC-3), [fork PR #1](https://github.com/PolarisCzh/veadk-python/pull/1),
+head `7ee50a79a4bbd5d59d2116dd76dc369eb737b9c6`, base
+`5e5deb6a8a663fed4918f1ab6b2822c93a6c989b`. All seven workflows and 14 validation
+jobs succeeded automatically without a maintainer approval:
+
+- [Unit Tests](https://github.com/PolarisCzh/veadk-python/actions/runs/39716494115):
+  Python 3.10: 7633 passed, 46 skipped, 4 xfailed; Python 3.12: 7636 passed,
+  43 skipped, 4 xfailed; Codex smoke succeeded. Skipped/xfail cases are not passes.
+- [Shared gate](https://github.com/PolarisCzh/veadk-python/actions/runs/39716494063):
+  backend, frontend, and aggregate succeeded; frontend completed in 66 seconds.
+- [Release verification](https://github.com/PolarisCzh/veadk-python/actions/runs/39716494045):
+  shared backend/frontend/aggregate plus full Studio bundle, simulated customer
+  update, startup and installed-package smoke validation succeeded; its frontend
+  completed in 58 seconds. Release allocation, publication, and notification
+  were all skipped as required by FR-3.
+- License `39716494036`, secrets `39716494022`, dependency policy `39716494030`,
+  and pre-commit `39716494050` all succeeded.
+
+GitHub had suspended workflows on this fork despite its API reporting Actions
+as enabled. Re-enabled them through the Actions page. The default branch was
+briefly changed for diagnosis and restored to `main`; its commits were preserved.
+The fork PR base is a dedicated branch pinned to upstream main because fork main
+contains separate work. The verified CI fix is carried to upstream PR #1178 with
+this documentation-only evidence update; its upstream execution/approval is a
+separate status, not implied by fork success. No cloud MPA creation or application
+redeployment was performed.

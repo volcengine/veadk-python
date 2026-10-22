@@ -2,7 +2,7 @@
 
 [English](2026-10-22-fork-ci-validation.md)
 
-变更 ID：studio-fork-ci-validation。日期：2026-10-22。状态：approved。
+变更 ID：studio-fork-ci-validation。日期：2026-10-22。状态：implemented。
 
 ## 证据与范围
 
@@ -61,4 +61,24 @@ fork 分支保护不能证明上游策略。无可执行生产代码增量，因
 及未指定项目 Python 的 Pyright 调用不适用；上述固定版本及项目环境命令通过，
 未添加规则豁免。
 
-fork 云端 CI：待执行（AC-3）。本次仅修改 CI，无需创建云端 MPA 或重新部署应用。
+fork 云端 CI：通过（AC-3），[fork PR #1](https://github.com/PolarisCzh/veadk-python/pull/1)，
+head 为 `7ee50a79a4bbd5d59d2116dd76dc369eb737b9c6`，base 为
+`5e5deb6a8a663fed4918f1ab6b2822c93a6c989b`。全部 7 个工作流、14 个验证任务
+自动运行成功，无需维护者批准：
+
+- [Unit Tests](https://github.com/PolarisCzh/veadk-python/actions/runs/39716494115)：
+  Python 3.10：7633 passed、46 skipped、4 xfailed；Python 3.12：7636 passed、
+  43 skipped、4 xfailed；Codex 冒烟成功。跳过和 xfail 用例不计为通过。
+- [共享门禁](https://github.com/PolarisCzh/veadk-python/actions/runs/39716494063)：
+  后端、前端和汇总全部成功；前端耗时 66 秒。
+- [发布验证](https://github.com/PolarisCzh/veadk-python/actions/runs/39716494045)：
+  共享前后端及汇总、完整 Studio 打包、模拟用户更新、启动与安装包冒烟验证均成功；
+  其前端耗时 58 秒。版本分配、发布和通知均按 FR-3 要求跳过。
+- 许可证 `39716494036`、密钥扫描 `39716494022`、依赖策略 `39716494030` 和
+  pre-commit `39716494050` 全部成功。
+
+GitHub 曾暂停该 fork 的工作流，尽管 API 显示 Actions 启用；已通过 Actions 页面
+重新启用。诊断时短暂调整默认分支，随后恢复为 `main`，原提交保留。
+fork main 包含其他工作，因此本次 PR 使用固定为上游 main 的专用基线分支。
+已验证的 CI 修复连同本次仅文档证据更新同步到上游 PR #1178；上游运行及批准
+属于独立状态，不能由 fork 成功推定。本次未创建云端 MPA 或重新部署应用。
