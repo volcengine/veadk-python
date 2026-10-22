@@ -165,11 +165,11 @@
     "runtimeAuthFailed": "删除前的 Runtime 认证失败，尚未执行删除。请刷新 Runtime 连接后重试。"
   },
   "alias": {
-    "label": "空间别名",
+    "label": "Agent 别名",
     "empty": "未设置",
     "edit": "设置别名",
-    "help": "同一空间内共享，留空可清除。对话示例：@代码助手 检查这段代码；名称含空格时使用 @\"Code Assistant\"。",
-    "unavailable": "当前 Runtime 未启用共享别名，请检查共享管理库配置或升级 Runtime。",
+    "help": "用于当前 MPA 中此空间下的 Agent，留空可清除。对话示例：@代码助手 检查这段代码；名称含空格时使用 @\"Code Assistant\"。",
+    "unavailable": "当前 Runtime 不支持 Agent 别名，请升级 Runtime 后刷新。",
     "invalid": "别名最多 80 个字符，仅支持字母、数字、空格、点、下划线和短横线。",
     "conflict": "此别名已被空间内其他 Agent 使用，请换一个名称。",
     "revisionConflict": "别名已被其他人修改，请刷新后重试。",

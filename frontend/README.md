@@ -1981,9 +1981,11 @@ A2A registration now reads the chosen Runtime's configured public/private endpoi
 
 A2A Runtime registration now has one required Runtime picker. The selected Runtime ID is carried automatically; there is no separate manual-ID input. Runtime-list loading, empty and error states remain distinct, with retry for empty/error and pagination for more choices. A selection removed by a list refresh invalidates its old endpoint and cannot submit. The existing registration API and imported Agent Card workflows remain unchanged. See the [single-picker fix](../prd-spec/bugfixes/mpa-a2a-runtime-picker/2026-10-22-single-runtime-picker.md).
 
-### A2A space aliases
+### A2A Agent aliases / A2A Agent 别名
 
-In Collaborating Agents → A2A Center, use **Set alias** on a registered Agent. Aliases are shared within the account/region/space through the Runtime management database; clearing a value removes the alias. This does not rename the Agent in AgentKit. Start a conversation message with `@代码助手 检查代码` or `@"Code Assistant" review code`. A unique alias or actual Agent Card name resolves to the registered Agent; ambiguous or missing names require correction. Requires an upgraded Runtime with shared management DB/account configuration. This UI does not add mention autocomplete.
+In Collaborating Agents → A2A Center, use **Set alias** on a registered Agent. Aliases belong to the current MPA business database, scoped by MPA/region/space/Agent. Clearing a value removes the alias. This does not rename the Agent in AgentKit. Start a conversation message with `@代码助手 检查代码` or `@"Code Assistant" review code`. A unique alias or actual Agent Card name resolves to the registered Agent; ambiguous or missing names require correction. Upgrade both Studio and Runtime; the alias feature needs no shared management database or AGENTKIT_ACCOUNT_ID. Previously shared aliases are retained in their old table but are not automatically imported; set the Agent alias again in each MPA. This UI does not add mention autocomplete.
+
+在协作 Agent → A2A 中心，对已注册的 Agent 点击**设置别名**。别名属于当前 MPA 业务库，按 MPA/地域/空间/Agent 隔离；留空可清除，不修改 AgentKit 中的名称。对话以 `@代码助手 检查代码` 或 `@"Code Assistant" review code` 开头，唯一别名或实际 Agent Card 名称可定位注册成员；歧义或不存在时需修正。须同步升级 Studio 和 Runtime；别名无需共享管理库或 AGENTKIT_ACCOUNT_ID。旧共享别名保留原表但不自动导入，需在各 MPA 重新设置。此 UI 不提供提及自动补全。
 
 ### MPA image updates / MPA 镜像更新
 

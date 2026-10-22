@@ -12853,6 +12853,10 @@ def _run_frontend_server(
         if (
             request.method == "PUT"
             and path != "api/v1/studio/collaborators/registry/binding"
+            and not re.fullmatch(
+                r"api/v1/studio/collaborators/registry/aliases/a-[A-Za-z0-9_-]{1,100}",
+                path,
+            )
         ):
             raise HTTPException(status_code=405, detail="method_not_allowed")
         method_override = request.query_params.get("_method", "").upper()

@@ -3,10 +3,13 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { A2AAliasEditor } from "../src/ui/collaborating-agents/A2AAliasEditor";
+import { useTranslation } from "react-i18next";
+import zh from "../src/i18n/resources/zh-CN/collaboratingAgents.json";
+import en from "../src/i18n/resources/en-US/collaboratingAgents.json";
 import { requestCollaborators } from "../src/adk/client";
 vi.mock("../src/adk/client", () => ({ requestCollaborators: vi.fn() }));
 vi.mock("react-i18next", () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: vi.fn(() => ({ t: (key: string) => key })),
 }));
 let host: HTMLDivElement, root: Root;
 const saved = vi.fn(),
@@ -64,6 +67,9 @@ beforeEach(() => {
   document.body.append(host);
   root = createRoot(host);
   vi.mocked(requestCollaborators).mockReset();
+  vi.mocked(useTranslation).mockReturnValue({
+    t: (key: string) => key,
+  } as ReturnType<typeof useTranslation>);
   saved.mockReset();
   refresh.mockReset();
 });
@@ -72,7 +78,7 @@ afterEach(async () => {
   host.remove();
   vi.unstubAllGlobals();
 });
-it("saves a space-owned alias with its revision and supports clearing", async () => {
+it("saves a registered Agent alias with its revision and supports clearing", async () => {
   await render();
   await edit("代码助手");
   vi.mocked(requestCollaborators).mockResolvedValue(
@@ -112,7 +118,7 @@ it("retains input on conflict and requires refresh", async () => {
   await act(async () => button("refresh").click());
   expect(refresh).toHaveBeenCalledOnce();
 });
-it("does not submit while composing or when shared storage is unavailable", async () => {
+it("does not submit while composing or when the Runtime does not support aliases", async () => {
   await render();
   const input = await edit("代码助手");
   await act(async () =>
@@ -165,3 +171,23 @@ it("cancels an in-flight save without treating it as confirmed", async () => {
   expect(button("save").disabled).toBe(true);
   expect(host.textContent).toContain("alias.failed");
 });
+
+it.each([zh, en])(
+  "labels a registered member as an Agent alias without shared-account setup",
+  async (resources) => {
+    vi.mocked(useTranslation).mockReturnValue({
+      t: (key: string) =>
+        key.startsWith("alias.")
+          ? resources.alias[key.slice(6) as keyof typeof resources.alias]
+          : key,
+    } as ReturnType<typeof useTranslation>);
+    await render(false);
+    expect(host.textContent).toContain(
+      resources === zh ? "Agent 别名" : "Agent alias",
+    );
+    expect(host.textContent).not.toMatch(
+      /共享管理库|共享别名|shared management database|Shared aliases/,
+    );
+    expect(button(resources.alias.edit).disabled).toBe(true);
+  },
+);

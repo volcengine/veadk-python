@@ -29,3 +29,5 @@ Shared database configuration and privileges must be present on the Runtime; old
 ## Local verification
 
 Implemented in Studio and Runtime. Studio Node tests:1389 passed; Vitest:192 passed; production build passed. A real-browser local fixture of the editor (mock transport) verified save, clear, duplicate-name feedback, Escape/focus and a320px column. No cloud calls, deployment or model end-to-end acceptance is claimed. Runtime evidence: agentkit-mpa-agent/docs/verification/agentkit-a2a-collaborators/alias-verification.md.
+
+> Superseded storage decision: see `prd-spec/bugfixes/mpa-agent-alias/2026-10-22-agent-alias-business-store.md`. Registered Agent aliases now belong to the current MPA business database.

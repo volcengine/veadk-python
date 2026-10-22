@@ -5189,3 +5189,96 @@ def test_mpa_image_route_wires_fresh_authorization_and_independent_update(
             cloud_read.assert_not_awaited()
             entry.save.assert_not_awaited()
             update.assert_not_awaited()
+
+
+@pytest.mark.parametrize("upstream_status", [200, 409, 503])
+@pytest.mark.parametrize("user,allowed", [("admin", True), ("outsider", False)])
+def test_agent_alias_put_proxy_preserves_auth_and_upstream_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    upstream_status: int,
+    user: str,
+    allowed: bool,
+) -> None:
+    app = _create_frontend_app(
+        monkeypatch, tmp_path, admins="admin", developers="outsider"
+    )
+    runtime = SimpleNamespace(
+        runtime_id="r-fixture",
+        project_name="default",
+        tags=[],
+        network_configurations=[
+            SimpleNamespace(endpoint="https://runtime.example", network_type="public")
+        ],
+        authorizer_configuration=SimpleNamespace(
+            key_auth=SimpleNamespace(api_key="server-only-fixture"),
+            custom_jwt_authorizer=None,
+        ),
+    )
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        lambda **_: SimpleNamespace(get_runtime=lambda _: runtime),
+    )
+    monkeypatch.setattr(
+        "volcenginesdktag.TAGApi",
+        lambda _: SimpleNamespace(
+            get_resources=Mock(
+                return_value=SimpleNamespace(resource_tag_mapping_list=[])
+            )
+        ),
+    )
+    seen: list[httpx.Request] = []
+    body = {"space_id": "as-test", "alias": "helper", "revision": 0}
+    expected = (
+        {"alias": "helper", "revision": 1}
+        if upstream_status == 200
+        else {"detail": "alias_conflict"}
+    )
+
+    class ResponseStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield json.dumps(expected).encode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        assert request.method == "PUT"
+        assert (
+            request.url.path == "/api/v1/studio/collaborators/registry/aliases/a-test"
+        )
+        assert request.headers["X-MPA-Studio-Key"] == "server-only-fixture"
+        assert json.loads(request.content) == body
+        return httpx.Response(
+            upstream_status,
+            stream=ResponseStream(),
+            headers={"content-type": "application/json"},
+        )
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: client_type(**{**kw, "transport": httpx.MockTransport(handler)}),
+    )
+    with TestClient(app) as client:
+        base = "/web/runtime-proxy/r-fixture/api/v1/studio/collaborators/registry/"
+        headers = {"X-VeADK-Local-User": user, "X-MPA-Studio-Key": "browser-forgery"}
+        result = client.put(
+            base + "aliases/a-test?_runtime_region=cn-beijing",
+            headers=headers,
+            json=body,
+        )
+        assert result.status_code == (upstream_status if allowed else 404)
+        if allowed:
+            assert result.json() == expected
+        assert len(seen) == int(allowed)
+        for path in (
+            "aliases",
+            "aliases/invalid",
+            "aliases/a-test/extra",
+            "unrelated",
+            "aliases/a-" + "x" * 101,
+        ):
+            assert (
+                client.put(base + path, headers=headers, json=body).status_code == 405
+            )
+        assert len(seen) == int(allowed)
