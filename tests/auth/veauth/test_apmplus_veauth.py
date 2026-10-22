@@ -71,3 +71,44 @@ def test_explicit_provider_and_credentials_override_environment(monkeypatch):
     assert request.call_args.kwargs["sk"] == "explicit-sk"
     assert request.call_args.kwargs["host"] == "open.byteplusapi.com"
     assert request.call_args.kwargs["header"]["X-Security-Token"] == "explicit-token"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {},
+        {"data": None},
+        {"data": {}},
+        {"data": {"app_key": " "}},
+        {"data": {"app_key": 42}},
+        None,
+    ],
+)
+def test_malformed_response_is_rejected_without_payload(response):
+    with patch("veadk.auth.veauth.apmplus_veauth.ve_request", return_value=response):
+        with pytest.raises(ValueError, match="missing or invalid AppKey"):
+            get_apmplus_token()
+
+
+def test_iam_credentials_include_session_token(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.delenv("VOLCENGINE_ACCESS_KEY")
+    monkeypatch.delenv("VOLCENGINE_SECRET_KEY")
+    with (
+        patch(
+            "veadk.auth.veauth.apmplus_veauth.get_credential_from_vefaas_iam",
+            return_value=SimpleNamespace(
+                access_key_id="iam-ak",
+                secret_access_key="iam-sk",
+                session_token="iam-session",
+            ),
+        ),
+        patch(
+            "veadk.auth.veauth.apmplus_veauth.ve_request",
+            return_value={"data": {"app_key": " key "}},
+        ) as request,
+    ):
+        assert get_apmplus_token() == "key"
+    assert request.call_args.kwargs["ak"] == "iam-ak"
+    assert request.call_args.kwargs["header"]["X-Security-Token"] == "iam-session"
