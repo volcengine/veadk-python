@@ -12413,6 +12413,66 @@ def _run_frontend_server(
                 },
             ) from None
 
+    from frontend.server.mpa_images import (
+        ImageManager,
+        mount_routes as mount_mpa_image_routes,
+    )
+    from veadk.integrations.mpa.managed.worker import WorkerCloud
+
+    def _authorize_mpa_image(request: Request, runtime_id: str, region: str):
+        runtime = _authorized_runtime(
+            request, runtime_id, region, coded_access_error=True
+        )
+        tags = {
+            **_runtime_tags(runtime),
+            **_runtime_resource_tags(region, [runtime]).get(runtime_id, {}),
+        }
+        if _runtime_agent_category(runtime, tags) != "mpa":
+            raise HTTPException(404, {"reason": "not_found"})
+        return runtime
+
+    @asynccontextmanager
+    async def _mpa_image_scope(runtime: Any, region: str, catalog: Any):
+        snapshot = runtime.model_dump(by_alias=True, exclude_none=True)
+        agent_id = _runtime_env_map(runtime).get("MPA_AGENT_ID", "")
+        if not agent_id:
+            raise HTTPException(409, {"reason": "ownership"})
+
+        def credentials():
+            ak, sk, token = _resolve_ve_credentials()
+            return Credentials(ak, sk, token or "")
+
+        cloud = RuntimeCloud(
+            region=region,
+            credential_file="",
+            provider=provider,
+            credentials=credentials,
+            cache_identity=True,
+        )
+        async with owned_resource_cleanup(
+            runtime=snapshot, agent_id=agent_id, region=region, cloud=cloud
+        ) as context:
+            yield ImageManager(
+                entry=context.entry,
+                cloud=cloud,
+                worker=WorkerCloud(cloud),
+                runtime=snapshot,
+                account=context.account,
+                region=region,
+                agent_id=agent_id,
+                provider=provider,
+                catalog=catalog,
+            )
+
+    mount_mpa_image_routes(
+        app,
+        admin=_require_agent_management,
+        authorize=_authorize_mpa_image,
+        region_for=_coerce_cloud_region,
+        provider=provider,
+        scope=_mpa_image_scope,
+    )
+
     async def _mpa_delete_resources_preview(runtime: Any, agent_id: str, region: str):
         async with _mpa_resource_cleanup(runtime, agent_id, region) as cleanup:
             return await cleanup.preview()
@@ -12783,13 +12843,18 @@ def _run_frontend_server(
 
     @app.api_route(
         "/web/runtime-proxy/{runtime_id}/{path:path}",
-        methods=["GET", "HEAD", "POST", "PATCH", "DELETE"],
+        methods=["GET", "HEAD", "POST", "PATCH", "PUT", "DELETE"],
     )
     async def _runtime_proxy(runtime_id: str, path: str, request: Request):
         """Proxy a data-plane call with its runtime credential injected server-side.
 
         The browser never sees an API key. Streams the response so /run_sse works.
         """
+        if (
+            request.method == "PUT"
+            and path != "api/v1/studio/collaborators/registry/binding"
+        ):
+            raise HTTPException(status_code=405, detail="method_not_allowed")
         method_override = request.query_params.get("_method", "").upper()
         if method_override and not (
             request.method == "POST" and method_override == "DELETE"
@@ -14140,6 +14205,7 @@ def _run_frontend_server(
         action: str,
         payload: dict[str, Any],
         query: dict[str, str] | None = None,
+        structured_errors: bool = False,
     ) -> dict[str, Any]:
         endpoint = _agentkit_openapi_endpoint(region)
         body = json.dumps(payload, ensure_ascii=False)
@@ -14166,9 +14232,37 @@ def _run_frontend_server(
         except HTTPException:
             raise
         except httpx.HTTPError as exc:
+            if structured_errors:
+                from frontend.server.a2a_center import cloud_error
+
+                raise cloud_error(502) from None
             raise RuntimeError(f"AgentKit OpenAPI request failed: {exc}") from exc
 
         if response.status_code >= 400:
+            if structured_errors:
+                from frontend.server.a2a_center import cloud_error
+
+                code, message = "", ""
+                try:
+                    document = response.json()
+                    metadata = (
+                        document.get("ResponseMetadata", {})
+                        if isinstance(document, dict)
+                        else {}
+                    )
+                    error = (
+                        metadata.get("Error") if isinstance(metadata, dict) else None
+                    ) or (
+                        document.get("Error", {}) if isinstance(document, dict) else {}
+                    )
+                    if isinstance(error, dict):
+                        code, message = (
+                            str(error.get("Code", "")),
+                            str(error.get("Message", "")),
+                        )
+                except ValueError:
+                    pass
+                raise cloud_error(response.status_code, code, message) from None
             request_id = ""
             try:
                 metadata = response.json().get("ResponseMetadata") or {}
@@ -14185,6 +14279,14 @@ def _run_frontend_server(
             raise RuntimeError("AgentKit OpenAPI returned non-JSON response") from exc
         error = data.get("ResponseMetadata", {}).get("Error") or data.get("Error")
         if error:
+            if structured_errors:
+                from frontend.server.a2a_center import cloud_error
+
+                code = str(error.get("Code", "")) if isinstance(error, dict) else ""
+                message = (
+                    str(error.get("Message", "")) if isinstance(error, dict) else ""
+                )
+                raise cloud_error(400, code, message) from None
             from veadk.integrations.agentkit.evaluation import AgentKitOpenApiError
 
             if isinstance(error, dict):
@@ -14226,6 +14328,15 @@ def _run_frontend_server(
             )
         )
         headers["Accept"] = "application/json"
+        from veadk.integrations.mpa.collaborator_proxy import (
+            collaborator_management_headers,
+        )
+
+        headers.update(
+            collaborator_management_headers(
+                path, is_admin=_request_role(request).is_admin, api_key=apikey
+            )
+        )
         if payload is not None:
             headers["Content-Type"] = "application/json"
         target = f"{endpoint.rstrip('/')}/{path.lstrip('/')}"
@@ -15533,6 +15644,20 @@ def _run_frontend_server(
         principal=_current_principal,
         runtime_request=_runtime_json_request,
         normalize_region=_coerce_cloud_region,
+    )
+
+    from frontend.server.a2a_center import mount_routes as mount_a2a_center_routes
+
+    async def _a2a_center_openapi_post(**kwargs: Any) -> dict[str, Any]:
+        return await _agentkit_openapi_post(**kwargs, structured_errors=True)
+
+    mount_a2a_center_routes(
+        app,
+        admin=_require_agent_management,
+        authorize=_authorized_runtime_for_connection,
+        region_for=_coerce_cloud_region,
+        cloud=_a2a_center_openapi_post,
+        runtime_request=_runtime_json_request,
     )
 
     @app.get("/web/a2a-spaces")

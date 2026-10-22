@@ -458,3 +458,11 @@ class AgentDatabaseProvisioner:
 
     async def close(self):
         await self.admin.dispose()
+
+
+def has_active_image_update(record: dict) -> bool:
+    """Keep provisioning and deletion away from unresolved image mutations."""
+    return any(
+        operation.get("phase") in {"submitting", "submitted", "uncertain"}
+        for operation in (record.get("image_updates") or {}).values()
+    )

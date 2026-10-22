@@ -63,6 +63,10 @@ class OwnedResourceCleanup:
         record = await self.entry.read() if self.entry is not None else {}
         if record and record.get("runtime_id") != self.runtime.get("RuntimeId"):
             raise ResourceDeletionError("ownership", "runtime_binding_conflict")
+        from .database import has_active_image_update
+
+        if has_active_image_update(record):
+            raise ResourceDeletionError("ownership", "active_image_update")
         if record.get("pending"):
             raise ResourceDeletionError("ownership", "active_deployment")
         env = env_map(self.runtime)

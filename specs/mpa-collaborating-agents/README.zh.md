@@ -1,51 +1,56 @@
-# MPA 协作 Agent 配置
+# MPA 协作 Agent：A2A 中心
 
-管理入口 `/api/v1/studio/collaborators`，归属来自当前 Runtime 的 `MPA_AGENT_ID`，不接受浏览器指定归属。`X-MPA-Studio-Key` 必须匹配数据库中的当前 Runtime 密钥；Studio 仅对管理员在服务端注入。GET 列表、POST 新建；PATCH/DELETE `/{id}` 和 POST `/{id}/check` 要求正整数 `revision`，DELETE 通过查询参数传递。版本冲突 409、记录缺失 404、未认证 401、缺持久化后端或 Runtime 身份 503。响应不含密钥值。
+[English](README.md)
 
-数据库新增 `mpa_collaborating_agents`，以 MPA/id 为联合主键，JSON 配置和递增版本。不提供内存降级。使用 Runtime 业务 PG。迁移仅新增，回滚保留表并部署旧二进制。旧 Studio/Runtime 的行为不变。
+## 职责与入口
 
-连接验证仅允许 HTTPS，拒绝用户信息、查询参数、fragment；显式填写 Card 地址。解析并固定 DNS，默认拒绝非公网地址，始终禁止云元数据、loopback、link-local；运维配置 `MPA_COLLABORATOR_PRIVATE_ORIGINS` 仅允许列出的 HTTPS origin 访问私网 VPC。禁用跳转和环境代理、限制超时和响应大小、验证 TLS。Card 的执行端点必须与 Card 地址同源。仅保存有界的白名单元数据，不存任意 Card JSON。明确拒绝不支持的传输和鉴权机制，本版不实现 OAuth 刷新。
+Studio 管理员进入 **MPA → 协作 Agent → A2A 中心**，选择目标 Runtime 的账号/地域和空间。Runtime GET/PUT `/api/v1/studio/collaborators/registry/binding` 只持久化一个 MPA 与空间的关联，使用 revision CAS；registry/spaces、registry/agents 使用目标 Runtime 云身份查询。空间内包含未来新增的、运行中且兼容的成员由既有受控派发器发现。注册被接受不等于执行成功。
 
+## 注册
 
-[Design](../../prd-spec/features/mpa-collaborating-agents/2026-10-20-collaborating-agents.zh.md)
+POST `/web/a2a-agents?region=...` 是 Studio 控制面接口，不是 Runtime 工具。要求既有管理权限和 targetRuntimeId 的访问权。Runtime 来源还校验 runtimeId 权限，RuntimeConfig 包含 public/private 的 networkType。Standard 来源支持 importType=json（agentCard 对象）或 url（HTTPS cardUrl）。所有请求带 spaceId，来源字段互斥。Studio 使用既有服务端凭据签名 CreateA2aAgent，只返回 `{id}`。账号/地域权限错误明确返回；不增加 Runtime 创建权限或新依赖。
 
-## 配置与联调交接
+输入上限 128 KiB，校验 ID；JSON 要求 name/url/version；URL 不允许用户信息或锚点。导入 URL 由 AgentKit 抓取，Studio 不直接请求任意 URL。Card 和凭据不回显、不写日志、不在浏览器持久化；JSON 默认遮罩，可主动显示。创建不自动重试；网络、5xx、取消导致结果不明，必须先刷新核对。注册成功而刷新失败时保留成功结论并显示列表错误。切换 Runtime/地域/空间取消旧响应、清空输入；保留键盘和 IME 行为。
 
-Studio 以管理员身份进入「智能体 → MPA 智能体 → 选中智能体」，在「基本信息」下点击「协作 Agent」Tab →「添加 Agent」。填写目标名称、用途、**完整 Agent Card HTTPS URL**和鉴权方式，保存后点击「验证连接」。能力由 Card 的 `skills` 读取，不需要手工复制一份能力列表。此入口仅对 MPA 显示。
+## 旧数据与兼容
 
-Bearer/API Key 在 Studio 直接填写实际密钥，新输入默认隐藏，可临时显示；已保存密钥不回传浏览器。编辑时留空，仅当鉴权方式、请求头与目标 origin 不变时保留旧值；更换 origin 必须重新输入。选择无鉴权会清除密钥。API Key 还需填写目标要求的 `X-` 请求头。Runtime API 仍兼容旧 `MPA_COLLABORATOR_` 环境变量引用。
+旧本地列表、新建、修改、删除、检查接口鉴权后返回 410 `legacy_registration_retired`，删除其表单和本地写入/解析服务。Runtime schema 迁移后，启动时幂等删除 mpa_collaborating_agents 中当前 MPA 的记录；缺身份不删除，缺表为空操作。保留其他 MPA、空间关联、会话与执行账本。共享 collaborator_credential_key 保留，避免滚动升级竞争。已发布迁移和表结构不改。回滚需既有 DB 备份，二进制回滚不能恢复已删除行。未升级启动前不会删除线上记录。
 
-私网目标还需在 Runtime 配置 `MPA_COLLABORATOR_PRIVATE_ORIGINS=https://research.internal.example:443`，同时保证网络可达和可信 TLS 证书；配置允许 origin 不会自动创建 VPC、路由或放行网络。公网目标无须这个配置。当前不支持跨源 Card 执行端点、HTTP 明文、OAuth 自动刷新、云 AK/SK 请求签名和非 JSONRPC 传输。
+## 既有派发安全
 
-注册请求示例（经 Studio 可信代理调用）：
-```json
-{
-  "name": "研究助手",
-  "description": "检索资料并整理依据",
-  "card_url": "https://research.example/.well-known/agent-card.json",
-  "enabled": true,
-  "auth_type": "bearer",
-  "secret": "<target-agent-token>",
-  "header_name": ""
-}
-```
-响应包含 `id`、`mpa_id`、`revision` 和 `check`。新建状态为 `not_checked`；调用 `POST /{id}/check` 并提交当前 `revision` 后返回新版本。`verified` 仅说明 Agent Card 可读取且格式受支持，不能作为远端任务执行成功的证据。修改配置会回到 `not_checked`。网络断开导致写入结果不确定时，页面要求先刷新，不盲目重复创建。
+模型工具只接受关联空间中解析的 ID，不接受任意 URL/认证头。Harness 的 identity/scope/grant/fence/ledger/terminal 语义不变。安全传输继续限制 HTTPS、DNS/地址、TLS、禁重定向、响应大小和超时；私网来源需显式 Runtime allowlist 和网络连通性。仅兼容的 Card 协议、传输和认证可调用。Worker 与定时 Main 不新增注册或协作权限。
 
-`dispatch_a2a_task` 负责人与本实现的交接点：
-```python
-# 使用已注入的 CollaboratorService；mpa_id 必须来自可信执行上下文。
-snapshot = await service.resolve_for_dispatch(mpa_id, registration_id)
-# snapshot: mpa_id / registration_id / revision / endpoint /
-#           headers（仅服务端，repr 隐藏） / protocol_version
-```
-派发方仍须检查调用者与当前 MPA 的授权关系，在真正请求前重新做目标地址/DNS 安全检查，并自行实现 task、SSE、取消、结果和 trace。禁止把 `headers` 放进模型上下文、轨迹或 API 响应；不要直接使用不受保护的 HTTP 客户端。禁用或未验证记录解析时返回 `registration_not_ready`。本次未把登记对象注入模型，也不会使 MPA 自动调用它们。
+## 验证与设计
 
-数据库由现有 Runtime 渠道存储的 engine 承载，生产使用 Runtime 业务 PG；本地允许持久化 SQLite 文件，拒绝内存 SQLite。新增迁移 `0013_collaborating_agents.sql`，并沿用存储首次使用建表模式；受限数据库账号可由迁移账号预先执行 SQL。每条记录按当前 MPA 隔离，不新建共享目录或新 PG 实例。回滚应用时保留表，不删除注册数据。
+[注册及退役设计](../../prd-spec/features/mpa-collaborating-agents/2026-10-22-center-registration.zh.md)。Python 路由：tests/cli/test_a2a_center_registration.py；UI：frontend/tests/collaboratingAgents.test.tsx、mpaBasicDetails.test.tsx。Runtime 清理测试：agentkit-mpa-agent/tests/test_collaborator_retirement.py。模拟测试、本地浏览器检查与真实云创建/PG 清理必须分别报告。
 
-UI 生命周期：仅在选中 Tab、目标是有 Runtime 的 MPA 且具有 admin/super_admin 权限时挂载管理器，以地域及 Runtime ID 为 key。切换 Tab、目标或权限时卸载、取消请求并丢弃临时状态。普通智能体、草稿及非管理员没有入口或请求，不支持的定位回到基本信息。聊天不再提供此入口。
+## 空间管理（2026-10-22）
+
+绑定和成员使用独立可访问区域。POST `/web/a2a-spaces?region=...` 要求管理员及目标 Runtime 授权，接受 `{targetRuntimeId, name, projectName?, intentEnabled?}`，签名调用 CreateA2aSpace 后返回 `{id}`。请求体上限 4096 字节；名称/项目去除首尾空白后非空、不超过 128 字符且无控制字符；项目默认 default，语义检索默认 false。拒绝未知字段及非布尔开关。创建后选中已确认的空间（当前列表页未返回时仍可选），不自动绑定。刷新失败保留已确认的创建成功状态。写入结果不明或取消后须刷新核对，才允许再次写入，不自动重试。切换 Runtime/地域取消旧请求。保留原有云身份/地域与派发边界。创建表单不管理标签或空间编辑；删除遵循下方成员操作合同。参见[空间管理设计](../../prd-spec/features/mpa-collaborating-agents/2026-10-22-space-management.zh.md)。
+
+仅当所选空间就是已绑定空间时提供解绑操作。切换空间清除旧确认；写入处理函数拒绝解绑与所选空间不匹配的绑定。空间资源 ID 保留在选择值和请求中，但不显示在面向用户的名称、状态及目标标签里。
+
+## 成员操作与删除
+
+已本地实现：[成员操作设计](../../prd-spec/features/mpa-collaborating-agents/2026-10-22-member-actions.zh.md)。Studio 提供脱敏 GET 及经确认的 DELETE /web/a2a-agents/{agentId}，按 targetRuntimeId、spaceId 和 region 限定，返回 ID 必须匹配。DELETE /web/a2a-spaces/{spaceId} 在云删除前检查目标当前绑定、空间身份及成员列表为空。不级联、不自动解绑、不删除来源 Runtime、不自动重试写入。仅 A2A 开启结构化云错误，区分明确拒绝与结果不明；其他 helper 调用保留原行为。详情排除原始 Card、未脱敏 URL 和提供商错误。关闭在途写入须刷新核对；身份切换中止旧 UI 更新。
 
 
-## 密钥存储与兼容
-`secret` 为只写字段（最多8192字符、禁止控制字符）；公开 `credential_configured` 仅表示存在配置，不证明连接成功。Runtime 将密钥值及 MPA/注册 ID 归属加密后存入 `config.encrypted_secret`，在数据库事务锁下自动生成专用密钥，持久化为 `mpa_deployment_settings.collaborator_credential_key`，无需手工配置环境变量。密钥与密文必须一起备份；丢失或损坏返回 `credential_store_unavailable`，不自动轮换。这防止响应或普通配置暴露，不隔离能够读取两个表的数据库管理员。接口不回显明文或密文，校验错误不包含原始输入，浏览器仅临时持有新输入值，不使用 local storage。新版 Studio 直接密钥输入需要升级 Runtime，先部署后端再部署页面；回滚时保留两个表，使用本版或后续兼容版本管理加密记录，旧程序不支持直接密钥。
+## 删除前置检查认证
 
-启用控制派发资格，停用保留配置。连接验证成功不表示任务派发已实现。[直接密钥方案](../../prd-spec/features/mpa-collaborating-agents/2026-10-20-direct-credentials.zh.md)。
+CON-DELETE-AUTH：Runtime JSON 协作请求与专用协作代理共用仅管理员、由服务端持有的 `X-MPA-Studio-Key` 策略。浏览器凭据不能替换该 Key，无关路径不添加协作 Key。绑定读取 401/403 保持原状态并返回 `runtime_auth_failed`，不调用云接口，在 UI 中仍是可重试的明确前置失败。云权限拒绝保留独立行为。参见[认证修复](../../prd-spec/bugfixes/mpa-a2a-space-deletion/2026-10-22-runtime-auth.zh.md)。
+
+
+## 端点与技能元数据
+
+CON-ENDPOINTS：GET /web/a2a-runtime-endpoints/{sourceRuntimeId} 校验管理员及 region 中 targetRuntimeId/sourceRuntimeId 的访问权限。返回 runtimeId，每种 public/private 类型最多一个已配置、安全的 HTTP(S) URL。注册仅列当前配置类型，阻止迟到/不可用选择；Payload 仍为 RuntimeId/NetworkType，不接受任意端点 URL。
+
+CON-CARD-VIEW：Agent 详情增加 serviceAddress（string|null）、skills（array|null）、skillsTruncated（boolean）。仅投影有界名称/描述/标签/示例/ID，不返回原始 Card 或认证内容。null 为不可用，[] 为已确认无技能；超过 100 项明确提示截断。移除 query/fragment，拒绝 userinfo、无效、控制字符及非 HTTP(S) URL。元数据解析仅影响查看，不影响注销。参见[端点与技能设计](../../prd-spec/features/mpa-collaborating-agents/2026-10-22-endpoints-and-skills.zh.md)。
+
+
+## Runtime 注册选择控件
+
+CON-RUNTIME-PICKER：Runtime 注册使用一个必选 Select，选项来自已授权的分页 Runtime 查询，不再提供独立手动 ID 字段。所选 ID 保留为内部请求值；仅当选择仍存在于当前列表且有匹配端点时才允许提交。加载、成功空列表和读取失败明确区分，空/错误支持重试，追加分页保留选择。Standard 导入和后端 API 不变。参见[单一选择修复](../../prd-spec/bugfixes/mpa-a2a-runtime-picker/2026-10-22-single-runtime-picker.zh.md)。
+
+## 2026-10-22 Alias
+
+空间共享别名由 Runtime 保存在账号管理库，Studio 经鉴权 Runtime 代理携带 revision CAS 编辑可选别名，不修改中心名称或 Card。见[别名设计](../../prd-spec/features/mpa-collaborating-agents/2026-10-22-space-aliases.zh.md)。已实现；本地 Node/Vitest、构建和浏览器模拟接口验证通过；云端模型端到端验收待执行。
