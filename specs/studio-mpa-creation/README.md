@@ -4,7 +4,7 @@
 
 - Component ID: `studio-mpa-creation`
 - Status: active
-- Revised: 2026-10-12
+- Revised: 2026-10-21
 - Design and evidence: [Studio MPA creation](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-20-studio-mpa-creation.md)
 - Owned code: `veadk/integrations/mpa/managed/`, `frontend/server/mpa_creation.py`, `frontend/src/adk/mpaCreation.ts`, `frontend/src/ui/mpa-create/`; CLI and directory integration.
 - Tests: `tests/integrations/mpa_managed/`, `frontend/tests/mpaCreation.test.tsx`.
@@ -280,3 +280,11 @@ not claim live cloud verification.
 
 
 CON-17 TOS resource credentials: `/web/deployment-resources` passes the current server-resolved AK/SK/session token to TOS queries as well as CR. Each request resolves credentials anew; clients are not cached across requests. Without complete explicit credentials, existing SDK discovery remains available. Provider endpoint resolution, filtering and credential-redacted failures are preserved.
+
+## Studio latest content snapshots (2026-10-21)
+
+The approved [read-only design](../../prd-spec/bugfixes/studio-latest-image-refresh/2026-10-21-readonly-tag-resolution.md) revises CON-1/3/6/8/9 for Studio-created agents. Inputs keep latest; before Worker/Runtime intents, the existing deployment lock protects anonymous, GET-only resolution of each latest manifest to an already-published same-repository non-latest tag with the identical SHA-256 digest. List all bounded tag pages, prefer an existing digest-named tag, then test remaining tags in descending lexical order. Preserve and validate Docker/OCI manifests and indexes. No cloud credentials, registry management API, write permission, tag publication, image copy, or new pipeline is required. Publishers must retain a matching version tag and must not overwrite it; no match fails explicitly. Fixed tags and standalone CLI are unchanged.
+
+Native `image_snapshots` retains original `requested` inputs and `selected` `{digest,image}` entries before cloud creation. Retries validate the same original input and saved tag digest without reading latest or listing tags; legacy digest-named snapshots remain supported. Changed/missing saved content fails without reselection. Legacy unfinished intents without selection are not rewritten; existing running MPAs are not upgraded.
+
+Only the current provider's CR suffix is trusted. Anonymous bearer challenges stay on same-host HTTPS/default port without userinfo or redirects; token scope is pull-only. Disable ambient requests authentication. Responses are at most 1 MiB; discovery is at most 20 pages / 1000 tag entries with a 120-second checked budget and bounded 10/30-second connect/read timeouts. Pagination stays on the same repository tags-list endpoint, allows only n/last parameters, and rejects cycles/unsafe links. Invalid registry responses and sanitized transport failures do not fall back to latest. Private latest repositories requiring credentials are outside this public-discovery contract. Tag retention/immutability is the publisher's responsibility.

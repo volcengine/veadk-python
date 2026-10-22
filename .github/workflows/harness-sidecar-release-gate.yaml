@@ -200,7 +200,10 @@ jobs:
   frontend-gate:
     name: Frontend gate
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 10
+    env:
+      npm_config_registry: https://registry.npmjs.org
+      npm_config_replace_registry_host: always
     steps:
       - uses: actions/checkout@v4
 

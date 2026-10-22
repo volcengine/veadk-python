@@ -391,3 +391,7 @@ now includes the three OV provisioning operations on both providers. Custom role
 need equivalent authorization separately. See the maintained
 [cloud IAM contract](../../../../specs/studio-mpa-creation/README.md#cloud-studio-mpa-iam-credentials-and-openviking-permissions)
 for credential failure behavior and prerequisites.
+
+### Studio image freshness
+
+Studio resolves each configured `latest` anonymously to an already-published tag in the same public repository with the exact same manifest digest. It persists both selections before creating the Worker or Runtime; retries verify the saved tags even if latest moves. No registry write permission, image copy, or extra pipeline is required. Every latest publication must retain a matching version tag and must not overwrite that tag. No matching tag, unavailable public read access, invalid/oversized pagination, changed saved content, or legacy unfinished intents without a selection fail explicitly. Fixed tags, existing agents, and standalone CLI deployments are unchanged. Discovery uses only anonymous pull tokens and bounded GET requests, with no cloud credentials. See the [read-only contract](../../../../specs/studio-mpa-creation/README.md#studio-latest-content-snapshots-2026-10-21).

@@ -1915,3 +1915,5 @@ MPA same-request retries validate the original stored payload and deployment-acc
 BytePlus Studio MPA creation now retrieves the deployment-account APM AppKey through the overseas service host and injects `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY` into Runtime Envs. The key stays out of browser/task/deployment records; lookup failures stop resource preparation with safe diagnostics. Restart Studio and use a new request. Domestic/general-agent creation and CLI profiles are unchanged. See the [APM key design](../prd-spec/bugfixes/mpa-byteplus-apm/2026-10-14-server-app-key.md).
 
 BytePlus Studio MPA 创建现通过海外服务 Host 获取部署账号的 APM AppKey，注入 Runtime Envs 的 `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY`。Key 不进入浏览器/任务/部署记录；获取失败时以安全诊断停止资源准备。重启 Studio 后使用新请求。国内/通用智能体创建和 CLI 配置不变。见 [APM Key 设计](../prd-spec/bugfixes/mpa-byteplus-apm/2026-10-14-server-app-key.zh.md)。
+
+MPA 创建的镜像输入继续使用服务端 latest 默认值；部署层匿名只读匹配同公共仓库已有、digest 完全相同的非 latest tag，并持久化选择；重试只验证原选择。无需仓库写权限、手填版本或新增流水线；发布方须保留匹配版本标签且不得覆盖，无匹配项明确失败。详见 [Studio MPA 镜像快照契约](../specs/studio-mpa-creation/README.zh.md#studio-latest-内容快照2026-10-21)。

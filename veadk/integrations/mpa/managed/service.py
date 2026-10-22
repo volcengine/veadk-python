@@ -48,6 +48,7 @@ from .iam import (
     ensure_runtime_role,
     ensure_tos_mount_permissions,
 )
+from .image_snapshot import pin_studio_images
 from .model_key import resolve_model_key
 from .names import check_creation_name
 from .network import AccountNetworkProvisioner, NetworkOptions
@@ -428,6 +429,10 @@ async def provision(
             bind_postgres_workspaces(profile, record)
             record["studio_owner"] = owner
             await entry.save(record)
+            if studio_runtime_owner is not None:
+                profile = await pin_studio_images(profile, entry, cloud)
+                if profile.managed.runtime.image:
+                    template["ArtifactUrl"] = profile.managed.runtime.image
             current = (
                 await cloud.get(record["runtime_id"])
                 if record.get("runtime_id")

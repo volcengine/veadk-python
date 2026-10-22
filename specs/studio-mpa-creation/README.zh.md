@@ -269,3 +269,11 @@ BytePlus `veadk studio deploy` 自动写入非密钥函数环境变量
 
 
 CON-17 TOS 资源凭据：`/web/deployment-resources` 将当前服务端解析的 AK/SK/session token 传给 TOS 和 CR 查询。每次请求重新解析凭据，客户端不跨请求缓存。没有完整显式凭据时保留原有 SDK 发现机制。保持 provider endpoint 解析、过滤和凭据脱敏错误行为。
+
+## Studio latest 内容快照（2026-10-21）
+
+批准的[只读设计](../../prd-spec/bugfixes/studio-latest-image-refresh/2026-10-21-readonly-tag-resolution.zh.md)修订 Studio 创建的 CON-1/3/6/8/9。输入保留 latest；在 Worker/Runtime 意图前，持有既有部署锁，以匿名 GET 将 latest manifest 解析为同仓库已发布、SHA-256 完全相同的非 latest 标签。先完整读取有界分页，优先已有 digest 命名标签，其余按字典倒序核验。保留并校验 Docker/OCI manifest 和 index。不使用云凭据、仓库管理 API、写权限，不发布标签、不搬运镜像、不新增流水线。发布方必须保留匹配版本标签且不得覆盖；无匹配项明确失败。固定 tag 和独立 CLI 不变。
+
+原生 `image_snapshots` 在云创建前保留原始 `requested` 输入和 `selected` 的 `{digest,image}`。重试验证原输入和保存 tag 的 digest，不读取 latest、不列举标签；兼容原 digest 命名快照。保存内容变更或缺失时失败，不重新选择。不改写缺少选择记录的旧未完成意图，不升级既有运行 MPA。
+
+仅信任当前平台 CR 后缀。匿名 bearer 挑战须为同主机 HTTPS/默认端口，无用户信息或重定向，token 只有 pull scope。禁用 requests 环境鉴权。单响应最多 1 MiB，发现最多 20 页 / 1000 个标签项，检查 120 秒预算，连接/读取上限为 10/30 秒。分页保持同仓库 tags-list 路径，只允许 n/last 参数，拒绝循环和不安全链接。非法仓库响应及脱敏传输错误不回退 latest。要求凭据的私有 latest 仓库不属于公共发现契约；标签保留和不覆盖由发布方保证。

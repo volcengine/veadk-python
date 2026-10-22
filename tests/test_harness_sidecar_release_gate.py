@@ -43,7 +43,11 @@ def test_sidecar_release_gate_runs_backend_and_frontend_in_parallel() -> None:
     assert "needs" not in backend
     assert "needs" not in frontend
     assert backend["timeout-minutes"] == 10
-    assert frontend["timeout-minutes"] == 3
+    assert frontend["timeout-minutes"] == 10
+    assert frontend["env"] == {
+        "npm_config_registry": "https://registry.npmjs.org",
+        "npm_config_replace_registry_host": "always",
+    }
     assert set(aggregate["needs"]) == {"backend-gate", "frontend-gate"}
     assert aggregate["if"] == "${{ always() }}"
 
