@@ -2,27 +2,29 @@
 
 [English](README.md)
 
-组件：`skill-observability`；状态：implemented（本地验证；全量回归限制见 PRD）；修订：2026-10-16。
+组件：`skill-observability`；状态：implemented（本地验证；全量回归限制见 PRD）；修订：2026-10-21。
 关联变更：[skill-observability](../../prd-spec/features/skill-observability/2026-10-16-skill-observability.zh.md)。
 
 ## 责任与接口
 
-VeADK 在 `veadk/skills/` 与 `veadk/tracing/telemetry/telemetry.py` 负责 Runtime 技能包获取及 ADK 指令加载埋点。`actb-mono/sandboxes/agentkit-skill` 负责 Python/Go Sandbox 安装、工具适配及 exporter 生命周期。共享下述上报结构；Sandbox 独立发布，不导入尚未发布的 SDK 记录模块。既有工具/签名/结果和指标保持兼容。技能发现、资源/脚本执行、主动问题汇报和业务成功不属于本组件。
+VeADK 在 `veadk/skills/` 与 `veadk/tracing/telemetry/telemetry.py` 负责 Runtime 技能包获取及 ADK 指令加载埋点。`actb-mono/sandboxes/agentkit-skill` 负责 Python/Go Sandbox 安装、工具适配及 exporter 生命周期。共享下述上报结构；Sandbox 独立发布，不导入尚未发布的 SDK 记录模块。既有工具/签名/结果保持兼容。技能指标采用下述新名称和单位，查询方须同步切换；不重复发送旧名称。技能发现、资源/脚本执行、主动问题汇报和业务成功不属于本组件。
 
 ## 契约
 
-- CON-1：`gen_ai_skill_download` 是 OTEL counter，单位 `count`；维度严格为 `skill_source`、`skill_id`、`skill_version`、`skill_space_id`、`outcome`。`outcome` 为 `success` 或 `error`（含取消）。每次获取结束加一，包含缓存恢复。单纯发现或本地软链接创建不产生事件。
-- CON-2：`gen_ai_skill_load` 是 OTEL counter，单位 `count`；维度严格为上述四个身份字段。每次成功返回指令加一，ADK invocation 缓存命中仍计数。失败、取消、转发、资源/脚本访问不计数。
-- CON-3：下载 Span `skill_download` 包含 `skill.source`、`skill.id`、`skill.version`、`skill.space_id`、`outcome`、`cache_hit`、`consumer`。失败增加 `error.type` 和安全的静态 `error.description`，状态为 ERROR。成功加载在既有工具 Span 上添加四个点分身份字段和 `consumer`。consumer 为 `runtime` 或 `skill_sandbox`。Span 耗时为总获取时间。consumer/cache/错误文本不放入 metric 标签。
+- CON-1：`gen_ai_skill_download_count` 是 OTEL counter，单位 `time`；维度严格为 `skill_source`、`skill_id`、`skill_name`、`skill_version`、`skill_space_id`。每次获取结束加一，包含缓存恢复和失败。单纯发现或本地软链接创建不产生事件；结果仅记录在 Span。
+- CON-2：`gen_ai_skill_load_count` 是 OTEL counter，单位 `time`；维度严格为上述五个身份字段。每次成功返回指令加一，ADK invocation 缓存命中仍计数。失败、取消、转发、资源/脚本访问不计数。
+- CON-3：下载 Span `download_skill {skill_name}` 包含 `skill.source`、`skill.id`、`skill.name`、`skill.version`、`skill.space_id`、`skill.consumer`、`skill.download.outcome`、`skill.download.cache_hit`。结果为 `success` 或 `error`（含取消）；失败增加 `error.type` 和安全的静态 `error.description`，状态为 ERROR。成功加载将既有工具 Span 命名为 `load_skill {skill_name}`，并添加五个点分身份字段和 `skill.consumer`，不新增重复 Span。`skill.consumer` 为 `runtime` 或 `skill_sandbox`。Span 耗时覆盖实际操作。consumer/cache/结果/错误文本不放入 metric 标签。
 - CON-4：身份遵循下表。缺失版本/空间用空字符串，不使用生成的缓存 hash。缺少可信 ID 的远端技能和无法分类的本地技能不采集。遥测身份以 Registry 元数据为准，覆盖技能包同名 metadata。SkillHub 安装时随实际安装包记录 slug，不能仅依赖当前期望配置。
 
-| skill_source | skill_id | skill_version | skill_space_id |
-| --- | --- | --- | --- |
-| builtin_skill | name | 空 | 空 |
-| skillhub_skill | slug | 空 | 空 |
-| skillhub_skill_space | s-* | 接口提供时为 sv-* | sp-* |
-| agentkit_skill | s-* | vN | 空 |
-| agentkit_skill_space | s-* | 接口提供或旧包路径中存在的 vN | ss-* |
+`skill_name` 使用当前来源已解析的技能名称：Runtime/技能空间用元数据，本地技能用已加载名称，SkillHub 安装用已解析的安装名称。显式 TOS 获取优先传递版本接口的 `Name`；缺失时在成功获取或缓存恢复后读取已验证包的名称。获取失败且尚无名称时使用空字符串，不用 ID、slug 或路径冒充名称。名称读取仅用于观测，失败不得影响获取结果。
+
+| skill_source | skill_id | skill_name | skill_version | skill_space_id |
+| --- | --- | --- | --- | --- |
+| builtin_skill | name | name | 空 | 空 |
+| skillhub_skill | slug | 已解析名称或空字符串 | 空 | 空 |
+| skillhub_skill_space | s-* | 已解析名称或空字符串 | 接口提供时为 sv-* | sp-* |
+| agentkit_skill | s-* | 已解析名称或空字符串 | vN | 空 |
+| agentkit_skill_space | s-* | 已解析名称或空字符串 | 接口提供或旧包路径中存在的 vN | ss-* |
 
 Python 支持以上五类来源。Sandbox 固定 Go SDK 仍拒绝 `sp-*`，用户已批准保留这一限制。本地 SkillHub 来源记录供 Python/Go 共同读取。
 

@@ -15,12 +15,14 @@
 
 ## 需求与场景
 
-- FR-1：已识别来源的远端技能包获取结束时记录一次 `gen_ai_skill_download`，覆盖验证成功的磁盘缓存恢复和失败。无效缓存后重新下载属于一次获取，`cache_hit=false`。
-- FR-2：成功返回指令时记录一次 `gen_ai_skill_load`。同一 invocation 两次成功 `load_skill` 计两次，即使 ADK 只获取一次。未知技能、读取失败和取消不计成功加载。
+- FR-1：已识别来源的远端技能包获取结束时记录一次 `gen_ai_skill_download_count`，覆盖验证成功的磁盘缓存恢复和失败。无效缓存后重新下载属于一次获取，`skill.download.cache_hit=false`。
+- FR-2：成功返回指令时记录一次 `gen_ai_skill_load_count`。同一 invocation 两次成功 `load_skill` 计两次，即使 ADK 只获取一次。未知技能、读取失败和取消不计成功加载。
 - FR-3：云端身份在转换/缓存后保留。Sandbox Python 区分内置技能、SkillHub slug、显式 AgentKit ID 和两类空间；Go 保留既有四类来源支持。来源不明的本地技能不猜测成内置技能。
 - FR-4：使用既有进程级 OTEL provider；Sandbox 仅在未配置 provider 时安装周期 OTLP metric exporter。trace 与 metric 禁用开关独立。导出失败不影响对话；退出 flush 有时间上限。
 - FR-5：新增遥测不记录包 URL、凭据、指令正文、路径或原始异常消息。既有内容遥测策略保持不变。
 - FR-6：Python 与 Go 对已支持的来源使用相同标签和来源语义；预取只产生下载数据。保留既有安装包和会话链接。
+
+当前数据结构以 2026-10-21 读取的技术文档 revision 2419 及随后用户要求的单位 `time` 调整为准：两个 counter 使用 `_count` 后缀和单位 `time`，身份新增 `skill_name`；结果仅放在 `skill.download.outcome`，不再作为 metric 标签。Span 命名为 `download_skill {skill_name}` / `load_skill {skill_name}`，并使用 `skill.consumer` 和 `skill.download.cache_hit`。具体名称来源与空值规则见组件契约。保留固定 Counter 实现；字段和 record 方法名无需 `gen_ai` 前缀。
 
 ## 设计与受影响消费者
 
@@ -28,7 +30,7 @@ Runtime：增加小型 `veadk/skills/telemetry.py` 记录模块，在既有 mate
 
 Sandbox：使用已经安装的 OTEL 包实现本地记录模块，确保已发布 SDK 无需依赖尚未发布的 VeADK 改动。在 `playground_skills/packages.py`、SkillHub 安装和既有 `ObservedSkillsTool` 采集。随安装包保存 SkillHub slug，避免替换失败时把旧内置技能标记成新的 SkillHub 技能。Go 包存储负责下载记录；目录元数据把身份传递给既有 tracked tool。内置技能不产生下载事件。在现有遥测初始化中配置 metric 导出，并复用退出 flush。
 
-counter 从身份解析后的技能包获取开始计数。尚无技能 ID 的元数据列表失败无法产生按技能归属的下载。获取成功表示技能包通过验证且可用，不只是 HTTP 成功。Python 工作线程可能在等待任务取消后完成下载；按实际获取结果计数，但不计取消的加载。Go context 取消计入错误结果。metric 仅含契约规定的维度；`consumer`、`cache_hit` 和错误放在 Span。Span 耗时覆盖获取、验证和安装。通过 Span 计算的缓存命中率受 trace 采样影响。
+counter 从身份解析后的技能包获取开始计数。尚无技能 ID 的元数据列表失败无法产生按技能归属的下载。获取成功表示技能包通过验证且可用，不只是 HTTP 成功。Python 工作线程可能在等待任务取消后完成下载；按实际获取结果计数，但不计取消的加载。Go context 取消计入错误结果。metric 仅含契约规定的维度；`skill.consumer`、`skill.download.cache_hit` 和错误放在 Span。Span 耗时覆盖获取、验证和安装。通过 Span 计算的缓存命中率受 trace 采样影响。
 
 ## 任务、测试与验收
 
