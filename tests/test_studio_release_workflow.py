@@ -25,6 +25,30 @@ import pytest
 import yaml
 
 
+def test_fork_pr_runs_validation_without_enabling_release_side_effects() -> None:
+    workflow = yaml.safe_load(
+        (
+            Path(__file__).parents[1] / ".github/workflows/publish-studio-release.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    jobs = workflow["jobs"]
+    assert workflow["permissions"] == {"contents": "read"}
+    assert jobs["harness-sidecar-release-gate"]["if"] == (
+        "github.event_name == 'pull_request'"
+    )
+    assert jobs["verify"]["if"] == (
+        "github.event_name == 'pull_request' || "
+        "(github.repository == 'volcengine/veadk-python' && "
+        "github.ref == 'refs/heads/main')"
+    )
+    for name in ("release-context", "publish", "notify"):
+        assert jobs[name]["if"] == (
+            "github.event_name == 'workflow_dispatch' && "
+            "github.repository == 'volcengine/veadk-python' && "
+            "github.ref == 'refs/heads/main'"
+        )
+
+
 def _publish_job() -> dict[str, Any]:
     workflow_path = (
         Path(__file__).parents[1]

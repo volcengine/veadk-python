@@ -46,14 +46,13 @@ concurrency:
 jobs:
   harness-sidecar-release-gate:
     if: >-
-      github.repository == 'volcengine/veadk-python' &&
       github.event_name == 'pull_request'
     uses: ./.github/workflows/harness-sidecar-release-gate.yaml
 
   verify:
     if: >-
-      github.repository == 'volcengine/veadk-python' &&
-      (github.event_name == 'pull_request' || github.ref == 'refs/heads/main')
+      github.event_name == 'pull_request' ||
+      (github.repository == 'volcengine/veadk-python' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
