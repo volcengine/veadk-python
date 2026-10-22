@@ -1,3 +1,4 @@
+import { MpaImageUpdates } from "./mpa-images/MpaImageUpdates";
 import {
   useEffect,
   useMemo,
@@ -105,7 +106,7 @@ import { CollaboratorManager } from "./collaborating-agents/CollaboratingAgents"
 import "./AgentWorkspace.css";
 
 type WorkspaceView = "library" | "evaluation";
-type AgentSection = "basic" | "collaborators" | "profileConfig" | "sessionConfig" | "usage" | "diagnostics" | "evaluations" | "optimizations" | "integrations" | "versions";
+type AgentSection = "basic" | "images" | "collaborators" | "profileConfig" | "sessionConfig" | "usage" | "diagnostics" | "evaluations" | "optimizations" | "integrations" | "versions";
 type IntegrationProtocol = "api-server" | "a2a";
 type EvaluationSection = "config" | "history";
 type CaseKind = "good" | "bad";
@@ -309,6 +310,7 @@ function evaluationText(value: string, t: TFunction): string {
 
 const AGENT_SECTIONS: AgentSection[] = [
   "basic",
+  "images",
   "collaborators",
   "profileConfig",
   "sessionConfig",
@@ -2129,7 +2131,10 @@ export function AgentWorkspace({
   const collaboratorsAvailable = selectedAgentCategory === "mpa" &&
     Boolean(selectedAgent?.runtimeId) && canManageCollaborators;
   // Gate restored/external focus as well as the visible navigation.
-  const section = requestedSection === "collaborators"
+  const imagesAvailable = selectedAgentCategory === "mpa" && Boolean(selectedAgent?.runtimeId) && canUpdate;
+  const section = requestedSection === "images"
+    ? imagesAvailable ? "images" : "basic"
+    : requestedSection === "collaborators"
     ? collaboratorsAvailable ? "collaborators" : "basic"
     : selectedAgentCategory === "mpa" ? "basic" : requestedSection;
   const runtimeDetailForSelectedAgent = runtimeDetail?.runtimeId === selectedAgent?.runtimeId
@@ -2143,6 +2148,7 @@ export function AgentWorkspace({
     selectedAgent?.runtimeId ??
     "";
   const visibleAgentSectionIds = AGENT_SECTIONS.filter((item) => {
+    if (item === "images") return imagesAvailable;
     if (item === "collaborators") return collaboratorsAvailable;
     if (selectedAgentCategory === "mpa") return item === "basic";
     if (item === "profileConfig") return false;
@@ -2153,7 +2159,7 @@ export function AgentWorkspace({
   });
   const visibleAgentSections = visibleAgentSectionIds.map((id) => ({
     id,
-    label: id === "collaborators" ? t("collaboratingAgents:title") : t(`agentWorkspace.sections.${id}`),
+    label: id === "images" ? t("mpaImages:title") : id === "collaborators" ? t("collaboratingAgents:title") : t(`agentWorkspace.sections.${id}`),
   }));
   const agentUsageRequestKey = JSON.stringify([
     selectedAgent?.runtimeId ?? "",
@@ -4430,6 +4436,12 @@ export function AgentWorkspace({
               </div>
             )}
             <div className="aw-content">
+              {section === "images" && imagesAvailable && selectedAgent?.runtimeId && (
+                <section className="aw-section">
+                  <h3>{t("mpaImages:title")}</h3>
+                  <MpaImageUpdates runtimeId={selectedAgent.runtimeId} region={selectedAgent.region ?? "cn-beijing"} />
+                </section>
+              )}
               {section === "collaborators" && collaboratorsAvailable && selectedAgent?.runtimeId && (
                 <section className="aw-section">
                   <h3>{t("collaboratingAgents:title")}</h3>

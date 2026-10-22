@@ -18,8 +18,15 @@ from fastapi import HTTPException
 from veadk.integrations.mpa.collaborator_proxy import collaborator_management_headers
 
 
-def test_collaborator_management_is_admin_only_and_server_key_only():
-    path = "api/v1/studio/collaborators"
+@pytest.mark.parametrize(
+    "path",
+    [
+        "api/v1/studio/collaborators",
+        "api/v1/studio/collaborators/registry/spaces",
+        "api/v1/studio/collaborators/registry/binding",
+    ],
+)
+def test_collaborator_management_is_admin_only_and_server_key_only(path):
     with pytest.raises(HTTPException) as denied:
         collaborator_management_headers(path, is_admin=False, api_key="runtime-key")
     assert denied.value.status_code == 403

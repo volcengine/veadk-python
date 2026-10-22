@@ -504,6 +504,12 @@ class AgentRuntimeDeployer:
         await self.registry.initialize()
         async with self.registry.lock(account, self.region, agent_id) as entry:
             record = await entry.read()
+            from .database import has_active_image_update
+
+            if has_active_image_update(record):
+                raise DeploymentError(
+                    "Image update is unresolved; refresh image status in Studio before deploying"
+                )
             if record.get("state") in {"deleting", "deleted"}:
                 raise DeploymentError("Agent deletion has started; use a new agent ID")
             if runtime_id and record.get("runtime_id") not in (None, "", runtime_id):

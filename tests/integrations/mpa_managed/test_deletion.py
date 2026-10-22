@@ -389,3 +389,16 @@ def test_deletion_identity_cache_rechecks_rotated_credentials(monkeypatch):
     with pytest.raises(Exception, match="changed accounts"):
         cloud._credentials()
     assert identity.call_count == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("component", ["runtime", "worker"])
+async def test_deletion_rejects_unresolved_image_updates(component):
+    cleanup, entry, cloud, worker = setup()
+    entry.record["image_updates"] = {
+        component: {"phase": "uncertain", "target": "public/repo:tag"}
+    }
+    with pytest.raises(ResourceDeletionError, match="active_image_update"):
+        await cleanup.delete_resources()
+    worker.delete.assert_not_awaited()
+    cloud.delete_skill_space.assert_not_awaited()

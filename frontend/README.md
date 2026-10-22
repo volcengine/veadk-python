@@ -1962,3 +1962,36 @@ debug/publish environments. Bot Profile overrides and MA remote-host are unchang
 覆盖规则和 MA remote-host 保持原有行为。
 
 Contracts: [English](../specs/studio-agents-md/README.md) / [中文](../specs/studio-agents-md/README.zh.md).
+
+### A2A Center registration
+
+MPA administrators open **Collaborating Agents → A2A Center**, select a space, and choose **Register Agent**. Select an authorized existing Runtime and its public/private endpoint, or import an Agent Card as JSON/HTTPS URL. Registrations live in AgentKit; **Connect selected space** controls which space this MPA can use. No per-Agent MPA binding is required. Creation uses the Studio server cloud identity; space listing/dispatch uses Runtime identity, so both must access the same account/region/space. On an unknown create result, refresh and reconcile before registering again. The previous local manual-registration form is retired; existing local configuration is cleaned only when its upgraded Runtime starts.
+
+
+### A2A space management
+
+Collaborating Agents separates space binding from space members. Use **New space** to create an AgentKit A2A space in the target Runtime region with a name, project (default `default`) and optional semantic search (off by default). Studio requires management authorization, target Runtime access and cloud creation permission. Creation selects the space; click **Connect selected space** separately to bind it. **Register Agent** registers in the space shown in the members section. After an unconfirmed create or cancellation during submission, refresh and check the space list before another attempt. Local tests use simulated cloud responses; live provider creation requires separate verification. See the [bilingual design](../prd-spec/features/mpa-collaborating-agents/2026-10-22-space-management.md).
+
+
+A2A Center member rows provide **View** and **Deregister**. View opens a bounded details dialog; deregistration removes the shared registry record after confirmation and preserves its source Runtime. **Delete space** requires an empty space and disconnection from the current MPA; the server rechecks both before deletion and never cascades member removal. Other applications may still depend on the space, so deletion requires explicit confirmation. Runtime registrations rejected as duplicates now show a specific message instead of an unconfirmed-write warning. Network/unknown write outcomes still require read reconciliation before another attempt. See the [member action design](../prd-spec/features/mpa-collaborating-agents/2026-10-22-member-actions.md).
+
+
+A2A registration now reads the chosen Runtime's configured public/private endpoints and displays their addresses; endpoint loading, read errors and unavailable addresses block Runtime registration until resolved. View includes the sanitized effective service address and AgentCard skills (name, description, tags and examples), with distinct empty/unavailable states. URL query/fragment data and credentials are excluded. Space deletion preflight uses the same server-owned Runtime Studio credential as normal collaborator reads; Runtime authentication failure is reported separately from cloud permission refusal. Restart the Studio backend and refresh the page after updating. See the [endpoint/skill design](../prd-spec/features/mpa-collaborating-agents/2026-10-22-endpoints-and-skills.md) and [authentication fix](../prd-spec/bugfixes/mpa-a2a-space-deletion/2026-10-22-runtime-auth.md).
+
+
+A2A Runtime registration now has one required Runtime picker. The selected Runtime ID is carried automatically; there is no separate manual-ID input. Runtime-list loading, empty and error states remain distinct, with retry for empty/error and pagination for more choices. A selection removed by a list refresh invalidates its old endpoint and cannot submit. The existing registration API and imported Agent Card workflows remain unchanged. See the [single-picker fix](../prd-spec/bugfixes/mpa-a2a-runtime-picker/2026-10-22-single-runtime-picker.md).
+
+### A2A space aliases
+
+In Collaborating Agents → A2A Center, use **Set alias** on a registered Agent. Aliases are shared within the account/region/space through the Runtime management database; clearing a value removes the alias. This does not rename the Agent in AgentKit. Start a conversation message with `@代码助手 检查代码` or `@"Code Assistant" review code`. A unique alias or actual Agent Card name resolves to the registered Agent; ambiguous or missing names require correction. Requires an upgraded Runtime with shared management DB/account configuration. This UI does not add mention autocomplete.
+
+### MPA image updates / MPA 镜像更新
+
+MPA management navigation places **Image updates** second, between Basic and Collaborating Agents. Runtime and Worker each accept a manually entered full tagged image address or a version from their corresponding fixed domestic/overseas public repository. Entering an address clears the public selection; selecting a public version clears the manual address. Both paths show the complete target and require independent confirmation. Use **Load more versions** to see additional public tags. Manual addresses may use other registries and remain usable when catalog loading fails; Studio validates format without contacting those registries, while AgentKit checks image pull permissions and compatibility. Runtime updates request immediate release; Worker updates change only the bound, exclusively managed template. Existing sandbox sessions may keep their old image: create a new session to use the updated template. A submitted request is not proof of application health. Refresh status to reconcile; an unknown outcome blocks duplicate submission. Restart Studio with its original cloud credential environment and refresh the browser to activate the new backend and assets. See the [image management contract](../specs/mpa-image-update/README.md).
+
+MPA 管理页将 **镜像更新** 放在基本信息和协作 Agent 之间。Runtime 与 Worker 均支持手填完整带标签镜像地址，或从对应国内/海外固定公共仓库选择版本。输入地址清空公共版本，选择公共版本清空手填内容；两种方式均展示完整目标并独立确认更新。可通过 **加载更多版本** 查看其他公共标签。手填可使用其他仓库，不受目录加载失败影响；Studio 仅校验格式而不请求该仓库，拉取权限和兼容性由 AgentKit 检查。Runtime 请求立即发布；Worker 只更新绑定且可证明独占归属的托管模板。已有沙箱会话可能保留原镜像，请新建会话使用新模板。提交成功不代表应用健康，需刷新状态核对；结果未确认时禁止重复提交。更新后须使用原云凭据环境重启 Studio 并刷新浏览器，启用新后端和资源。参见[镜像管理契约](../specs/mpa-image-update/README.zh.md)。
+
+
+Selecting **latest** from a public repository resolves it to an existing version before confirmation. The dialog shows the actual image and content digest; submission verifies the selected version again and does not follow a later change to latest. A missing/overwritten version or failed verification prevents an update. Read-only resolution can be retried. This applies only to MPA Runtime/Worker in Volcengine and BytePlus; manual addresses retain their existing behavior, including manually entered latest.
+
+从公共仓库选择 **latest** 时，确认前先解析为已有版本，确认框展示实际镜像及内容摘要。提交时再次校验该版本，不跟随之后变化的 latest；版本不存在、被覆盖或校验失败时不更新。可重试只读解析。此行为仅适用于国内和 BytePlus 的 MPA Runtime/Worker；手填地址（含手填 latest）维持原逻辑。

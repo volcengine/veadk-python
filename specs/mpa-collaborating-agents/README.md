@@ -1,51 +1,56 @@
-# MPA collaborating Agent configuration
+# MPA collaborating Agents: A2A Center
 
-Management base: `/api/v1/studio/collaborators`, scoped by the serving Runtime's configured `MPA_AGENT_ID`, never browser-provided ownership. Dedicated `X-MPA-Studio-Key` must match persisted current Runtime credential; Studio only injects it server-side for administrators. GET list; POST create; PATCH/DELETE `/{id}` and POST `/{id}/check` require positive `revision` (DELETE query). Version mismatch 409, missing record 404, unauthenticated 401, missing durable backend/Runtime identity 503. Public output excludes all credential values.
+[中文版](README.zh.md)
 
-Database: additive `mpa_collaborating_agents` table with composite MPA/id key, JSON configuration and monotonically increasing revision. No volatile fallback. Existing Runtime business PG owns records. Migration is additive; rollback keeps the table and deploys the previous binaries. Older Studio/Runtime remain unchanged.
+## Ownership and UI
 
-Connection check: HTTPS only; no userinfo/query/fragment; fixed explicit Card URL. Resolve and pin DNS for the request; reject non-global addresses by default and cloud metadata/loopback/link-local always. Explicit operator-configured `MPA_COLLABORATOR_PRIVATE_ORIGINS` permits private VPC destinations only for listed HTTPS origins. No redirects or environment proxies, bounded timeout and response size, TLS verification on. Card execution endpoint must have the same origin as the configured Card. Store only bounded allowlisted metadata, never arbitrary Card JSON. Check unsupported transport/auth schemes explicitly; no OAuth refresh in this version.
+Studio administrators manage **MPA → Collaborating Agents → A2A Center**. Select a target Runtime account/region and a space. Runtime GET/PUT `/api/v1/studio/collaborators/registry/binding` persists only one MPA-to-space association with revision CAS; registry/spaces and registry/agents query the target Runtime cloud identity. All compatible running members, including future members, can be discovered by the existing governed dispatcher. Registration acceptance alone is not proof of execution.
 
+## Registration
 
-[Design](../../prd-spec/features/mpa-collaborating-agents/2026-10-20-collaborating-agents.md)
+POST `/web/a2a-agents?region=...` is a Studio control-plane endpoint, not a Runtime tool. It requires existing management authorization and access to targetRuntimeId. Source Runtime also authorizes runtimeId and passes RuntimeConfig with networkType public/private. Source Standard supports importType json (agentCard object) or url (cardUrl HTTPS). All requests include spaceId; source-specific fields are mutually exclusive. Studio signs CreateA2aAgent with existing server credentials and returns only `{id}`. Account/region access failures remain explicit. No new Runtime create privilege or external dependency is introduced.
 
-## Configuration and dispatcher handoff
+Input is bounded to 128 KiB, IDs are validated, JSON requires name/url/version, URLs exclude userinfo/fragments. AgentKit fetches imported URLs; Studio does not fetch arbitrary URLs. Cards and credentials are never returned, logged, or persisted by the browser. JSON input is masked until explicitly revealed. No automatic create retry: network/5xx/cancel uncertainty requires refresh/reconciliation. A successful create followed by a failed refresh remains a successful create with a list error. Changing Runtime/region/space aborts stale UI responses and clears input; normal keyboard and IME behavior is retained.
 
-As a Studio administrator, open **Agents → MPA → selected agent → Collaborating Agents**, the tab below **Basic information**, then **Add Agent**. Enter its name, purpose, full HTTPS Agent Card URL and authentication configuration. Save, then check the connection. Capabilities come from Card `skills`; they are not a second manually maintained list. This entry appears for MPAs only.
+## Legacy data and compatibility
 
-For Bearer/API Key authentication, enter the actual credential in Studio. New input is masked by default and can be shown temporarily. Saved credentials are never returned to the browser. Blank edits preserve an existing credential only for the same authentication mode, header and destination origin; a new origin requires re-entry. Selecting no authentication clears the credential. API keys also require a target-specific `X-` header. Old `MPA_COLLABORATOR_` environment references remain supported by Runtime APIs.
+Old local list/create/update/delete/check endpoints authenticate then return 410 `legacy_registration_retired`. Their manual form and local write/resolution service are removed. After schema migration, Runtime startup deletes only current-MPA rows from mpa_collaborating_agents, idempotently. Missing identity never deletes, missing table is a no-op. Preserve other MPAs, space associations, sessions and execution ledger. Preserve the shared collaborator_credential_key for rolling-upgrade safety. Published migrations and table structure remain unchanged. Deletion requires an existing DB backup for rollback; binary rollback cannot restore deleted rows. Current implementation does not deploy or delete live records until the upgraded Runtime starts.
 
-For a private endpoint, also set `MPA_COLLABORATOR_PRIVATE_ORIGINS=https://research.internal.example:443` on the Runtime and provide network connectivity and trusted TLS. Allowlisting an origin does not create VPCs, routes or firewall rules. Public endpoints need no allowlist. Cross-origin execution endpoints, plaintext HTTP, OAuth refresh, cloud AK/SK signing and non-JSONRPC transports are not supported in this version.
+## Existing dispatch safety
 
-Example registration body (through the authenticated Studio proxy):
-```json
-{
-  "name": "Research assistant",
-  "description": "Find sources and organize evidence",
-  "card_url": "https://research.example/.well-known/agent-card.json",
-  "enabled": true,
-  "auth_type": "bearer",
-  "secret": "<target-agent-token>",
-  "header_name": ""
-}
-```
-The response includes `id`, `mpa_id`, `revision` and `check`. New entries are `not_checked`; `POST /{id}/check` takes the current `revision` and returns a new one. `verified` means Card discovery and format compatibility only, not successful task execution. Editing invalidates the check. If a mutation's outcome is unknown after a connection failure, the UI requires refresh before another mutation, avoiding blind duplicate creation.
+Model tools accept IDs resolved from the bound space, never arbitrary URLs/auth headers. Existing Harness identity/scope/grant/fence/ledger/terminal semantics are unchanged. Safe transport enforces HTTPS, DNS/address policy, TLS, no redirects, bounded responses/timeouts. Private origins require explicit Runtime allowlisting and connectivity. Only supported Card protocol/transport/auth configurations are callable. Worker and scheduled Main do not gain registration or collaboration privileges.
 
-Handoff to the `dispatch_a2a_task` owner:
-```python
-# Use an injected CollaboratorService; mpa_id comes from trusted execution context.
-snapshot = await service.resolve_for_dispatch(mpa_id, registration_id)
-# snapshot: mpa_id / registration_id / revision / endpoint /
-#           headers (server-only, hidden from repr) / protocol_version
-```
-The dispatcher must authorize the caller for that MPA, revalidate destination/DNS safety at request time, and implement tasks, SSE, cancellation, results and trace. Never expose `headers` in model context, execution traces or HTTP responses; do not use an unguarded HTTP client. Disabled or unverified records return `registration_not_ready`. This change does not inject registrations into the model or make them callable automatically.
+## Verification and design
 
-Persistence borrows the existing Runtime channel-store engine: business PostgreSQL in production, durable SQLite files for local development, with in-memory SQLite rejected. The additive `0013_collaborating_agents.sql` migration also has the existing first-use table-creation path; restricted DB users can have the migration applied by an operator first. Records are scoped to the current MPA; there is no global catalog or new PG instance. Rollback retains the table and registrations.
+[Registration and retirement design](../../prd-spec/features/mpa-collaborating-agents/2026-10-22-center-registration.md). Python route tests: tests/cli/test_a2a_center_registration.py; UI: frontend/tests/collaboratingAgents.test.tsx and mpaBasicDetails.test.tsx. Runtime cleanup tests live in agentkit-mpa-agent/tests/test_collaborator_retirement.py. Mocked tests and local browser checks are distinct from live cloud creation and real-PG cleanup.
 
-UI lifecycle: mount management only for the selected tab of an MPA with a Runtime and admin/super_admin permission. Key by region and Runtime ID; unmounting on tab/target/permission changes aborts requests and discards transient state. General agents, drafts and non-administrators have no entry or requests; unsupported focus falls back to Basic. Chat no longer exposes the entry.
+## Space management (2026-10-22)
+
+The binding and member areas are separate accessible sections. POST `/web/a2a-spaces?region=...` requires administrator and target Runtime authorization, accepts `{targetRuntimeId, name, projectName?, intentEnabled?}`, and returns `{id}` after signed CreateA2aSpace. Body limit is 4096 bytes; name/project are trimmed nonempty strings with at most 128 characters and no control characters; project defaults to default and semantic search to false. Reject unknown fields and non-boolean switches. Creation selects the confirmed space (including when absent from the current list page), never binds it automatically. Failed refresh preserves confirmed creation success. Uncertain writes/cancel require refresh before another mutation, with no automatic retry. Runtime/region switching cancels stale requests. Existing cloud identity/region and dispatch boundaries remain unchanged. Tags and space editing are outside the creation form; deletion follows the member-action contract below. See [space management design](../../prd-spec/features/mpa-collaborating-agents/2026-10-22-space-management.md).
+
+The unbind action is offered only when the selected space equals the bound space. Switching spaces clears any prior confirmation; the mutation handler rejects unbinding another selected space. Space resource IDs remain in selection/request values but are omitted from user-facing names, status and destination labels.
+
+## Member actions and deletion
+
+Implemented locally: [member action design](../../prd-spec/features/mpa-collaborating-agents/2026-10-22-member-actions.md). Studio provides sanitized GET and confirmed DELETE /web/a2a-agents/{agentId}, scoped by targetRuntimeId, spaceId and region. Returned IDs must match. DELETE /web/a2a-spaces/{spaceId} checks current target binding, space identity and an empty member list before cloud deletion. No cascade, automatic unbinding, source Runtime deletion or automatic mutation retry. A2A-specific opt-in structured cloud errors distinguish known refusal from uncertainty; other helper callers retain existing behavior. Details exclude raw Cards, unsanitized URLs and provider errors. Closing pending mutations requires refresh reconciliation; identity changes abort stale UI updates.
 
 
-## Credential storage and compatibility
-`secret` is write-only (at most 8192 characters, no control characters). `credential_configured` is the public saved-credential indicator, not proof of a successful connection. Runtime encrypts the credential together with its MPA and registration ID in `config.encrypted_secret`. A dedicated key is generated once under a DB transaction lock and persisted as `collaborator_credential_key` in `mpa_deployment_settings`. No operator environment variable is needed. Keys and ciphertext must be backed up together; missing or corrupt keys fail with `credential_store_unavailable`, never automatic rotation. This protects response and ordinary configuration exposure, not database administrators, who can access both tables. Responses exclude plaintext and ciphertext; validation errors exclude raw input. Browser state is transient, never local storage. Direct-input Studio requires an upgraded Runtime; deploy the backend before the UI. For rollback, preserve both tables and use this version or a later compatible version to manage encrypted registrations. Old binaries do not support direct credentials.
+## Deletion preflight authentication
 
-Enabled controls dispatch eligibility; disabled registrations remain stored. Check success alone does not mean task dispatch has been implemented. [Direct credentials design](../../prd-spec/features/mpa-collaborating-agents/2026-10-20-direct-credentials.md).
+CON-DELETE-AUTH: Runtime JSON collaborator requests apply the same administrator-only, server-owned `X-MPA-Studio-Key` policy as the dedicated collaborator proxy. Browser credentials cannot replace this key, and unrelated paths receive no collaborator key. Binding-read 401/403 yields `runtime_auth_failed` with the original status, performs no cloud calls and remains a retryable known preflight failure in the UI. Cloud permission refusals retain their separate behavior. See [authentication fix](../../prd-spec/bugfixes/mpa-a2a-space-deletion/2026-10-22-runtime-auth.md).
+
+
+## Endpoint and skill metadata
+
+CON-ENDPOINTS: GET /web/a2a-runtime-endpoints/{sourceRuntimeId} authorizes administrator and both targetRuntimeId/sourceRuntimeId in region. Return runtimeId and at most one configured safe HTTP(S) URL per public/private type. Registration offers only current configured types and blocks stale/unavailable selections; payload stays RuntimeId/NetworkType. No arbitrary endpoint URL is accepted.
+
+CON-CARD-VIEW: Agent detail adds serviceAddress (string|null), skills (array|null) and skillsTruncated (boolean). Project only bounded name/description/tags/examples/ID, never raw Cards or authentication. Null indicates unavailable, [] confirmed empty; over 100 skills shows explicit truncation. Strip query/fragment; reject userinfo, malformed, control-character or non-HTTP(S) URLs. Metadata parsing affects View only, not deregistration. See [endpoint and skill design](../../prd-spec/features/mpa-collaborating-agents/2026-10-22-endpoints-and-skills.md).
+
+
+## Runtime registration picker
+
+CON-RUNTIME-PICKER: Runtime registration uses one required Select populated by authorized paginated Runtime reads. There is no separate manual ID field. The selected ID remains an internal request value; only a selection still present in the current list with a matching endpoint can submit. Loading, successful empty list and failed list reads remain distinct, with retry for empty/error and append pagination preserving selection. Standard imports and backend APIs are unchanged. See [single-picker fix](../../prd-spec/bugfixes/mpa-a2a-runtime-picker/2026-10-22-single-runtime-picker.md).
+
+## 2026-10-22 Alias
+
+Space-shared aliases are maintained by the Runtime in its account management database. Studio edits optional aliases with revision CAS through the authenticated Runtime proxy. No center name or Card is modified. See [alias design](../../prd-spec/features/mpa-collaborating-agents/2026-10-22-space-aliases.md). Implemented; local Node/Vitest tests, build and browser fixture verified. Cloud/model end-to-end acceptance pending.
