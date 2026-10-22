@@ -51,6 +51,6 @@ CON-CARD-VIEW: Agent detail adds serviceAddress (string|null), skills (array|nul
 
 CON-RUNTIME-PICKER: Runtime registration uses one required Select populated by authorized paginated Runtime reads. There is no separate manual ID field. The selected ID remains an internal request value; only a selection still present in the current list with a matching endpoint can submit. Loading, successful empty list and failed list reads remain distinct, with retry for empty/error and append pagination preserving selection. Standard imports and backend APIs are unchanged. See [single-picker fix](../../prd-spec/bugfixes/mpa-a2a-runtime-picker/2026-10-22-single-runtime-picker.md).
 
-## 2026-10-22 Alias
+## 2026-10-22 Agent alias correction
 
-Space-shared aliases are maintained by the Runtime in its account management database. Studio edits optional aliases with revision CAS through the authenticated Runtime proxy. No center name or Card is modified. See [alias design](../../prd-spec/features/mpa-collaborating-agents/2026-10-22-space-aliases.md). Implemented; local Node/Vitest tests, build and browser fixture verified. Cloud/model end-to-end acceptance pending.
+Registered Agent aliases belong to the current MPA business database, scoped by MPA/region/space/Agent. List, discovery and @name resolution share this data. No SHARED_APIG_DATABASE_URL or AGENTKIT_ACCOUNT_ID dependency. Studio keeps revision CAS and authenticated ownership checks; it forwards PUT only for binding and exact valid Agent alias routes. Older Runtime capability absence disables editing with an upgrade message. Shared aliases are not automatically imported. Center names and Cards remain unchanged. See [design](../../prd-spec/bugfixes/mpa-agent-alias/2026-10-22-agent-alias-business-store.md).

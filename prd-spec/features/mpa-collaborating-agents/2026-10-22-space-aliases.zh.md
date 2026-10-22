@@ -29,3 +29,5 @@ Runtime 必须具备共享库配置与权限，旧实例需升级 Runtime。写�
 ## 本地验证
 
 Studio 和 Runtime 已实现。Studio Node tests1389通过、Vitest192通过、生产构建通过。本地浏览器使用真实编辑器/主题、模拟传输，验证保存、清空、重名提示、Escape/焦点恢复及320px窄列。未发布、未调用云端或完成真实模型端到端验收。Runtime证据见 agentkit-mpa-agent/docs/verification/agentkit-a2a-collaborators/alias-verification.md。
+
+> 存储决定已被 `prd-spec/bugfixes/mpa-agent-alias/2026-10-22-agent-alias-business-store.zh.md` 取代：已注册 Agent 别名归当前 MPA 业务库。

@@ -51,6 +51,6 @@ CON-CARD-VIEW：Agent 详情增加 serviceAddress（string|null）、skills（ar
 
 CON-RUNTIME-PICKER：Runtime 注册使用一个必选 Select，选项来自已授权的分页 Runtime 查询，不再提供独立手动 ID 字段。所选 ID 保留为内部请求值；仅当选择仍存在于当前列表且有匹配端点时才允许提交。加载、成功空列表和读取失败明确区分，空/错误支持重试，追加分页保留选择。Standard 导入和后端 API 不变。参见[单一选择修复](../../prd-spec/bugfixes/mpa-a2a-runtime-picker/2026-10-22-single-runtime-picker.zh.md)。
 
-## 2026-10-22 Alias
+## 2026-10-22 Agent alias correction
 
-空间共享别名由 Runtime 保存在账号管理库，Studio 经鉴权 Runtime 代理携带 revision CAS 编辑可选别名，不修改中心名称或 Card。见[别名设计](../../prd-spec/features/mpa-collaborating-agents/2026-10-22-space-aliases.zh.md)。已实现；本地 Node/Vitest、构建和浏览器模拟接口验证通过；云端模型端到端验收待执行。
+已注册 Agent 别名属于当前 MPA 业务库，按 MPA/地域/空间/Agent 隔离；列表、发现和 @名称解析读取相同数据，不依赖 SHARED_APIG_DATABASE_URL 或 AGENTKIT_ACCOUNT_ID。Studio 保留 revision CAS 和所有者鉴权，仅放行绑定与 Agent ID 合法的精确别名 PUT。旧 Runtime 未声明能力时禁用并提示升级；共享别名不自动导入；中心名称和 Card 不变。参见[设计](../../prd-spec/bugfixes/mpa-agent-alias/2026-10-22-agent-alias-business-store.zh.md).

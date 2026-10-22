@@ -165,11 +165,11 @@
     "runtimeAuthFailed": "Runtime authentication failed before deletion. Nothing was deleted. Refresh the Runtime connection and try again."
   },
   "alias": {
-    "label": "Space alias",
+    "label": "Agent alias",
     "empty": "Not set",
     "edit": "Set alias",
-    "help": "Shared within this space. Leave empty to clear. Use @helper followed by a task, or @\"Code Assistant\" for a name with spaces.",
-    "unavailable": "Shared aliases are unavailable. Check the shared management database configuration or upgrade this Runtime.",
+    "help": "Names this Agent within this space for the current MPA. Leave empty to clear. Use @helper followed by a task, or @\"Code Assistant\" for a name with spaces.",
+    "unavailable": "This Runtime does not support Agent aliases. Upgrade the Runtime and refresh.",
     "invalid": "Use up to 80 letters, numbers, spaces, dots, underscores or hyphens.",
     "conflict": "Another Agent in this space uses this alias. Choose a different name.",
     "revisionConflict": "Someone changed this alias. Refresh before trying again.",
