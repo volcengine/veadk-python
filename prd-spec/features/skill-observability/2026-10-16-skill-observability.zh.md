@@ -22,7 +22,7 @@
 - FR-5：新增遥测不记录包 URL、凭据、指令正文、路径或原始异常消息。既有内容遥测策略保持不变。
 - FR-6：Python 与 Go 对已支持的来源使用相同标签和来源语义；预取只产生下载数据。保留既有安装包和会话链接。
 
-当前数据结构以 2026-10-21 读取的技术文档 revision 2419 及随后用户要求的单位 `time` 调整为准：两个 counter 使用 `_count` 后缀和单位 `time`，身份新增 `skill_name`；结果仅放在 `skill.download.outcome`，不再作为 metric 标签。Span 命名为 `download_skill {skill_name}` / `load_skill {skill_name}`，并使用 `skill.consumer` 和 `skill.download.cache_hit`。具体名称来源与空值规则见组件契约。保留固定 Counter 实现；字段和 record 方法名无需 `gen_ai` 前缀。
+当前数据结构以 2026-10-21 读取的技术文档 revision 2419 及用户于 2026-10-22 批准将单位从 `time` 修正为无量纲 `1` 的要求为准：两个 counter 使用 `_count` 后缀和单位 `1`，身份新增 `skill_name`；结果仅放在 `skill.download.outcome`，不再作为 metric 标签。Span 命名为 `download_skill {skill_name}` / `load_skill {skill_name}`，并使用 `skill.consumer` 和 `skill.download.cache_hit`。具体名称来源与空值规则见组件契约。保留固定 Counter 实现；字段和 record 方法名无需 `gen_ai` 前缀。
 
 ## 设计与受影响消费者
 
@@ -80,3 +80,16 @@ T-1 至 T-6 已实现。真实 ADK 加载响应保留 Registry 提供的身份�
 | Studio/浏览器门禁 | not_applicable | 未改变 Studio 前后端契约。 |
 
 Sandbox 初次全模块收集需要测试模型 API 值；最终命令使用占位值、禁用外部 exporter，并设置 `PYTHONPATH=src` 供子进程导入。创建内存 SDK provider 的测试局部移除 `OTEL_SDK_DISABLED`。未使用真实凭据、真实模型请求或修改全局机器配置。用户同意在此记录这些环境/工具限制。临时基线副本在对比后删除。受影响检查验证了本地实现行为，全仓验收尚未全绿。
+
+### 单位修正（2026-10-22）
+
+用户明确批准 VeADK 与 ACTB Python/Go 的两个 Skill counter 统一采用单位 `1`，取代此前的 `time` 决策。这是对 FR-1/FR-2/FR-6 和 CON-1/CON-2 的修正。更新 SDK 的两个 instrument、Sandbox instrument、既有单位断言及双语契约；保持名称、标签、计数增量、Span 和 provider 生命周期。无需新增初始化工作或依赖。既有 `time` 历史数据不会重写；按单位过滤的消费者需在发布期间接纳新值。
+
+直接设计评审（review-spec 不可用）：核对三个生产端、既有真实 provider/导出测试、双语一致性与兼容边界。用户当前指令已批准这一准确范围，无额外待定设计。验收要求为既有延迟 provider 和 collector 测试中的单位变为 `1`，计数和标签保持不变。验证于 2026-10-22 执行，范围为 VeADK `5a2aea21` 之上的单位修正 diff：
+
+- `pass`：更新后的 VeADK/Python Sandbox 延迟 provider 测试和 Go 获取测试在旧 `time` instrument 上失败，修正后通过。
+- `pass`：`uv run --no-sync --extra dev pytest tests/skills tests/test_portal_metrics.py tests/test_tracing_content.py -q` — 123 项；复用已有本地环境，未改变依赖。
+- `pass`：`uv run --no-sync --extra dev pre-commit run --all-files` — Ruff lint/format、密钥扫描与依赖策略检查。
+- `pass`：ACTB Python 观测/安装器/playground/catalog/agent/本地 OTLP 回归 — 67 项及 9 个子测试；`TMPDIR=/private/tmp go run ./cmd/skill-go test -race -run 'TestSkill|TestInstalledSkillHub|TestTelemetry' -count=1 .`；`make verify PYTHON=/Users/bytedance/actb-mono/.venv/bin/python` — 29 项 smoke。
+- `pass`：编辑前 fetch origin 并 rebase 到已配置的跟踪分支，分支已是最新。本次延续用户每个 fix 独立 commit 的交付要求；不包含推送或部署。
+- `not_run`：全仓无关测试、镜像构建和真实云端采集；本次只修改两个 Skill 单位，不涉及依赖、启动或其他 instrument。历史数据和后端按单位过滤的迁移不属于本地变更范围。

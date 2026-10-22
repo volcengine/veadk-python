@@ -337,7 +337,7 @@ def test_default_proxy_instruments_are_bounded_and_support_late_provider():
             values = {m.name: [(dict(p.attributes), p.value) for p in m.data.data_points]
                       for r in data.resource_metrics for s in r.scope_metrics for m in s.metrics}
             assert {s.scope.name for r in data.resource_metrics for s in r.scope_metrics for m in s.metrics if m.name in {"gen_ai_skill_load_count", "gen_ai_skill_download_count"}} == {"veadk_portal"}
-            assert {m.unit for r in data.resource_metrics for s in r.scope_metrics for m in s.metrics if m.name.startswith("gen_ai_skill_")} == {"time"}
+            assert {m.unit for r in data.resource_metrics for s in r.scope_metrics for m in s.metrics if m.name.startswith("gen_ai_skill_")} == {"1"}
             assert values["gen_ai_skill_load_count"] == [(labels, 3)], values
             assert values["gen_ai_skill_download_count"] == [(labels, 3)], values
         finally:
