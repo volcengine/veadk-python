@@ -84,3 +84,39 @@ def test_inmemory_zero_limits_are_valid(monkeypatch):
     monkeypatch.setenv("OBSERVABILITY_OPENTELEMETRY_INMEMORY_MAX_BYTES", "0")
     config = OpenTelemetryConfig()
     assert config.inmemory_max_spans == config.inmemory_max_bytes == 0
+
+
+@pytest.mark.parametrize(
+    "explicit,tenant,expected",
+    [
+        (" explicit ", "tenant", "explicit"),
+        ("", " tenant ", "tenant"),
+        ("  ", "  ", "automatic"),
+    ],
+)
+def test_apmplus_key_precedence_and_cache(monkeypatch, explicit, tenant, expected):
+    from unittest.mock import Mock
+
+    lookup = Mock(return_value="automatic")
+    monkeypatch.setenv("OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY", explicit)
+    monkeypatch.setenv("TENANT_APMPLUS_APPKEY", tenant)
+    monkeypatch.setattr("veadk.configs.tracing_configs.get_apmplus_token", lookup)
+    config = APMPlusConfig()
+    lookup.assert_not_called()
+    assert config.otel_exporter_api_key == expected
+    assert config.otel_exporter_api_key == expected
+    assert lookup.call_count == (1 if expected == "automatic" else 0)
+
+
+def test_apmplus_failed_lookup_can_retry(monkeypatch):
+    from unittest.mock import Mock
+
+    monkeypatch.delenv("OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY", raising=False)
+    monkeypatch.delenv("TENANT_APMPLUS_APPKEY", raising=False)
+    lookup = Mock(side_effect=[RuntimeError("unavailable"), "recovered"])
+    monkeypatch.setattr("veadk.configs.tracing_configs.get_apmplus_token", lookup)
+    config = APMPlusConfig()
+    with pytest.raises(RuntimeError):
+        _ = config.otel_exporter_api_key
+    assert config.otel_exporter_api_key == "recovered"
+    assert lookup.call_count == 2

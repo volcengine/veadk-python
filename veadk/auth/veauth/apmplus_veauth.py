@@ -74,9 +74,9 @@ def get_apmplus_token(
         region=region,
         host=host,
     )
-    try:
-        api_key = res["data"]["app_key"]
-        logger.info("Successfully fetching APMPlus API Key.")
-        return api_key
-    except KeyError:
-        raise ValueError(f"Failed to get APMPlus token: {res}")
+    data = res.get("data") if isinstance(res, dict) else None
+    api_key = data.get("app_key") if isinstance(data, dict) else None
+    if not isinstance(api_key, str) or not api_key.strip():
+        raise ValueError("Failed to get APMPlus token: missing or invalid AppKey")
+    logger.info("Successfully fetching APMPlus API Key.")
+    return api_key.strip()
