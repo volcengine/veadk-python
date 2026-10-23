@@ -14,7 +14,7 @@ Input is bounded to 128 KiB, IDs are validated, JSON requires name/url/version, 
 
 ## Legacy data and compatibility
 
-Old local list/create/update/delete/check endpoints authenticate then return 410 `legacy_registration_retired`. Their manual form and local write/resolution service are removed. After schema migration, Runtime startup deletes only current-MPA rows from mpa_collaborating_agents, idempotently. Missing identity never deletes, missing table is a no-op. Preserve other MPAs, space associations, sessions and execution ledger. Preserve the shared collaborator_credential_key for rolling-upgrade safety. Published migrations and table structure remain unchanged. Deletion requires an existing DB backup for rollback; binary rollback cannot restore deleted rows. Current implementation does not deploy or delete live records until the upgraded Runtime starts.
+Old local list/create/update/delete/check endpoints authenticate then return 410 `legacy_registration_retired`. Their manual form and local write/resolution service are removed. Runtime startup does not delete or migrate legacy rows in `mpa_collaborating_agents`; existing records remain stored but are not used for discovery or dispatch. Preserve other MPAs, space associations, sessions, the execution ledger and the shared `collaborator_credential_key`. Published migrations and table structure remain unchanged. Upgrading or rolling back binaries does not itself delete these records; any future data cleanup requires a separately approved operation.
 
 ## Existing dispatch safety
 
@@ -22,7 +22,7 @@ Model tools accept IDs resolved from the bound space, never arbitrary URLs/auth 
 
 ## Verification and design
 
-[Registration and retirement design](../../prd-spec/features/mpa-collaborating-agents/2026-10-22-center-registration.md). Python route tests: tests/cli/test_a2a_center_registration.py; UI: frontend/tests/collaboratingAgents.test.tsx and mpaBasicDetails.test.tsx. Runtime cleanup tests live in agentkit-mpa-agent/tests/test_collaborator_retirement.py. Mocked tests and local browser checks are distinct from live cloud creation and real-PG cleanup.
+[Registration and retirement design](../../prd-spec/features/mpa-collaborating-agents/2026-10-22-center-registration.md). Python route tests: tests/cli/test_a2a_center_registration.py; UI: frontend/tests/collaboratingAgents.test.tsx and mpaBasicDetails.test.tsx. Runtime retired-endpoint tests live in agentkit-mpa-agent/tests/test_collaborator_retirement.py. Mocked tests and local browser checks are distinct from live cloud verification. Automatic legacy-data cleanup is not part of this contract.
 
 ## Space management (2026-10-22)
 

@@ -14,7 +14,7 @@ POST `/web/a2a-agents?region=...` 是 Studio 控制面接口，不是 Runtime �
 
 ## 旧数据与兼容
 
-旧本地列表、新建、修改、删除、检查接口鉴权后返回 410 `legacy_registration_retired`，删除其表单和本地写入/解析服务。Runtime schema 迁移后，启动时幂等删除 mpa_collaborating_agents 中当前 MPA 的记录；缺身份不删除，缺表为空操作。保留其他 MPA、空间关联、会话与执行账本。共享 collaborator_credential_key 保留，避免滚动升级竞争。已发布迁移和表结构不改。回滚需既有 DB 备份，二进制回滚不能恢复已删除行。未升级启动前不会删除线上记录。
+旧本地列表、新建、修改、删除、检查接口鉴权后返回 410 `legacy_registration_retired`，删除其表单和本地写入/解析服务。Runtime 启动时不删除或迁移 `mpa_collaborating_agents` 中的旧记录；已有记录保留在库中，但不再用于发现或派发。保留其他 MPA、空间关联、会话、执行账本及共享 `collaborator_credential_key`。已发布迁移和表结构不改。升级或回滚二进制本身不会删除这些记录；未来如需清理数据，须另行批准操作。
 
 ## 既有派发安全
 
@@ -22,7 +22,7 @@ POST `/web/a2a-agents?region=...` 是 Studio 控制面接口，不是 Runtime �
 
 ## 验证与设计
 
-[注册及退役设计](../../prd-spec/features/mpa-collaborating-agents/2026-10-22-center-registration.zh.md)。Python 路由：tests/cli/test_a2a_center_registration.py；UI：frontend/tests/collaboratingAgents.test.tsx、mpaBasicDetails.test.tsx。Runtime 清理测试：agentkit-mpa-agent/tests/test_collaborator_retirement.py。模拟测试、本地浏览器检查与真实云创建/PG 清理必须分别报告。
+[注册及退役设计](../../prd-spec/features/mpa-collaborating-agents/2026-10-22-center-registration.zh.md)。Python 路由：tests/cli/test_a2a_center_registration.py；UI：frontend/tests/collaboratingAgents.test.tsx、mpaBasicDetails.test.tsx。Runtime 退役接口测试：agentkit-mpa-agent/tests/test_collaborator_retirement.py。模拟测试、本地浏览器检查与真实云验证必须分别报告。自动清理旧数据不属于此合同。
 
 ## 空间管理（2026-10-22）
 
