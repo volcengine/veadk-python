@@ -22,6 +22,8 @@ from typing import Any
 
 from veadk.integrations.mpa.managed.database import DeploymentError
 
+from .diagnostics import report_failure, with_diagnostic
+
 
 class NetworkCloudError(DeploymentError):
     def __init__(self, action, code):
@@ -77,7 +79,10 @@ class NetworkCloud:
                 ]["Error"]["Code"]
             except (ValueError, KeyError, TypeError):
                 error = "CloudRequestFailed"
-            raise NetworkCloudError(method, error) from None
+            diagnostic = report_failure(method, exc)
+            raise with_diagnostic(
+                NetworkCloudError(method, error), diagnostic
+            ) from None
 
     async def zones(self):
         result = await self.call("describe_zones", "DescribeZonesRequest", ecs=True)

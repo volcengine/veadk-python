@@ -420,6 +420,12 @@ async def provision(
         await registry.initialize()
         async with registry.lock(account, profile.region, agent_id) as entry:
             record = await entry.read()
+            from .database import has_active_image_update
+
+            if has_active_image_update(record):
+                raise DeploymentError(
+                    "Image update is unresolved; refresh image status in Studio before deploying"
+                )
             if record.get("state") in {"deleting", "deleted"}:
                 raise DeploymentError("Agent deletion has started; use a new agent ID")
             if record and record.get("studio_owner") != owner:

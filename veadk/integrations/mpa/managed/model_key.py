@@ -26,7 +26,14 @@ from veadk.utils.volcengine_sign import volcengine_signed_request
 
 from .config import Profile
 from .database import DeploymentError
-from .diagnostics import CODE_CATEGORIES, classify_error, report
+from .diagnostics import (
+    CODE_CATEGORIES,
+    classify_error,
+    failure_identifiers,
+    report,
+    with_diagnostic,
+)
+from .openviking import response_metadata
 
 
 class ModelKeyError(DeploymentError):
@@ -94,12 +101,15 @@ async def _read(
             )
 
         category = ""
+        error_code, request_id = "", ""
         try:
             response = await asyncio.to_thread(request)
         except Exception as error:
             category = classify_error(error)
+            error_code, request_id = failure_identifiers(error)
             response = {}
         if not category:
+            error_code, request_id = response_metadata(response)
             if not isinstance(response, dict):
                 category = "protocol_error"
             else:
@@ -124,15 +134,20 @@ async def _read(
             "throttled",
             "unavailable",
         }
-        report(
+        diagnostic = report(
             operation,
             category,
             attempt=attempt,
             outcome="retrying" if retry else "failed",
+            error_code=error_code,
+            request_id=request_id,
         )
         if not retry:
-            raise ModelKeyError(
-                "Ark model key lookup failed; check deployment Ark read permissions and connectivity"
+            raise with_diagnostic(
+                ModelKeyError(
+                    "Ark model key lookup failed; check deployment Ark read permissions and connectivity"
+                ),
+                diagnostic,
             ) from None
         await asyncio.sleep((0.2, 0.5)[attempt - 1])
     raise AssertionError("Ark read retry loop exhausted")

@@ -244,7 +244,7 @@ test("agent details show capability badges and deployment state before the flow"
 test("agent details expose detected integration methods without inventing unavailable endpoints", () => {
   assert.match(
     workspaceSource,
-    /type AgentSection = "basic" \| "profileConfig" \| "sessionConfig" \| "usage" \| "diagnostics" \| "evaluations" \| "optimizations" \| "integrations" \| "versions"/,
+    /type AgentSection = "basic" \| "images" \| "collaborators" \| "profileConfig" \| "sessionConfig" \| "usage" \| "diagnostics" \| "evaluations" \| "optimizations" \| "integrations" \| "versions"/,
   );
   assert.match(
     workspaceSource,
@@ -481,7 +481,7 @@ test("MPA diagnostics tab uses Runtime Console correlation instead of generic tr
     clientSource,
     /\/api\/v1\/runtime-console\/admin\/runs\/\$\{encodeURIComponent\(params\.invocationId\)\}\/trace\?\$\{query\.toString\(\)\}/,
   );
-  assert.match(workspaceSource, /type AgentSection = "basic" \| "profileConfig" \| "sessionConfig" \| "usage" \| "diagnostics"/);
+  assert.match(workspaceSource, /type AgentSection = "basic" \| "images" \| "collaborators" \| "profileConfig" \| "sessionConfig" \| "usage" \| "diagnostics"/);
   assert.match(workspaceSource, /if \(item === "diagnostics"\) return false/);
   assert.match(workspaceSource, /function MpaDiagnosticsPanel/);
   assert.match(workspaceSource, /getMpaRuntimeConsoleRuns\(\{/);

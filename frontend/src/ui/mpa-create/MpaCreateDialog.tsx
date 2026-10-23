@@ -19,6 +19,7 @@ import {
 } from "../../adk/mpaCreation";
 import "../../components/composites/ModalButton/ModalButton.css";
 import "./MpaCreateDialog.css";
+import { MpaCreationFailure } from "./MpaCreationFailure";
 import "../ProjectPreview.css";
 import { runtimeNameProblem } from "../../create/runtimeName";
 import type { CloudProvider } from "../../adk/cloudProvider";
@@ -922,7 +923,12 @@ export function MpaCreateDialog({
                         })}
                       </p>
                     )}
-                    {task.state === "failed" || task.state === "cancelled" ? (
+                    {task.state === "failed" ? (
+                      <MpaCreationFailure
+                        key={`${task.taskId}:${JSON.stringify(task.latestDiagnostic)}`}
+                        task={task}
+                      />
+                    ) : task.state === "cancelled" ? (
                       task.error === "runtimeNameTaken" ? (
                         <Alert
                           color="danger"

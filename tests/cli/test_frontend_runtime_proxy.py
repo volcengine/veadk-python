@@ -3665,8 +3665,9 @@ def test_runtime_proxy_preserves_api_region_with_distinct_runtime_region(
     assert forwarded_params == {"region": "all"}
 
 
+@pytest.mark.parametrize("method", ["POST", "PUT"])
 def test_runtime_proxy_accepts_post_delete_override(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, method: str
 ) -> None:
     app = _create_frontend_app(monkeypatch, tmp_path)
 
@@ -3692,6 +3693,8 @@ def test_runtime_proxy_accepts_post_delete_override(
     )
     upstream_method = ""
     upstream_params: dict[str, str] = {}
+    upstream_headers: dict[str, str] = {}
+    upstream_body = b""
 
     class _FakeUpstreamResponse:
         status_code = 200
@@ -3716,9 +3719,11 @@ def test_runtime_proxy_accepts_post_delete_override(
             headers: dict[str, str],
             content: bytes,
         ) -> object:
-            nonlocal upstream_method, upstream_params
+            nonlocal upstream_method, upstream_params, upstream_headers, upstream_body
             upstream_method = method
             upstream_params = params
+            upstream_headers = headers
+            upstream_body = content
             return object()
 
         async def send(self, request: object, *, stream: bool) -> _FakeUpstreamResponse:
@@ -3730,13 +3735,23 @@ def test_runtime_proxy_accepts_post_delete_override(
     monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
 
     with TestClient(app) as client:
-        response = client.post(
-            "/web/runtime-proxy/runtime-1/apps/demo/users/user/sessions/session"
-            "?region=cn-beijing&_method=DELETE"
+        path = (
+            "api/v1/studio/collaborators/registry/binding?region=cn-beijing"
+            if method == "PUT"
+            else "apps/demo/users/user/sessions/session?region=cn-beijing&_method=DELETE"
         )
+        response = client.request(
+            method,
+            f"/web/runtime-proxy/runtime-1/{path}",
+            json={"space_id": "as-test", "revision": 0},
+        )
+        assert client.put("/web/runtime-proxy/runtime-1/other").status_code == 405
 
     assert response.status_code == 200
-    assert upstream_method == "DELETE"
+    assert upstream_method == ("PUT" if method == "PUT" else "DELETE")
+    if method == "PUT":
+        assert upstream_headers["X-MPA-Studio-Key"] == "runtime-api-key"
+        assert json.loads(upstream_body) == {"space_id": "as-test", "revision": 0}
     assert upstream_params == {}
 
 
@@ -4908,3 +4923,362 @@ def test_studio_runtime_proxy_only_schedules_successful_completed_sse(
     assert automation.started[0].runtime_authorization.get_secret_value() == (
         "Bearer runtime-api-key"
     )
+
+
+@pytest.mark.parametrize("path", ["collaborators", "agents-md"])
+@pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.parametrize("user, expected_status", [("admin", 200), ("member", 404)])
+def test_collaborator_proxy_uses_server_key_and_enforces_admin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    user: str,
+    expected_status: int,
+    path: str,
+    method: str,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path, admins="admin")
+
+    class RuntimeClient:
+        def __init__(self, **kwargs: Any):
+            pass
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                runtime_id="runtime-1",
+                project_name="default",
+                tags=[],
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example", network_type="public"
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-server-key"),
+                    custom_jwt_authorizer=None,
+                ),
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", RuntimeClient
+    )
+    seen: list[httpx.Request] = []
+
+    class ResponseStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'{"items": []}'
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        assert request.headers["X-MPA-Studio-Key"] == "runtime-server-key"
+        return httpx.Response(
+            200, stream=ResponseStream(), headers={"content-type": "application/json"}
+        )
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: client_type(
+            **{**kwargs, "transport": httpx.MockTransport(handler)}
+        ),
+    )
+    with TestClient(app) as client:
+        response = client.request(
+            method,
+            f"/web/runtime-proxy/runtime-1/api/v1/studio/{path}?_runtime_region=cn-beijing",
+            headers={"X-VeADK-Local-User": user, "X-MPA-Studio-Key": "browser-forgery"},
+        )
+    assert response.status_code == expected_status
+    assert bool(seen) is (expected_status == 200)
+
+
+@pytest.mark.parametrize("upstream_status", [200, 401, 403])
+def test_space_deletion_preflight_uses_server_owned_collaborator_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, upstream_status: int
+) -> None:
+    from frontend.server import a2a_center
+
+    real_mount = a2a_center.mount_routes
+    cloud = AsyncMock(
+        side_effect=lambda **kw: {
+            "Result": {
+                "GetA2aSpace": {"Id": "as-fixture"},
+                "ListA2aAgents": {"Items": [], "TotalCount": 0},
+            }.get(kw["action"], {})
+        }
+    )
+
+    def mount(app, **kwargs):
+        real_mount(app, **{**kwargs, "cloud": cloud})
+
+    monkeypatch.setattr(a2a_center, "mount_routes", mount)
+    app = _create_frontend_app(monkeypatch, tmp_path, admins="admin")
+
+    class RuntimeClient:
+        def __init__(self, **kwargs: Any):
+            pass
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                runtime_id="r-fixture",
+                project_name="default",
+                tags=[],
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example", network_type="public"
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-server-key"),
+                    custom_jwt_authorizer=None,
+                ),
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", RuntimeClient
+    )
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.headers.get("X-MPA-Studio-Key") != "runtime-server-key":
+            return httpx.Response(
+                401, json={"detail": "Studio Runtime credential is required"}
+            )
+        return httpx.Response(
+            upstream_status,
+            json={"space_id": None, "revision": 0}
+            if upstream_status == 200
+            else {"detail": "private-upstream-detail"},
+        )
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: client_type(**{**kw, "transport": httpx.MockTransport(handler)}),
+    )
+    with TestClient(app) as client:
+        response = client.delete(
+            "/web/a2a-spaces/as-fixture?targetRuntimeId=r-fixture&region=cn-beijing",
+            headers={
+                "X-VeADK-Local-User": "admin",
+                "X-MPA-Studio-Key": "browser-forgery",
+            },
+        )
+    assert response.status_code == upstream_status
+    assert len(seen) == 1
+    assert seen[0].headers["X-MPA-Studio-Key"] == "runtime-server-key"
+    assert seen[0].url.path == "/api/v1/studio/collaborators/registry/binding"
+    if upstream_status == 200:
+        assert response.json() == {"deleted": True}
+        assert [call.kwargs["action"] for call in cloud.await_args_list] == [
+            "GetA2aSpace",
+            "ListA2aAgents",
+            "DeleteA2aSpace",
+        ]
+    else:
+        assert response.json() == {"detail": {"reason": "runtime_auth_failed"}}
+        cloud.assert_not_called()
+
+
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+@pytest.mark.parametrize("category,expected", [("mpa", 200), ("general", 404)])
+def test_mpa_image_route_wires_fresh_authorization_and_independent_update(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    category: str,
+    expected: int,
+    provider: CloudProvider,
+):
+    from contextlib import asynccontextmanager
+    from agentkit.sdk.runtime.types import GetRuntimeResponse
+    from frontend.server.mpa_images import repository
+
+    current = repository(provider, "runtime") + ":old"
+    snapshot = {
+        "RuntimeId": "r-image",
+        "ArtifactUrl": current,
+        "Status": "Ready",
+        "ProjectName": "default",
+        "Envs": [{"Key": "MPA_AGENT_ID", "Value": "mi-image"}],
+        "Tags": [{"Key": "veadk:agent-type", "Value": category}],
+    }
+
+    class Client:
+        def __init__(self, **_):
+            pass
+
+        def get_runtime(self, _):
+            return GetRuntimeResponse.model_validate(snapshot)
+
+    monkeypatch.setattr("agentkit.sdk.runtime.client.AgentkitRuntimeClient", Client)
+    monkeypatch.setattr(
+        "volcenginesdktag.TAGApi",
+        lambda _: SimpleNamespace(
+            get_resources=Mock(
+                return_value=SimpleNamespace(resource_tag_mapping_list=[])
+            )
+        ),
+    )
+    entry = AsyncMock()
+    entry.read.return_value = {"runtime_id": "r-image", "state": "ready"}
+
+    @asynccontextmanager
+    async def scope(**_):
+        yield SimpleNamespace(entry=entry, account="test-account")
+
+    monkeypatch.setattr(
+        "veadk.integrations.mpa.managed.deletion.owned_resource_cleanup", scope
+    )
+    cloud_read = AsyncMock(return_value=snapshot)
+    update = AsyncMock()
+    monkeypatch.setattr(
+        "veadk.integrations.mpa.managed.runtime.RuntimeCloud.get", cloud_read
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.mpa.managed.runtime.RuntimeCloud.update", update
+    )
+    monkeypatch.setattr("frontend.server.mpa_images.PublicCatalog.verify", AsyncMock())
+    if provider == "byteplus":
+        monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "test-ak")
+        monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "test-sk")
+    app = _create_frontend_app(monkeypatch, tmp_path, provider=provider)
+    region = "cn-beijing" if provider == "volcengine" else "ap-southeast-1"
+    with TestClient(app) as client:
+        response = client.get(f"/web/mpa-images/r-image/runtime?region={region}")
+        assert response.status_code == expected
+        if category == "mpa":
+            assert response.json()["currentImage"] == current
+            result = client.post(
+                f"/web/mpa-images/r-image/runtime?region={region}",
+                json={"tag": "new", "revision": response.json()["revision"]},
+            )
+            assert result.status_code == 200
+            update.assert_awaited_once_with(
+                {
+                    "RuntimeId": "r-image",
+                    "ArtifactType": "public_image",
+                    "ArtifactUrl": repository(provider, "runtime") + ":new",
+                    "ReleaseEnable": True,
+                }
+            )
+        else:
+            resolver = Mock(
+                side_effect=AssertionError("General agent must not resolve images")
+            )
+            monkeypatch.setattr(
+                "veadk.integrations.mpa.managed.image_snapshot.snapshot_image", resolver
+            )
+            for component in ("runtime", "worker"):
+                for suffix in ("", "/versions", "/latest-preview?revision=x"):
+                    assert (
+                        client.get(
+                            f"/web/mpa-images/r-image/{component}{suffix}{'&' if '?' in suffix else '?'}region={region}"
+                        ).status_code
+                        == 404
+                    )
+                assert (
+                    client.post(
+                        f"/web/mpa-images/r-image/{component}?region={region}",
+                        json={"tag": "latest", "revision": "x"},
+                    ).status_code
+                    == 404
+                )
+            resolver.assert_not_called()
+            cloud_read.assert_not_awaited()
+            entry.save.assert_not_awaited()
+            update.assert_not_awaited()
+
+
+@pytest.mark.parametrize("upstream_status", [200, 409, 503])
+@pytest.mark.parametrize("user,allowed", [("admin", True), ("outsider", False)])
+def test_agent_alias_put_proxy_preserves_auth_and_upstream_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    upstream_status: int,
+    user: str,
+    allowed: bool,
+) -> None:
+    app = _create_frontend_app(
+        monkeypatch, tmp_path, admins="admin", developers="outsider"
+    )
+    runtime = SimpleNamespace(
+        runtime_id="r-fixture",
+        project_name="default",
+        tags=[],
+        network_configurations=[
+            SimpleNamespace(endpoint="https://runtime.example", network_type="public")
+        ],
+        authorizer_configuration=SimpleNamespace(
+            key_auth=SimpleNamespace(api_key="server-only-fixture"),
+            custom_jwt_authorizer=None,
+        ),
+    )
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        lambda **_: SimpleNamespace(get_runtime=lambda _: runtime),
+    )
+    monkeypatch.setattr(
+        "volcenginesdktag.TAGApi",
+        lambda _: SimpleNamespace(
+            get_resources=Mock(
+                return_value=SimpleNamespace(resource_tag_mapping_list=[])
+            )
+        ),
+    )
+    seen: list[httpx.Request] = []
+    body = {"space_id": "as-test", "alias": "helper", "revision": 0}
+    expected = (
+        {"alias": "helper", "revision": 1}
+        if upstream_status == 200
+        else {"detail": "alias_conflict"}
+    )
+
+    class ResponseStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield json.dumps(expected).encode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        assert request.method == "PUT"
+        assert (
+            request.url.path == "/api/v1/studio/collaborators/registry/aliases/a-test"
+        )
+        assert request.headers["X-MPA-Studio-Key"] == "server-only-fixture"
+        assert json.loads(request.content) == body
+        return httpx.Response(
+            upstream_status,
+            stream=ResponseStream(),
+            headers={"content-type": "application/json"},
+        )
+
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: client_type(**{**kw, "transport": httpx.MockTransport(handler)}),
+    )
+    with TestClient(app) as client:
+        base = "/web/runtime-proxy/r-fixture/api/v1/studio/collaborators/registry/"
+        headers = {"X-VeADK-Local-User": user, "X-MPA-Studio-Key": "browser-forgery"}
+        result = client.put(
+            base + "aliases/a-test?_runtime_region=cn-beijing",
+            headers=headers,
+            json=body,
+        )
+        assert result.status_code == (upstream_status if allowed else 404)
+        if allowed:
+            assert result.json() == expected
+        assert len(seen) == int(allowed)
+        for path in (
+            "aliases",
+            "aliases/invalid",
+            "aliases/a-test/extra",
+            "unrelated",
+            "aliases/a-" + "x" * 101,
+        ):
+            assert (
+                client.put(base + path, headers=headers, json=body).status_code == 405
+            )
+        assert len(seen) == int(allowed)

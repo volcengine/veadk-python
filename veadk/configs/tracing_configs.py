@@ -75,7 +75,8 @@ class APMPlusConfig(BaseSettings):
     @cached_property
     def otel_exporter_api_key(self) -> str:
         return (
-            os.getenv("OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY")
+            os.getenv("OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY", "").strip()
+            or os.getenv("TENANT_APMPLUS_APPKEY", "").strip()
             or get_apmplus_token()
         )
 

@@ -341,7 +341,18 @@
     "discardDocument": "放弃未保存的修改？",
     "keepEditing": "继续编辑",
     "discardChanges": "放弃修改",
-    "saveDocument": "保存为新版本"
+    "saveDocument": "保存为新版本",
+    "editAgentsMd": "编辑",
+    "agentsMdEditHint": "修改会应用于当前智能体的后续对话，正在进行的回复保持原配置。",
+    "agentsMdConflict": "配置已被其他页面修改，请刷新后核对，再保存。",
+    "agentsMdEditUnsupported": "当前 Runtime 不支持编辑 AGENTS.md，请升级 Runtime 镜像。",
+    "agentsMdClearConfirm": "清空后将不再使用自定义指令，确认保存？",
+    "confirmDocument": "确认",
+    "agentsMdSaveUncertain": "保存状态尚未确认，请刷新并核对持久化内容。",
+    "agentsMdTooLong": "AGENTS.md 最多支持 40,000 个字符，请缩短后保存。",
+    "agentsMdLoading": "正在加载 AGENTS.md…",
+    "agentsMdLoadFailed": "无法加载 AGENTS.md，请刷新重试。",
+    "saveAgentsMd": "保存"
   },
   "sessionEnvironment": {
     "mountFailed": "挂载环境失败",

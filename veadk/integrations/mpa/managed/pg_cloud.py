@@ -58,6 +58,7 @@ def _debug_event(hypothesis: str, location: str, message: str, data: dict) -> No
 class PGCloudError(DeploymentError):
     def __init__(self, method, code, *, request_id=""):
         self.code = code
+        self.operation = METHOD_OPERATIONS.get(method, "provision")
         self.request_id = request_id
         super().__init__(
             f"AIDAP {method} failed ({code}); check deployment permissions and connectivity"

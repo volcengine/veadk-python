@@ -5,6 +5,8 @@ import { listSkillsInSpacePage } from "../../create/skills/skillspace";
 import { SkillDocumentEditor } from "./SkillDocumentEditor";
 import type { SkillDocumentTarget } from "../../adk/skillDocuments";
 import { AgentInfoPanel, type AgentInfoPanelProps } from "../AgentTopology";
+import { AgentsMdEditor } from "./AgentsMdEditor";
+import type { AgentsMdTarget } from "../../adk/agentsMd";
 
 export interface BoundSkill extends AgentSkill {
   spaceId: string;
@@ -21,17 +23,21 @@ export interface BoundSkillState {
   error?: "error" | "forbidden" | "unsupported" | "degraded";
 }
 
-export function MpaAgentInfoRail(props: AgentInfoPanelProps) {
+type MpaRailProps = AgentInfoPanelProps & { agentsMdTarget?: AgentsMdTarget };
+
+export function MpaAgentInfoRail(props: MpaRailProps) {
   if (props.info?.agentCategory !== "mpa") return null;
   const metadata = props.info.mpa;
   const identity = JSON.stringify([
+    props.agentsMdTarget,
     metadata?.skillSpacesStatus,
     metadata?.skillSpaces,
   ]);
   return <MpaRail key={identity} {...props} info={props.info} />;
 }
 
-function MpaRail(props: AgentInfoPanelProps & { info: AgentInfo }) {
+function MpaRail(props: MpaRailProps & { info: AgentInfo }) {
+  const [editingAgentsMd, setEditingAgentsMd] = useState(false);
   const [selected, setSelected] = useState<SkillDocumentTarget | null>(null);
   const [reload, setReload] = useState(0);
   const [state, setState] = useState<BoundSkillState>({
@@ -133,12 +139,18 @@ function MpaRail(props: AgentInfoPanelProps & { info: AgentInfo }) {
       <AgentInfoPanel
         {...props}
         boundSkills={state}
+        onEditAgentsMd={props.agentsMdTarget ? () => setEditingAgentsMd(true) : undefined}
         onOpenSkill={(index) => setSelected(state.skills[index])}
         onRefresh={() => {
           if (props.onRefresh) props.onRefresh();
           else setReload((value) => value + 1);
         }}
       />
+      {editingAgentsMd && props.agentsMdTarget && (
+        <AgentsMdEditor target={props.agentsMdTarget}
+          onClose={() => setEditingAgentsMd(false)}
+          onSaved={() => props.onRefresh?.()} />
+      )}
       {selected && (
         <SkillDocumentEditor
           target={selected}

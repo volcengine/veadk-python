@@ -24,7 +24,7 @@ import uuid
 from ..mpa_tool import build_tos_mount_config
 from .config import WORKER_RESERVED_ENV_KEYS, validate_runtime_name
 from .database import DeploymentError, agent_suffix
-from .diagnostics import failure_identifiers, report, retry_worker
+from .diagnostics import failure_identifiers, report, retry_worker, with_diagnostic
 
 
 class WorkerCloud:
@@ -343,9 +343,12 @@ async def _ensure_worker(
         )
         status = tool.get("Status")
         if status in {"Failed", "Error", "Deleted", "Deleting"}:
-            report("worker_state", "resource_failed")
-            raise DeploymentError(
-                "Worker is not ready; inspect it and retry the same agent"
+            diagnostic = report("worker_state", "resource_failed")
+            raise with_diagnostic(
+                DeploymentError(
+                    "Worker is not ready; inspect it and retry the same agent"
+                ),
+                diagnostic,
             )
         if missing:
             incomplete_observations = min(incomplete_observations + 1, 4)
@@ -371,7 +374,15 @@ async def _ensure_worker(
                     outcome="retrying" if retrying else "failed",
                 )
             if not retrying:
-                raise DeploymentError("Worker ownership metadata is incomplete")
+                raise with_diagnostic(
+                    DeploymentError("Worker ownership metadata is incomplete"),
+                    {
+                        "operation": missing[-1],
+                        "category": "metadata_missing",
+                        "attempt": incomplete_observations,
+                        "outcome": "failed",
+                    },
+                )
             await asyncio.sleep(5)
             continue
         if status == "Ready":
@@ -492,6 +503,9 @@ def _missing_worker_metadata(
         ("worker_agent_binding", env.get("MPA_AGENT_ID"), agent_id),
     ]:
         if value not in (None, "") and value != expected:
-            report(operation, "ownership")
-            raise DeploymentError("Worker ownership does not match this agent")
+            diagnostic = report(operation, "ownership")
+            raise with_diagnostic(
+                DeploymentError("Worker ownership does not match this agent"),
+                diagnostic,
+            )
     return [operation for operation, value, _ in checks if value in (None, "")]
