@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-组件：`skill-observability`；状态：implemented（本地验证；全量回归限制见 PRD）；修订：2026-10-21。
+组件：`skill-observability`；状态：implemented（本地验证；全量回归限制见 PRD）；修订：2026-10-22。
 关联变更：[skill-observability](../../prd-spec/features/skill-observability/2026-10-16-skill-observability.zh.md)。
 
 ## 责任与接口
@@ -11,8 +11,8 @@ VeADK 在 `veadk/skills/` 与 `veadk/tracing/telemetry/telemetry.py` 负责 Runt
 
 ## 契约
 
-- CON-1：`gen_ai_skill_download_count` 是 OTEL counter，单位 `time`；维度严格为 `skill_source`、`skill_id`、`skill_name`、`skill_version`、`skill_space_id`。每次获取结束加一，包含缓存恢复和失败。单纯发现或本地软链接创建不产生事件；结果仅记录在 Span。
-- CON-2：`gen_ai_skill_load_count` 是 OTEL counter，单位 `time`；维度严格为上述五个身份字段。每次成功返回指令加一，ADK invocation 缓存命中仍计数。失败、取消、转发、资源/脚本访问不计数。
+- CON-1：`gen_ai_skill_download_count` 是 OTEL counter，单位 `1`；维度严格为 `skill_source`、`skill_id`、`skill_name`、`skill_version`、`skill_space_id`。每次获取结束加一，包含缓存恢复和失败。单纯发现或本地软链接创建不产生事件；结果仅记录在 Span。
+- CON-2：`gen_ai_skill_load_count` 是 OTEL counter，单位 `1`；维度严格为上述五个身份字段。每次成功返回指令加一，ADK invocation 缓存命中仍计数。失败、取消、转发、资源/脚本访问不计数。
 - CON-3：下载 Span `download_skill {skill_name}` 包含 `skill.source`、`skill.id`、`skill.name`、`skill.version`、`skill.space_id`、`skill.consumer`、`skill.download.outcome`、`skill.download.cache_hit`。结果为 `success` 或 `error`（含取消）；失败增加 `error.type` 和安全的静态 `error.description`，状态为 ERROR。成功加载将既有工具 Span 命名为 `load_skill {skill_name}`，并添加五个点分身份字段和 `skill.consumer`，不新增重复 Span。`skill.consumer` 为 `runtime` 或 `skill_sandbox`。Span 耗时覆盖实际操作。consumer/cache/结果/错误文本不放入 metric 标签。
 - CON-4：身份遵循下表。缺失版本/空间用空字符串，不使用生成的缓存 hash。缺少可信 ID 的远端技能和无法分类的本地技能不采集。遥测身份以 Registry 元数据为准，覆盖技能包同名 metadata。SkillHub 安装时随实际安装包记录 slug，不能仅依赖当前期望配置。
 

@@ -238,10 +238,10 @@ class PortalMetricRecorder:
         )
 
         self.skill_download_counter = self.meter.create_counter(
-            Meters.GEN_AI_SKILL_DOWNLOAD_COUNT, unit="time"
+            Meters.GEN_AI_SKILL_DOWNLOAD_COUNT, unit="1"
         )
         self.skill_load_counter = self.meter.create_counter(
-            Meters.GEN_AI_SKILL_LOAD_COUNT, unit="time"
+            Meters.GEN_AI_SKILL_LOAD_COUNT, unit="1"
         )
 
     def record_skill_download(self, attributes: dict[str, str]) -> None:

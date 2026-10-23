@@ -2,7 +2,7 @@
 
 [中文版](README.zh.md)
 
-Component: `skill-observability`; status: implemented (local verification; full regression limitations in PRD); revised 2026-10-21.
+Component: `skill-observability`; status: implemented (local verification; full regression limitations in PRD); revised 2026-10-22.
 Change: [skill-observability](../../prd-spec/features/skill-observability/2026-10-16-skill-observability.md).
 
 ## Ownership and interfaces
@@ -11,8 +11,8 @@ VeADK owns Runtime package acquisition and ADK instruction-load instrumentation 
 
 ## Contracts
 
-- CON-1: `gen_ai_skill_download_count` is an OTEL counter, unit `time`; dimensions are exactly `skill_source`, `skill_id`, `skill_name`, `skill_version`, `skill_space_id`. One acquisition completion, including cache restore and failure, adds one. No event for mere discovery or local symlink creation; outcome is recorded only on the Span.
-- CON-2: `gen_ai_skill_load_count` is an OTEL counter, unit `time`; dimensions are exactly the five identity fields above. One successful instruction response adds one. ADK invocation-cache hits still count. Errors, cancellation, forwarding and resource/script access do not.
+- CON-1: `gen_ai_skill_download_count` is an OTEL counter, unit `1`; dimensions are exactly `skill_source`, `skill_id`, `skill_name`, `skill_version`, `skill_space_id`. One acquisition completion, including cache restore and failure, adds one. No event for mere discovery or local symlink creation; outcome is recorded only on the Span.
+- CON-2: `gen_ai_skill_load_count` is an OTEL counter, unit `1`; dimensions are exactly the five identity fields above. One successful instruction response adds one. ADK invocation-cache hits still count. Errors, cancellation, forwarding and resource/script access do not.
 - CON-3: Download Span `download_skill {skill_name}` has `skill.source`, `skill.id`, `skill.name`, `skill.version`, `skill.space_id`, `skill.consumer`, `skill.download.outcome`, `skill.download.cache_hit`. Outcome is `success` or `error` (including cancellation); failures add `error.type` and a safe static `error.description`, with ERROR status. Successful loading renames the existing tool Span to `load_skill {skill_name}` and adds the five dotted identity fields and `skill.consumer`, without creating a duplicate Span. `skill.consumer` is `runtime` or `skill_sandbox`. Span duration covers the actual operation. Consumer/cache/outcome/error text never becomes a metric label.
 - CON-4: Identity follows the table. Missing version/space is the empty string, never a synthesized cache hash. Remote skills without a trustworthy ID and unclassified local skills are excluded. Registry-owned metadata overrides archive metadata for telemetry identity. SkillHub installation records the slug with the installed package, not just the current desired configuration.
 

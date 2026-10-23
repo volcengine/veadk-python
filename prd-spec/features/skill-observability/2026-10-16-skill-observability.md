@@ -22,7 +22,7 @@ Count package acquisition and successful instruction delivery with the exact sou
 - FR-5: New telemetry never records archive URLs, credentials, instruction bodies, paths or raw exception messages. Existing content telemetry policy remains unchanged.
 - FR-6: Python and Go use the same labels and source semantics for supported sources; prefetch produces downloads only. Existing installed packages/session links are retained.
 
-The current schema follows technical document revision 2419, read on 2026-10-21, plus the subsequent user-requested unit change to `time`: both counters use the `_count` suffix and unit `time`, with `skill_name` added to identity. Outcome is only `skill.download.outcome`, no longer a metric label. Spans are named `download_skill {skill_name}` / `load_skill {skill_name}` and use `skill.consumer` and `skill.download.cache_hit`. Name provenance and empty-value rules are in the component contract. Preserve fixed Counter instruments; fields and record methods do not need a `gen_ai` prefix.
+The current schema follows technical document revision 2419, read on 2026-10-21, plus the user-approved 2026-10-22 correction from `time` to dimensionless `1`: both counters use the `_count` suffix and unit `1`, with `skill_name` added to identity. Outcome is only `skill.download.outcome`, no longer a metric label. Spans are named `download_skill {skill_name}` / `load_skill {skill_name}` and use `skill.consumer` and `skill.download.cache_hit`. Name provenance and empty-value rules are in the component contract. Preserve fixed Counter instruments; fields and record methods do not need a `gen_ai` prefix.
 
 ## Design and affected consumers
 
@@ -80,3 +80,16 @@ Tested scope is the uncommitted diff over VeADK `d55fe8fa` and ACTB `7354ed5`. S
 | Studio/browser gates | not_applicable | No frontend/backend Studio contract changed. |
 
 Initial Sandbox full collection required a dummy model API value; the final command uses a placeholder, disables external exporters and supplies `PYTHONPATH=src` for child processes. Tests that create an in-memory SDK provider explicitly remove `OTEL_SDK_DISABLED` locally. No real credentials, real model requests or machine-global configuration were used. The user approved recording these environment/tooling limitations here. Temporary baseline copies are removed after comparison. Affected checks establish local implementation behavior; full-repository acceptance is not green.
+
+### Unit correction (2026-10-22)
+
+The user explicitly approved unit `1` for both Skill counters across VeADK and ACTB Python/Go, superseding the earlier `time` decision. This is a correction to FR-1/FR-2/FR-6 and CON-1/CON-2. Update the two SDK instruments, sandbox instruments, existing unit assertions and bilingual contracts; preserve names, labels, increments, spans and provider lifecycle. No new initialization work or dependencies are needed. Existing historical `time` data is not rewritten; consumers filtering units must accept the new value during rollout.
+
+Direct design review (review-spec unavailable): checked all three producers, existing real-provider/export tests, bilingual parity and compatibility boundaries. The user's current instruction approves this exact scope; no additional design decision is pending. Acceptance is unit `1` with unchanged counts/labels in the existing late-provider and collector tests. Verification on the unit-only diff over VeADK `5a2aea21`, 2026-10-22:
+
+- `pass`: the updated VeADK/Python-sandbox late-provider tests and Go acquisition test failed against the old `time` instruments, then passed after the correction.
+- `pass`: `uv run --no-sync --extra dev pytest tests/skills tests/test_portal_metrics.py tests/test_tracing_content.py -q` — 123 tests; the existing local environment was reused without dependency changes.
+- `pass`: `uv run --no-sync --extra dev pre-commit run --all-files` — Ruff lint/format, secret scanners and dependency policy.
+- `pass`: ACTB Python observability/reconciler/playground/catalog/agent/local-OTLP regression — 67 tests and 9 subtests; `TMPDIR=/private/tmp go run ./cmd/skill-go test -race -run 'TestSkill|TestInstalledSkillHub|TestTelemetry' -count=1 .`; `make verify PYTHON=/Users/bytedance/actb-mono/.venv/bin/python` — 29 smoke tests.
+- `pass`: fetched origin and rebased onto the configured tracking branch before edits; the branch was already current. The follow-up retains the user's one-fix-per-commit delivery instruction; no push or deployment is included.
+- `not_run`: repository-wide unrelated tests, image builds and live cloud collection; this correction only changes the two Skill units and has no dependency, startup or other-instrument changes. Historical data and backend unit-filter migration remain outside this local change.
