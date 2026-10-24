@@ -22,6 +22,7 @@ import pytest
 from veadk.extensions.feishu_channel import (
     FeishuChannelExtension,
     _call_in_fresh_event_loop,
+    _format_tool_payload,
 )
 
 
@@ -58,7 +59,8 @@ class FakeStreamChannel(FakeChannel):
     async def stream(self, chat_id, spec, options=None):
         controller = FakeStreamController()
         await spec["markdown"](controller)
-        self.stream_calls.append((chat_id, controller.chunks, options))
+        if controller.chunks:
+            self.stream_calls.append((chat_id, controller.chunks, options))
 
 
 class FakeBlockingChannel(FakeChannel):
@@ -192,6 +194,120 @@ class FakeStreamingRunner:
         )
 
 
+def build_stream_event(
+    *,
+    partial=False,
+    parts=None,
+    calls=None,
+    responses=None,
+):
+    return SimpleNamespace(
+        partial=partial,
+        content=SimpleNamespace(parts=parts or []),
+        get_function_calls=lambda: calls or [],
+        get_function_responses=lambda: responses or [],
+    )
+
+
+class FakeDetailedStreamingRunner(FakeStreamingRunner):
+    async def run_async(self, user_id, session_id, new_message, run_config=None):
+        self.run_async_calls.append(
+            {
+                "user_id": user_id,
+                "session_id": session_id,
+                "new_message": new_message,
+                "run_config": run_config,
+            }
+        )
+        call = SimpleNamespace(
+            id="call-1",
+            name="bash",
+            args={"command": "printf ok", "api_key": "secret-value"},
+        )
+        response = SimpleNamespace(
+            id="call-1",
+            name="bash",
+            response={"output": "ok", "access_token": "secret-token"},
+        )
+        thinking = "The\noutput\nshows one item: skills.\nI'll report it."
+        yield build_stream_event(
+            partial=True,
+            parts=[SimpleNamespace(text="The\noutput\n", thought=True)],
+        )
+        yield build_stream_event(
+            partial=True,
+            parts=[
+                SimpleNamespace(
+                    text="shows one item: skills.\nI'll report it.", thought=True
+                )
+            ],
+        )
+        # Providers may repeat the accumulated thinking in a completed event.
+        yield build_stream_event(
+            parts=[SimpleNamespace(text=thinking, thought=True)],
+        )
+        yield build_stream_event(calls=[call])
+        yield build_stream_event(calls=[call])
+        yield build_stream_event(responses=[response])
+        yield build_stream_event(
+            partial=True,
+            parts=[SimpleNamespace(text="完成", thought=False)],
+        )
+        # Some providers insert an empty reasoning event immediately before
+        # repeating the completed answer.
+        yield build_stream_event(
+            partial=True,
+            parts=[SimpleNamespace(text="\n", thought=True)],
+        )
+        yield build_stream_event(
+            parts=[SimpleNamespace(text="完成", thought=False)],
+        )
+        yield build_stream_event(
+            partial=True,
+            parts=[SimpleNamespace(text=".", thought=True)],
+        )
+
+
+class FakeSeparateToolCardRunner(FakeStreamingRunner):
+    async def run_async(self, user_id, session_id, new_message, run_config=None):
+        calls = [
+            SimpleNamespace(id="call-1", name="bash", args={"command": "one"}),
+            SimpleNamespace(id="call-2", name="python", args={"code": "two"}),
+        ]
+        responses = [
+            SimpleNamespace(
+                id="call-2",
+                name="python",
+                response={"status": "failed", "error": "bad"},
+            ),
+            SimpleNamespace(
+                id="call-1",
+                name="bash",
+                response={"output": "ok"},
+            ),
+        ]
+        yield build_stream_event(calls=calls)
+        yield build_stream_event(calls=calls)
+        yield build_stream_event(responses=responses)
+        yield build_stream_event(responses=responses)
+        yield build_stream_event(
+            partial=True,
+            parts=[SimpleNamespace(text="done", thought=False)],
+        )
+
+
+class FakeToolOnlyRunner(FakeStreamingRunner):
+    async def run_async(self, user_id, session_id, new_message, run_config=None):
+        call = SimpleNamespace(id="call-1", name="bash", args={"command": "one"})
+        response = SimpleNamespace(
+            id="call-1",
+            name="bash",
+            response={"output": "ok"},
+        )
+        yield build_stream_event(calls=[call])
+        yield build_stream_event(responses=[response])
+
+
 def build_message(**overrides):
     message = SimpleNamespace(
         id="om_001",
@@ -219,6 +335,133 @@ def build_message(**overrides):
     return message
 
 
+def test_tool_payload_is_redacted_and_truncated():
+    rendered = _format_tool_payload(
+        {
+            "password": "do-not-show",
+            "nested": {"authorization": "Bearer secret"},
+            "output": "x" * 200,
+        },
+        max_length=100,
+    )
+
+    assert len(rendered) == 100
+    assert rendered.endswith("…")
+    assert "do-not-show" not in rendered
+    assert "Bearer secret" not in rendered
+    assert '"password": "***"' in rendered
+
+
+def test_tool_payload_fallback_preserves_redaction_and_escapes_fences():
+    rendered = _format_tool_payload(
+        {("unsupported", "json-key"): "```", "password": "do-not-show"},
+        max_length=4000,
+    )
+
+    assert "do-not-show" not in rendered
+    assert "***" in rendered
+    assert "```" not in rendered
+
+
+@pytest.mark.anyio
+async def test_shutdown_closes_channel_then_drains_accepted_message():
+    entered = asyncio.Event()
+    finish = asyncio.Event()
+    closed = asyncio.Event()
+
+    class DrainingChannel(FakeChannel):
+        async def disconnect(self):
+            closed.set()
+
+    async def handler(context):
+        entered.set()
+        await finish.wait()
+        return "finished"
+
+    channel = DrainingChannel()
+    extension = FeishuChannelExtension(
+        runner=FakeRunner(), channel=channel, message_handler=handler
+    )
+    extension._loop = asyncio.get_running_loop()
+    await extension._on_message(build_message())
+    await entered.wait()
+    shutdown = asyncio.create_task(extension.shutdown(drain_timeout=1))
+    await closed.wait()
+
+    assert extension.is_draining
+    assert not shutdown.done()
+    assert len(extension._inflight) == 1
+
+    finish.set()
+    await shutdown
+    assert channel.sent_messages[0][1] == {"text": "finished"}
+    assert not extension._inflight
+
+
+@pytest.mark.anyio
+async def test_separate_tool_card_is_settled_when_runner_fails():
+    class FailingRunner(FakeStreamingRunner):
+        async def run_async(self, **kwargs):
+            yield build_stream_event(
+                calls=[SimpleNamespace(id="pending", name="bash", args={})]
+            )
+            raise RuntimeError("runner failed")
+
+    channel = FakeStreamChannel()
+    extension = FeishuChannelExtension(
+        runner=FailingRunner(),
+        channel=channel,
+        streaming=True,
+        show_tool_calls=True,
+        separate_tool_call_cards=True,
+    )
+
+    with pytest.raises(RuntimeError, match="runner failed"):
+        await asyncio.wait_for(extension._on_message(build_message()), timeout=10)
+
+    assert len(channel.stream_calls) == 1
+    assert "pending" not in "".join(channel.stream_calls[0][1])
+
+
+@pytest.mark.anyio
+async def test_separate_card_failure_during_cleanup_is_propagated():
+    class MissingResultRunner(FakeStreamingRunner):
+        async def run_async(self, **kwargs):
+            yield build_stream_event(
+                calls=[SimpleNamespace(id="pending", name="bash", args={})]
+            )
+
+    class FailingCardChannel(FakeStreamChannel):
+        async def stream(self, chat_id, spec, options=None):
+            controller = FakeStreamController()
+            await spec["markdown"](controller)
+            if controller.chunks:
+                raise RuntimeError("card failed")
+
+    extension = FeishuChannelExtension(
+        runner=MissingResultRunner(),
+        channel=FailingCardChannel(),
+        streaming=True,
+        show_tool_calls=True,
+        separate_tool_call_cards=True,
+    )
+
+    with pytest.raises(RuntimeError, match="card failed"):
+        await extension._on_message(build_message())
+
+
+def test_separate_cards_and_topic_can_be_enabled_from_environment(monkeypatch):
+    monkeypatch.setenv("TOOL_FEISHU_CHANNEL_SEPARATE_TOOL_CALL_CARDS", "true")
+    monkeypatch.setenv("TOOL_FEISHU_CHANNEL_SEPARATE_THINKING_CARD", "true")
+    monkeypatch.setenv("TOOL_FEISHU_CHANNEL_CREATE_TOPIC", "true")
+
+    extension = FeishuChannelExtension(runner=FakeRunner(), channel=FakeChannel())
+
+    assert extension.separate_tool_call_cards is True
+    assert extension.separate_thinking_card is True
+    assert extension.create_topic is True
+
+
 @pytest.mark.anyio
 async def test_extension_uses_union_id_and_thread_id():
     runner = FakeRunner()
@@ -244,7 +487,11 @@ async def test_extension_uses_union_id_and_thread_id():
         }
     ]
     assert channel.sent_messages == [
-        ("oc_chat", {"text": "echo:你好"}, {"reply_to": "om_001"})
+        (
+            "oc_chat",
+            {"text": "echo:你好"},
+            {"reply_to": "om_001", "reply_in_thread": True},
+        )
     ]
 
 
@@ -299,6 +546,137 @@ async def test_extension_streaming_uses_markdown_producer_controller():
     ]
     assert len(runner.run_async_calls) == 1
     assert channel.stream_calls == [("oc_chat", ["hel", "lo"], {"reply_to": "om_001"})]
+
+
+@pytest.mark.anyio
+async def test_extension_streams_thinking_tool_calls_results_and_answer():
+    runner = FakeDetailedStreamingRunner()
+    channel = FakeStreamChannel()
+    extension = FeishuChannelExtension(
+        runner=runner,
+        channel=channel,
+        streaming=True,
+        show_thinking=True,
+        show_tool_calls=True,
+        show_tool_results=True,
+    )
+
+    await extension._on_message(build_message())
+
+    assert len(channel.stream_calls) == 1
+    rendered = "".join(channel.stream_calls[0][1])
+    assert rendered.count("💭 **Thinking**") == 1
+    assert rendered.count("🔧 **调用工具 `bash`**") == 1
+    assert rendered.count("✅ **工具 `bash` 返回**") == 1
+    assert rendered.count("💬 **回答**") == 1
+    assert "The output shows one item: skills. I'll report it." in rendered
+    assert "The\noutput" not in rendered
+    assert rendered.count("完成") == 1
+    assert rendered.endswith("完成")
+    assert '"api_key": "***"' in rendered
+    assert '"access_token": "***"' in rendered
+    assert "secret-value" not in rendered
+    assert "secret-token" not in rendered
+    assert rendered.index("Thinking") < rendered.index("调用工具")
+    assert rendered.index("调用工具") < rendered.index("工具 `bash` 返回")
+    assert rendered.index("工具 `bash` 返回") < rendered.index("回答")
+
+
+@pytest.mark.anyio
+async def test_extension_streams_each_tool_call_and_result_in_separate_card():
+    runner = FakeSeparateToolCardRunner()
+    channel = FakeStreamChannel()
+    extension = FeishuChannelExtension(
+        runner=runner,
+        channel=channel,
+        streaming=True,
+        show_tool_calls=True,
+        show_tool_results=True,
+        separate_tool_call_cards=True,
+    )
+
+    await extension._on_message(build_message())
+
+    assert len(channel.stream_calls) == 3
+    rendered_cards = ["".join(call[1]) for call in channel.stream_calls]
+    bash_card = next(card for card in rendered_cards if "`bash`" in card)
+    python_card = next(card for card in rendered_cards if "`python`" in card)
+    answer_card = next(card for card in rendered_cards if card == "done")
+
+    assert bash_card.count("🔧 **调用工具 `bash`**") == 1
+    assert bash_card.count("✅ **工具 `bash` 返回**") == 1
+    assert '"command": "one"' in bash_card
+    assert '"output": "ok"' in bash_card
+    assert "python" not in bash_card
+
+    assert python_card.count("🔧 **调用工具 `python`**") == 1
+    assert python_card.count("❌ **工具 `python` 返回**") == 1
+    assert '"code": "two"' in python_card
+    assert '"error": "bad"' in python_card
+    assert "bash" not in python_card
+    assert answer_card == "done"
+
+
+@pytest.mark.anyio
+async def test_extension_streams_thinking_tools_and_answer_as_topic_cards():
+    runner = FakeDetailedStreamingRunner()
+    channel = FakeStreamChannel()
+    extension = FeishuChannelExtension(
+        runner=runner,
+        channel=channel,
+        streaming=True,
+        show_thinking=True,
+        show_tool_calls=True,
+        show_tool_results=True,
+        separate_tool_call_cards=True,
+        separate_thinking_card=True,
+        create_topic=True,
+    )
+
+    await extension._on_message(build_message())
+
+    assert len(channel.stream_calls) == 3
+    rendered_cards = ["".join(call[1]) for call in channel.stream_calls]
+    thinking_card = next(card for card in rendered_cards if "Thinking" in card)
+    tool_card = next(card for card in rendered_cards if "`bash`" in card)
+    answer_card = next(card for card in rendered_cards if card == "完成")
+
+    assert "The output shows one item: skills. I'll report it." in thinking_card
+    assert "调用工具" not in thinking_card
+    assert "回答" not in thinking_card
+    assert tool_card.count("🔧 **调用工具 `bash`**") == 1
+    assert tool_card.count("✅ **工具 `bash` 返回**") == 1
+    assert "Thinking" not in tool_card
+    assert answer_card == "完成"
+    assert all(
+        call[2] == {"reply_to": "om_001", "reply_in_thread": True}
+        for call in channel.stream_calls
+    )
+
+
+@pytest.mark.anyio
+async def test_extension_does_not_create_cards_for_missing_stages():
+    channel = FakeStreamChannel()
+    extension = FeishuChannelExtension(
+        runner=FakeToolOnlyRunner(),
+        channel=channel,
+        streaming=True,
+        show_thinking=True,
+        show_tool_calls=True,
+        show_tool_results=True,
+        separate_tool_call_cards=True,
+        separate_thinking_card=True,
+        create_topic=True,
+    )
+
+    await extension._on_message(build_message())
+
+    assert len(channel.stream_calls) == 1
+    rendered = "".join(channel.stream_calls[0][1])
+    assert "🔧 **调用工具 `bash`**" in rendered
+    assert "✅ **工具 `bash` 返回**" in rendered
+    assert "Thinking" not in rendered
+    assert "回答" not in rendered
 
 
 @pytest.mark.anyio

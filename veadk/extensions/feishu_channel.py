@@ -54,6 +54,69 @@ MessageHandler = Callable[["FeishuMessageContext"], Awaitable[str | None] | str 
 SessionIdFactory = Callable[[Any], str]
 UserIdFactory = Callable[[Any], str]
 
+_SENSITIVE_FIELD_MARKERS = (
+    "api_key",
+    "apikey",
+    "access_key",
+    "authorization",
+    "cookie",
+    "credential",
+    "password",
+    "secret",
+    "token",
+)
+
+
+def _env_enabled(name: str) -> bool:
+    return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _redact_sensitive(value: Any) -> Any:
+    """Return a display-safe copy of tool input/output data."""
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(exclude_none=True)
+    if isinstance(value, dict):
+        redacted: dict[Any, Any] = {}
+        for key, item in value.items():
+            normalized_key = str(key).lower().replace("-", "_")
+            if any(marker in normalized_key for marker in _SENSITIVE_FIELD_MARKERS):
+                redacted[key] = "***"
+            else:
+                redacted[key] = _redact_sensitive(item)
+        return redacted
+    if isinstance(value, (list, tuple)):
+        return [_redact_sensitive(item) for item in value]
+    return value
+
+
+def _format_tool_payload(value: Any, max_length: int) -> str:
+    """Serialize, redact and bound a tool payload for a Feishu Markdown card."""
+    redacted = _redact_sensitive(value)
+    try:
+        rendered = json.dumps(
+            redacted,
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )
+    except (TypeError, ValueError):
+        rendered = str(redacted)
+    # Do not let a tool-provided fence terminate our Markdown code block.
+    rendered = rendered.replace("```", "` ` `")
+    if len(rendered) > max_length:
+        rendered = f"{rendered[: max(0, max_length - 1)]}…"
+    return rendered
+
+
+def _tool_response_failed(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    status = str(payload.get("status", "")).lower()
+    if status in {"error", "failed", "failure"} or payload.get("error"):
+        return True
+    exit_code = payload.get("exit_code")
+    return exit_code not in (None, 0, "0")
+
 
 def _coalesce(*values: Any) -> str:
     for value in values:
@@ -318,6 +381,13 @@ class FeishuChannelExtension:
         channel_kwargs: dict[str, Any] | None = None,
         streaming: bool = False,
         reactions: bool = False,
+        show_thinking: bool = False,
+        show_tool_calls: bool = False,
+        show_tool_results: bool = False,
+        separate_tool_call_cards: bool = False,
+        separate_thinking_card: bool = False,
+        create_topic: bool = False,
+        tool_detail_max_length: int = 4000,
         include_parent_message: bool = True,
         include_thread_history: bool = True,
         thread_history_limit: int = 20,
@@ -337,6 +407,25 @@ class FeishuChannelExtension:
             streaming
             or str(os.getenv("TOOL_FEISHU_CHANNEL_STREAMING", "")).lower() == "true"
         )
+        self.show_thinking = show_thinking or _env_enabled(
+            "TOOL_FEISHU_CHANNEL_SHOW_THINKING"
+        )
+        self.show_tool_calls = show_tool_calls or _env_enabled(
+            "TOOL_FEISHU_CHANNEL_SHOW_TOOL_CALLS"
+        )
+        self.show_tool_results = show_tool_results or _env_enabled(
+            "TOOL_FEISHU_CHANNEL_SHOW_TOOL_RESULTS"
+        )
+        self.separate_tool_call_cards = separate_tool_call_cards or _env_enabled(
+            "TOOL_FEISHU_CHANNEL_SEPARATE_TOOL_CALL_CARDS"
+        )
+        self.separate_thinking_card = separate_thinking_card or _env_enabled(
+            "TOOL_FEISHU_CHANNEL_SEPARATE_THINKING_CARD"
+        )
+        self.create_topic = create_topic or _env_enabled(
+            "TOOL_FEISHU_CHANNEL_CREATE_TOPIC"
+        )
+        self.tool_detail_max_length = max(100, int(tool_detail_max_length))
         self.include_parent_message = include_parent_message
         self.include_thread_history = include_thread_history
         self.thread_history_limit = max(1, int(thread_history_limit))
@@ -644,6 +733,8 @@ class FeishuChannelExtension:
         send_options = {}
         if self.reply_in_thread and context.message_id:
             send_options["reply_to"] = context.message_id
+            if self.create_topic or context.thread_id:
+                send_options["reply_in_thread"] = True
 
         if self.message_handler is not None:
             response_text = await self._maybe_await(self.message_handler(context))
@@ -680,22 +771,310 @@ class FeishuChannelExtension:
             )
 
             async def stream_to_feishu(stream):
-                for converted_message in converted_messages:
-                    async for event in self.runner.run_async(
-                        user_id=context.user_id,
-                        session_id=context.session_id,
-                        new_message=converted_message,
-                        run_config=run_config,
-                    ):
-                        if not getattr(event, "partial", False):
-                            continue
-                        if not (event.content and event.content.parts):
-                            continue
-                        for part in event.content.parts:
-                            if getattr(part, "thought", False):
-                                continue
-                            if part.text:
-                                await stream.append(part.text)
+                seen_tool_call_ids: set[str] = set()
+                seen_tool_response_ids: set[str] = set()
+                tool_card_streams: dict[
+                    str,
+                    tuple[asyncio.Future[Any], asyncio.Task[Any]],
+                ] = {}
+                thinking_queue: asyncio.Queue[str | None] | None = None
+                thinking_task: asyncio.Task[Any] | None = None
+                active_section = ""
+                current_thinking_text = ""
+                last_emitted_thinking_text = ""
+                current_answer_text = ""
+
+                async def flush_thinking() -> None:
+                    nonlocal current_thinking_text, last_emitted_thinking_text
+                    nonlocal thinking_queue, thinking_task
+                    if not current_thinking_text:
+                        return
+                    # A Markdown stream append may be rendered as a separate
+                    # block by Feishu. Buffer reasoning deltas and collapse
+                    # provider whitespace so token-sized chunks do not become
+                    # one-word-per-line output.
+                    rendered = " ".join(current_thinking_text.split())
+                    if rendered:
+                        if self.separate_thinking_card:
+                            if thinking_queue is None:
+                                thinking_queue = asyncio.Queue()
+                                thinking_queue.put_nowait(rendered)
+                                started = asyncio.Event()
+
+                                async def stream_thinking(thinking_stream) -> None:
+                                    first_chunk = await thinking_queue.get()
+                                    if first_chunk is None:
+                                        started.set()
+                                        return
+                                    try:
+                                        await thinking_stream.append(
+                                            f"💭 **Thinking**\n\n{first_chunk}"
+                                        )
+                                    finally:
+                                        started.set()
+                                    while True:
+                                        chunk = await thinking_queue.get()
+                                        if chunk is None:
+                                            return
+                                        await thinking_stream.append(f"\n\n{chunk}")
+
+                                thinking_task = asyncio.create_task(
+                                    self._maybe_await(
+                                        self.channel.stream(
+                                            context.chat_id,
+                                            {"markdown": stream_thinking},
+                                            send_options,
+                                        )
+                                    )
+                                )
+                                thinking_task.add_done_callback(lambda _: started.set())
+                                await started.wait()
+                                if thinking_task.done():
+                                    await thinking_task
+                            else:
+                                thinking_queue.put_nowait(rendered)
+                        else:
+                            await begin_section("thinking", "💭 **Thinking**\n\n")
+                            await stream.append(rendered)
+                        last_emitted_thinking_text = rendered
+                    current_thinking_text = ""
+
+                async def begin_section(section: str, heading: str = "") -> None:
+                    nonlocal active_section
+                    if active_section == section:
+                        return
+                    separator = "\n\n" if active_section else ""
+                    rendered_heading = f"{separator}{heading}"
+                    if rendered_heading:
+                        await stream.append(rendered_heading)
+                    active_section = section
+
+                async def append_tool_call(call: Any) -> None:
+                    call_id = str(getattr(call, "id", "") or "")
+                    if call_id and call_id in seen_tool_call_ids:
+                        return
+                    if call_id:
+                        seen_tool_call_ids.add(call_id)
+                    name = str(getattr(call, "name", "") or "unknown")
+                    args = getattr(call, "args", None)
+                    await flush_thinking()
+                    if self.separate_tool_call_cards:
+                        response_future = asyncio.get_running_loop().create_future()
+                        started = asyncio.Event()
+
+                        async def stream_tool_call(tool_stream) -> None:
+                            try:
+                                await tool_stream.append(
+                                    f"🔧 **调用工具 `{name}`**\n\n"
+                                    "```json\n"
+                                    f"{_format_tool_payload(args, self.tool_detail_max_length)}\n"
+                                    "```"
+                                )
+                            finally:
+                                started.set()
+
+                            response = await response_future
+                            if response is None:
+                                return
+                            response_name = str(getattr(response, "name", "") or name)
+                            payload = getattr(response, "response", None)
+                            icon = "❌" if _tool_response_failed(payload) else "✅"
+                            await tool_stream.append(
+                                f"\n\n{icon} **工具 `{response_name}` 返回**\n\n"
+                                "```json\n"
+                                f"{_format_tool_payload(payload, self.tool_detail_max_length)}\n"
+                                "```"
+                            )
+
+                        task = asyncio.create_task(
+                            self._maybe_await(
+                                self.channel.stream(
+                                    context.chat_id,
+                                    {"markdown": stream_tool_call},
+                                    send_options,
+                                )
+                            )
+                        )
+                        task.add_done_callback(lambda _: started.set())
+                        tool_card_streams[call_id or str(id(call))] = (
+                            response_future,
+                            task,
+                        )
+                        await started.wait()
+                        if task.done():
+                            await task
+                        return
+                    await begin_section(
+                        f"tool-call:{call_id or id(call)}",
+                        f"🔧 **调用工具 `{name}`**\n\n",
+                    )
+                    await stream.append(
+                        "```json\n"
+                        f"{_format_tool_payload(args, self.tool_detail_max_length)}\n"
+                        "```"
+                    )
+
+                async def append_tool_response(response: Any) -> None:
+                    response_id = str(getattr(response, "id", "") or "")
+                    if response_id and response_id in seen_tool_response_ids:
+                        return
+                    if response_id:
+                        seen_tool_response_ids.add(response_id)
+                    name = str(getattr(response, "name", "") or "unknown")
+                    payload = getattr(response, "response", None)
+                    icon = "❌" if _tool_response_failed(payload) else "✅"
+                    await flush_thinking()
+                    if self.separate_tool_call_cards:
+                        state = tool_card_streams.get(response_id)
+                        if state is not None:
+                            response_future, task = state
+                            if not response_future.done():
+                                response_future.set_result(response)
+                            await task
+                            return
+
+                        async def stream_tool_response(tool_stream) -> None:
+                            await tool_stream.append(
+                                f"{icon} **工具 `{name}` 返回**\n\n"
+                                "```json\n"
+                                f"{_format_tool_payload(payload, self.tool_detail_max_length)}\n"
+                                "```"
+                            )
+
+                        await self._maybe_await(
+                            self.channel.stream(
+                                context.chat_id,
+                                {"markdown": stream_tool_response},
+                                send_options,
+                            )
+                        )
+                        return
+                    await begin_section(
+                        f"tool-result:{response_id or id(response)}",
+                        f"{icon} **工具 `{name}` 返回**\n\n",
+                    )
+                    await stream.append(
+                        "```json\n"
+                        f"{_format_tool_payload(payload, self.tool_detail_max_length)}\n"
+                        "```"
+                    )
+
+                stream_failed = False
+                try:
+                    for converted_message in converted_messages:
+                        async for event in self.runner.run_async(
+                            user_id=context.user_id,
+                            session_id=context.session_id,
+                            new_message=converted_message,
+                            run_config=run_config,
+                        ):
+                            get_calls = getattr(event, "get_function_calls", None)
+                            if self.show_tool_calls and callable(get_calls):
+                                for call in get_calls() or []:
+                                    await append_tool_call(call)
+
+                            get_responses = getattr(
+                                event, "get_function_responses", None
+                            )
+                            if self.show_tool_results and callable(get_responses):
+                                for response in get_responses() or []:
+                                    await append_tool_response(response)
+
+                            content = getattr(event, "content", None)
+                            parts = getattr(content, "parts", None) or []
+                            for part in parts:
+                                part_text = getattr(part, "text", None)
+                                if not part_text:
+                                    continue
+                                if getattr(part, "thought", False):
+                                    if not self.show_thinking:
+                                        continue
+                                    # Some providers emit a trailing reasoning
+                                    # fragment (often punctuation) after the final
+                                    # answer. Do not open a new Thinking section
+                                    # unless a tool event has moved the stream into
+                                    # another reasoning round.
+                                    if (
+                                        active_section == "answer"
+                                        and current_answer_text
+                                    ):
+                                        continue
+                                    is_partial = getattr(event, "partial", False)
+                                    if is_partial:
+                                        current_thinking_text += part_text
+                                        continue
+                                    # SSE providers commonly emit the accumulated
+                                    # thought once more in a non-partial event.
+                                    normalized_part = " ".join(part_text.split())
+                                    normalized_current = " ".join(
+                                        current_thinking_text.split()
+                                    )
+                                    if not normalized_part or normalized_part in {
+                                        normalized_current,
+                                        last_emitted_thinking_text,
+                                    }:
+                                        continue
+                                    current_thinking_text = part_text
+                                    continue
+
+                                # Preserve the existing delta-first streaming
+                                # behavior while supporting providers that only
+                                # produce a completed answer event.
+                                await flush_thinking()
+                                if (
+                                    not getattr(event, "partial", False)
+                                    and part_text == current_answer_text
+                                ):
+                                    continue
+                                answer_heading = (
+                                    "💬 **回答**\n\n"
+                                    if (
+                                        self.show_thinking
+                                        and not self.separate_thinking_card
+                                        or (
+                                            not self.separate_tool_call_cards
+                                            and (
+                                                self.show_tool_calls
+                                                or self.show_tool_results
+                                            )
+                                        )
+                                    )
+                                    else ""
+                                )
+                                if (
+                                    getattr(event, "partial", False)
+                                    and active_section != "answer"
+                                ):
+                                    current_answer_text = ""
+                                await begin_section("answer", answer_heading)
+                                await stream.append(part_text)
+                                if getattr(event, "partial", False):
+                                    current_answer_text += part_text
+                                else:
+                                    current_answer_text = part_text
+
+                    await flush_thinking()
+                except BaseException:
+                    stream_failed = True
+                    raise
+                finally:
+                    pending_tasks: list[asyncio.Task[Any]] = []
+                    if thinking_queue is not None:
+                        thinking_queue.put_nowait(None)
+                    if thinking_task is not None:
+                        pending_tasks.append(thinking_task)
+                    for response_future, task in tool_card_streams.values():
+                        if not response_future.done():
+                            response_future.set_result(None)
+                        pending_tasks.append(task)
+                    if pending_tasks:
+                        results = await asyncio.gather(
+                            *pending_tasks, return_exceptions=True
+                        )
+                        if not stream_failed:
+                            for result in results:
+                                if isinstance(result, BaseException):
+                                    raise result
 
             await self._maybe_await(
                 self.channel.stream(

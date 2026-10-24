@@ -77,6 +77,13 @@ tool:
     app_id:
     app_secret:
     transport: ws  # `ws` | `webhook`
+    streaming: false
+    show_thinking: false
+    show_tool_calls: false
+    show_tool_results: false
+    separate_tool_call_cards: false
+    separate_thinking_card: false
+    create_topic: false
   # [optional] for Volcengine Lake AI Service https://www.volcengine.com/product/las
   mobile_use:
     tool_id: #https://console.volcengine.com/ACEP
