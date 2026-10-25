@@ -63,8 +63,29 @@ test("opens custom creation directly from scratch creation", () => {
   assert.doesNotMatch(appSource, /visibleCreateView === "menu"/);
 });
 
+test("imports exported YAML into custom creation", () => {
+  assert.match(appSource, /import \{ yamlToDraft \} from "\.\/create\/configYaml"/);
+  assert.match(
+    appSource,
+    /const imported = yamlToDraft\(text\)[\s\S]*?setCustomCreateMode\("yaml_import"\)[\s\S]*?setCreateView\("custom"\)/,
+  );
+  assert.match(
+    appSource,
+    /key: "yaml-import"[\s\S]*?title: "导入 YAML"[\s\S]*?onClick: openYamlImportPicker/,
+  );
+  assert.match(
+    appSource,
+    /accept="\.yaml,\.yml,text\/yaml,application\/x-yaml"/,
+  );
+});
+
 test("uses thin hand-drawn icons for all add-agent options", () => {
-  for (const iconName of ["ScratchIcon", "PackageIcon", "MigrationIcon"]) {
+  for (const iconName of [
+    "ScratchIcon",
+    "PackageIcon",
+    "YamlImportIcon",
+    "MigrationIcon",
+  ]) {
     assert.match(
       appSource,
       new RegExp(`function ${iconName}\\([\\s\\S]*?strokeWidth="1\\.45"`),
