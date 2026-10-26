@@ -565,7 +565,11 @@ class Agent(LlmAgent):
                 else:
                     self.after_agent_callback = save_session_to_long_term_memory
 
-        if self.skills or self.enable_dynamic_load_skills:
+        if (
+            self.skills
+            or self.enable_dynamic_load_skills
+            or self.skills_mode == "aio_sandbox"
+        ):
             self.load_skills()
             if self.enable_skills_checklist:
                 logger.info("Skills checklist enabled")
@@ -756,7 +760,11 @@ class Agent(LlmAgent):
 
         initialize_skills(self)
 
-        if self.enable_dynamic_load_skills:
+        if self.enable_dynamic_load_skills or self.skills_mode == "aio_sandbox":
+            if self.skills_mode == "aio_sandbox":
+                from veadk.tools.skills_tools.aio_sandbox import prepare_aio_sandbox
+
+                check_skills = prepare_aio_sandbox
             if self.before_agent_callback:
                 if isinstance(self.before_agent_callback, list):
                     self.before_agent_callback.append(check_skills)

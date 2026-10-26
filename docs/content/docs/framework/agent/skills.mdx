@@ -2,7 +2,7 @@
 title: "技能"
 ---
 
-技能（Skills）是一种可复用的「提示词包」，用于为 Agent 注入特定的领域知识、操作流程与脚本。本地技能加载/执行场景推荐使用 Google ADK 官方的 `load_skill_from_dir` / `SkillToolset` 方式接入；VeADK 旧的 `Agent(skills=..., skills_mode="local")` 本地入口仍保持兼容，但已标记为 deprecated。`skills_sandbox` 与 `aio_sandbox` 模式仍按原方式使用。
+技能（Skills）是一种可复用的「提示词包」，用于为 Agent 注入特定的领域知识、操作流程与脚本。本地技能加载/执行场景推荐使用 Google ADK 官方的 `load_skill_from_dir` / `SkillToolset` 方式接入；VeADK 旧的 `Agent(skills=..., skills_mode="local")` 本地入口仍保持兼容，但已标记为 deprecated。`skills_sandbox` 通过云端技能空间执行；`aio_sandbox` 从绑定的沙箱加载技能并执行文件和 Shell 工具。
 
 ## 推荐：ADK SkillToolset
 
@@ -70,7 +70,7 @@ VeADK `skills` 参数仍支持三种技能运行模式，其中仅 `local` 的�
 | :- | :- |
 | `local` | Deprecated。技能由 VeADK 旧 `skills_tool` 和配套文件/Shell 工具加载，建议迁移到 ADK `SkillToolset`。 |
 | `skills_sandbox` | 技能托管在云端技能空间（Skill Space），通过 `execute_skills` 工具在沙箱中执行。 |
-| `aio_sandbox` | All-in-one 沙箱模式，适用于 AgentKit 托管的工具运行时。 |
+| `aio_sandbox` | Runtime 执行推理，绑定的 All-in-one 沙箱提供 Skill 文件和基础工具；`skills` 为沙箱内绝对目录。 |
 
 未显式设置 `skills_mode` 时，VeADK 会根据运行环境自动推断：本地运行默认为 `local`；在 AgentKit 工具运行时中，会根据工具类型自动选择 `skills_sandbox` 或 `aio_sandbox`。
 
@@ -103,6 +103,24 @@ agent = Agent(
     tools=[execute_skills],
 )
 ```
+
+### AIO 沙箱模式
+
+```python
+from veadk import Agent
+
+agent = Agent(
+    model_name="doubao-seed-evolving",
+    skills_mode="aio_sandbox",
+    skills=["/workspace/skills"],
+)
+```
+
+配置 `VOLCENGINE_ACCESS_KEY`、`VOLCENGINE_SECRET_KEY`、`AGENTKIT_TOOL_ID` 和模型凭据后，通过 ADK/VeADK Runner 创建 Session 并运行 Agent。构造 Agent 不读取宿主机 Skill 文件；首次执行前按 app/user/session 身份创建或复用 AgentKit 沙箱，同一对话使用同一沙箱。沙箱过期或失败会报错，不自动更换实例或回退到本地。实例生命周期由应用管理，闲置实例按 TTL 过期。
+
+保留 VeADK `SkillsToolset`，自动提供 `skills_tool`、`bash_tool`、`read_file_tool`、`write_file_tool`、`edit_file_tool`。元数据通过沙箱 `GET /v1/skills` 获取，说明通过远端文件接口按需读取；命令和文件操作均在沙箱执行，相对路径基于 `/workspace`。宿主机环境变量不会传入命令环境；调用方额外传入的自定义工具仍由调用方负责。
+
+`skills` 可配置多个沙箱绝对目录，以重复 `path` 查询参数发送；省略或传空列表使用沙箱默认 `/workspace/skills`。这里不接受云端 SkillSpace ID；已有 AIO 调用方需要改为沙箱路径。沙箱需支持 `/v1/skills`、文件 API 和 Bash API。可选 `SANDBOX_API_KEY` 用于沙箱 HTTP 认证，ADK 配置的 `inbound_auth` 凭据沿用。Bash 超时/取消会尝试终止远端命令并关闭临时 Shell；清理失败会明确报告，写操作不自动重试。
 
 ### 技能检查清单（Checklist）
 
@@ -137,7 +155,7 @@ agent = Agent(
 
 | 参数 | 类型 | 说明 |
 | :- | :- | :- |
-| `skills` | `list[str]` | 技能列表，元素为本地技能根目录路径或云端技能空间标识；当 `skills_mode="local"` 时，该旧本地加载路径已 deprecated。 |
-| `skills_mode` | `"local" \| "skills_sandbox" \| "aio_sandbox"` | 技能运行模式，缺省时自动推断；其中 `local` 旧路径已 deprecated，`skills_sandbox` / `aio_sandbox` 仍保持原用法。 |
+| `skills` | `list[str]` | 技能列表；`aio_sandbox` 下为沙箱绝对目录，其他模式下为本地技能根目录路径或云端技能空间标识；当 `skills_mode="local"` 时，该旧本地加载路径已 deprecated。 |
+| `skills_mode` | `"local" \| "skills_sandbox" \| "aio_sandbox"` | 技能运行模式，缺省时自动推断；其中 `local` 旧路径已 deprecated，`skills_sandbox` 保持原用法，`aio_sandbox` 使用远端目录与基础工具。 |
 | `enable_skills_checklist` | `bool` | 是否启用旧技能检查清单，默认 `False`。 |
 | `enable_dynamic_load_skills` | `bool` | 是否启用旧技能的动态加载，默认 `False`。 |
