@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from __future__ import annotations
+
 import os
 import shutil
 import tempfile
@@ -26,6 +27,7 @@ from opentelemetry.sdk.trace import _Span
 from opentelemetry.trace.status import Status, StatusCode
 
 from veadk.skills.skill import Skill
+from veadk.tools.skills_tools.bash_tool import bash_tool
 from veadk.tools.skills_tools.session_path import get_session_path
 from veadk.tracing.telemetry.telemetry import set_common_attributes_on_tool_span
 from veadk.utils.logger import get_logger
@@ -63,14 +65,14 @@ class SkillsTool(BaseTool):
             "How to use skills:\n"
             "- Invoke skills using this tool with the skill name only (no arguments)\n"
             "- When you invoke a skill, the skill's full SKILL.md will load with detailed instructions\n"
-            "- Follow the skill's instructions and use the bash tool to execute commands\n"
+            f"- Follow the skill's instructions and use the `{bash_tool.__name__}` tool to execute commands\n"
             "- Examples:\n"
             '  - command: "data-analysis" - invoke the data-analysis skill\n'
             '  - command: "pdf-processing" - invoke the pdf-processing skill\n\n'
             "Important:\n"
             "- If the invoked skills are not in the available skills, this tool will automatically download these skills from the remote object storage bucket\n"
             "- Do not invoke a skill that is already loaded in the conversation\n"
-            "- After loading a skill, use the bash tool for execution\n"
+            f"- After loading a skill, use the `{bash_tool.__name__}` tool for execution\n"
             "- If not specified, scripts are located in the skill-name/scripts subdirectory\n"
             "</skills_instructions>\n\n"
         )
@@ -479,7 +481,9 @@ class SkillsTool(BaseTool):
     ) -> bool:
         """Download a skill using the vestack environment GenTempTosObjectDownloadUrl API."""
         import json
+
         import requests
+
         from veadk.utils.volcengine_sign import ve_request
 
         # Extract skill_id and skill_version from TosPath
@@ -569,7 +573,7 @@ class SkillsTool(BaseTool):
         )
         footer = (
             "\n\n---\n"
-            "The skill has been loaded. Follow the instructions above and use the bash tool to execute commands."
+            f"The skill has been loaded. Follow the instructions above and use the `{bash_tool.__name__}` tool to execute commands."
         )
         return header + content + footer
 
