@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import time
 
 from veadk.version import VERSION
 
@@ -38,7 +37,6 @@ DEFAULT_MODEL_EXTRA_CONFIG = {
         # "thinking": {
         #     "type": "disabled"
         # },
-        "expire_at": int(time.time()) + 3600,  # expire after 1 hour
     },
 }
 

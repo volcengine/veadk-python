@@ -7,6 +7,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # Ensure veadk and example root are in PYTHONPATH
 export PYTHONPATH="$REPO_ROOT:$SCRIPT_DIR:${PYTHONPATH:-}"
 
+# Ensure internal gateway domains bypass proxy by default
+DEFAULT_NO_PROXY=".volceapi.com,localhost,127.0.0.1,.volces.com"
+export no_proxy="${no_proxy:-$DEFAULT_NO_PROXY}"
+export NO_PROXY="${NO_PROXY:-$no_proxy}"
+
 # Load .env if present
 if [ -f "$SCRIPT_DIR/.env" ]; then
     # Treat .env as defaults. Explicit caller-provided values are useful for
@@ -14,7 +19,20 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
     declare -A EXPLICIT_ENV=()
     for key in \
         ANTHROPIC_BASE_URL ANTHROPIC_ENVIRONMENT_ID ANTHROPIC_ENVIRONMENT_KEY \
-        SANDBOX_AGENT_ID X_TOP_ACCOUNT_ID SANDBOX_TIMEOUT_SECONDS PORT; do
+        ANTHROPIC_SESSION_ID \
+        SANDBOX_AGENT_ID X_TOP_ACCOUNT_ID SANDBOX_TIMEOUT_SECONDS PORT \
+        VEADK_MANAGED_SESSION_DB_URL DATABASE_POSTGRESQL_HOST \
+        DATABASE_POSTGRESQL_PORT DATABASE_POSTGRESQL_USER \
+        DATABASE_POSTGRESQL_PASSWORD DATABASE_POSTGRESQL_DATABASE \
+        DATABASE_POSTGRESQL_SCHEMA MANAGED_AGENT_WORKDIR \
+        TOOL_FEISHU_CHANNEL_APP_ID TOOL_FEISHU_CHANNEL_APP_SECRET \
+        TOOL_FEISHU_CHANNEL_TRANSPORT TOOL_FEISHU_CHANNEL_STREAMING \
+        TOOL_FEISHU_CHANNEL_REACTIONS TOOL_FEISHU_CHANNEL_SHOW_THINKING \
+        TOOL_FEISHU_CHANNEL_SHOW_TOOL_CALLS \
+        TOOL_FEISHU_CHANNEL_SHOW_TOOL_RESULTS \
+        TOOL_FEISHU_CHANNEL_SEPARATE_TOOL_CALL_CARDS \
+        TOOL_FEISHU_CHANNEL_SEPARATE_THINKING_CARD \
+        TOOL_FEISHU_CHANNEL_CREATE_TOPIC; do
         if [[ -v $key ]]; then
             EXPLICIT_ENV[$key]="${!key}"
         fi
@@ -34,6 +52,11 @@ else
 fi
 
 PORT="${PORT:-8067}"
+
+if [ "${1:-}" = "--feishu" ]; then
+    shift
+    set -- --feishu "$@"
+fi
 
 # Check if web mode is requested
 if [ "${1:-}" = "--web" ]; then
