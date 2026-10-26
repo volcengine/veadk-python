@@ -26,6 +26,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+from ble_cache import patch_blesh
 from editor_assets import FONTS, apply_fonts, offline_vsix, preserve_editor_settings
 from editor_routing import patch_editor
 
@@ -145,6 +146,7 @@ def main() -> None:
             archive.extractall(temporary, filter="data")
         source = next(Path(temporary).iterdir())
         shutil.copytree(source, STUDIO / "ble/share/blesh", dirs_exist_ok=True)
+    patch_blesh(STUDIO / "ble/share/blesh/ble.sh")
     run(
         "/opt/agentkit-code-env/venv/bin/python",
         str(STUDIO / "runtime/configure-runtime.py"),
