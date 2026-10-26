@@ -6627,3 +6627,48 @@ export function listMpaCronTasks(runtime: MpaRuntime, offset: number, query: str
 
 export function requestMpaTask(runtime: MpaRuntime, method: string, suffix: string, payload?: unknown, signal?: AbortSignal) { return manageMpaTask(apiFetch, runtime, method, suffix, payload, signal); }
 export function listMpaRuns(runtime: MpaRuntime, taskId: string, offset: number, signal?: AbortSignal) { return fetchMpaRuns(apiFetch, runtime, taskId, offset, signal); }
+
+// Registration management deliberately has no task-dispatch endpoint.
+export function requestCollaborators(runtimeId: string, region: string, suffix = "", init: RequestInit = {}) {
+  return apiFetch(`/api/v1/studio/collaborators${suffix}`, {
+    ...init, headers: {"Content-Type": "application/json", ...init.headers},
+  }, {runtimeId, region});
+}
+
+export function requestAgentsMd(runtimeId: string, region: string, init: RequestInit = {}) {
+  return apiFetch("/api/v1/studio/agents-md", {
+    ...init, headers: { "Content-Type": "application/json", ...init.headers },
+  }, { runtimeId, region });
+}
+
+/** Register in AgentKit Center using Studio's cloud identity, not the Runtime proxy. */
+export function createA2aCenterAgent(region: string, payload: import('./a2aSpace').CenterRegistration, signal?: AbortSignal) {
+  return studioFetch(`/web/a2a-agents?${new URLSearchParams({region})}`, {
+    method: 'POST', signal, headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload),
+  });
+}
+
+/** Create a space through Studio's authorized cloud control plane. */
+export function createA2aSpace(region: string, payload: import('./a2aSpace').SpaceCreation, signal?: AbortSignal) {
+  return studioFetch(`/web/a2a-spaces?${new URLSearchParams({region})}`, {
+    method: 'POST', signal, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
+  });
+}
+
+export function requestA2aCenterAgent(targetRuntimeId: string, region: string, spaceId: string, agentId: string, init: RequestInit = {}) {
+  return studioFetch(`/web/a2a-agents/${encodeURIComponent(agentId)}?${new URLSearchParams({targetRuntimeId, region, spaceId})}`, init);
+}
+export function deleteA2aCenterSpace(targetRuntimeId: string, region: string, spaceId: string, signal?: AbortSignal) {
+  return studioFetch(`/web/a2a-spaces/${encodeURIComponent(spaceId)}?${new URLSearchParams({targetRuntimeId, region})}`, {method: "DELETE", signal});
+}
+
+export function requestA2aRuntimeEndpoints(targetRuntimeId: string, region: string, sourceRuntimeId: string, signal?: AbortSignal) {
+  return studioFetch(`/web/a2a-runtime-endpoints/${encodeURIComponent(sourceRuntimeId)}?${new URLSearchParams({targetRuntimeId, region})}`, {signal});
+}
+
+export function requestMpaImage(runtimeId: string, region: string, component: "runtime" | "worker", suffix = "", init: RequestInit = {}) {
+  const params = new URLSearchParams({ region });
+  return apiFetch(`/web/mpa-images/${encodeURIComponent(runtimeId)}/${component}${suffix}${suffix.includes("?") ? "&" : "?"}${params}`, {
+    ...init, headers: { "Content-Type": "application/json", ...init.headers },
+  }, {}, suffix.startsWith("/latest-preview") || init.method === "POST" ? 180_000 : 30_000);
+}

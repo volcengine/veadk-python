@@ -70,6 +70,7 @@ async def test_transient_reconciliation_retries_and_keeps_safe_diagnostics(
             category=category,
             attempt=i,
             outcome="retrying",
+            exceptionType="RuntimeError",
             requestId=REQUEST_ID,
         )
         for i in [1, 2]

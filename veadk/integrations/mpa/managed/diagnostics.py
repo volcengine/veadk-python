@@ -21,7 +21,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TypeVar
@@ -55,6 +55,29 @@ CATEGORIES = {
     "protocol_error",
 }
 OPERATIONS = {
+    "load_credentials",
+    "get_caller_identity",
+    "runtime_client",
+    "create_skill_space",
+    "get_skill_space",
+    "list_skill_spaces",
+    "get_runtime",
+    "list_runtimes",
+    "prepare_database",
+    "wait_runtime",
+    "describe_zones",
+    "describe_vpc_attributes",
+    "describe_subnet_attributes",
+    "describe_vpcs",
+    "describe_subnets",
+    "create_vpc",
+    "create_subnet",
+    "ListGateways",
+    "GetGatewayAvailableZones",
+    "CreateGateway",
+    "GetGateway",
+    "CreateIMChannelGateway",
+    "GetIMChannelGatewayStatus",
     "create_runtime",
     "update_runtime",
     "iam_verify",
@@ -142,6 +165,7 @@ _sink: ContextVar[Callable[[Diagnostic], None] | None] = ContextVar(
     "mpa_diagnostic_sink", default=None
 )
 T = TypeVar("T")
+E = TypeVar("E", bound=BaseException)
 
 
 def classify_error(error: BaseException) -> str:
@@ -263,12 +287,133 @@ def failure_identifiers(error: Exception) -> tuple[str, str]:
     return code, request_id
 
 
+# Only fixed type labels cross the task/log/UI boundary, never arbitrary class names.
+EXCEPTION_TYPES = {
+    "Exception",
+    "ApiError",
+    "AuthError",
+    "NetworkError",
+    "HTTPError",
+    "HTTPStatusError",
+    "RequestException",
+    "TimeoutError",
+    "Timeout",
+    "ConnectTimeout",
+    "ReadTimeout",
+    "ConnectionError",
+    "ConnectError",
+    "ReadError",
+    "SSLError",
+    "JSONDecodeError",
+    "ValidationError",
+    "ValueError",
+    "TypeError",
+    "KeyError",
+    "RuntimeError",
+    "OSError",
+}
+RESPONSE_TYPES = {"application/json", "text/html", "text/plain", "other"}
+
+
+def safe_exception_details(value: object) -> Diagnostic:
+    if not isinstance(value, dict):
+        return {}
+    result: Diagnostic = {}
+    types = value.get("exceptionType")
+    if isinstance(types, str) and len(types) <= 256:
+        parts = types.split(" -> ")
+        if 1 <= len(parts) <= 8 and all(part in EXCEPTION_TYPES for part in parts):
+            result["exceptionType"] = types
+    status = value.get("httpStatus")
+    if type(status) is int and 100 <= status <= 599:
+        result["httpStatus"] = status
+    response_type = value.get("responseType")
+    if isinstance(response_type, str) and response_type in RESPONSE_TYPES:
+        result["responseType"] = response_type
+    for key, check in (("errorCode", safe_error_code), ("requestId", safe_request_id)):
+        valid = check(value.get(key))
+        if valid:
+            result[key] = valid
+    return result
+
+
+def exception_details(error: BaseException) -> Diagnostic:
+    """Inspect bounded causes and selected metadata without rendering exception text."""
+    saved = safe_exception_details(getattr(error, "_mpa_exception_details", None))
+    if saved:
+        return saved
+    result: Diagnostic = {}
+    names: list[str] = []
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen and len(seen) < 8:
+        seen.add(id(current))
+        names.append(
+            next(
+                (
+                    cls.__name__
+                    for cls in type(current).__mro__
+                    if cls.__name__ in EXCEPTION_TYPES
+                ),
+                "Exception",
+            )
+        )
+        response = getattr(current, "response", None)
+        status = getattr(response, "status_code", getattr(current, "status", None))
+        if type(status) is int and 100 <= status <= 599:
+            result.setdefault("httpStatus", status)
+        headers = getattr(response, "headers", None)
+        if isinstance(headers, Mapping):
+            content_type = headers.get("Content-Type", headers.get("content-type", ""))
+            if isinstance(content_type, str) and content_type:
+                media = content_type.split(";", 1)[0].strip().lower()
+                result.setdefault(
+                    "responseType", media if media in RESPONSE_TYPES else "other"
+                )
+            for key in ("X-Request-Id", "X-Tt-Logid", "x-request-id", "x-tt-logid"):
+                request_id = safe_request_id(headers.get(key))
+                if request_id:
+                    result.setdefault("requestId", request_id)
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+    result["exceptionType"] = " -> ".join(names)
+    return safe_exception_details(result)
+
+
+def preserve_exception_details(target: E, source: Exception) -> E:
+    """Retain safe evidence before an adapter intentionally suppresses its cause."""
+    details = exception_details(source)
+    code, request_id = failure_identifiers(source)
+    if code:
+        details["errorCode"] = code
+    if request_id:
+        details["requestId"] = request_id
+    target.__dict__["_mpa_exception_details"] = details
+    original = validate_diagnostic(getattr(source, "_mpa_creation_diagnostic", None))
+    if original is not None:
+        with_diagnostic(target, original)
+    return target
+
+
+@contextmanager
+def failure_boundary(operation: str) -> Iterator[None]:
+    """Label setup failures while preserving exceptions, cancellation and call counts."""
+    try:
+        yield
+    except Exception as error:
+        report_failure(operation, error)
+        raise
+
+
 def validate_diagnostic(value: object) -> Diagnostic | None:
     required = {"operation", "category", "attempt", "outcome"}
     if (
         not isinstance(value, dict)
         or not required <= set(value)
-        or set(value) - required - {"requestId", "errorCode"}
+        or set(value)
+        - required
+        - {"requestId", "errorCode", "exceptionType", "httpStatus", "responseType"}
     ):
         return None
     if (
@@ -283,6 +428,7 @@ def validate_diagnostic(value: object) -> Diagnostic | None:
     ):
         return None
     result = {key: value[key] for key in required}
+    result.update(safe_exception_details(value))
     request_id = safe_request_id(value.get("requestId"))
     if request_id:
         result["requestId"] = request_id
@@ -309,16 +455,18 @@ def report(
     outcome: str = "failed",
     request_id: str = "",
     error_code: str = "",
-) -> None:
+    details: Diagnostic | None = None,
+) -> Diagnostic:
     diagnostic = validate_diagnostic(
-        dict(
-            operation=operation,
-            category=category,
-            attempt=attempt,
-            outcome=outcome,
+        {
+            "operation": operation,
+            "category": category,
+            "attempt": attempt,
+            "outcome": outcome,
+            **safe_exception_details(details),
             **({"requestId": request_id} if request_id else {}),
             **({"errorCode": error_code} if error_code else {}),
-        )
+        }
     )
     if diagnostic is None:
         raise ValueError("Invalid internal diagnostic")
@@ -327,6 +475,75 @@ def report(
         sink(diagnostic)
     else:
         logger.warning("MPA creation diagnostic: %s", diagnostic)
+    return diagnostic
+
+
+def with_diagnostic(error: E, diagnostic: Diagnostic) -> E:
+    """Annotate an unchanged exception with validated, non-secret failure metadata."""
+    error.__dict__["_mpa_creation_diagnostic"] = validate_diagnostic(diagnostic)
+    return error
+
+
+def report_failure(operation: str, error: Exception) -> Diagnostic:
+    """Report the originating failure, without changing exception or retry semantics."""
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen and len(seen) < 8:
+        seen.add(id(current))
+        original = validate_diagnostic(
+            getattr(current, "_mpa_creation_diagnostic", None)
+        )
+        if original is not None:
+            detail = report(
+                str(original["operation"]),
+                str(original["category"]),
+                attempt=int(original["attempt"]),
+                outcome=str(original["outcome"]),
+                error_code=str(original.get("errorCode", "")),
+                request_id=str(original.get("requestId", "")),
+                details=original,
+            )
+            with_diagnostic(error, detail)
+            return detail
+        current = current.__cause__
+    code, request_id = failure_identifiers(error)
+    code = code or safe_error_code(getattr(error, "code", None))
+    specific_operation = getattr(error, "operation", "")
+    if isinstance(specific_operation, str) and specific_operation in OPERATIONS:
+        operation = specific_operation
+    category = getattr(error, "category", "")
+    if not isinstance(category, str) or category not in CATEGORIES:
+        category = CODE_CATEGORIES.get(code, classify_error(error))
+    # SQL driver messages can contain SQL parameters and credentials. Retain SQLSTATE only.
+    sqlstate = getattr(getattr(error, "orig", error), "sqlstate", None)
+    if isinstance(sqlstate, str) and re.fullmatch(r"[0-9A-Z]{5}", sqlstate):
+        operation, code = "prepare_database", "PostgreSQL." + sqlstate
+        category = (
+            "permission"
+            if sqlstate.startswith("28") or sqlstate == "42501"
+            else "deployment_error"
+        )
+    if isinstance(error, DeploymentError):
+        message = str(error)
+        if (
+            message
+            == "Runtime deployment failed; inspect its logs and retry using the registered ID"
+        ):
+            operation, category = "wait_runtime", "resource_failed"
+        elif (
+            message
+            == "Runtime deployment is still pending; rerun the same command to resume"
+        ):
+            operation, category = "wait_runtime", "timeout"
+    detail = report(
+        operation if operation in OPERATIONS else "provision",
+        category,
+        error_code=code,
+        request_id=request_id,
+        details=exception_details(error),
+    )
+    with_diagnostic(error, detail)
+    return detail
 
 
 async def retry_worker(
@@ -347,7 +564,7 @@ async def retry_worker(
                 "unavailable",
             } or (retry_not_found and category == "not_found")
             retrying = recoverable and attempt < 4
-            report(
+            diagnostic = report(
                 operation,
                 category,
                 attempt=attempt,
@@ -356,6 +573,7 @@ async def retry_worker(
                 request_id=request_id,
             )
             if not retrying:
+                with_diagnostic(error, diagnostic)
                 raise
             await asyncio.sleep(2 ** (attempt - 1))
     raise AssertionError("Worker retry loop exhausted without a result")

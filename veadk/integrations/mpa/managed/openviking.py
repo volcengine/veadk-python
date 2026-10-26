@@ -30,6 +30,7 @@ from .diagnostics import (
     report,
     safe_error_code,
     safe_request_id,
+    with_diagnostic,
 )
 
 ERROR_KEYS = frozenset(
@@ -213,7 +214,7 @@ class OpenVikingCloud:
                 and attempt < 3
                 and category in {"connection", "timeout", "throttled", "unavailable"}
             )
-            report(
+            diagnostic = report(
                 operation,
                 category,
                 attempt=attempt,
@@ -233,7 +234,9 @@ class OpenVikingCloud:
                 "protocol_error": "openvikingInvalidResponse",
                 "throttled": "openvikingQuotaExceeded",
             }.get(category, "openvikingUnavailable")
-            raise OpenVikingError(key, category=category, rejected=rejected) from None
+            raise with_diagnostic(
+                OpenVikingError(key, category=category, rejected=rejected), diagnostic
+            ) from None
         raise AssertionError("OpenViking read retry exhausted")
 
     async def create(self, request, *, model_api_key):

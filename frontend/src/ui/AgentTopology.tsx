@@ -48,6 +48,7 @@ function ModuleTitle({ title, count }: ModuleTitleProps) {
 }
 
 export interface AgentInfoPanelProps {
+  onEditAgentsMd?: () => void;
   boundSkills?: BoundSkillState;
   onRefresh?: () => void;
   onOpenSkill?: (index: number) => void;
@@ -74,6 +75,7 @@ export interface AgentInfoPanelProps {
  * right whitespace. The parent owns metadata loading so this display component
  * never issues a duplicate `/web/agent-info` request. */
 export function AgentInfoPanel({
+  onEditAgentsMd,
   info,
   loading,
   boundSkills,
@@ -152,6 +154,11 @@ export function AgentInfoPanel({
       <div className="topo-module-stack">
         <section className="topo-module-card topo-agents-md-card" aria-label={t("agentTopology.agentsMd")}>
           <ModuleTitle title={t("agentTopology.agentsMd")} />
+          {isMpa && onEditAgentsMd && (
+            <button type="button" className="topo-refresh" onClick={onEditAgentsMd}>
+              {t("agentTopology.editAgentsMd")}
+            </button>
+          )}
           <div
             className="topo-module-scroll topo-agents-md-scroll"
             role="region"

@@ -277,3 +277,13 @@ CON-17 TOS 资源凭据：`/web/deployment-resources` 将当前服务端解析�
 原生 `image_snapshots` 在云创建前保留原始 `requested` 输入和 `selected` 的 `{digest,image}`。重试验证原输入和保存 tag 的 digest，不读取 latest、不列举标签；兼容原 digest 命名快照。保存内容变更或缺失时失败，不重新选择。不改写缺少选择记录的旧未完成意图，不升级既有运行 MPA。
 
 仅信任当前平台 CR 后缀。匿名 bearer 挑战须为同主机 HTTPS/默认端口，无用户信息或重定向，token 只有 pull scope。禁用 requests 环境鉴权。单响应最多 1 MiB，发现最多 20 页 / 1000 个标签项，检查 120 秒预算，连接/读取上限为 10/30 秒。分页保持同仓库 tags-list 路径，只允许 n/last 参数，拒绝循环和不安全链接。非法仓库响应及脱敏传输错误不回退 latest。要求凭据的私有 latest 仓库不属于公共发现契约；标签保留和不覆盖由发布方保证。
+
+### 失败详情（火山与 BytePlus）
+
+失败的 MPA 任务显示本地化安全原因，可展开/复制阶段、操作、可选的已校验 errorCode 和 requestId。不展示建议及原始 SDK/SQL/异常正文。已知配额、权限、超时及资源状态标识显示安全说明；缺失详情时明确说明原因未知。创建成功及通用智能体视图保持不变。
+
+已有资源适配器与终态 runner 在异常包装时保留源头诊断，不新增平台调用或改变创建/重试决策。任务重启被接受后推进新增的 tasks.diagnostic_start_id 游标（旧记录默认 0）；当前 latestDiagnostic 忽略之前轮次，仍保留有界历史诊断。页面忽略阶段不匹配及非 failed 诊断。现有请求 ID、快照、错误键、云端参数及资源恢复保持不变。
+
+见[失败详情设计](../../prd-spec/bugfixes/mpa-creation-failure-details/2026-10-20-failure-details.zh.md)。
+
+新增可选字段 `exceptionType`（最多八项固定异常类型）、`httpStatus`（100–599 整数）、`responseType`（application/json、text/html、text/plain、other），在采集、持久化及展示边界校验。增量 `task_diagnostics.details` 对旧行默认 `{}`。IAM 在抑制异常链前保留这些证据；Runtime 准备分别标识 load_credentials、get_caller_identity、runtime_client。不改变异常及重试语义，不采集原始 stderr。展开详情字号与原因段落统一为 13px。参见[诊断补齐](../../prd-spec/bugfixes/mpa-creation-failure-details/2026-10-20-diagnostic-completeness.zh.md)。

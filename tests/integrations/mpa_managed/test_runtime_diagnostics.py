@@ -55,6 +55,7 @@ def test_sdk_failure_records_code_without_changing_payload_or_exception(
             "attempt": 1,
             "outcome": "failed",
             "errorCode": "InvalidParameter.Runtime",
+            "exceptionType": "ApiError",
         }
     ]
     assert "private" not in str(events)
