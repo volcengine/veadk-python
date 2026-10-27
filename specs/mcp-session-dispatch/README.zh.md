@@ -32,8 +32,8 @@
 
 ## Agent 所属原生准备计时扩展
 
-已批准扩展 [mcp-preparation-native-extension](../../prd-spec/features/mcp-preparation-timing/2026-10-27-mcp-preparation-native-extension.zh.md)：VeADK Agent 组装的原生与 VeIdentity 实例保留原管理器、回调、鉴权、缓存和重试语义，增加准备／获取计时。实例绑定须幂等并保留 deepcopy 对象归属，Trusted 不得重复计时；实例适配及 Agent 组装已通过本地回归，原生云端验收仍待完成。
+已批准扩展 [mcp-preparation-native-extension](../../prd-spec/features/mcp-preparation-timing/2026-10-27-mcp-preparation-native-extension.zh.md)：VeADK Agent 组装的原生与 VeIdentity 实例保留原管理器、回调、鉴权、缓存和重试语义，增加准备／获取计时。实例绑定须幂等并保留 deepcopy 对象归属，Trusted 不得重复计时；实例适配及 Agent 组装已通过本地回归，原生 V26 与 Agent 自动接入 V27 云端验收通过。
 
 ## VeIdentity 请求 Trace 上下文扩展
 
-已批准[VeIdentity 逐次上下文](../../prd-spec/bugfixes/veidentity-mcp-trace-context/2026-10-27-veidentity-mcp-trace-context.zh.md)：仅当前 W3C 上下文放请求 meta，凭据头和缓存键不变。保留无上下文行为、提取故障隔离、取消与重试次数；日志只记录错误类型，不记录私有异常消息。实现及本地回归／HTTP 检查通过，隔离云端验收待完成。
+已批准[VeIdentity 逐次上下文](../../prd-spec/bugfixes/veidentity-mcp-trace-context/2026-10-27-veidentity-mcp-trace-context.zh.md)：仅当前 W3C 上下文放请求 meta，凭据头和缓存键不变。保留无上下文行为、提取故障隔离、取消与重试次数；日志只记录错误类型，不记录私有异常消息。实现、本地回归／HTTP 与隔离 V28 APMPlus 验证通过，合成凭据下两次调用分别关联准确的直接父 Span；真实凭据提供方授权仍未验证。

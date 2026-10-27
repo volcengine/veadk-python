@@ -30,4 +30,5 @@ review-spec 不可用，已直接评审。用户已授权可推进的一期实�
 - `pass`：修复前 5 failed／2 passed；修复后 141 项相关检查通过，全量 Python 回归 7,968 passed／50 skipped／4 xfailed／88 warnings，561.61 秒；Python 差异摘要未变，格式化后全文件 pre-commit 通过。
 - `pass`：常规索引／类型生成后的 types:check 与文档生产构建通过；首次构建遇到此前出现的生成 server 模块为空。未修改文档站配置或依赖 lock。
 - `pass`：真实本地 HTTP 的凭据解析后路径使用合成凭据，两次不同调用 Span 与接收端直接父 Span 匹配。首版样例匿名发现后再鉴权调用导致超时；将同一合成请求头及 readonly context 交给原生 header provider，恢复实际 VeIdentity 的发现／调用方式，未改变生产行为或放宽超时。
-- `not_run`：该新代码的隔离云端验收；真实凭据提供方授权未证实，不能由合成样例推导。
+- `pass`：隔离 Runtime V28 使用源码 `216c3bf3`，APMPlus 的 36 个 Span 包含一次准备、三次获取，两次内部调用分别关联各自准确的直接父 Span。SDK 正文关闭，16 个文件摘要、依赖版本与 29 项配置一致；仅覆盖合成凭据解析后路径，未调用真实提供方或模型。
+- `not_run`：真实凭据提供方授权，不能由合成样例推导。
