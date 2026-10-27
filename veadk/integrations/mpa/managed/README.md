@@ -35,8 +35,8 @@ managed:
 
 Historical CLI/YAML AK/SK mode remains compatible. Existing Tools/Sessions are
 not changed automatically. Old Studio pages sending credential fields must be
-refreshed. See [the maintained contract](../../../../specs/studio-mpa-creation/README.md#con-17--bucket-only-iam-tos-mounts)
-and [implementation/verification evidence](../../../../prd-spec/features/studio-mpa-tos-iam/2026-10-12-bucket-only.md).
+refreshed. This section is the maintained reference for the bucket-only IAM TOS
+mount behavior.
 
 ## Automatic PG setup (recommended for new installations)
 
@@ -59,7 +59,7 @@ After creation submission, prepare/reuse `mpa_admin_workspace/mpa_admin_db`, the
 
 All Studio/CLI processes for a scope must use the **same durable bootstrap file path on one coordinator host**. Preserve this file across restarts and redeployments. The private SQLite file contains only intents and IDs, never passwords. Cancelled/failed jobs retain resources. If a create response is lost, retry discovers the tagged Workspace; if its outcome is still uncertain, inspect AIDAP and provide the matching ID. Do not delete state to force another creation. Confirmed IAM/parameter rejections can be retried after correction. No Workspace is automatically deleted.
 
-Confirmed `CreateFailed` Workspaces no longer permanently block later automatic requests. The bootstrap validates their scope, retains their cloud resources and records their IDs separately before releasing the failed binding. Retry may create a replacement; a newly failed purchase is not repeated in the same task. Explicit Workspace IDs, operational failures and uncertain outcomes still require inspection rather than blind replacement. Previously retired failures cannot authorize repeating a newer timed-out request. See CON-13 in the [recovery contract](../../../../specs/studio-mpa-creation/README.md).
+Confirmed `CreateFailed` Workspaces no longer permanently block later automatic requests. The bootstrap validates their scope, retains their cloud resources and records their IDs separately before releasing the failed binding. Retry may create a replacement; a newly failed purchase is not repeated in the same task. Explicit Workspace IDs, operational failures and uncertain outcomes still require inspection rather than blind replacement. Previously retired failures cannot authorize repeating a newer timed-out request.
 
 
 ### Independent business Workspace for new Studio agents
@@ -68,7 +68,7 @@ New Studio forms submit `businessWorkspaceMode: per-agent` and `businessDatabase
 
 The first Next and final submission perform authorized, bounded name checks for Runtime, sandbox template and target Workspace. Same-request own resources may be reused; foreign/ambiguous collisions require another name, and query failures require rechecking. Active requests on one Studio host reserve their names by verified provider/account/region; failed requests do not hold a local reservation. The backend checks again before new-layout prerequisites. Read-only checks do not provide atomic exclusion across independent hosts; cloud ownership/uniqueness enforcement remains authoritative.
 
-Explicit CLI/YAML profiles enable the new layout with `managed.postgres.mode: auto`, `business-workspace-mode: per-agent` and `business-database-name: aidb`, without a configured business Workspace ID. Omitting the database selection preserves the previous hashed per-agent layout; omitting both selects the original shared layout. Initial aidb adoption validates the dedicated Workspace, database owner, absence of non-system/non-extension relations and absence of a previous Runtime/ready binding, then transaction-locks and marks it. Missing, foreign or nonempty initial databases fail closed. `init-admin-db` migration remains a shared-layout operation. Runtime/skill/Feishu logic is unchanged; deleting MPA retains PG resources. See [design and verification](../../../../prd-spec/features/mpa-name-preflight/2026-10-13-runtime-name-and-workspace-labels.md).
+Explicit CLI/YAML profiles enable the new layout with `managed.postgres.mode: auto`, `business-workspace-mode: per-agent` and `business-database-name: aidb`, without a configured business Workspace ID. Omitting the database selection preserves the previous hashed per-agent layout; omitting both selects the original shared layout. Initial aidb adoption validates the dedicated Workspace, database owner, absence of non-system/non-extension relations and absence of a previous Runtime/ready binding, then transaction-locks and marks it. Missing, foreign or nonempty initial databases fail closed. `init-admin-db` migration remains a shared-layout operation. Runtime/skill/Feishu logic is unchanged; deleting MPA retains PG resources.
 
 ### Existing installation cutover
 
@@ -81,7 +81,7 @@ To preserve and migrate old relationships instead, keep the default `legacy-urls
 3. Run `veadk mpa init-admin-db --config mpa-create.config.yaml --source-url-env OLD_SHARED_APIG_DATABASE_URL`. It prepares the Workspaces/management DB and copies registry records atomically using the migration rules below. It does not migrate business databases or alter running Runtime environments.
 4. Verify copied resource bindings. Coordinate existing Runtime `SHARED_APIG_DATABASE_URL` updates to the new management database with the existing safe deployment procedure; remove the legacy registry URL from the Studio/CLI environment only after cutover is complete. Preserve old business credentials or explicitly verify the adopted connection before removing obsolete settings. Resume writers only after verification. Keep the source backup for rollback.
 
-No live migration or cloud allocation is performed by the repository tests. See the [automatic PG design](../../../../prd-spec/features/mpa-space-scoped-resources/2026-09-23-auto-pg-workspaces.md) for limitations and verification.
+No live migration or cloud allocation is performed by the repository tests. Treat live cutover and cloud allocation as separately authorized operations with isolated verification.
 
 
 ## Shared network and gateway preparation
@@ -113,7 +113,7 @@ Runtime subnet IDs may be returned in a different order by AgentKit. An identica
 
 ## CLI YAML and manual / legacy server setup
 
-1. Copy the [example YAML](../../../../prd-spec/features/mpa-agent-oneclick-provision/mpa-create.config.example.yaml) to a private `mpa-create.config.yaml`. Keep filled-in configuration outside Git.
+1. Create a private `mpa-create.config.yaml` from the options and snippets in this README. Keep filled-in configuration outside Git.
 2. Supply an existing PostgreSQL instance, shared registry database, database login/owner, Runtime/worker IAM roles, images and model access. The deployment administrator needs `CREATEDB` and permission to assign the business database owner. The registry needs schema-write permissions and direct/session pooling; transaction pooling is incompatible with advisory locks.
 3. For manual CLI profiles, set `DEPLOYMENT_DATABASE_ADMIN_URL` and `SHARED_APIG_DATABASE_URL` in the CLI environment. These are PostgreSQL connection URLs; the YAML stores environment variable names. Flat/template secrets support complete `${ENV_NAME}` references. Do not expose these variables in browser configuration.
 4. Configure deployment credentials through a rotating `managed.credential-file` or `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY` and optional `VOLCENGINE_SESSION_TOKEN`. Without an explicit file or environment key pair, the mounted `/var/run/secrets/iam/credential` is used. Each cloud call refreshes credentials; Runtime, VPC, worker and APIG use the same verified account.
@@ -197,7 +197,7 @@ Studio stores nonsecret task state in `.adk/mpa-creation.sqlite3` (override with
 
 Cancellation is not cloud rollback. APIG/VPC, business database, Skill Space, worker and any Runtime already created remain for recovery; an in-flight cloud request may complete after cancellation. Do not delete shared resources to retry. Unknown create results use persisted intent and client tokens; conflicting unfinished configuration stops with an error. Success requires platform Ready **and** the application's `/readiness`. Task responses contain safe stage/error codes and resource IDs, never raw deployment logs or credentials.
 
-See the [component contract](../../../../specs/studio-mpa-creation/README.md) and [verification record](../../../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-20-studio-mpa-creation.md). Tests simulate cloud operations; live deployment requires separately supplied credentials and an isolated target.
+The recovery rules in this section are the maintained operational contract. Tests simulate cloud operations; live deployment requires separately supplied credentials and an isolated target.
 
 ### Runtime display names
 
@@ -289,7 +289,7 @@ New named Studio requests use the entered, validated Runtime name unchanged as t
 
 ### Automatic MPA runtime role
 
-Built-in Studio prepares `IDRoleForArkClawShareAgent` in the verified deployment account before preparing resources. It reuses a compatible role and adds missing approved policy bindings; it never replaces trust or policy contents. Explicit CLI profiles default to `managed.iam.mode: existing`; `auto` opts in for fresh default-role configurations only. See the [permission baseline and recovery rules](../../../../prd-spec/features/mpa-runtime-iam/2026-10-09-managed-runtime-role.md). The Studio execution role needs `iam:CreatePolicy` in addition to GetRole/CreateRole/GetPolicy/ListAttachedRolePolicies/AttachRolePolicy. Redeploy or update an existing Studio execution policy before using this capability. Retry the same agent ID after administrator repair; cancellation retains shared IAM resources.
+Built-in Studio prepares `IDRoleForArkClawShareAgent` in the verified deployment account before preparing resources. It reuses a compatible role and adds missing approved policy bindings; it never replaces trust or policy contents. Explicit CLI profiles default to `managed.iam.mode: existing`; `auto` opts in for fresh default-role configurations only. The Studio execution role needs `iam:CreatePolicy` in addition to GetRole/CreateRole/GetPolicy/ListAttachedRolePolicies/AttachRolePolicy. Redeploy or update an existing Studio execution policy before using this capability. Retry the same agent ID after administrator repair; cancellation retains shared IAM resources.
 
 ### Deployment account in Studio
 
@@ -354,7 +354,7 @@ New BytePlus Studio requests select automatic personal-library preparation in `a
 
 The adapter uses `vikingdb.ap-southeast-1.byteplusapi.com`, POST `/api/openviking/{Action}`, signing region `ap-southeast-1`, API version `2025-06-09`, and deployment-account BytePlus AK/SK/STS. It creates `Version=developer`, `Source=volcengine`, VLM `seed-2-0-lite` and Embedding `skylark-embedding-vision`, without ModelVersion. Each model credential contains the ordinary ApiKey and its EndpointID. After READY it obtains the default Key without sending UserID and injects the existing four variables, using `https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking`. Retry reuses the bound ResourceID, unknown create results block blind recreation, and cancellation/deletion retains the library. Secrets are not persisted in the resource registry.
 
-Personal libraries only support the default user. The supplied overseas contract requires Bearer authentication and `x-tt-env: pre` for data requests. This repository prepares resources; `agentkit-mpa-agent` must separately implement those semantics before OV memory can work. These changes do not establish live cloud availability or change Beijing enterprise provisioning. See the [design](../../../../prd-spec/features/mpa-byteplus-openviking/2026-10-14-automatic-creation.md).
+Personal libraries only support the default user. The supplied overseas contract requires Bearer authentication and `x-tt-env: pre` for data requests. This repository prepares resources; `agentkit-mpa-agent` must separately implement those semantics before OV memory can work. These changes do not establish live cloud availability or change Beijing enterprise provisioning.
 
 BytePlus inference EndpointID defaults (requested for trial, not verified overseas):
 
@@ -363,14 +363,14 @@ BytePlus inference EndpointID defaults (requested for trial, not verified overse
 | VLM | `doubao-seed-2-0-lite-260428` | `OV_VLM_ENDPOINT_ID` |
 | Embedding | `doubao-embedding-vision-251215` | `OV_EMBEDDING_ENDPOINT_ID` |
 
-The key must have access to both endpoints. Overrides accept 1–128 ASCII letters/digits/hyphens/underscores/periods, starting with a letter or digit. Explicit blank/invalid overrides fail before resource mutation. Restart Studio after changing server settings. Domestic parameters do not use these overrides. Endpoint creation/discovery is not part of this flow. Provider rejection is surfaced; there is no Coding Plan or AgentPlan fallback. A retry after an OV intent was recorded must use the same endpoints and source; a prior Coding Plan intent cannot be silently migrated or recreated. See [inference design](../../../../prd-spec/features/mpa-byteplus-openviking/2026-10-14-inference-endpoints.md).
+The key must have access to both endpoints. Overrides accept 1–128 ASCII letters/digits/hyphens/underscores/periods, starting with a letter or digit. Explicit blank/invalid overrides fail before resource mutation. Restart Studio after changing server settings. Domestic parameters do not use these overrides. Endpoint creation/discovery is not part of this flow. Provider rejection is surfaced; there is no Coding Plan or AgentPlan fallback. A retry after an OV intent was recorded must use the same endpoints and source; a prior Coding Plan intent cannot be silently migrated or recreated.
 
 
 ### IAM temporary failures
 
 Runtime role preparation retries timeout, connection, throttling and unavailable failures at most four times with 1/2/4-second waits, inside the existing 120-second role deadline. Each retry reads the fixed role/policy names before writing, so a lost response cannot blindly recreate resources. Permission, invalid input, unknown errors and ownership/trust/policy conflicts fail immediately. Exhausted transient requests use `iamTemporaryFailure`; `iamPermissionDenied` continues to indicate deployment authorization failures. Cancellation stops subsequent calls; an already dispatched SDK request may still finish.
 
-Validated IAM operation/category/attempt/outcome and optional provider Request ID are stored in `task_diagnostics.request_id` and server logs; legacy rows receive an empty value through additive migration. Original messages, request bodies and credentials are excluded. Request IDs must be 16–128 hexadecimal characters/hyphens; unrecognized values are omitted. The previous four-field diagnostic protocol remains valid. To inspect, select `operation, category, attempt, outcome, request_id` from the task diagnostics for the affected task. Restart Studio to load this change. See [IAM recovery design](../../../../prd-spec/bugfixes/mpa-iam-retry/2026-10-14-transient-errors.md).
+Validated IAM operation/category/attempt/outcome and optional provider Request ID are stored in `task_diagnostics.request_id` and server logs; legacy rows receive an empty value through additive migration. Original messages, request bodies and credentials are excluded. Request IDs must be 16–128 hexadecimal characters/hyphens; unrecognized values are omitted. The previous four-field diagnostic protocol remains valid. To inspect, select `operation, category, attempt, outcome, request_id` from the task diagnostics for the affected task. Restart Studio to load this change.
 
 OpenViking failures write safe operation/category/errorCode/requestId diagnostics to the Studio backend log and bounded task_diagnostics records when structured provider metadata is available. errorCode/requestId are optional; transport errors may provide neither. Raw provider messages, request/response bodies and API keys are excluded. Load the updated backend before reproducing; existing uncertain-create tasks remain guarded and are not automatically redispatched. Historical error metadata cannot be recovered.
 
@@ -388,10 +388,9 @@ BytePlus `veadk studio deploy` automatically sets
 function-role credentials. Local AK/SK usage remains unchanged. Redeploy existing
 installations to apply this setting and refresh the default Studio role policy, which
 now includes the three OV provisioning operations on both providers. Custom roles
-need equivalent authorization separately. See the maintained
-[cloud IAM contract](../../../../specs/studio-mpa-creation/README.md#cloud-studio-mpa-iam-credentials-and-openviking-permissions)
-for credential failure behavior and prerequisites.
+need equivalent authorization separately. Credential failure behavior and
+prerequisites are maintained in this section.
 
 ### Studio image freshness
 
-Studio resolves each configured `latest` anonymously to an already-published tag in the same public repository with the exact same manifest digest. It persists both selections before creating the Worker or Runtime; retries verify the saved tags even if latest moves. No registry write permission, image copy, or extra pipeline is required. Every latest publication must retain a matching version tag and must not overwrite that tag. No matching tag, unavailable public read access, invalid/oversized pagination, changed saved content, or legacy unfinished intents without a selection fail explicitly. Fixed tags, existing agents, and standalone CLI deployments are unchanged. Discovery uses only anonymous pull tokens and bounded GET requests, with no cloud credentials. See the [read-only contract](../../../../specs/studio-mpa-creation/README.md#studio-latest-content-snapshots-2026-10-21).
+Studio resolves each configured `latest` anonymously to an already-published tag in the same public repository with the exact same manifest digest. It persists both selections before creating the Worker or Runtime; retries verify the saved tags even if latest moves. No registry write permission, image copy, or extra pipeline is required. Every latest publication must retain a matching version tag and must not overwrite that tag. No matching tag, unavailable public read access, invalid/oversized pagination, changed saved content, or legacy unfinished intents without a selection fail explicitly. Fixed tags, existing agents, and standalone CLI deployments are unchanged. Discovery uses only anonymous pull tokens and bounded GET requests, with no cloud credentials.
