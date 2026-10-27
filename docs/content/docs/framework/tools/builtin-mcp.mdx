@@ -245,6 +245,12 @@ toolset = TrustedMcpToolset(
 agent = Agent(tools=[toolset])
 ```
 
+## 准备阶段计时
+
+配置已有[可观测能力](/cn/docs/framework/observability)后，`TrustedMcpToolset` 会记录 `mcp.tools.prepare`（构建请求头、获取／筛选工具清单）和 `mcp.session.acquire`（会话复用检查、锁等待及必要的首次连接初始化）。工具清单命中缓存时，不会为计时额外获取会话；实际工具调用中的会话获取也单独记录。
+
+两个阶段可能嵌套，不能将耗时相加，也不能把会话获取当作纯网络耗时。新增记录只含固定阶段／传输类型及错误类型，不含地址、鉴权头或工具正文。直接使用 Google ADK `MCPToolset` 或 `VeIdentityMcpToolset` 的路径不由这层包装计时。
+
 ## 自定义 MCP Server
 
 如果上述内置接入方式都无法满足需求，可直接使用 Google ADK 的 `MCPToolset` 连接任意 MCP Server：

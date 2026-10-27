@@ -247,6 +247,12 @@ toolset = TrustedMcpToolset(
 agent = Agent(tools=[toolset])
 ```
 
+## Preparation timing
+
+With existing [observability](/en/docs/framework/observability) configured, `TrustedMcpToolset` records `mcp.tools.prepare` (header construction and tool-list retrieval/filtering) and `mcp.session.acquire` (reuse checks, lock wait and initial connection/initialization when needed). A cached tool list does not trigger an extra acquisition for telemetry; session acquisition during an actual tool call is also observed separately.
+
+These stages can be nested, so their durations must not be added or interpreted as network-only time. New records contain fixed phase/transport categories and error types, excluding endpoints, authentication headers and tool content. Direct Google ADK `MCPToolset` and `VeIdentityMcpToolset` paths are not timed by this wrapper.
+
 ## Custom MCP Server
 
 If none of the built-in connectors above meet your needs, connect to any MCP Server directly using Google ADK's `MCPToolset`:

@@ -28,6 +28,7 @@ from bytedance.jeddak_trusted_mcp import (
     trusted_mcp_client,
     trusted_mcp_client_context,
 )
+from veadk.tools.mcp_tool.preparation_tracing import preparation_span
 from veadk.utils.logger import get_logger
 
 logger = get_logger("veadk." + __name__)
@@ -101,6 +102,14 @@ class TrustedMcpSessionManager(MCPSessionManager):
         Returns:
             ClientSession: The initialized MCP client session.
         """
+        # Acquisition includes reuse/lock wait and first connection when necessary.
+        # The native implementation still owns all pooling and retry decisions.
+        with preparation_span("session.acquire", self._connection_params):
+            return await self._acquire_veadk_session(headers=headers)
+
+    async def _acquire_veadk_session(
+        self, headers: Optional[Dict[str, str]] = None
+    ) -> ClientSession:
         # Merge headers once at the beginning
         merged_headers = self._merge_headers(headers)
         trusted_transport = (

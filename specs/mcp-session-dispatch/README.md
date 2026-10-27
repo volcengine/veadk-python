@@ -22,3 +22,10 @@ No public signature, dependency range, credential source or persistent data sche
 [Bugfix design](../../prd-spec/bugfixes/mcp-session-delegation/2026-10-27-standard-mcp-session-delegation.md) owns requirements, acceptance and delivery evidence. `CON-1/3` map to bounded normal delegation/concurrency/cancellation tests; `CON-2` to existing vendor selection/cache regressions; `CON-4` to synthetic-secret constructor logging regression. An authorized existing receiver is used for actual discovery/call/close verification without models, new cloud resources or credential persistence. Contracts are implemented and verified on the test branch; the paired design records remaining cloud receiver correlation work.
 
 The private `_create_client` adapter forwards native positional and keyword transport arguments unchanged for ordinary connections, including parent-provided mTLS transport and session metadata.
+
+## Preparation timing contract extension
+
+- `CON-5`: `mcp.tools.prepare` and nested `mcp.session.acquire` are INTERNAL observed boundaries, not separate durations to sum or network-only timing. Native pooling, tool cache and retries remain owned by ADK/vendor dispatch.
+- `CON-6`: New attributes contain only fixed phase/transport categories and error types; no messages, connection data or tool content. OTel parent context is restored and telemetry failures never repeat/prevent business calls.
+
+[Preparation timing design](../../prd-spec/features/mcp-preparation-timing/2026-10-27-mcp-preparation-timing.md) owns acceptance and delivery. These additional contracts are approved for implementation; existing CON-1/4 remain implemented.
