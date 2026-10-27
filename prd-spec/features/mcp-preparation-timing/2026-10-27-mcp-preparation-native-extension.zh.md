@@ -35,4 +35,5 @@ review-spec 不可用，已直接评审。用户已要求完成所有可推进�
 - `pass`：本地真实 HTTP 样例及归档检查共 12 项通过，覆盖 Trusted 与原生准备、三次获取、两次调用、父上下文恢复与关闭。这不能证明原生云端部署及 APMPlus 入库。
 - `pass`：格式化后全文件 pre-commit、文档站生产构建。
 - `fail`：独立文档 types:check 生成空 `.source/server.ts` 并报 TS2306。将两份 MDX 暂时恢复为未修改 HEAD 后，同一命令复现相同错误；finally 已恢复工作改动。前序 Trusted 记录中的类型通过不能证明全新检查可稳定通过。
-- `pass`：全量 Python 回归 7,958 passed、50 skipped、4 xfailed、88 warnings，耗时 512.83 秒；核对 Python 差异摘要未改变。`not_run`：原生云端验收。合成样例不能证明真实 VeIdentity 授权。
+- `pass`：全量 Python 回归 7,958 passed、50 skipped、4 xfailed、88 warnings，耗时 512.83 秒；核对 Python 差异摘要未改变。完整 Agent 自动接入的云端部署与真实 VeIdentity 授权不属于该合成样例的验证证据。
+- `pass`：现有隔离 Runtime V26 原生 HTTP 样例及 APMPlus 回查通过：一次准备、三次获取、两次成功内部工具调用，Trace／父子祖先匹配，会话关闭，29 项配置不变且依赖版本与 V25 一致。云端样例直接调用同一实例适配器；Agent 自动组装接入已离线验证，不等于完整 Agent 云端部署。真实 VeIdentity 提供方授权及请求 meta 传播仍是单独范围。
