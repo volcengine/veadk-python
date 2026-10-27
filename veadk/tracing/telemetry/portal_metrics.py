@@ -195,7 +195,7 @@ class PortalMetricRecorder:
         )
         self.chat_exception_counter = self.meter.create_counter(
             name=Meters.LLM_COMPLETIONS_EXCEPTIONS,
-            unit="time",
+            unit="1",
             description="Number of exceptions occurred during chat completions",
         )
         self.streaming_time_to_first_token = self.meter.create_histogram(
