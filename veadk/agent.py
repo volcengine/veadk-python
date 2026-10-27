@@ -628,6 +628,12 @@ class Agent(LlmAgent):
             else:
                 self.after_agent_callback = dataset_auto_gen_callback
 
+        # Observe the final owned toolset list without changing shared ADK classes
+        # or replacing managers that already hold auth/callback/session state.
+        from veadk.tools.mcp_tool.preparation_adapter import instrument_mcp_toolsets
+
+        instrument_mcp_toolsets(self.tools)
+
         logger.info(f"VeADK version: {VERSION}")
 
         logger.info(f"{self.__class__.__name__} `{self.name}` init done.")

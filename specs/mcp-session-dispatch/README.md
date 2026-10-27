@@ -29,3 +29,7 @@ The private `_create_client` adapter forwards native positional and keyword tran
 - `CON-6`: New attributes contain only fixed phase/transport categories and error types; no messages, connection data or tool content. OTel parent context is restored and telemetry failures never repeat/prevent business calls.
 
 [Preparation timing design](../../prd-spec/features/mcp-preparation-timing/2026-10-27-mcp-preparation-timing.md) owns acceptance and delivery. These additional contracts are approved for implementation; existing CON-1/4 remain implemented.
+
+## Agent-owned native preparation extension
+
+Approved extension [mcp-preparation-native-extension](../../prd-spec/features/mcp-preparation-timing/2026-10-27-mcp-preparation-native-extension.md): native and VeIdentity instances assembled by VeADK Agent retain the same manager, callbacks, auth, cache and retry semantics while preparation/acquisition are observed. Instance-local binding must be idempotent and preserve deepcopy ownership; Trusted spans must not duplicate. Instance adapter and Agent assembly pass local regression; native cloud acceptance remains pending.

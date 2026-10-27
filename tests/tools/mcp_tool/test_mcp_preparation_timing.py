@@ -15,6 +15,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from veadk.tools.mcp_tool.trusted_mcp_toolset import TrustedMcpToolset
+from veadk.tools.mcp_tool.preparation_adapter import instrument_mcp_toolsets
 
 
 @pytest.fixture
@@ -257,8 +258,9 @@ async def test_telemetry_failure_does_not_repeat_or_change_native_work(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["trusted", "native"])
 async def test_native_retry_is_one_preparation_with_each_acquisition_attempt(
-    monkeypatch, tracing
+    monkeypatch, tracing, kind
 ):
     from unittest.mock import AsyncMock
     from mcp.types import ListToolsResult, Tool
@@ -279,7 +281,15 @@ async def test_native_retry_is_one_preparation_with_each_acquisition_attempt(
         return session
 
     monkeypatch.setattr(MCPSessionManager, "create_session", acquire)
-    tools = toolset()
+    tools = (
+        toolset()
+        if kind == "trusted"
+        else McpToolset(
+            connection_params=StreamableHTTPConnectionParams(url="https://mcp.invalid"),
+            errlog=io.StringIO(),
+        )
+    )
+    instrument_mcp_toolsets([tools])
     result = await tools.get_tools()
     assert [tool.name for tool in result] == ["synthetic_tool"]
     assert len(attempts) == 2
@@ -295,8 +305,9 @@ async def test_native_retry_is_one_preparation_with_each_acquisition_attempt(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["trusted", "native"])
 async def test_native_tool_list_cache_does_not_create_extra_acquisition(
-    monkeypatch, tracing
+    monkeypatch, tracing, kind
 ):
     from unittest.mock import AsyncMock
     from mcp.types import ListToolsResult, Tool
@@ -309,12 +320,18 @@ async def test_native_tool_list_cache_does_not_create_extra_acquisition(
         )
     )
     acquire = AsyncMock(return_value=session)
-    monkeypatch.setattr(MCPSessionManager, "create_session", acquire)
-    tools = TrustedMcpToolset(
+
+    async def native_acquire(self, headers=None):
+        return await acquire(headers=headers)
+
+    monkeypatch.setattr(MCPSessionManager, "create_session", native_acquire)
+    toolset_class = TrustedMcpToolset if kind == "trusted" else McpToolset
+    tools = toolset_class(
         connection_params=StreamableHTTPConnectionParams(url="https://mcp.invalid/mcp"),
         tool_list_cache_ttl_seconds=60,
         errlog=io.StringIO(),
     )
+    instrument_mcp_toolsets([tools])
     assert [tool.name for tool in await tools.get_tools()] == ["synthetic_tool"]
     assert [tool.name for tool in await tools.get_tools()] == ["synthetic_tool"]
     acquire.assert_awaited_once()

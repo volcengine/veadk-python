@@ -29,3 +29,7 @@
 - `CON-6`：新增属性只含固定阶段／传输类别及错误类型，不含消息、连接数据或工具正文；恢复 OTel 父上下文，遥测失败不重复或阻止业务调用。
 
 [准备计时设计](../../prd-spec/features/mcp-preparation-timing/2026-10-27-mcp-preparation-timing.zh.md) 负责验收与交付。本次扩展已批准实施；既有 CON-1/4 保持已实现状态。
+
+## Agent 所属原生准备计时扩展
+
+已批准扩展 [mcp-preparation-native-extension](../../prd-spec/features/mcp-preparation-timing/2026-10-27-mcp-preparation-native-extension.zh.md)：VeADK Agent 组装的原生与 VeIdentity 实例保留原管理器、回调、鉴权、缓存和重试语义，增加准备／获取计时。实例绑定须幂等并保留 deepcopy 对象归属，Trusted 不得重复计时；实例适配及 Agent 组装已通过本地回归，原生云端验收仍待完成。
