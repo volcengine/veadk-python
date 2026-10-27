@@ -178,7 +178,8 @@ def retry_on_errors(func):
             # If an error is thrown, we will retry the function to reconnect to the
             # server. create_session will handle detecting and replacing disconnected
             # sessions.
-            logger.info("Retrying %s due to error: %s", func.__name__, e)
+            # Transport errors can include private URLs, credentials or tool data.
+            logger.info("Retrying %s after %s", func.__name__, type(e).__name__)
             return await func(self, *args, **kwargs)
 
     return wrapper
