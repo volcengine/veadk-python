@@ -37,3 +37,11 @@ review-spec 不可用，已直接评审。用户已要求完成所有可推进�
 - `fail`：独立文档 types:check 生成空 `.source/server.ts` 并报 TS2306。将两份 MDX 暂时恢复为未修改 HEAD 后，同一命令复现相同错误；finally 已恢复工作改动。前序 Trusted 记录中的类型通过不能证明全新检查可稳定通过。
 - `pass`：全量 Python 回归 7,958 passed、50 skipped、4 xfailed、88 warnings，耗时 512.83 秒；核对 Python 差异摘要未改变。完整 Agent 自动接入的云端部署与真实 VeIdentity 授权不属于该合成样例的验证证据。
 - `pass`：现有隔离 Runtime V26 原生 HTTP 样例及 APMPlus 回查通过：一次准备、三次获取、两次成功内部工具调用，Trace／父子祖先匹配，会话关闭，29 项配置不变且依赖版本与 V25 一致。云端样例直接调用同一实例适配器；Agent 自动组装接入已离线验证，不等于完整 Agent 云端部署。真实 VeIdentity 提供方授权及请求 meta 传播仍是单独范围。
+
+## Agent 自动接入的云端验证扩展
+
+在现有隔离镜像更新授权内，已于样例／测试编辑前评审。1e3c150 旧 Agent 源码与 ba030adb 候选仅相差六行自动接入逻辑，不可变 V26 中的 Agent 身份现已通过构建前写入校验。归档扩为五份，包含 veadk/agent.py；写入任何源码前，要求不可变 V26 基线的 Agent SHA 匹配 8c171a0d8ff5b0db58d7f97427925783beeb1445078808dd7a0507f9b78f6f99。不匹配时构建失败，不影响正在运行的部署。
+
+无参数 loopback 样例使用合成模型配置构造真实 Agent，并通过 Agent.tools 调用；不调用模型，该模式不手动安装适配器。复用启动时的 tracer，保留 provider／exporter 对象及数量，遇到非预期 CozeLoop／TLS 自动导出地址时拒绝执行；不改变环境变量、依赖、SDK、凭据及 29 项 Runtime 配置。实现前补真实 HTTP 和错误基线摘要测试；核对新镜像五个模块、协议中的 Agent 初始化标记及 APM 阶段／父子链。这些检查通过前不宣称完整 Agent 云端通过。
+
+验证结果：`pass`——20 项样例／归档／tracer 检查通过，旧 Agent SHA 门禁和 13 个活动代码文件摘要已核对。隔离 Runtime V27 构造真实 Agent，通过其原生 MCP 工具执行，不手动安装适配器，返回初始化标记；APMPlus 精确查到一次准备、三次获取、两次成功内部调用，Trace／父子祖先一致。SDK／正文开关、依赖版本、既有 provider／exporter 对象及 29 项 Runtime 配置不变。本次未调用模型；真实 VeIdentity 提供方授权及逐次请求 meta 修复仍单独推进。
