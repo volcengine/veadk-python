@@ -41,7 +41,9 @@ class TrustedMcpSessionManager(MCPSessionManager):
     session pooling based on authentication headers.
     """
 
-    def _create_client(self, merged_headers: Optional[Dict[str, str]] = None):
+    def _create_client(
+        self, merged_headers: Optional[Dict[str, str]] = None, *args, **kwargs
+    ):
         """Creates an MCP client based on the connection parameters.
 
         Args:
@@ -57,8 +59,11 @@ class TrustedMcpSessionManager(MCPSessionManager):
         if (
             isinstance(self._connection_params, StreamableHTTPConnectionParams)
             and merged_headers
-            and merged_headers.pop("x-trusted-mcp", None) == "true"
+            and merged_headers.get("x-trusted-mcp") == "true"
         ):
+            # Remove the vendor selector only from a private transport copy.
+            merged_headers = dict(merged_headers)
+            merged_headers.pop("x-trusted-mcp", None)
             logger.info("Creating TrustedMCP client")
             # FIXME: something wrong in client created via trusted_mcp_client_context as the
             # transports returned by exit_stack.enter_async_context(client) are inconsisted
@@ -74,7 +79,9 @@ class TrustedMcpSessionManager(MCPSessionManager):
             )
         else:
             logger.info("Creating MCP client")
-            client = super()._create_client(merged_headers)
+            # Native ADK owns transport security and session metadata; preserve its
+            # version-specific arguments instead of rebuilding the client here.
+            client = super()._create_client(merged_headers, *args, **kwargs)
         return client
 
     async def create_session(
@@ -96,6 +103,15 @@ class TrustedMcpSessionManager(MCPSessionManager):
         """
         # Merge headers once at the beginning
         merged_headers = self._merge_headers(headers)
+        trusted_transport = (
+            isinstance(self._connection_params, StreamableHTTPConnectionParams)
+            and merged_headers
+            and merged_headers.get("x-trusted-mcp") == "true"
+        )
+        if not trusted_transport:
+            # The parent acquires this same lock and owns ordinary session metadata.
+            # Delegate before our vendor lock to avoid a non-reentrant deadlock.
+            return await super().create_session(headers=headers)
 
         # Generate session key using merged headers
         session_key = self._generate_session_key(merged_headers)
@@ -126,33 +142,24 @@ class TrustedMcpSessionManager(MCPSessionManager):
             exit_stack = AsyncExitStack()
 
             try:
-                # FIXME: reuse the normal procedure to create a session after updated trusted_mcp_client_context
-                if (
-                    isinstance(self._connection_params, StreamableHTTPConnectionParams)
-                    and merged_headers
-                    and merged_headers.pop("x-trusted-mcp", None) == "true"
-                ):
-                    logger.info("Initialize TrustedMCP session via trusted_mcp_client")
-                    session = await exit_stack.enter_async_context(
-                        trusted_mcp_client(
-                            url=self._connection_params.url,
-                            headers=merged_headers,
-                            timeout=timedelta(seconds=self._connection_params.timeout),
-                            sse_read_timeout=timedelta(
-                                seconds=self._connection_params.sse_read_timeout
-                            ),
-                            terminate_on_close=self._connection_params.terminate_on_close,
-                        )
+                # Mode selection already established the vendor transport above.
+                logger.info("Initialize TrustedMCP session via trusted_mcp_client")
+                merged_headers.pop("x-trusted-mcp", None)
+                session = await exit_stack.enter_async_context(
+                    trusted_mcp_client(
+                        url=self._connection_params.url,
+                        headers=merged_headers,
+                        timeout=timedelta(seconds=self._connection_params.timeout),
+                        sse_read_timeout=timedelta(
+                            seconds=self._connection_params.sse_read_timeout
+                        ),
+                        terminate_on_close=self._connection_params.terminate_on_close,
                     )
+                )
 
-                    # Store session and exit stack in the pool
-                    self._sessions[session_key] = (session, exit_stack)
-                    logger.debug("Created new session: %s", session_key)
-                    return session
-                else:
-                    # Create a new session
-                    logger.info("Initialize MCP session")
-                    return await super().create_session(headers)
+                self._sessions[session_key] = (session, exit_stack)
+                logger.debug("Created new session: %s", session_key)
+                return session
             except Exception:
                 # If session creation fails, clean up the exit stack
                 if exit_stack:

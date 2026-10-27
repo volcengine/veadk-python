@@ -116,8 +116,10 @@ class TrustedMcpToolset(McpToolset):
         )
 
         # Create the session manager that will handle the TrustedMCP connection
+        # Connection parameters may contain credential headers or signed URLs.
         logger.info(
-            f"TrustedMcpToolset initialized with connection_params: {self._connection_params}"
+            "TrustedMcpToolset initialized using %s",
+            type(self._connection_params).__name__,
         )
         self._mcp_session_manager = TrustedMcpSessionManager(
             connection_params=self._connection_params,
