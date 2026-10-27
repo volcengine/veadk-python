@@ -256,6 +256,25 @@ DB_KINDS = ["database", *_SERVER_DB_ENVS]
 STORE_KINDS = ["memory", "localdir", *DB_KINDS]
 
 
+def test_independent_stores_have_distinct_stable_pool_namespaces():
+    a, b = InMemoryThreadStore(), InMemoryThreadStore()
+    assert a.pool_namespace is a.pool_namespace
+    assert a.pool_namespace != b.pool_namespace
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", STORE_KINDS)
+async def test_current_identity_distinguishes_delete_recreate(kind, tmp_path):
+    async with _make_store(kind, tmp_path) as store:
+        assert await store.current_identity(KEY) is None
+        await store.save(KEY, TID, _rollout(), "h", expected_version=None)
+        assert await store.current_identity(KEY) == (TID, 1)
+        await store.delete(KEY)
+        other = str(uuid.uuid4())
+        await store.save(KEY, other, _rollout(tid=other), "h", expected_version=None)
+        assert await store.current_identity(KEY) == (other, 1)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", STORE_KINDS)
 async def test_store_create_load_update(kind: str, tmp_path: Path) -> None:

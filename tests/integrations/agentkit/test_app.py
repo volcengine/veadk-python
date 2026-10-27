@@ -644,3 +644,31 @@ def test_run_agentkit_app_uses_explicit_and_environment_configuration(
 def test_run_agentkit_app_rejects_unmanaged_app() -> None:
     with pytest.raises(ValueError, match="create_agentkit_app"):
         agentkit_app.run_agentkit_app(FastAPI())
+
+
+@pytest.mark.asyncio
+async def test_lifespan_shuts_the_codex_runtime_down_only_when_loaded(
+    monkeypatch,
+) -> None:
+    import sys
+
+    calls: list[str] = []
+
+    async def shutdown_codex_runtime() -> None:
+        calls.append("shutdown")
+
+    app = FastAPI()
+    agentkit_app._configure_codex_runtime_shutdown(app)
+    monkeypatch.delitem(sys.modules, "veadk.runtime.codex.runtime", raising=False)
+    async with app.router.lifespan_context(app):
+        pass
+    assert calls == [], "the Codex runtime was not loaded"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "veadk.runtime.codex.runtime",
+        SimpleNamespace(shutdown_codex_runtime=shutdown_codex_runtime),
+    )
+    async with app.router.lifespan_context(app):
+        pass
+    assert calls == ["shutdown"]

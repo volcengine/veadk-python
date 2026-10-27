@@ -20,6 +20,7 @@ import asyncio
 import inspect
 import json
 import os
+import sys
 import threading
 import traceback
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping
@@ -423,6 +424,27 @@ def _configure_harness_extension_lifecycle(
                 yield
             finally:
                 close()
+
+    app.router.lifespan_context = lifespan
+
+
+def _configure_codex_runtime_shutdown(app: FastAPI) -> None:
+    """Close warm Codex processes, the MCP bridge and shims on shutdown.
+
+    Only when the Codex runtime was loaded: an app that never ran a Codex turn
+    must not import the optional SDK just to shut it down.
+    """
+    original_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(fastapi_app: FastAPI):
+        async with original_lifespan(fastapi_app):
+            try:
+                yield
+            finally:
+                codex_runtime = sys.modules.get("veadk.runtime.codex.runtime")
+                if codex_runtime is not None:
+                    await codex_runtime.shutdown_codex_runtime()
 
     app.router.lifespan_context = lifespan
 
@@ -833,8 +855,9 @@ def _configure_dynamic_a2a_routes(
                                 )
                                 + "\n\n"
                             )
-            except Exception as exc:  # noqa: BLE001 - SSE surfaces errors as data.
-                yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            except Exception:  # noqa: BLE001 - SSE surfaces failures as data.
+                logger.exception("dynamic_run_sse_failed")
+                yield f"data: {json.dumps({'error': 'agent execution failed'})}\n\n"
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -885,8 +908,9 @@ def _configure_dynamic_a2a_routes(
                             )
                             + "\n\n"
                         )
-            except Exception as exc:  # noqa: BLE001 - SSE surfaces errors as data.
-                yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            except Exception:  # noqa: BLE001 - SSE surfaces failures as data.
+                logger.exception("dynamic_invoke_failed")
+                yield f"data: {json.dumps({'error': 'agent execution failed'})}\n\n"
 
         return StreamingResponse(
             event_generator(),
@@ -1068,6 +1092,7 @@ def create_agentkit_app(
         _configure_feishu_lifecycle(fastapi_app, root_agent, short_term_memory)
     if harness_extension is not None:
         _configure_harness_extension_lifecycle(fastapi_app, harness_extension)
+    _configure_codex_runtime_shutdown(fastapi_app)
     _add_introspection_routes(fastapi_app, root_agent, names, agent_draft)
     _mount_webui(fastapi_app)
     _prioritize_platform_routes(fastapi_app)

@@ -25,6 +25,11 @@ Turns are isolated by a random bearer token minted by
 :meth:`McpBridge.register_turn`: ``tools/list`` and ``tools/call`` only ever see
 the calling token's tools, and an unknown token is refused with HTTP 401.
 
+Pooled processes retain a credential and immutable manifest, but no
+idle executors. Their active invocation requires the SDK-owned thread/turn
+identity and process-wide unique request IDs; closing admission drains tasks
+before the credential can serve a later invocation.
+
 Codex-specific facts this module relies on (verified against codex 0.159.2):
 
 - ``tools/call`` params carry ``_meta.callId`` -- the model's ``call_id`` --
@@ -90,6 +95,8 @@ _ERROR_TEXT_LIMIT = 2000
 
 _SCOPE_TURN = "veadk.mcp_bridge.turn"
 _SCOPE_SLOT = "veadk.mcp_bridge.slot"
+_SCOPE_TOOLS = "veadk.mcp_bridge.tools"
+_MAX_PROCESS_REQUESTS = 32768
 
 
 @dataclass(frozen=True)
@@ -122,6 +129,20 @@ class _Turn:
     state: BridgeTurnState = field(default_factory=BridgeTurnState)
     # JSON-RPC request id -> slot, so `notifications/cancelled` can find it.
     slots: dict[str, "_CallSlot"] = field(default_factory=dict)
+    closed: bool = False
+    thread_id: str | None = None
+    turn_id: str | None = None
+    activated: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+@dataclass
+class _ProcessBinding:
+    """A process credential and manifest, with no invocation executors."""
+
+    tools: list[types.Tool]
+    thread_id: str | None = None
+    request_ids: set[str] = field(default_factory=set)
+    reusable: bool = True
 
 
 @dataclass
@@ -230,6 +251,7 @@ class McpBridge:
     def __init__(self) -> None:
         self.url: str | None = None
         self._turns: dict[str, _Turn] = {}
+        self._processes: dict[str, _ProcessBinding] = {}
         self._turns_lock = threading.Lock()
         self._server: uvicorn.Server | None = None
         self._task: asyncio.Task[Any] | None = None
@@ -242,6 +264,61 @@ class McpBridge:
 
     # -- turn registry -------------------------------------------------------
 
+    def register_process(self, specs: list[dict[str, Any]]) -> str:
+        """Create a credential for a guarded process with a fixed manifest."""
+        token = secrets.token_urlsafe(32)
+        with self._turns_lock:
+            self._processes[_token_key(token)] = _ProcessBinding(
+                tools=[_spec_to_tool(spec) for spec in specs]
+            )
+        return token
+
+    def release_process(self, token: str) -> None:
+        """Revoke a process credential, including any active invocation."""
+        self.unregister_turn(token)
+        with self._turns_lock:
+            self._processes.pop(_token_key(token), None)
+
+    def activate_turn(self, token: str, thread_id: str, turn_id: str) -> None:
+        """Bind a preparing invocation to IDs obtained from the SDK handle."""
+        with self._turns_lock:
+            binding = self._processes.get(_token_key(token))
+            turn = self._turns.get(_token_key(token))
+            if binding is None or turn is None or turn.closed:
+                raise RuntimeError("the process has no preparing invocation")
+            if not thread_id or not turn_id:
+                raise ValueError("a guarded invocation requires thread and turn IDs")
+            if binding.thread_id not in (None, thread_id):
+                binding.reusable = False
+                raise RuntimeError("the process belongs to a different thread")
+            if turn.activated.is_set():
+                raise RuntimeError("the invocation is already activated")
+            binding.thread_id = turn.thread_id = thread_id
+            turn.turn_id = turn_id
+            turn.activated.set()
+
+    async def finish_turn(self, token: str) -> bool:
+        """Close admission and drain executors before a process may be parked."""
+        turn = self._lookup(token)
+        self.unregister_turn(token)
+        tasks = (
+            [slot.task for slot in turn.slots.values() if slot.task is not None]
+            if turn
+            else []
+        )
+        drained = True
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=_STOP_TIMEOUT_SECONDS)
+            drained = not pending
+        with self._turns_lock:
+            binding = self._processes.get(_token_key(token))
+            if binding is not None and (
+                not drained
+                or (turn is not None and (turn.state.errors or turn.state.interrupts))
+            ):
+                binding.reusable = False
+            return drained and binding is not None and binding.reusable
+
     def register_turn(
         self,
         specs: list[dict[str, Any]],
@@ -251,8 +328,15 @@ class McpBridge:
         otel_context: Any = None,
         max_tool_iterations: int | None = None,
         on_error: Callable[[Exception], Awaitable[None]] | None = None,
+        token: str | None = None,
     ) -> str:
-        """Register one turn's tools and return a fresh bearer token for it."""
+        """Register one turn's tools and return the bearer token serving it.
+
+        A token from :meth:`register_process` binds fresh executors to a
+        preparing invocation, activated later from the SDK handle. Without
+        it a fresh per-invocation token is minted. Closing an invocation stops
+        tool admission; only a guarded process retains discovery access.
+        """
         tools: list[types.Tool] = []
         for spec in specs:
             name = spec.get("name") if isinstance(spec, dict) else None
@@ -265,7 +349,7 @@ class McpBridge:
                 )
                 continue
             tools.append(_spec_to_tool(spec))
-        token = secrets.token_urlsafe(32)
+        token = token or secrets.token_urlsafe(32)
         turn = _Turn(
             tools=tools,
             executors=dict(executors),
@@ -275,6 +359,11 @@ class McpBridge:
             on_error=on_error,
         )
         with self._turns_lock:
+            if _token_key(token) in self._turns:
+                raise RuntimeError("the bearer token already serves a turn")
+            process = self._processes.get(_token_key(token))
+            if process is not None and (not process.reusable or process.tools != tools):
+                raise RuntimeError("the process tool manifest or lifecycle changed")
             self._turns[_token_key(token)] = turn
         logger.debug(
             "codex_mcp_bridge_turn_registered invocation_id=%s tools=%d",
@@ -288,6 +377,8 @@ class McpBridge:
         with self._turns_lock:
             turn = self._turns.pop(_token_key(token), None)
         if turn is not None:
+            turn.closed = True
+            turn.activated.set()
             for slot in list(turn.slots.values()):
                 slot.cancel()
 
@@ -340,16 +431,22 @@ class McpBridge:
     def _build_mcp_server(self) -> Server:
         server: Server = Server(self.SERVER_NAME)
 
+        def request_scope() -> dict[str, Any]:
+            request = server.request_context.request
+            if request is None:
+                raise RuntimeError("MCP handler has no HTTP request context")
+            return request.scope
+
         # Handlers are installed directly instead of through the decorators:
         # the decorators keep a single server-wide tool cache (and validate
         # calls against it), which is wrong when every turn has its own tools.
         async def list_tools(_req: Any) -> types.ServerResult:
-            turn = server.request_context.request.scope.get(_SCOPE_TURN)
-            tools = list(turn.tools) if turn is not None else []
+            scope = request_scope()
+            tools = list(scope.get(_SCOPE_TOOLS) or [])
             return types.ServerResult(types.ListToolsResult(tools=tools))
 
         async def call_tool(req: types.CallToolRequest) -> types.ServerResult:
-            scope = server.request_context.request.scope
+            scope = request_scope()
             return await self._call_tool(
                 scope.get(_SCOPE_TURN), scope.get(_SCOPE_SLOT), req
             )
@@ -378,6 +475,10 @@ class McpBridge:
         error = None
         notify_error = False
         with self._turns_lock:
+            if turn.closed:
+                return _text_result(
+                    "Tool call rejected: invocation closed.", is_error=True
+                )
             if (
                 turn.max_tool_iterations is not None
                 and turn.state.calls >= turn.max_tool_iterations
@@ -492,8 +593,15 @@ class McpBridge:
                 auth = value.decode("latin-1")
                 break
         scheme, _, token = auth.partition(" ")
-        turn = self._lookup(token.strip()) if scheme.lower() == "bearer" else None
-        if turn is None:
+        token = token.strip()
+        turn = self._lookup(token) if scheme.lower() == "bearer" else None
+        with self._turns_lock:
+            process = (
+                self._processes.get(_token_key(token))
+                if scheme.lower() == "bearer"
+                else None
+            )
+        if turn is None and process is None:
             await _send_simple(send, 401, b'{"error":"unauthorized"}')
             return
 
@@ -518,12 +626,13 @@ class McpBridge:
             rpc = json.loads(body) if body else None
         except ValueError:
             rpc = None
-        method = rpc.get("method") if isinstance(rpc, dict) else None
+        rpc = rpc if isinstance(rpc, dict) else {}
+        method = rpc.get("method")
 
         if method == "notifications/cancelled":
             params = rpc.get("params") or {}
             request_id = params.get("requestId") if isinstance(params, dict) else None
-            slot = turn.slots.get(str(request_id))
+            slot = turn.slots.get(str(request_id)) if turn is not None else None
             if slot is not None:
                 slot.cancel()
             await _send_simple(send, 202)
@@ -531,13 +640,70 @@ class McpBridge:
 
         slot: _CallSlot | None = None
         rpc_id: str | None = None
-        if method == "tools/call" and "id" in rpc:
+        if method == "tools/call" and turn is None:
+            await _send_simple(send, 403)
+            return
+        if process is not None and method == "tools/call":
+            if turn is None:
+                await _send_simple(send, 403)
+                return
+            try:
+                await asyncio.wait_for(turn.activated.wait(), _START_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                process.reusable = False
+                await _send_simple(send, 403)
+                return
+            params = rpc.get("params") if isinstance(rpc, dict) else None
+            meta = params.get("_meta") if isinstance(params, dict) else None
+            if not isinstance(meta, dict):
+                await _send_simple(send, 403)
+                return
+            identity = meta.get("x-codex-turn-metadata")
+            if (
+                turn.closed
+                or not isinstance(identity, dict)
+                or identity.get("thread_id") != turn.thread_id
+                or identity.get("turn_id") != turn.turn_id
+                or meta.get("threadId", turn.thread_id) != turn.thread_id
+                or meta.get("sessionId", turn.thread_id) != turn.thread_id
+            ):
+                logger.warning("codex_mcp_bridge_rejected reason=invocation_identity")
+                await _send_simple(send, 403)
+                return
+            value = rpc.get("id")
+            rpc_id = str(value)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, str))
+                or len(rpc_id) > 256
+                or rpc_id in process.request_ids
+                or len(process.request_ids) >= _MAX_PROCESS_REQUESTS
+            ):
+                # A cancel notification only carries this ID. Reject reuse
+                # across generations, including reconnects, before execution.
+                process.reusable = False
+                logger.warning("codex_mcp_bridge_rejected reason=request_id")
+                await _send_simple(send, 409)
+                return
+            process.request_ids.add(rpc_id)
+        elif (
+            process is not None
+            and turn is None
+            and method
+            not in ("initialize", "notifications/initialized", "tools/list", "ping")
+        ):
+            await _send_simple(send, 403)
+            return
+        if method == "tools/call" and "id" in rpc and turn is not None:
             slot = _CallSlot()
             rpc_id = str(rpc["id"])
             turn.slots[rpc_id] = slot
         scope = dict(scope)
         scope[_SCOPE_TURN] = turn
         scope[_SCOPE_SLOT] = slot
+        scope[_SCOPE_TOOLS] = (
+            process.tools if process is not None else (turn.tools if turn else [])
+        )
 
         disconnected = asyncio.Event()
 
@@ -573,7 +739,11 @@ class McpBridge:
             watcher.cancel()
             with contextlib.suppress(BaseException):
                 await watcher
-            if rpc_id is not None and turn.slots.get(rpc_id) is slot:
+            if (
+                rpc_id is not None
+                and turn is not None
+                and turn.slots.get(rpc_id) is slot
+            ):
                 del turn.slots[rpc_id]
 
     @staticmethod
@@ -712,7 +882,10 @@ class McpBridge:
         with self._turns_lock:
             turns = list(self._turns.values())
             self._turns.clear()
+            self._processes.clear()
         for turn in turns:
+            turn.closed = True
+            turn.activated.set()
             for slot in list(turn.slots.values()):
                 slot.cancel()
 

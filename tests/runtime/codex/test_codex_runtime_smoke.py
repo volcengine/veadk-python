@@ -58,6 +58,7 @@ import json
 import os
 import platform
 import shutil
+import sys
 import tempfile
 import time
 import uuid
@@ -76,6 +77,9 @@ _SANDBOX_PROBE_MARKER = "veadk-codex-sandbox-probe-ok"
 #: which of these comes back says whether the sandbox is actually enforcing.
 _WRITE_ALLOWED_MARKER = "veadk-codex-write-allowed"
 _WRITE_DENIED_MARKER = "veadk-codex-write-denied"
+#: The same probe outside the workspace, which `read_only` denies everywhere.
+_OUTSIDE_WRITE_ALLOWED_MARKER = "veadk-codex-outside-write-allowed"
+_OUTSIDE_WRITE_DENIED_MARKER = "veadk-codex-outside-write-denied"
 #: Path the probe tries to create, relative to the turn's workspace (cwd).
 _WRITE_PROBE_FILE = "veadk-codex-write-probe"
 #: Passed to the ADK tool by the stub backend and recorded by the tool body.
@@ -288,7 +292,10 @@ _PROBE_SCRIPT = (
     f"/bin/echo {_SANDBOX_PROBE_MARKER}; "
     f"if /usr/bin/touch ./{_WRITE_PROBE_FILE} 2>/dev/null; "
     f"then /bin/echo {_WRITE_ALLOWED_MARKER}; "
-    f"else /bin/echo {_WRITE_DENIED_MARKER}; fi"
+    f"else /bin/echo {_WRITE_DENIED_MARKER}; fi; "
+    f"if /usr/bin/touch /tmp/{_WRITE_PROBE_FILE}-$$ 2>/dev/null; "
+    f"then /bin/echo {_OUTSIDE_WRITE_ALLOWED_MARKER}; "
+    f"else /bin/echo {_OUTSIDE_WRITE_DENIED_MARKER}; fi"
 )
 
 
@@ -460,9 +467,21 @@ async def test_real_codex_binary_completes_one_tool_using_turn(monkeypatch) -> N
         "the OS sandbox did not establish, or refused to run a trivial "
         f"read-only command. Codex reported: {probe_output!r}"
     )
-    assert _WRITE_DENIED_MARKER in probe_output, (
+    assert _OUTSIDE_WRITE_DENIED_MARKER in probe_output, (
         "sandbox='read_only' did not actually block a write from inside the "
         f"sandbox. Codex reported: {probe_output!r}"
+    )
+    # The session's own workspace: read-only, except on Linux, where Codex's
+    # sandbox cannot reach a read grant beneath the denied temp dir and VeADK
+    # grants it write instead (`runtime._nested_read_access`). Revisit when
+    # Codex fixes that; until then Linux must keep the workaround.
+    own_marker = (
+        _WRITE_ALLOWED_MARKER
+        if sys.platform.startswith("linux")
+        else _WRITE_DENIED_MARKER
+    )
+    assert own_marker in probe_output, (
+        f"unexpected own-workspace write result. Codex reported: {probe_output!r}"
     )
 
     # -- the ADK tool path over a real socket ------------------------------
@@ -512,9 +531,18 @@ async def test_real_codex_binary_completes_one_tool_using_turn(monkeypatch) -> N
     # process-owned root or landing in the working directory.
     workspace = next(iter(new_workspaces))
     assert workspace.parent == workspace_root
-    assert not (workspace / _WRITE_PROBE_FILE).exists(), (
-        "the read-only sandbox let Codex create a file in the workspace"
-    )
+    # Same platform split as `own_marker` above: the file shows the write
+    # really happened (Linux workaround) or really did not (elsewhere).
+    write_probe = workspace / _WRITE_PROBE_FILE
+    if sys.platform.startswith("linux"):
+        assert write_probe.exists(), (
+            "the Linux workaround should let Codex write its own workspace: "
+            "Codex cannot read-grant a path beneath the denied temp dir"
+        )
+    else:
+        assert not write_probe.exists(), (
+            "the read-only sandbox let Codex create a file in the workspace"
+        )
     cwd_after = {name for name in os.listdir(os.getcwd()) if name[0] != "."}
     assert cwd_after == cwd_before, (
         "the turn created entries in the working directory: "
@@ -526,14 +554,19 @@ async def test_real_codex_binary_completes_one_tool_using_turn(monkeypatch) -> N
 def _codex_homes(temp_root: Path) -> set[Path]:
     """Invocation-scoped CODEX_HOME dirs, excluding the workspace root.
 
-    ``_prepare_codex_home`` and ``_SESSION_WORKSPACE_ROOT`` share the
-    ``veadk-codex-`` prefix; only the former must be gone after a turn.
+    ``_prepare_codex_home`` creates homes inside a ``veadk-codex-homes-*``
+    root; the roots, like ``_SESSION_WORKSPACE_ROOT``, outlive a turn.
     """
-    return {
-        path
-        for path in temp_root.glob("veadk-codex-*")
-        if path.is_dir() and not path.name.startswith("veadk-codex-workspaces-")
-    }
+    homes: set[Path] = set()
+    for path in temp_root.glob("veadk-codex-*"):
+        if not path.is_dir() or path.name.startswith("veadk-codex-workspaces-"):
+            continue
+        if path.name.startswith("veadk-codex-homes-"):
+            # A process-owned root; the homes are its subdirectories.
+            homes.update(home for home in path.iterdir() if home.is_dir())
+        else:
+            homes.add(path)
+    return homes
 
 
 def _tool_names(requests: list[dict[str, Any]]) -> list[str]:
@@ -582,12 +615,13 @@ async def test_real_codex_binary_fails_turn_when_shim_is_unreachable() -> None:
 
     from veadk.runtime.codex.model_provider import shim_route
 
+    workspace = tempfile.mkdtemp(prefix="veadk-codex-smoke-dead-shim-")
     home = runtime_module._prepare_codex_home(
         shim_route(f"http://127.0.0.1:{dead_port}", ""),
         "smoke-model",
         CodexRuntimeConfig(),
+        workspace=workspace,
     )
-    workspace = tempfile.mkdtemp(prefix="veadk-codex-smoke-dead-shim-")
 
     async def _turn_status() -> str:
         config = CodexConfig(
@@ -742,7 +776,7 @@ async def test_real_codex_shell_cannot_see_the_model_key() -> None:
         extra_headers={"X-Api-Key": header_secret},
     )
     home = runtime_module._prepare_codex_home(
-        route, "smoke-model", CodexRuntimeConfig()
+        route, "smoke-model", CodexRuntimeConfig(), workspace=tempfile.gettempdir()
     )
     with open(os.path.join(home, "config.toml"), encoding="utf-8") as f:
         config_text = f.read()

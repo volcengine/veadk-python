@@ -1221,7 +1221,12 @@ class ResponsesShim:
             )
             return JSONResponse(
                 status_code=status,
-                content={"error": {"type": _error_type(status), "message": detail}},
+                content={
+                    "error": {
+                        "type": _error_type(status),
+                        "message": _safe_backend_error_message(status),
+                    }
+                },
             )
 
         # Starlette resolves handlers by walking `type(exc).__mro__`, and none
@@ -1712,6 +1717,20 @@ def _error_type(status: int) -> str:
     }.get(status, "api_error")
 
 
+def _safe_backend_error_message(status: int) -> str:
+    """Stable client-facing backend error text that cannot expose provider internals."""
+    return {
+        400: "Backend rejected the request.",
+        401: "Backend authentication failed.",
+        403: "Backend permission denied.",
+        404: "Backend resource was not found.",
+        408: "Backend request timed out.",
+        422: "Backend rejected the request.",
+        429: "Backend rate limit exceeded.",
+        503: "Backend service is unavailable.",
+    }.get(status, "Backend request failed.")
+
+
 def _to_dict(obj: Any) -> dict[str, Any]:
     """Normalize a litellm Responses object into a plain dict."""
     if isinstance(obj, dict):
@@ -2014,10 +2033,20 @@ _SHIMS_LOCK = threading.Lock()
 _RETIRED: "list[ResponsesShim]" = []
 
 
+_FINGERPRINT_KEY = b"veadk-codex-shim-cache-v1"
+
+
 def _credential_fingerprint(api_key: str) -> str:
     if not api_key:
         return ""
-    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:32]
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        api_key.encode("utf-8"),
+        _FINGERPRINT_KEY,
+        200_000,
+        dklen=16,
+    )
+    return digest.hex()
 
 
 async def get_shim(api_base: str, api_key: str) -> ShimLease:

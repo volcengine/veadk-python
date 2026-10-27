@@ -272,8 +272,11 @@ def make_notification(name: str, payload: dict[str, Any]) -> Any:
 class _Note:
     """The ``note`` wrapper the SDK stream yields; the runtime reads ``payload``."""
 
-    def __init__(self, payload: Any) -> None:
+    def __init__(self, payload: Any, method: str = "") -> None:
         self.payload = payload
+        #: The JSON-RPC method, as on the SDK's ``Notification`` (only
+        #: ``turn/completed`` is read, by ``TurnCompletion``).
+        self.method = method
 
 
 class ShimDrivingCodex:
@@ -842,6 +845,7 @@ class DirectDrivingCodex:
         self.requests: list[dict[str, Any]] = []
         #: Every MCP ``tools/call`` this client issued.
         self.mcp_calls: list[dict[str, Any]] = []
+        self._mcp_request_seed = 0
         #: Every notification payload this client streamed, in order.
         self.notifications: list[Any] = []
         self.threads: list[_DirectThread] = []
@@ -1486,7 +1490,10 @@ class _DirectTurn:
             payload.setdefault("completed_at_ms", _now_ms())
         elif name == "ReasoningSummaryTextDeltaNotification":
             payload.setdefault("summary_index", 0)
-        note = _Note(make_notification(name, payload))
+        note = _Note(
+            make_notification(name, payload),
+            "turn/completed" if name == "TurnCompletedNotification" else "",
+        )
         self.client.notifications.append(note.payload)
         return note
 
@@ -1586,6 +1593,10 @@ class _DirectTurn:
                 streamable_http_client(str(config["url"]), http_client=http)
             )
             session = await stack.enter_async_context(ClientSession(read, write))
+            # The fake reconnects each turn; pinned Codex keeps the MCP client
+            # for its process. Preserve process-wide request identity here too.
+            session._request_id = self.client._mcp_request_seed
+            self.client._mcp_request_seed += 65536
             await session.initialize()
             server = _McpServer(name, config, session)
             enabled = config.get("enabled_tools")
