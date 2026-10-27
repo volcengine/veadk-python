@@ -16,15 +16,22 @@
 
 This static source check requires only the Python standard library; it guards
 telemetry metadata consistency against a copy-paste of a duration unit from a
-histogram onto a counter. The full recorder-based test in
+histogram onto a counter. The recorder-based runtime test in
 test_portal_metrics.py exercises runtime wiring and requires google.adk.
 """
 import re
 from pathlib import Path
 
 
-def test_chat_exception_counter_uses_count_unit():
-    src = (
+def _counter_block(src, var):
+    m = re.search(var + r"\s*=\s*self\.meter\.create_counter\((.*?)\)", src, re.S)
+    assert m, var + " block not found"
+    unit = re.search(r'unit\s*=\s*"([^"]*)"', m.group(1))
+    return unit.group(1) if unit else None
+
+
+def _source():
+    return (
         Path(__file__).resolve().parent.parent
         / "veadk"
         / "tracing"
@@ -32,15 +39,14 @@ def test_chat_exception_counter_uses_count_unit():
         / "portal_metrics.py"
     ).read_text(encoding="utf-8")
 
-    m = re.search(
-        r"chat_exception_counter\s*=\s*self\.meter\.create_counter\((.*?)\)",
-        src,
-        re.S,
-    )
-    assert m, "chat_exception_counter create_counter block not found"
-    block = m.group(1)
-    unit = re.search(r'unit\s*=\s*"([^"]*)"', block)
-    assert unit, "no unit= found on chat_exception_counter"
-    assert unit.group(1) in ("1", "count"), (
-        f"chat_exception_counter unit must be a count unit, got {unit.group(1)!r}"
-    )
+
+def test_chat_exception_counter_uses_count_unit():
+    assert _counter_block(_source(), "self.chat_exception_counter") in ("1", "count")
+
+
+def test_sibling_counters_unchanged():
+    # scope guard: these units must remain as-is (not altered by this change)
+    src = _source()
+    assert _counter_block(src, "self.llm_invoke_counter") == "count"
+    assert _counter_block(src, "self.skill_download_counter") == "1"
+    assert _counter_block(src, "self.skill_load_counter") == "1"
