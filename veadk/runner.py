@@ -14,6 +14,7 @@
 
 import functools
 import os
+from contextlib import aclosing
 from types import MethodType
 from typing import Union
 
@@ -148,45 +149,50 @@ def intercept_new_message(process_func):
                     thinking_parts.clear()
 
             event_metadata = ""
-            async for event in func(
-                user_id=user_id,
-                session_id=session_id,
-                new_message=new_message,
-                **kwargs,
-            ):
-                if event is None:
-                    logger.error(f"Event is None with new_message: {new_message}")
-                    continue
+            async with aclosing(
+                func(
+                    user_id=user_id,
+                    session_id=session_id,
+                    new_message=new_message,
+                    **kwargs,
+                )
+            ) as stream:
+                async for event in stream:
+                    if event is None:
+                        logger.error(f"Event is None with new_message: {new_message}")
+                        continue
 
-                yield event
+                    yield event
 
-                # skip streaming partial chunks; they are logged once aggregated
-                if event.partial:
-                    continue
+                    # skip streaming partial chunks; they are logged once aggregated
+                    if event.partial:
+                        continue
 
-                event_metadata = f"| agent_name: {event.author} , user_id: {user_id} , session_id: {session_id} , invocation_id: {event.invocation_id}"
-                function_calls = get_event_function_calls(event)
-                function_responses = get_event_function_responses(event)
-                if function_calls:
-                    flush_thinking(event_metadata)
-                    for function_call in function_calls:
-                        logger.debug(f"Function call: {function_call} {event_metadata}")
-                elif function_responses:
-                    flush_thinking(event_metadata)
-                    for function_response in function_responses:
-                        logger.debug(
-                            f"Function response: {function_response} {event_metadata}"
-                        )
-                elif event.content is not None and event.content.parts:
-                    for part in event.content.parts:
-                        if part.text and len(part.text.strip()) > 0:
-                            if part.thought:
-                                thinking_parts.append(part.text)
-                            else:
-                                flush_thinking(event_metadata)
-                                logger.debug(
-                                    f"Event output: {part.text} {event_metadata}"
-                                )
+                    event_metadata = f"| agent_name: {event.author} , user_id: {user_id} , session_id: {session_id} , invocation_id: {event.invocation_id}"
+                    function_calls = get_event_function_calls(event)
+                    function_responses = get_event_function_responses(event)
+                    if function_calls:
+                        flush_thinking(event_metadata)
+                        for function_call in function_calls:
+                            logger.debug(
+                                f"Function call: {function_call} {event_metadata}"
+                            )
+                    elif function_responses:
+                        flush_thinking(event_metadata)
+                        for function_response in function_responses:
+                            logger.debug(
+                                f"Function response: {function_response} {event_metadata}"
+                            )
+                    elif event.content is not None and event.content.parts:
+                        for part in event.content.parts:
+                            if part.text and len(part.text.strip()) > 0:
+                                if part.thought:
+                                    thinking_parts.append(part.text)
+                                else:
+                                    flush_thinking(event_metadata)
+                                    logger.debug(
+                                        f"Event output: {part.text} {event_metadata}"
+                                    )
 
             # flush trailing thinking for a pure-reasoning turn with no answer
             flush_thinking(event_metadata)

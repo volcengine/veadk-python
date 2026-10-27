@@ -257,6 +257,14 @@ class Agent(LlmAgent):
 
     tools: list[ToolUnion] = []
 
+    sandbox: Any | None = Field(default=None, exclude=True, repr=False)
+    """Optional live SandboxManager for session-scoped MCP execution.
+
+    Bound inside the Agent loop, including with ordinary Google ADK runners.
+    This resource reference is excluded from serialization and is validated
+    lazily to avoid importing the sandbox SDK for agents that do not use it.
+    """
+
     sub_agents: list[BaseAgent] = Field(default_factory=list, exclude=True)
 
     prompt_manager: Optional[BasePromptManager] = None
@@ -635,6 +643,11 @@ class Agent(LlmAgent):
             f"Agent: {self.model_dump(include={'id', 'name', 'model_name', 'model_api_base', 'tools', 'skills'})}"
         )
 
+        if self.sandbox is not None:
+            from veadk.sandbox.runtime import validate_sandbox_agent
+
+            validate_sandbox_agent(self)
+
         if self.runtime != "adk":
             # Fail at ``Agent(...)`` rather than at the first turn. This is a
             # convenience, not the authoritative gate: ``BaseAgent.clone()``
@@ -870,6 +883,15 @@ class Agent(LlmAgent):
                 return SupervisorAutoFlow(supervised_agent=self)
             return AutoFlow()
 
+    @property
+    def canonical_before_model_callbacks(self):
+        callbacks = super().canonical_before_model_callbacks
+        if self.sandbox is None:
+            return callbacks
+        from veadk.sandbox.runtime import bind_tools
+
+        return [bind_tools, *callbacks]
+
     async def _run_async_impl(
         self, ctx: "InvocationContext"
     ) -> AsyncGenerator["Event", None]:
@@ -880,6 +902,18 @@ class Agent(LlmAgent):
         external agent harness (e.g. the Claude Code SDK) back into the ADK event
         stream, so the surrounding ``Runner`` is unaffected.
         """
+        if self.sandbox is not None:
+            from veadk.sandbox.runtime import sandbox_scope, validate_sandbox_agent
+
+            validate_sandbox_agent(self)
+            async with (
+                sandbox_scope(self, ctx),
+                aclosing(super()._run_async_impl(ctx)) as events,
+            ):
+                async for event in events:
+                    yield event
+            return
+
         if self.runtime == "adk":
             # A transfer can close this wrapper before the LLM stream ends.
             # Close it in the same task so tracing contexts do not leak into
@@ -923,6 +957,10 @@ class Agent(LlmAgent):
         Raises:
             NotImplementedError: If the agent uses a non-``adk`` runtime.
         """
+        if self.sandbox is not None:
+            raise NotImplementedError(
+                "Agent(sandbox=...) supports run_async, not run_live"
+            )
         if self.runtime != "adk":
             raise NotImplementedError(
                 f"Agent(runtime={self.runtime!r}) has no live/bidi "
