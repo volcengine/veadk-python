@@ -93,12 +93,18 @@ def test_environment_reaches_session_service(monkeypatch):
     assert (url.host, url.port) == ("db.example.test", 6543)
 
 
-def test_explicit_db_url_bypasses_host_configuration(monkeypatch):
+@pytest.mark.asyncio
+async def test_explicit_db_url_bypasses_host_configuration(monkeypatch):
     monkeypatch.setenv("DATABASE_POSTGRESQL_HOST", "db.example.test:invalid")
-    service = Mock()
-    monkeypatch.setattr(
-        "veadk.memory.short_term_memory.DatabaseSessionService", service
-    )
     url = "sqlite+aiosqlite:///:memory:"
-    ShortTermMemory(db_url=url)
-    service.assert_called_once_with(db_url=url)
+    service = ShortTermMemory(db_url=url).session_service
+    try:
+        # Assert URL precedence through the owned service, not its internal constructor.
+        assert service.db_engine.url == make_url(url)
+        session = await service.create_session(app_name="app", user_id="user")
+        reloaded = await service.get_session(
+            app_name="app", user_id="user", session_id=session.id
+        )
+        assert reloaded is not None and reloaded.id == session.id
+    finally:
+        await service.db_engine.dispose()
