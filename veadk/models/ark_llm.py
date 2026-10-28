@@ -61,6 +61,7 @@ from volcenginesdkarkruntime._exceptions import ArkBadRequestError
 
 from veadk.config import settings
 from veadk.consts import DEFAULT_VIDEO_MODEL_API_BASE
+from veadk.tracing.telemetry.timing import ModelTiming, ark_output_type
 from veadk.utils.adk_compat import (
     get_previous_interaction_id,
     llm_request_has_field,
@@ -855,18 +856,26 @@ class ArkLlm(Gemini):
         responses_args = request_reorganization_by_ark(
             responses_args, enable_responses_cache=self.enable_responses_cache
         )
-        if stream:
-            responses_args["stream"] = True
-            async for part in await self.llm_client.aresponses(**responses_args):
-                llm_response = event_to_generate_content_response(
-                    event=part, is_partial=True, model_version=model
-                )
-                if llm_response:
-                    yield llm_response
-        else:
-            raw_response = await self.llm_client.aresponses(**responses_args)
-            llm_response = ark_response_to_generate_content_response(raw_response)
-            yield llm_response
+        with ModelTiming(streaming=stream, model=model) as timing:
+            if stream:
+                responses_args["stream"] = True
+                response = await self.llm_client.aresponses(**responses_args)
+                try:
+                    async for part in response:
+                        timing.observe(ark_output_type(part))
+                        llm_response = event_to_generate_content_response(
+                            event=part, is_partial=True, model_version=model
+                        )
+                        if llm_response:
+                            yield llm_response
+                finally:
+                    close = getattr(response, "close", None)
+                    if close is not None:
+                        await close()
+            else:
+                raw_response = await self.llm_client.aresponses(**responses_args)
+                llm_response = ark_response_to_generate_content_response(raw_response)
+                yield llm_response
 
     @classmethod
     @override

@@ -187,3 +187,22 @@ In a multi-agent scenario, spans are linked through `parent_span_id`, showing th
 <Callout type="info" title="OpenTelemetry Compatibility">
   VeADK's field naming follows the OpenTelemetry generative-AI conventions, so you can import tracing data directly into any OpenTelemetry-compatible system for analysis and visualization.
 </Callout>
+
+
+## Request, model, and first-token timestamps
+
+VeADK's default LiteLLM and Ark Responses adapters add the following extension attributes to model spans when OpenTelemetry tracing is enabled. UTC Unix nanoseconds are used throughout.
+
+| Attribute | Meaning |
+| --- | --- |
+| `veadk.request.start_time_unix_ns` | HTTP ASGI entry in VeADK AgentKit/Harness apps, or direct VeADK Runner execution entry. |
+| `veadk.request.start_source` | `http` or `runner`; an inherited HTTP timestamp takes precedence. |
+| `veadk.model.start_time_unix_ns` | Start of one adapter SDK request, not provider inference start. |
+| `veadk.model.streaming` | Actual model SDK request mode, independent of HTTP SSE transport. |
+| `veadk.model.first_token_time_unix_ns` | Receipt of the first nonempty generated content delta. |
+| `veadk.model.first_token_type` | `text`, `reasoning`, or `tool_call`. |
+| `veadk.model.first_token_status` | `observed`, `non_streaming`, `no_output`, or `unsupported`. |
+
+First-token capture excludes role/id/signature metadata, empty deltas, usage, heartbeats, and completion-only aggregates. It does not require token usage or content tracing. One chunk may contain several tokens, so this is an SDK-observed first-output timestamp. Non-streaming calls have no first-token timestamp; completion time is never substituted.
+
+Each SDK request creates a `model_request` child span; the owning model span also receives the latest attempt's fields. VeADK-issued retries and fallbacks create separate attempts. Internal LiteLLM/provider retries remain within the observed SDK request (`veadk.model.request_scope=sdk_request`). Unsupported external/custom engines are explicitly marked; invocation span start is not used as model start. Applications outside the VeADK HTTP factories must install the request timing middleware or use VeADK Runner to establish a request timestamp. Client-render timing and TTFT/TPOT histogram reporting are separate capabilities.
