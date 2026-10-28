@@ -104,10 +104,22 @@ class PostgreSqlSTMBackend(BaseShortTermMemoryBackend):
     def model_post_init(self, context: Any) -> None:
         encoded_username = quote_plus(self.postgresql_config.user)
         encoded_password = quote_plus(self.postgresql_config.password)
+        host = self.postgresql_config.host
+        port = self.postgresql_config.port
+        if host.count(":") == 1:
+            host, embedded_port = host.rsplit(":", 1)
+            if not host or not embedded_port.isascii() or not embedded_port.isdecimal():
+                raise ValueError(
+                    "PostgreSQL host:port requires a hostname and a numeric port."
+                )
+            # A port in the host takes precedence over the separate setting.
+            port = int(embedded_port)
+            if not 1 <= port <= 65535:
+                raise ValueError("PostgreSQL port must be between 1 and 65535.")
         if should_use_async_db_drivers():
-            self._db_url = f"postgresql+asyncpg://{encoded_username}:{encoded_password}@{self.postgresql_config.host}:{self.postgresql_config.port}/{self.postgresql_config.database}"
+            self._db_url = f"postgresql+asyncpg://{encoded_username}:{encoded_password}@{host}:{port}/{self.postgresql_config.database}"
         else:
-            self._db_url = f"postgresql://{encoded_username}:{encoded_password}@{self.postgresql_config.host}:{self.postgresql_config.port}/{self.postgresql_config.database}"
+            self._db_url = f"postgresql://{encoded_username}:{encoded_password}@{host}:{port}/{self.postgresql_config.database}"
 
     @cached_property
     @override
