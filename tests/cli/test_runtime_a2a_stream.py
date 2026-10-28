@@ -911,7 +911,7 @@ def test_decoder_suppresses_repeated_transport_heartbeats():
     assert decoder.project(working, author="default") == []
 
 
-def test_does_not_map_submitted_user_echo_or_terminal_status_message():
+def test_does_not_map_submitted_user_echo():
     submitted = {
         "kind": "status-update",
         "status": {
@@ -919,8 +919,16 @@ def test_does_not_map_submitted_user_echo_or_terminal_status_message():
             "message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}]},
         },
     }
+
+    assert a2a_event_to_studio_events(submitted, author="default") == []
+
+
+@pytest.mark.parametrize("mpa_a2a", [False, True])
+def test_decoder_projects_final_completed_status_message(mpa_a2a):
+    decoder = A2AStreamDecoder(mpa_a2a=mpa_a2a)
     completed = {
         "kind": "status-update",
+        "taskId": "task-1",
         "final": True,
         "status": {
             "state": "completed",
@@ -928,8 +936,96 @@ def test_does_not_map_submitted_user_echo_or_terminal_status_message():
         },
     }
 
-    assert a2a_event_to_studio_events(submitted, author="default") == []
-    assert a2a_event_to_studio_events(completed, author="default") == []
+    projected = decoder.project(completed, author="default")
+
+    assert projected == [
+        {
+            "id": "a2a-task-1-final-0",
+            "author": "default",
+            "partial": False,
+            "turnComplete": True,
+            "content": {"role": "model", "parts": [{"text": "done"}]},
+            "customMetadata": {"projectionSource": "a2a-terminal-status"},
+        }
+    ]
+    assert decoder.finalize_projection(author="default") == []
+    assert decoder.stream_incomplete_error() == ""
+
+
+@pytest.mark.parametrize("mpa_a2a", [False, True])
+def test_decoder_projects_final_failed_status_message_as_error(mpa_a2a):
+    decoder = A2AStreamDecoder(mpa_a2a=mpa_a2a)
+    failed = {
+        "kind": "status-update",
+        "taskId": "task-1",
+        "final": True,
+        "status": {
+            "state": "failed",
+            "message": {"role": "agent", "parts": [{"kind": "text", "text": "boom"}]},
+        },
+    }
+
+    projected = decoder.project(failed, author="default")
+
+    assert projected == [
+        {
+            "id": "a2a-task-1-failed-error",
+            "author": "default",
+            "partial": False,
+            "content": {"role": "model", "parts": []},
+            "error": "A2A task failed: boom",
+        }
+    ]
+    assert decoder.finalize_projection(author="default") == []
+    assert decoder.stream_incomplete_error() == ""
+
+
+def test_decoder_suppresses_duplicate_terminal_status_after_final_artifact():
+    decoder = A2AStreamDecoder()
+    assert decoder.project(_outer_result("done"), author="default")
+
+    duplicate = {
+        "kind": "status-update",
+        "taskId": "task-1",
+        "final": True,
+        "status": {
+            "state": "completed",
+            "message": {"role": "agent", "parts": [{"kind": "text", "text": "done"}]},
+        },
+    }
+
+    assert decoder.project(duplicate, author="default") == []
+    assert decoder.stream_incomplete_error() == ""
+
+
+def test_decoder_reports_incomplete_stream_after_partial_without_terminal():
+    decoder = A2AStreamDecoder()
+    decoder.project(
+        {
+            "kind": "status-update",
+            "taskId": "task-1",
+            "status": {
+                "state": "working",
+                "message": {
+                    "role": "agent",
+                    "parts": [{"kind": "text", "text": "partial"}],
+                },
+            },
+        },
+        author="default",
+    )
+
+    assert (
+        decoder.stream_incomplete_error()
+        == "A2A stream ended before a terminal task status (last state: working)."
+    )
+
+
+def test_decoder_accepts_completed_projection_without_terminal_status():
+    decoder = A2AStreamDecoder()
+    assert decoder.project(_outer_result("done"), author="default")
+
+    assert decoder.stream_incomplete_error() == ""
 
 
 def test_projection_suppresses_cumulative_working_message_after_deltas():
