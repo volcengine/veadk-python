@@ -2,7 +2,7 @@
 
 [中文版](2026-10-28-first-token-timestamps.zh.md)
 
-Change ID: `first-token-timestamps`; created/revised: 2026-10-28; status: approved (implementation and feature verification complete; repository default regression is not fully green).
+Change ID: `first-token-timestamps`; created/revised: 2026-10-28; status: approved (implementation and local verification complete; current publication checks are tracked in PR #1190).
 Component: [model-timing](../../../specs/model-timing/README.md). Base: `23014771`.
 
 ## Background, scope, and approval
@@ -112,3 +112,5 @@ Sanitized evidence is retained outside Git in `veadk-first-token-20261028`; conc
 Request start is server ASGI ingress or direct Runner execution, not browser submission/render. Model start is adapter SDK request, not provider inference. Opaque LiteLLM/provider retries remain within one SDK request; external/custom engines have explicit unavailable status. No new TTFT/TPOT histogram or cross-host duration guarantee is added. Cloud proof covers one Beijing Runtime and the two supported adapters/model modes; no broad provider matrix or load benchmark is claimed. The existing Sidecar regression above remains outside this change. Commit and push are subsequently authorized; no PR is requested. Git history and the remote feature branch record publication.
 
 Pre-publication verification (2026-10-28): fetched and rebased against `origin/main` (`23014771`, unchanged); all applicable pre-commit hooks passed and all 244 affected tests passed again. Production SHA256 values still match the real cloud E2E build.
+
+CI follow-up (2026-10-28): [test stabilization](../../bugfixes/pr1190-ci/2026-10-28-stabilize-concurrent-tests.md) corrects the concurrent Sandbox test oracle and isolates the existing Sidecar fixture. The former baseline failure is resolved. Latest local default regression: **7,942 passed, 0 failed, 42 skipped, 4 xfailed; 6 subtests passed**. Historical failures above describe the original run. All nine production hashes, 100% (208/208) changed production-line coverage, and 6/6 real cloud E2E evidence remain unchanged. PR creation and the CI follow-up are now explicitly authorized. Published checks are available at [PR #1190](https://github.com/volcengine/veadk-python/pull/1190/checks).

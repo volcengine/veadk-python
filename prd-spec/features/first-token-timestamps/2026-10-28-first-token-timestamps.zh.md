@@ -2,7 +2,7 @@
 
 [English](2026-10-28-first-token-timestamps.md)
 
-变更 ID：`first-token-timestamps`；创建/修订：2026-10-28；状态：approved（实现与需求验证完成；仓库默认回归未全绿）。
+变更 ID：`first-token-timestamps`；创建/修订：2026-10-28；状态：approved（实现与本地验证已完成；当前发布检查由 PR #1190 记录）。
 组件：[model-timing](../../../specs/model-timing/README.zh.md)。基线：`23014771`。
 
 ## 背景、范围和授权
@@ -112,3 +112,5 @@ Chat 流式/非流式、Responses 流式/非流式及并发 Chat/Responses 流�
 请求起点是服务端 ASGI 入口或直接 Runner 执行，不是浏览器提交/渲染。模型起点是适配器 SDK 请求，不是 Provider 推理。不可见的 LiteLLM/Provider 内部重试计入一次 SDK 请求；外部/自定义引擎明确标记不可用。未新增 TTFT/TPOT 直方图或跨主机耗时保证。云端证据覆盖北京一个 Runtime、两个支持的适配器及模型调用模式，不宣称完整 Provider 矩阵或负载基准。上述既有 Sidecar 回归在本次变更范围之外。用户随后授权 commit 和 push，未要求创建 PR。发布记录见 Git 历史和远端功能分支。
 
 发布前验证（2026-10-28）：已 fetch 并相对 `origin/main`（`23014771`，未变化）执行 rebase；全部适用的 pre-commit hook 通过，244 项受影响测试再次全部通过。生产文件 SHA256 仍与真实云端 E2E 构建一致。
+
+CI 后续修复（2026-10-28）：[测试稳定性修复](../../bugfixes/pr1190-ci/2026-10-28-stabilize-concurrent-tests.zh.md)修正 Sandbox 并发测试断言，并隔离既有 Sidecar 测试环境。原基线失败已解决。最新本地默认全量回归：**7,942 passed、0 failed、42 skipped、4 xfailed；6 subtests passed**。上文失败属于原始运行历史。九个生产源码哈希、100%（208/208）生产变更行覆盖率及真实云端 E2E 6/6 证据均不变。用户现已明确授权创建 PR 和修复 CI。推送后的检查结果见 [PR #1190](https://github.com/volcengine/veadk-python/pull/1190/checks)。
