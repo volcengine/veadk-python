@@ -39,6 +39,7 @@ def _closure_cell(function, name):
 
 
 def test_harness_app_exposes_agent_info(monkeypatch):
+    monkeypatch.delenv("MODEL_AGENT_NAME", raising=False)
     monkeypatch.setenv("MODEL_AGENT_API_KEY", "test-api-key")
     monkeypatch.setenv("MODEL_NAME", "test-model")
     monkeypatch.setenv("HARNESS_NAME", "test-harness")
@@ -100,6 +101,7 @@ def test_harness_app_disables_bff_tool_host_by_default(monkeypatch):
 
 
 def test_harness_session_create_accepts_id_and_get_agent_config(monkeypatch):
+    monkeypatch.delenv("MODEL_AGENT_NAME", raising=False)
     monkeypatch.setenv("MODEL_AGENT_API_KEY", "test-api-key")
     monkeypatch.setenv("MODEL_NAME", "test-model")
     monkeypatch.setenv("HARNESS_NAME", "test-harness")

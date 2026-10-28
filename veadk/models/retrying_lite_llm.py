@@ -22,11 +22,13 @@ import math
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from google.adk.models.lite_llm import LiteLlm
+from google.adk.models.lite_llm import LiteLlm, LiteLLMClient
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
+from pydantic import Field
 from typing_extensions import override
 
+from veadk.models.timed_lite_llm import TimedLiteLLMClient
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -90,6 +92,8 @@ class RetryingLiteLlm(LiteLlm):
     instance would duplicate user content.  Once any response has been yielded,
     replay is unsafe because it could duplicate text, reasoning, or tool calls.
     """
+
+    llm_client: LiteLLMClient = Field(default_factory=TimedLiteLLMClient, exclude=True)
 
     def __init__(self, *, model: str, **kwargs: Any) -> None:
         super().__init__(model=model, **kwargs)

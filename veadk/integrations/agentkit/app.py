@@ -49,6 +49,7 @@ from veadk.agent_metadata import (
 from veadk.agent_search import search_agent_component
 from veadk.cli.frontend_invocation import FrontendInvocationPlugin
 from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.tracing.telemetry.timing import install_request_timing
 from veadk.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -1055,6 +1056,7 @@ def create_agentkit_app(
         agent_server_kwargs["identity_health_routes"] = ("/ping",)
     agent_server = AgentkitAgentServerApp(**agent_server_kwargs)
     fastapi_app = cast(FastAPI, agent_server.app)
+    install_request_timing(fastapi_app)
     setattr(fastapi_app.state, _SERVER_STATE_KEY, agent_server)
     _configure_dynamic_a2a_routes(fastapi_app, root_agent, app_plugins)
     _configure_studio_tool_routes(

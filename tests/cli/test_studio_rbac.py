@@ -1328,9 +1328,11 @@ def test_system_info_lists_configured_sandbox_tool_ids(
     assert user_denied.status_code == 403
 
 
+@pytest.mark.parametrize("first_tool_id", ["tool-codex", "tool-codex-snapshot"])
 def test_system_info_prefetches_codex_model_env_state_on_startup(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    first_tool_id: str,
 ) -> None:
     from veadk.cli.studio_sandbox_tools import StudioCodexModelEnvironmentStatus
 
@@ -1339,9 +1341,14 @@ def test_system_info_prefetches_codex_model_env_state_on_startup(
     monkeypatch.setenv("VEADK_STUDIO_TOS_BUCKET", "teststudio")
     monkeypatch.setenv("VEADK_STUDIO_TOS_REGION", "cn-beijing")
     inspect_calls: list[dict[str, Any]] = []
+    first_inspected = Event()
 
     def _inspect_codex_env(**kwargs: Any) -> StudioCodexModelEnvironmentStatus:
+        if kwargs["tool_id"] != first_tool_id:
+            assert first_inspected.wait(timeout=5)
         inspect_calls.append(kwargs)
+        if kwargs["tool_id"] == first_tool_id:
+            first_inspected.set()
         if kwargs["tool_id"] == "tool-codex":
             return StudioCodexModelEnvironmentStatus(
                 needs_model_env_update=True,
@@ -1377,16 +1384,28 @@ def test_system_info_prefetches_codex_model_env_state_on_startup(
     )
 
     with TestClient(app) as client:
-        for _ in range(100):
-            if len(inspect_calls) >= 2:
+        deadline = time.monotonic() + 5
+        while True:
+            response = client.get(
+                "/web/system-info",
+                headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'admin'})}"},
+            )
+            assert response.status_code == 200
+            sandbox_tools = {
+                item["kind"]: item for item in response.json()["sandboxTools"]
+            }
+            if all(
+                sandbox_tools[kind]["needsModelEnvUpdate"]
+                for kind in ("codex", "codex_snapshot")
+            ):
                 break
+            assert time.monotonic() < deadline, (
+                "Startup prefetch state was not published"
+            )
             time.sleep(0.01)
-        response = client.get(
-            "/web/system-info",
-            headers={"Authorization": f"Bearer {_unsigned_jwt({'sub': 'admin'})}"},
-        )
 
-    assert [call["tool_id"] for call in inspect_calls] == [
+    assert inspect_calls[0]["tool_id"] == first_tool_id
+    assert sorted(call["tool_id"] for call in inspect_calls) == [
         "tool-codex",
         "tool-codex-snapshot",
     ]

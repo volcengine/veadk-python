@@ -34,6 +34,7 @@ from veadk.evaluation import EvalSetRecorder
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.processors.base_run_processor import BaseRunProcessor
 from veadk.types import MediaMessage
+from veadk.tracing.telemetry.timing import timed_runner
 from veadk.utils.adk_compat import (
     get_event_function_calls,
     get_event_function_responses,
@@ -193,7 +194,7 @@ def intercept_new_message(process_func):
 
             post_run_process(self)
 
-        return wrapper
+        return timed_runner(wrapper)
 
     return decorator
 

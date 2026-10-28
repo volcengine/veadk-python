@@ -270,6 +270,9 @@ class HarnessApp:
         # Base app = ADK api routes; then add /harness/invoke; mount A2A last so
         # it catches the well-known / RPC paths the ADK routes don't claim.
         self.app = self._server.get_fast_api_app(lifespan=lifespan)
+        from veadk.tracing.telemetry.timing import install_request_timing
+
+        install_request_timing(self.app)
         setattr(self.app.state, _ADK_SERVER_STATE_KEY, self._server)
         _configure_studio_tool_routes(
             self.app,

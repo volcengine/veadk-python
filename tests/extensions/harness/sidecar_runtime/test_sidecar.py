@@ -619,8 +619,12 @@ def test_runtime_exit_switches_stable_mcp_url_to_env_upstream(
 
 
 def test_run_wraps_child_with_sidecar_environment(
-    fake_runtime: Path, tmp_path: Path
+    fake_runtime: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv(
+        "MODEL_AGENT_API_BASE", "https://parent-model.example.test/api/v3"
+    )
+    monkeypatch.setenv("MCP_URLS", "https://parent-mcp.example.test/metrics")
     output = tmp_path / "child-env.json"
     child = tmp_path / "child.py"
     child.write_text(
@@ -631,7 +635,7 @@ def test_run_wraps_child_with_sidecar_environment(
     )
 
     exit_code = run_with_harness_sidecar(
-        _config(fake_runtime), [sys.executable, str(child), str(output)]
+        _config(fake_runtime), [sys.executable, str(child), str(output)], env={}
     )
 
     assert exit_code == 0

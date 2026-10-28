@@ -29,6 +29,7 @@ from typing_extensions import override
 
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.utils.logger import get_logger
+from veadk.tracing.telemetry.timing import annotate_request_start
 
 logger = get_logger(__name__)
 _registration_lock = Lock()
@@ -196,6 +197,7 @@ class _InMemorySpanProcessor(export.SimpleSpanProcessor):
             span: The span being started
             parent_context: Parent OpenTelemetry context
         """
+        annotate_request_start(span)
         if span.name.startswith("invocation"):
             span.set_attribute("gen_ai.operation.name", "chain")
             span.set_attribute("gen_ai.span.kind", "workflow")
