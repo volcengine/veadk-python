@@ -204,3 +204,6 @@ Tracing 数据由一系列 **Span** 组成，每个 Span 记录一次操作（�
 首 Token 采集排除角色/id/签名元数据、空增量、usage、心跳和仅完成时返回的聚合内容。不依赖 token usage 或内容采集。一个 chunk 可含多个 token，因此这里表示 SDK 侧观测到首输出的时间。非流式调用没有首 Token 时间戳，不能用响应完成时间替代。
 
 每次 SDK 请求建立 `model_request` 子 Span，所属模型 Span 同时记录最近一次尝试的字段。VeADK 发起的重试和 fallback 分别记录尝试；LiteLLM/Provider 内部重试计入所观测的 SDK 请求（`veadk.model.request_scope=sdk_request`）。不支持的外部/自定义引擎明确标记，不用 invocation Span 起点替代模型开始。未使用 VeADK HTTP 工厂的应用需要安装请求计时中间件或使用 VeADK Runner，才能建立请求时间戳。客户端渲染计时和 TTFT/TPOT 直方图上报属于独立能力。
+## 会话事件保存耗时
+
+VeADK 内置 SQLite、MySQL、PostgreSQL 会话后端为实际保存事件的 `append_event` 调用生成 `veadk.session.append_event` Span，便于判断会话保存是否拖慢执行。流式 partial 事件不作为数据库保存计时；自定义会话后端不自动增加此埋点。复用现有上报配置，不记录事件正文、会话状态或数据库地址。该耗时覆盖 ADK 存储调用，不等于某条 SQL 的执行时间。

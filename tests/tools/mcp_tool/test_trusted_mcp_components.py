@@ -191,7 +191,7 @@ class TestTrustedMcpComponents(unittest.TestCase):
             with (
                 mock.patch(
                     "veadk.tools.mcp_tool.trusted_mcp_session_manager.MCPSessionManager._merge_headers",
-                    return_value={"header": "value"},
+                    return_value={"x-trusted-mcp": "true", "header": "value"},
                 ),
                 mock.patch(
                     "veadk.tools.mcp_tool.trusted_mcp_session_manager.MCPSessionManager._generate_session_key",

@@ -25,6 +25,7 @@ from mcp import StdioServerParameters
 
 from .trusted_mcp_session_manager import TrustedMcpSessionManager
 
+from veadk.tools.mcp_tool.preparation_tracing import preparation_span
 from veadk.utils.logger import get_logger
 
 logger = get_logger("veadk." + __name__)
@@ -116,10 +117,18 @@ class TrustedMcpToolset(McpToolset):
         )
 
         # Create the session manager that will handle the TrustedMCP connection
+        # Connection parameters may contain credential headers or signed URLs.
         logger.info(
-            f"TrustedMcpToolset initialized with connection_params: {self._connection_params}"
+            "TrustedMcpToolset initialized using %s",
+            type(self._connection_params).__name__,
         )
         self._mcp_session_manager = TrustedMcpSessionManager(
             connection_params=self._connection_params,
             errlog=self._errlog,
         )
+
+    async def get_tools(self, readonly_context=None):
+        # Delegate caching, authentication, filtering and retries without duplication.
+        # Acquisition is nested here; these elapsed boundaries must not be summed.
+        with preparation_span("tools.prepare", self._connection_params):
+            return await super().get_tools(readonly_context=readonly_context)

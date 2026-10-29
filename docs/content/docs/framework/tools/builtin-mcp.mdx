@@ -245,6 +245,14 @@ toolset = TrustedMcpToolset(
 agent = Agent(tools=[toolset])
 ```
 
+## 准备阶段计时
+
+配置已有[可观测能力](/cn/docs/framework/observability)后，VeADK Agent 持有的原生 MCP、VeIdentity 工具集及 `TrustedMcpToolset` 会记录 `mcp.tools.prepare`（构建请求头、获取／筛选工具清单）和 `mcp.session.acquire`（会话复用检查、锁等待及必要的首次连接初始化）。工具清单命中缓存时，不会为计时额外获取会话；实际工具调用中的会话获取也单独记录。
+
+两个阶段可能嵌套，不能将耗时相加，也不能把会话获取当作纯网络耗时。新增记录只含固定阶段／传输类型及错误类型，不含地址、鉴权头或工具正文。VeADK Agent 组装时仅适配其持有的原生／VeIdentity 实例，保留已有会话管理器、鉴权、缓存及重试；直接在 VeADK Agent 之外使用的原生工具集不会自动增加这些计时。
+
+VeIdentity 每次调用将当前 Trace ID 和调用 Span ID 放入 MCP 请求 meta 中的标准 `traceparent`／`tracestate`，不修改鉴权头或会话缓存键，也不传 baggage。接收端需支持读取这些追踪标识；没有当前 Trace 时不补造标识。
+
 ## 自定义 MCP Server
 
 如果上述内置接入方式都无法满足需求，可直接使用 Google ADK 的 `MCPToolset` 连接任意 MCP Server：

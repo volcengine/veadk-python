@@ -247,6 +247,14 @@ toolset = TrustedMcpToolset(
 agent = Agent(tools=[toolset])
 ```
 
+## Preparation timing
+
+With existing [observability](/en/docs/framework/observability) configured, native MCP and VeIdentity toolsets owned by VeADK Agent, as well as `TrustedMcpToolset`, record `mcp.tools.prepare` (header construction and tool-list retrieval/filtering) and `mcp.session.acquire` (reuse checks, lock wait and initial connection/initialization when needed). A cached tool list does not trigger an extra acquisition for telemetry; session acquisition during an actual tool call is also observed separately.
+
+These stages can be nested, so their durations must not be added or interpreted as network-only time. New records contain fixed phase/transport categories and error types, excluding endpoints, authentication headers and tool content. VeADK Agent adapts only its owned native/VeIdentity instances, preserving existing managers, authentication, caching and retries. Native toolsets used directly outside VeADK Agent do not automatically receive these timings.
+
+Each VeIdentity call puts the current Trace ID and calling Span ID in standard `traceparent`/`tracestate` fields in MCP request meta. Authentication headers and session cache keys are unchanged, and baggage is not forwarded. The receiver must consume these trace fields; no identifiers are invented when no current Trace exists.
+
 ## Custom MCP Server
 
 If none of the built-in connectors above meet your needs, connect to any MCP Server directly using Google ADK's `MCPToolset`:

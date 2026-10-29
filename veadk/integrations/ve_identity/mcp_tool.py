@@ -31,6 +31,7 @@ from veadk.integrations.ve_identity.auth_mixins import (
     AuthRequiredException,
 )
 from veadk.integrations.ve_identity.utils import generate_headers, retry_on_errors
+from veadk.tools.mcp_tool.request_trace_context import request_trace_context
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -176,5 +177,10 @@ class VeIdentityMcpTool(VeIdentityAuthMixin, BaseTool):
         # Get the session from the session manager
         session = await self._mcp_session_manager.create_session(headers=headers)
 
-        response = await session.call_tool(self._mcp_tool.name, arguments=args)
+        # Per-call context belongs in MCP metadata, not credential headers/pool keys.
+        metadata = request_trace_context()
+        call_options = {"arguments": args}
+        if metadata is not None:
+            call_options["meta"] = metadata
+        response = await session.call_tool(self._mcp_tool.name, **call_options)
         return response

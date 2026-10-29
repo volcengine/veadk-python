@@ -33,6 +33,9 @@ from veadk.memory.short_term_memory_backends.postgresql_backend import (
 from veadk.memory.short_term_memory_backends.sqlite_backend import (
     SQLiteSTMBackend,
 )
+from veadk.memory.short_term_memory_backends.traced_database_service import (
+    TracedDatabaseSessionService,
+)
 from veadk.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -106,7 +109,8 @@ class ShortTermMemory(BaseModel):
                     "Please encode `username` or `password` with `urllib.parse.quote_plus`. "
                     "Examples: p@ssword→p%40ssword."
                 )
-            self._session_service = DatabaseSessionService(
+            # Direct URLs are SDK-owned too; keep persistence timing on this path.
+            self._session_service = TracedDatabaseSessionService(
                 db_url=self.db_url, **self.db_kwargs
             )
         else:
