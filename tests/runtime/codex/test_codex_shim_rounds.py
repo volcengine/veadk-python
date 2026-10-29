@@ -1079,6 +1079,8 @@ async def test_backend_error_is_recorded_so_the_turn_cannot_finish_silently(
 
     assert response.status_code == 400
     assert response.json()["error"]["type"] == "invalid_request_error"
+    assert response.json()["error"]["message"] == "Backend rejected the request."
+    assert "not supported" not in json.dumps(response.json())
     assert "sk-secret-key" not in json.dumps(response.json())
     recorded = shim.turn_error(token)
     assert isinstance(recorded, litellm_exceptions.BadRequestError), recorded

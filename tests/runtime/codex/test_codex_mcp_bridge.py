@@ -101,6 +101,272 @@ def _tools_call(rpc_id: int, name: str, args: dict[str, Any], call_id: str) -> d
     }
 
 
+def _guarded_call(rpc_id: int, turn_id: str = "turn-1") -> dict:
+    body = _tools_call(rpc_id, "echo", {"text": "synthetic"}, f"call_{rpc_id}")
+    body["params"]["_meta"].update(
+        threadId="thread-1",
+        **{"x-codex-turn-metadata": {"thread_id": "thread-1", "turn_id": turn_id}},
+    )
+    return body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case", ["old_turn", "missing", "wrong_thread", "inconsistent"]
+)
+async def test_pooled_tool_identity_rejected_before_execution(bridge, case):
+    seen = []
+
+    async def run(args, call_id):
+        seen.append(call_id)
+        return "{}"
+
+    token = bridge.register_process([_ECHO_SPEC])
+    bridge.register_turn([_ECHO_SPEC], {"echo": run}, token=token)
+    bridge.activate_turn(token, "thread-1", "turn-2")
+    body = _guarded_call(101, "turn-2")
+    meta = body["params"]["_meta"]
+    if case == "old_turn":
+        meta["x-codex-turn-metadata"]["turn_id"] = "turn-1"
+    elif case == "missing":
+        meta.pop("x-codex-turn-metadata")
+    elif case == "wrong_thread":
+        meta["threadId"] = "another-thread"
+        meta["x-codex-turn-metadata"]["thread_id"] = "another-thread"
+    else:
+        meta["threadId"] = "another-thread"
+    async with httpx.AsyncClient() as client:
+        response = await client.post(bridge.url, headers=_rpc_headers(token), json=body)
+    assert response.status_code == 403
+    assert seen == []
+    assert bridge.turn_state(token).calls == 0
+
+
+@pytest.mark.asyncio
+async def test_pooled_call_waits_for_sdk_activation_and_idle_rejects(bridge):
+    token = bridge.register_process([_ECHO_SPEC])
+    bridge.register_turn([_ECHO_SPEC], {"echo": _echo}, token=token)
+    async with httpx.AsyncClient() as client:
+        pending = asyncio.create_task(
+            client.post(
+                bridge.url, headers=_rpc_headers(token), json=_guarded_call(101)
+            )
+        )
+        await asyncio.sleep(0.03)
+        assert not pending.done()
+        assert bridge.turn_state(token).calls == 0
+        bridge.activate_turn(token, "thread-1", "turn-1")
+        assert (await pending).status_code == 200
+        assert await bridge.finish_turn(token)
+        response = await client.post(
+            bridge.url, headers=_rpc_headers(token), json=_guarded_call(102)
+        )
+        assert response.status_code == 403
+        bridge.release_process(token)
+        response = await client.post(
+            bridge.url, headers=_rpc_headers(token), json=_guarded_call(103)
+        )
+        assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_pooled_turn_closing_unblocks_activation_wait(bridge):
+    token = bridge.register_process([_ECHO_SPEC])
+    bridge.register_turn([_ECHO_SPEC], {"echo": _echo}, token=token)
+    async with httpx.AsyncClient() as client:
+        pending = asyncio.create_task(
+            client.post(
+                bridge.url, headers=_rpc_headers(token), json=_guarded_call(101)
+            )
+        )
+        await asyncio.sleep(0.03)
+        assert await bridge.finish_turn(token)
+        assert (await asyncio.wait_for(pending, 1)).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_pooled_old_cancel_cannot_cancel_new_invocation(bridge):
+    token = bridge.register_process([_ECHO_SPEC])
+    bridge.register_turn([_ECHO_SPEC], {"echo": _echo}, token=token)
+    bridge.activate_turn(token, "thread-1", "turn-1")
+    started, release, cancelled = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def block(args, call_id):
+        started.set()
+        try:
+            await release.wait()
+            return "{}"
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    async with httpx.AsyncClient() as client:
+        assert (
+            await client.post(
+                bridge.url, headers=_rpc_headers(token), json=_guarded_call(101)
+            )
+        ).status_code == 200
+        assert await bridge.finish_turn(token)
+        bridge.register_turn([_ECHO_SPEC], {"echo": block}, token=token)
+        bridge.activate_turn(token, "thread-1", "turn-2")
+        pending = asyncio.create_task(
+            client.post(
+                bridge.url,
+                headers=_rpc_headers(token),
+                json=_guarded_call(102, "turn-2"),
+            )
+        )
+        await asyncio.wait_for(started.wait(), 2)
+        response = await client.post(
+            bridge.url,
+            headers=_rpc_headers(token),
+            json={
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": {"requestId": 101},
+            },
+        )
+        assert response.status_code == 202
+        assert not cancelled.is_set()
+        release.set()
+        assert (await pending).status_code == 200
+        assert await bridge.finish_turn(token)
+        bridge.register_turn([_ECHO_SPEC], {"echo": _echo}, token=token)
+        bridge.activate_turn(token, "thread-1", "turn-3")
+        # Request IDs cannot be reused by a reconnected pooled MCP client:
+        # an old cancellation without turn metadata would otherwise be ambiguous.
+        response = await client.post(
+            bridge.url, headers=_rpc_headers(token), json=_guarded_call(102, "turn-3")
+        )
+        assert response.status_code == 409
+        assert bridge.turn_state(token).calls == 0
+        assert not await bridge.finish_turn(token)
+
+
+@pytest.mark.asyncio
+async def test_pooled_finish_cancels_and_drains_business_tool(bridge):
+    token = bridge.register_process([_ECHO_SPEC])
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def block(args, call_id):
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        finally:
+            cancelled.set()
+        return "{}"
+
+    bridge.register_turn([_ECHO_SPEC], {"echo": block}, token=token)
+    bridge.activate_turn(token, "thread-1", "turn-1")
+    async with httpx.AsyncClient() as client:
+        pending = asyncio.create_task(
+            client.post(
+                bridge.url, headers=_rpc_headers(token), json=_guarded_call(101)
+            )
+        )
+        await asyncio.wait_for(started.wait(), 2)
+        assert await bridge.finish_turn(token)
+        assert cancelled.is_set()
+        await asyncio.wait_for(pending, 2)
+
+
+@pytest.mark.asyncio
+async def test_pooled_current_cancel_reaches_only_current_tool(bridge):
+    token = bridge.register_process([_ECHO_SPEC])
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def block(args, call_id):
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        finally:
+            cancelled.set()
+        return "{}"
+
+    bridge.register_turn([_ECHO_SPEC], {"echo": block}, token=token)
+    bridge.activate_turn(token, "thread-1", "turn-1")
+    async with httpx.AsyncClient() as client:
+        pending = asyncio.create_task(
+            client.post(
+                bridge.url, headers=_rpc_headers(token), json=_guarded_call(101)
+            )
+        )
+        await started.wait()
+        response = await client.post(
+            bridge.url,
+            headers=_rpc_headers(token),
+            json={
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": {"requestId": 101},
+            },
+        )
+        assert response.status_code == 202
+        await asyncio.wait_for(cancelled.wait(), 2)
+        await asyncio.wait_for(pending, 2)
+
+
+@pytest.mark.asyncio
+async def test_pooled_manifest_change_is_rejected_before_binding(bridge):
+    token = bridge.register_process([_ECHO_SPEC])
+    with pytest.raises(RuntimeError, match="manifest"):
+        bridge.register_turn([_spec("other")], {"other": _echo}, token=token)
+    assert bridge.turn_state(token) is None
+
+
+@pytest.mark.asyncio
+async def test_pooled_request_bookkeeping_has_a_hard_limit(bridge, monkeypatch):
+    monkeypatch.setattr(mcp_bridge, "_MAX_PROCESS_REQUESTS", 1)
+    token = bridge.register_process([_ECHO_SPEC])
+    bridge.register_turn([_ECHO_SPEC], {"echo": _echo}, token=token)
+    bridge.activate_turn(token, "thread-1", "turn-1")
+    async with httpx.AsyncClient() as client:
+        assert (
+            await client.post(
+                bridge.url, headers=_rpc_headers(token), json=_guarded_call(101)
+            )
+        ).status_code == 200
+        assert (
+            await client.post(
+                bridge.url, headers=_rpc_headers(token), json=_guarded_call(102)
+            )
+        ).status_code == 409
+    assert bridge.turn_state(token).calls == 1
+    assert not await bridge.finish_turn(token)
+
+
+@pytest.mark.asyncio
+async def test_pooled_undrained_executor_cannot_be_reused(bridge, monkeypatch):
+    monkeypatch.setattr(mcp_bridge, "_STOP_TIMEOUT_SECONDS", 0.02)
+    token = bridge.register_process([_ECHO_SPEC])
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def ignore_cancel(args, call_id):
+        started.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            await release.wait()
+        return "{}"
+
+    bridge.register_turn([_ECHO_SPEC], {"echo": ignore_cancel}, token=token)
+    bridge.activate_turn(token, "thread-1", "turn-1")
+    async with httpx.AsyncClient() as client:
+        pending = asyncio.create_task(
+            client.post(
+                bridge.url, headers=_rpc_headers(token), json=_guarded_call(101)
+            )
+        )
+        try:
+            await started.wait()
+            assert not await bridge.finish_turn(token)
+            with pytest.raises(RuntimeError, match="lifecycle"):
+                bridge.register_turn([_ECHO_SPEC], {"echo": _echo}, token=token)
+        finally:
+            release.set()
+            await asyncio.wait_for(pending, 2)
+
+
 async def _wait_for(predicate, timeout: float = 5.0) -> None:
     deadline = time.monotonic() + timeout
     while not predicate():

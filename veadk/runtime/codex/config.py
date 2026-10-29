@@ -56,11 +56,11 @@ class CodexRuntimeConfig(BaseModel):
     escalation and file change without consulting a human or ADK. Only
     ``"deny_all"`` (the default) actually keeps Codex inside the sandbox.
 
-    Security note on ``network_access``: it is written to the
-    ``[sandbox_workspace_write]`` table of Codex's ``config.toml`` and is read
-    only by the ``workspace-write`` sandbox. The ``read-only`` and
-    ``danger-full-access`` sandboxes ignore it entirely, so it cannot restrict
-    (or grant) network access outside ``sandbox="workspace_write"``.
+    Security note on ``network_access``: it is written to the network table of
+    VeADK's Codex permissions profile and honoured only for
+    ``sandbox="workspace_write"``. ``read_only`` always runs without network and
+    ``danger-full-access`` has no profile, so it cannot restrict (or grant)
+    network access outside ``sandbox="workspace_write"``.
     """
 
     approval_mode: Literal["deny_all", "auto_review"] = Field(
@@ -83,6 +83,13 @@ class CodexRuntimeConfig(BaseModel):
     )
     workspace_root: str | None = None
     reuse_workspace: bool = False
+    mcp_process_reuse: bool = Field(
+        default=True,
+        description=(
+            "Reuse same-thread MCP processes with per-invocation identity validation. "
+            "Set False to keep a fresh process and credential for each invocation."
+        ),
+    )
     reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"] = "medium"
     personality: Literal["none", "friendly", "pragmatic"] = "pragmatic"
     max_tool_iterations: int = Field(
@@ -102,10 +109,12 @@ class CodexRuntimeConfig(BaseModel):
         default=1800.0,
         gt=0,
         description=(
-            "Upper bound for one Codex turn. Past it the turn is interrupted "
-            "and the invocation fails with a TimeoutError. Bounded by default: "
-            "a turn that never ends would also block its session's later "
-            "invocations, which queue behind it. None means no bound."
+            "Upper bound for Codex admission, setup, and one running turn. "
+            "Admission or setup expiry fails with CodexTurnAdmissionTimeout; "
+            "a running-turn expiry interrupts the turn and fails with "
+            "CodexTurnTimeout. Bounded by default because a turn that never "
+            "ends also blocks its session's later invocations. None means no "
+            "bound."
         ),
     )
     auto_compact_token_limit: int | None = Field(
@@ -152,9 +161,9 @@ class CodexRuntimeConfig(BaseModel):
     def _check_sandbox_network_consistency(self) -> "CodexRuntimeConfig":
         """Reject sandbox/network combinations that misstate the isolation.
 
-        ``network_access`` only reaches Codex through the
-        ``[sandbox_workspace_write]`` table, which ``danger-full-access`` and
-        ``read-only`` ignore. Silently accepting those combinations lets a
+        ``network_access`` only reaches Codex through the ``workspace_write``
+        permissions profile, which ``danger-full-access`` and ``read-only``
+        do not use. Silently accepting those combinations lets a
         config read as "no network" while granting full network, so the
         dangerous direction raises and the harmless one warns.
 
@@ -206,6 +215,13 @@ class CodexRuntimeConfig(BaseModel):
             updates["model_transport"] = value.strip().lower()
         if value := os.getenv("VEADK_CODEX_THREAD_MODE"):
             updates["thread_mode"] = value.strip().lower()
+        if value := os.getenv("VEADK_CODEX_MCP_PROCESS_REUSE"):
+            updates["mcp_process_reuse"] = value.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
         if value := os.getenv("VEADK_CODEX_NETWORK_ACCESS"):
             updates["network_access"] = value.strip().lower() in {
                 "1",

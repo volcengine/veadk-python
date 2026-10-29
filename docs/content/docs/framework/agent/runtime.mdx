@@ -146,7 +146,9 @@ agent = Agent(
 Codex SDK 内置的审批处理器对每一个 `requestApproval` 通知都回答 `accept`，而 `AsyncCodex` 没有提供替换该处理器的接口。因此 `auto_review` 会自动批准每一次沙箱提权和文件修改，既不询问人工，也不经过 ADK。只有默认的 `deny_all` 才真正把 Codex 约束在沙箱内。在多租户或不可信输入场景中，请勿使用 `auto_review`。
 </Callout>
 
-关于沙箱与网络的组合，有一个容易误判的点：`network_access` 只会写入 Codex `config.toml` 的 `[sandbox_workspace_write]` 段，**只有 `workspace_write` 沙箱会读取它**。
+**Session 隔离。** `workspace_write` 和 `read_only` 下，VeADK 不再使用 Codex 的 `workspace-write`/`read-only` 预设（它们允许命令读取整个磁盘、写入 `$TMPDIR` 和 `/tmp`，而所有 Session 的工作目录和 `CODEX_HOME` 都在这里），而是让沙箱命令运行在 VeADK 生成的权限配置下（`config.toml` 中的 `default_permissions = "veadk"`）。该配置以只读访问为基础，拒绝访问临时目录（以及非共享的 `workspace_root`），只放行当前 Session 的工作目录（`workspace_write` 下可写）和它自己的 skills（只读），并把工作目录设为命令的 `TMPDIR`。Linux 上 Codex 的沙箱（bubblewrap）无法访问位于被拒绝目录之下的只读放行路径，因此在 Linux 上当前 Session 的工作目录和 skills 改为授予写权限，也就是说 Linux 上的 `read_only` 仍允许命令写入当前 Session 自己的工作目录；其他 Session 依然无法访问。因此一个 Session 的 shell 既读不到、也改不了其他 Session 的工作目录、rollout 和配置。主机上的其他文件（例如应用自身的配置、本地 SQLite Session 数据库）仍然可读；需要隔离时请在容器或操作系统用户层面隔离租户。Linux 沙箱与 macOS Seatbelt 实现不同，请在部署镜像上运行 `CODEX_RUN_SMOKE=1 uv run --extra dev pytest -m codex_smoke -p no:xdist tests/runtime/codex/test_codex_sandbox_isolation_smoke.py` 验证。
+
+关于沙箱与网络的组合，有一个容易误判的点：`network_access` 会写入上述权限配置的 `network` 段，**只有 `workspace_write` 沙箱会遵循它**。
 
 | `sandbox` | `network_access` 是否生效 |
 | :--- | :--- |
@@ -266,6 +268,7 @@ def load_orders(day: str) -> dict:
 | :--- | :--- | :--- |
 | `reasoning_effort` | `"medium"` | 推理强度，可选 `minimal`/`low`/`medium`/`high`/`xhigh`。越高越慢、消耗 token 越多。 |
 | `personality` | `"pragmatic"` | Codex 自带的回复风格，可选 `none`/`friendly`/`pragmatic`。 |
+| `mcp_process_reuse` | `True` | 默认开启 `direct` + `resume` 下稳定 ADK/MCP 工具的本实例进程复用；每轮重新绑定执行器并校验 SDK 的 thread/turn 身份。设置 `False` 关闭 MCP 进程复用。 |
 | `model_transport` | `"auto"` | Codex 如何访问模型：`direct` 让 Codex 直接调用支持 Responses API 的后端，并通过 runtime 为本轮启动的本地 MCP server 使用 Agent 的工具，工具循环由 Codex 驱动；`shim` 经由进程内 Responses→Chat 转换层，由转换层执行工具，适用于只支持 chat 的后端；`auto` 对火山方舟（`*.volces.com`）、BytePlus（`*.bytepluses.com`）与 `api.openai.com` 选 `direct`，其余选 `shim`；但 Agent 的 `model_extra_config` 含非空 `extra_body` 时，`auto` 仍选 `shim`，因为 `direct` 无法转发请求体。显式指定 `direct` 时 `extra_body` 不会被转发，并记录一条警告。 |
 | `turn_timeout_seconds` | `1800.0` | 单个 Codex 回合的时间上限（秒），到期后中断回合并抛出 `TimeoutError`；`None` 表示不限。`direct` 传输且 `thread_mode="resume"` 时，同一 Session 的调用在一把 Session 级锁上排队，不设上限的回合会同时阻塞该 Session 之后的所有调用，因此默认给出 30 分钟上限；其余模式同一 Session 的调用可以并发执行。 |
 | `auto_compact_token_limit` | `None` | 历史 token 超过该值时由 Codex 自行压缩（Codex 的 `model_auto_compact_token_limit`），仅 `direct` 传输生效；`None` 沿用 Codex 默认值。 |
@@ -278,6 +281,20 @@ def load_orders(day: str) -> dict:
 **行为变更：`max_tool_iterations` 的含义已改变，默认值从 `8` 提高到 `32`。**
 它现在约束的是**整个 Codex turn**，而不再是单次后端请求。Codex 每完成一次原生工具调用就会发起一次新的后端请求，所以旧的「每请求」计数实际允许的执行次数是「请求轮数 × budget」。默认值同时调高，是为了让「先跑若干轮原生工具、之后才调用 ADK 工具」的回合不被提前截断。如果你此前靠 `8` 这个值来兜底控制成本，请重新评估——现在更合适的成本上限是 `RunConfig(max_llm_calls=...)`（见下）。
 </Callout>
+
+
+### 并行与批量工具场景
+
+当 Codex 在同一次模型响应里生成多个独立异步函数调用时，现有链路即可并行执行。应用 instruction 和简洁的工具描述应明确哪些查询独立；有依赖的读取和写入仍按业务顺序执行。应用可以提供批量工具，对每个查询项返回结果或明确错误，并逐项鉴权：ADK 工具在宿主进程执行，Codex 沙箱不能替代业务权限。一个批量请求计作一次 SDK 工具调用，应用须另外限制业务查询数量。
+
+仓库的 `scripts/benchmark_codex_tools.py` 提供 `single`、`parallel`、`serial`、`batch` 示例与基准。其 `bounded_batch_lookup` 限制批量准入、设置逐项超时、保留取消行为并报告部分失败，不会自动合并任意已注册工具。
+
+```bash
+uv run --extra dev python scripts/benchmark_codex_tools.py --scenario parallel --turns 5 --pool-size 20
+uv run --extra dev python scripts/benchmark_codex_tools.py --scenario parallel --turns 5 --pool-size 0
+```
+
+这些运行使用真实 Codex 二进制和本地模拟模型，不消耗 provider tokens；验证复用命中、模型请求次数、上下文增长和工具结果，时延属于框架与模拟证据，不能替代真实模型性能测量。真实二进制回归单独运行：`CODEX_RUN_SMOKE=1 uv run --extra dev pytest tests/runtime/codex/test_codex_tool_workloads.py -m codex_smoke -p no:xdist -rs`。
 
 ### 指令是怎么下发给 Codex 的
 
@@ -297,7 +314,7 @@ Codex 自带一份约 20KB、针对自身工具链（`apply_patch`、`update_pla
 ### Codex 环境变量
 
 <Callout type="warn">
-以下六个环境变量**覆盖** Python 中的 `CodexRuntimeConfig`，而不是作为它的默认值。也就是说，即使代码里写死了 `sandbox="workspace_write"`，部署环境里的 `VEADK_CODEX_SANDBOX=full_access` 依然会生效。这一优先级与大多数配置项相反，在容器/函数计算等由平台注入环境变量的场景中尤其需要注意。
+以下环境变量**覆盖** Python 中的 `CodexRuntimeConfig`，而不是作为它的默认值。也就是说，即使代码里写死了 `sandbox="workspace_write"`，部署环境里的 `VEADK_CODEX_SANDBOX=full_access` 依然会生效。这一优先级与大多数配置项相反，在容器/函数计算等由平台注入环境变量的场景中尤其需要注意。
 </Callout>
 
 | 环境变量 | 覆盖的配置项 | 说明 |
@@ -308,6 +325,22 @@ Codex 自带一份约 20KB、针对自身工具链（`apply_patch`、`update_pla
 | `VEADK_CODEX_NETWORK_ACCESS` | `network_access` | `1`/`true`/`yes`/`on` 视为开启，其余视为关闭。 |
 | `VEADK_CODEX_MODEL_TRANSPORT` | `model_transport` | `auto`/`direct`/`shim`。 |
 | `VEADK_CODEX_THREAD_MODE` | `thread_mode` | `resume`/`ephemeral`。 |
+| `VEADK_CODEX_MCP_PROCESS_REUSE` | `mcp_process_reuse` | 默认开启带身份校验的 MCP 进程复用。`0`/`false`/`no`/`off` 关闭，`1`/`true`/`yes`/`on` 开启。`VEADK_CODEX_PROCESS_POOL_SIZE=0` 关闭全部复用。 |
+
+`direct` 传输且 `thread_mode="resume"` 时，无工具回合与暴露稳定 ADK/MCP 工具的回合默认都可以保留进程。设置 `mcp_process_reuse=False` 或 `VEADK_CODEX_MCP_PROCESS_REUSE=0` 关闭 MCP 进程复用，无工具回合仍可复用。每轮重新绑定执行器、回调、工作目录和工具预算；执行前必须匹配 SDK 确认的 thread/turn ID，旧轮次、缺失或不一致的身份及进程内重复的请求 ID 均被拒绝。空闲进程不接受工具执行。仅在同一存储、Session、thread，且模型、权限、skills、instruction、工具声明未变，存储中的 thread 身份和版本仍匹配时复用。错误、中断、保存失败或请求生命周期无法确定时关闭进程。`VEADK_CODEX_PROCESS_POOL_SIZE=0` 保持所有回合每轮新起进程的路径。
+
+保留进程会用常驻内存换取更少的启动与上下文开销，整轮性能仍受模型时延影响。MCP 重连后出现重复请求 ID 时，会在工具执行前拒绝并关闭进程，不会自动重放已开始的回合。需要每轮独立进程生命周期的应用可使用关闭开关。
+
+复用避免在正常 warm 路径反复注入 skills 和环境上下文；真正冷恢复时仍保留必要上下文。已有的空工作目录不再被提示为重置，新建或重建的目录仍会提示。
+
+| 环境变量 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `VEADK_CODEX_PROCESS_POOL_SIZE` | `20` | 每个 VeADK 进程最多保留的空闲进程数，超出时关闭最久未用的。`0` 表示关闭复用（每次调用一个进程）。 |
+| `VEADK_CODEX_PROCESS_IDLE_TTL_SECONDS` | `600` | 空闲进程超过该秒数后关闭。 |
+| `VEADK_CODEX_MAX_CONCURRENT_TURNS` | 未设置（不限） | 每个 VeADK 进程同时运行的 Codex 回合上限（每个回合一个 `codex app-server`，约 100MB）。超出的调用会在分配 workspace、private home、tools、session lock 或子进程前排队；准入、setup 和执行共享 `turn_timeout_seconds`，回合开始前过期会抛出 `CodexTurnAdmissionTimeout`。同一 Task 内递归转交给的 Codex Agent 不重复占用名额。 |
+| `VEADK_CODEX_DENY_READ_PATHS` | 未设置 | 沙箱命令禁止读取的额外主机路径（用 `os.pathsep` 分隔，Linux/macOS 上为 `:`），例如应用自身的配置和 `.env`、本地 SQLite Session 数据库。 |
+
+常驻进程会在空闲超时后自动释放。如需提前释放：`await veadk.runtime.codex.release_codex_session(app_name, user_id, session_id)` 关闭某个 Session 的常驻进程（删除 Session 时调用）；`await veadk.runtime.codex.shutdown_codex_runtime()` 关闭全部常驻进程以及 MCP bridge 和 shim，AgentKit 应用在关闭时会自动调用它。VeADK 进程被强杀时，它的 Codex 子进程会随之退出；同一主机上后续的 VeADK 进程只会在能证明 owner 已退出时清理带锁的 workspace 和 `CODEX_HOME` root。旧版本留下的无 owner 标记目录会保留，因为仅凭目录年龄无法证明没有活跃进程正在使用它。
 
 另有四个用于 Responses→Chat 转换层（shim）的环境变量。它们不参与上面的覆盖规则，只是 shim 自身的调参：
 

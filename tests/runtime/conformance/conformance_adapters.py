@@ -339,25 +339,25 @@ class CodexAdapter(RuntimeAdapter):
                 return await super().thread_start(**kwargs)
 
         original_home = runtime_module._prepare_codex_home
-        original_workspace = runtime_module._prepare_workspace
+        original_workspace = runtime_module._prepare_workspace_state
 
         def recording_home(*args: Any, **kwargs: Any) -> str:
             home = original_home(*args, **kwargs)
             adapter.codex_homes.append(home)
             return home
 
-        def recording_workspace(*args: Any, **kwargs: Any) -> str:
-            workspace = original_workspace(*args, **kwargs)
+        def recording_workspace(*args: Any, **kwargs: Any) -> tuple[str, bool]:
+            workspace, created = original_workspace(*args, **kwargs)
             if workspace not in adapter.workspaces:
                 adapter.workspaces.append(workspace)
-            return workspace
+            return workspace, created
 
         mp = self.monkeypatch
         mp.setattr("veadk.runtime.codex.proxy.litellm.aresponses", route)
         mp.setattr(runtime_module, "get_shim", fake_get_shim)
         mp.setattr(runtime_module, "AsyncCodex", _SkillSnoopingCodex)
         mp.setattr(runtime_module, "_prepare_codex_home", recording_home)
-        mp.setattr(runtime_module, "_prepare_workspace", recording_workspace)
+        mp.setattr(runtime_module, "_prepare_workspace_state", recording_workspace)
 
     def teardown(self) -> None:
         from veadk.runtime import get_runtime

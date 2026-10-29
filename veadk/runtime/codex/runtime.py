@@ -46,11 +46,12 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, AsyncGenerator
+from typing import TYPE_CHECKING, Any, AsyncGenerator, cast
 
 from openai_codex import (  # type: ignore[import-not-found]
     ApprovalMode,
@@ -76,12 +77,23 @@ from veadk.runtime.codex.config import toml_string
 from veadk.runtime.codex import metrics as codex_metrics
 from veadk.runtime.codex.mcp_bridge import McpBridge
 from veadk.runtime.codex.mcp_bridge import get_bridge
+from veadk.runtime.codex.mcp_bridge import shutdown_bridge
 from veadk.runtime.codex.model_provider import CodexModelRoute
 from veadk.runtime.codex.model_provider import direct_route
 from veadk.runtime.codex.model_provider import pinned_codex_settings
 from veadk.runtime.codex.model_provider import resolve_transport
 from veadk.runtime.codex.model_provider import shim_route
+from veadk.runtime.codex.process_pool import CodexProcessLease
+from veadk.runtime.codex.process_pool import CodexProcessPool
+from veadk.runtime.codex.process_pool import WarmCodex
+from veadk.runtime.codex.process_pool import fingerprint as process_fingerprint_of
+from veadk.runtime.codex.process_pool import pool_size
+from veadk.runtime.codex.process_pool import tree_digest
+from veadk.runtime.codex.private_dirs import HOME_ROOT_PREFIX
+from veadk.runtime.codex.private_dirs import WORKSPACE_ROOT_PREFIX
+from veadk.runtime.codex.private_dirs import create_owned_root
 from veadk.runtime.codex.proxy import get_shim
+from veadk.runtime.codex.proxy import shutdown_shims
 from veadk.runtime.codex.rollout_io import export_rollout
 from veadk.runtime.codex.rollout_io import import_rollout
 from veadk.runtime.codex.skills import sync_skills_to_codex_home
@@ -103,9 +115,11 @@ from veadk.runtime.codex.tools_bridge import (
     sync_bundle_to_tools_dict,
 )
 from veadk.runtime.codex.turn_control import ActiveTurns
+from veadk.runtime.codex.turn_control import CodexTurnAdmissionTimeout
 from veadk.runtime.codex.turn_control import CodexTurnTimeout
 from veadk.runtime.codex.turn_control import SessionTurnLocks
 from veadk.runtime.codex.turn_control import TurnCompletion
+from veadk.runtime.codex.turn_control import TurnSlots
 from veadk.runtime.codex.turn_control import interrupt_turn
 from veadk.runtime.codex.turn_control import run_with_turn_timeout
 from veadk.runtime.codex.turn_control import session_key
@@ -162,6 +176,10 @@ _RESUMED_RESULT_MAX_CHARS = 8000
 _SESSION_LOCKS = SessionTurnLocks()
 # The turn each session is running in this process, for `CodexRuntime.steer`.
 _ACTIVE_TURNS = ActiveTurns()
+# Warm app-servers holding a session's loaded thread between its invocations.
+_PROCESS_POOL = CodexProcessPool()
+# Optional cap on Codex processes running a turn at once.
+_TURN_SLOTS = TurnSlots()
 # How long a stopped turn gets to wind down (after a timeout or cancellation)
 # before its stream is abandoned.
 _TURN_STOP_GRACE_SECONDS = 5.0
@@ -179,7 +197,7 @@ class _QueueSentinel(enum.Enum):
 
 
 _QUEUE_DONE = _QueueSentinel.DONE
-_WORKSPACE_ROOT_PREFIX = "veadk-codex-workspaces-"
+_WORKSPACE_ROOT_PREFIX = WORKSPACE_ROOT_PREFIX
 # The process-owned root that holds every session workspace, created on first
 # use by `_ensure_session_workspace_root`. `None` until then.
 _session_workspace_root: str | None = None
@@ -220,13 +238,32 @@ def _ensure_session_workspace_root() -> str:
     global _session_workspace_root
     with _session_workspace_root_lock:
         if _session_workspace_root is None:
-            root = tempfile.mkdtemp(prefix=_WORKSPACE_ROOT_PREFIX)
+            # Owned (locked) for the process's lifetime, so a later process
+            # can reclaim it if this one is killed; see `private_dirs`.
+            root = create_owned_root(_WORKSPACE_ROOT_PREFIX)
             # Registered alongside creation, not at import: a hook over a
             # directory that was never created is pure noise, and
             # `ignore_errors=True` would have hidden that it did nothing.
             atexit.register(shutil.rmtree, root, ignore_errors=True)
             _session_workspace_root = root
         return _session_workspace_root
+
+
+# The process-owned root holding every invocation's CODEX_HOME, created on
+# first use like the workspace root.
+_codex_home_root: str | None = None
+_codex_home_root_lock = threading.Lock()
+
+
+def _ensure_codex_home_root() -> str:
+    """Return the process-owned root for ``CODEX_HOME`` dirs, creating it."""
+    global _codex_home_root
+    with _codex_home_root_lock:
+        if _codex_home_root is None:
+            root = create_owned_root(HOME_ROOT_PREFIX)
+            atexit.register(shutil.rmtree, root, ignore_errors=True)
+            _codex_home_root = root
+        return _codex_home_root
 
 
 def __getattr__(name: str) -> Any:
@@ -294,55 +331,108 @@ class CodexRuntime(BaseRuntime):
                 "codex runtime requires model_api_base and model_api_key "
                 "(the chat endpoint Codex is bridged onto)."
             )
-
-        # "direct": Codex calls a Responses-capable backend itself and reaches
-        # the agent's ADK tools through the MCP bridge, so Codex owns the tool
-        # loop. "shim": the in-process Responses->chat shim sits in between and
-        # runs the ADK tools itself, for backends that only speak chat.
-        transport = resolve_transport(runtime_config, api_base)
-        if transport == "direct" and _model_extra_body(agent):
-            # Codex's provider config has no request-body passthrough, so the
-            # direct transport would silently drop `extra_body` (e.g. a
-            # thinking switch). Under "auto" keep the shim, which forwards it.
-            if runtime_config.model_transport == "auto":
-                logger.info(
-                    "codex_transport_fallback invocation_id=%s transport=shim "
-                    "reason=extra_body_requires_shim",
-                    ctx.invocation_id,
-                )
-                transport = "shim"
-            else:
-                logger.warning(
-                    "codex_extra_body_ignored invocation_id=%s detail=the "
-                    "direct transport cannot forward model_extra_config "
-                    "extra_body; use model_transport='shim' to keep it",
-                    ctx.invocation_id,
-                )
-        shim = await get_shim(api_base, api_key) if transport == "shim" else None
-        bridge = await get_bridge() if transport == "direct" else None
-        route: CodexModelRoute = (
-            shim_route(shim.url or "", "")
-            if shim is not None
-            else direct_route(
-                api_base, api_key, extra_headers=_model_extra_headers(agent)
-            )
+        run_started_at = time.monotonic()
+        loop = asyncio.get_running_loop()
+        turn_deadline = (
+            loop.time() + runtime_config.turn_timeout_seconds
+            if runtime_config.turn_timeout_seconds
+            else None
         )
-        workspace = _prepare_workspace(runtime_config, ctx)
-        await _maybe_reap_workspaces(runtime_config)
-        codex_home = _prepare_codex_home(route, model, runtime_config)
-        # Expose the agent's skills to Codex by materializing them under
-        # `$CODEX_HOME/skills/`, where Codex's native skill system discovers
-        # them. Best-effort: a skill failure must not abort the turn.
+
+        async def _await_setup(awaitable: Any) -> Any:
+            """Await pre-turn work within the invocation's shared deadline."""
+            if turn_deadline is None:
+                return await awaitable
+            remaining = max(0.0, turn_deadline - loop.time())
+            try:
+                return await asyncio.wait_for(awaitable, timeout=remaining)
+            except (TimeoutError, asyncio.TimeoutError) as e:
+                if loop.time() >= turn_deadline:
+                    raise CodexTurnAdmissionTimeout(
+                        runtime_config.turn_timeout_seconds or 0
+                    ) from e
+                raise
+
+        def _check_setup_deadline() -> None:
+            """Stop before the next setup stage after non-cancellable work."""
+            if turn_deadline is not None and loop.time() >= turn_deadline:
+                raise CodexTurnAdmissionTimeout(
+                    runtime_config.turn_timeout_seconds or 0
+                )
+
+        lock_stack = contextlib.AsyncExitStack()
+        admission_timeout = (
+            max(0.0, turn_deadline - loop.time()) if turn_deadline is not None else None
+        )
         try:
-            sync_skills_to_codex_home(
-                agent, codex_home, invocation_id=ctx.invocation_id
+            await lock_stack.enter_async_context(
+                _TURN_SLOTS.hold(timeout=admission_timeout)
             )
-        except Exception as e:  # noqa: BLE001
-            logger.warning(
-                "codex_skill_sync_failed invocation_id=%s error_type=%s",
-                ctx.invocation_id,
-                type(e).__name__,
+        except CodexTurnAdmissionTimeout as e:
+            # The waiter receives the exact remaining deadline, but the public
+            # error reports the configured invocation budget.
+            raise CodexTurnAdmissionTimeout(
+                runtime_config.turn_timeout_seconds or 0
+            ) from e
+        try:
+            # "direct": Codex calls a Responses-capable backend itself and
+            # reaches ADK tools through the MCP bridge. "shim" executes them in
+            # the in-process Responses-to-chat adapter.
+            transport = resolve_transport(runtime_config, api_base)
+            if transport == "direct" and _model_extra_body(agent):
+                if runtime_config.model_transport == "auto":
+                    logger.info(
+                        "codex_transport_fallback invocation_id=%s transport=shim "
+                        "reason=extra_body_requires_shim",
+                        ctx.invocation_id,
+                    )
+                    transport = "shim"
+                else:
+                    logger.warning(
+                        "codex_extra_body_ignored invocation_id=%s detail=the "
+                        "direct transport cannot forward model_extra_config "
+                        "extra_body; use model_transport='shim' to keep it",
+                        ctx.invocation_id,
+                    )
+            shim = (
+                await _await_setup(get_shim(api_base, api_key))
+                if transport == "shim"
+                else None
             )
+            bridge = await _await_setup(get_bridge()) if transport == "direct" else None
+            route: CodexModelRoute = (
+                shim_route(shim.url or "", "")
+                if shim is not None
+                else direct_route(
+                    api_base, api_key, extra_headers=_model_extra_headers(agent)
+                )
+            )
+            workspace, workspace_created = _prepare_workspace_state(runtime_config, ctx)
+            _check_setup_deadline()
+            await _await_setup(_maybe_reap_workspaces(runtime_config))
+            codex_home = _prepare_codex_home(
+                route,
+                model,
+                runtime_config,
+                workspace=workspace,
+            )
+            _check_setup_deadline()
+            try:
+                sync_skills_to_codex_home(
+                    agent,
+                    codex_home,
+                    invocation_id=ctx.invocation_id,
+                )
+                _check_setup_deadline()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "codex_skill_sync_failed invocation_id=%s error_type=%s",
+                    ctx.invocation_id,
+                    type(e).__name__,
+                )
+        except BaseException:
+            await lock_stack.aclose()
+            raise
 
         event_queue: asyncio.Queue["Event | BaseException | _QueueSentinel"] = (
             asyncio.Queue()
@@ -350,6 +440,7 @@ class CodexRuntime(BaseRuntime):
         use_adk_transfer_scheduler = _uses_adk_transfer_scheduler(ctx)
         turn_token: str | None = None
         bridge_token: str | None = None
+        guarded_bridge = False
         # The direct transport has no shim to charge `max_llm_calls` per model
         # call and record the budget error; the stream pump does it instead.
         direct_turn_error: BaseException | None = None
@@ -359,9 +450,13 @@ class CodexRuntime(BaseRuntime):
         thread_key: ThreadKey | None = None
         thread_record: ThreadRecord | None = None
         thread_instruction_hash = ""
+        expected_version: int | None = None
         active_thread_id: str | None = None
-        lock_stack = contextlib.AsyncExitStack()
-        run_started_at = time.monotonic()
+        # The session's warm-process slot (persistent threads only), and the
+        # process this invocation runs on.
+        pool_key: Any = None
+        process_fingerprint = ""
+        lease: CodexProcessLease | None = None
 
         def _turn_error() -> BaseException | None:
             """The error that aborted this turn outside the event stream."""
@@ -396,11 +491,13 @@ class CodexRuntime(BaseRuntime):
         # built" from "setup failed before that" without inspecting locals().
         tool_bundle = None
         try:
-            tool_bundle = await build_executable_tools(
-                agent,
-                ctx,
-                event_sink=_emit_tool_event,
-                timeout_seconds=runtime_config.tool_timeout_seconds,
+            tool_bundle = await _await_setup(
+                build_executable_tools(
+                    agent,
+                    ctx,
+                    event_sink=_emit_tool_event,
+                    timeout_seconds=runtime_config.tool_timeout_seconds,
+                )
             )
             transfer_targets = get_transfer_targets(agent)
             if transfer_targets:
@@ -417,8 +514,8 @@ class CodexRuntime(BaseRuntime):
             # did.
             with bind_workspace(workspace):
                 resumed_events = [
-                    *await resume_authenticated_tools(tool_bundle, ctx),
-                    *await resume_confirmed_tools(tool_bundle, ctx),
+                    *await _await_setup(resume_authenticated_tools(tool_bundle, ctx)),
+                    *await _await_setup(resume_confirmed_tools(tool_bundle, ctx)),
                 ]
         except BaseException as e:
             logger.error(
@@ -426,9 +523,17 @@ class CodexRuntime(BaseRuntime):
                 ctx.invocation_id,
                 type(e).__name__,
             )
-            if tool_bundle is not None:
-                await close_toolsets(tool_bundle.opened_toolsets)
-            shutil.rmtree(codex_home, ignore_errors=True)
+            try:
+                if tool_bundle is not None:
+                    await close_toolsets(tool_bundle.opened_toolsets)
+            finally:
+                try:
+                    await asyncio.to_thread(shutil.rmtree, codex_home, True)
+                finally:
+                    # Admission now precedes every resource allocation. Release
+                    # its process-wide permit on every setup failure too; this
+                    # path has not installed the normal `_cleanup` helper yet.
+                    await lock_stack.aclose()
             raise
 
         # ADK's `call_llm` span is opened by its own LLM flow, which this
@@ -457,13 +562,22 @@ class CodexRuntime(BaseRuntime):
             finally:
                 if bridge is not None and bridge_token is not None:
                     bridge.unregister_turn(bridge_token)
+                    if guarded_bridge and (lease is None or not lease.detached):
+                        bridge.release_process(bridge_token)
                 try:
-                    await lock_stack.aclose()
-                    await close_toolsets(tool_bundle.opened_toolsets)
+                    # A process still held here was not parked: close it
+                    # before its session lock lets the next invocation in.
+                    if lease is not None:
+                        await lease.close()
+                    try:
+                        await close_toolsets(tool_bundle.opened_toolsets)
+                    finally:
+                        await lock_stack.aclose()
                 finally:
-                    # Workspaces survive turns; only the private Codex home
-                    # belongs to this invocation.
-                    shutil.rmtree(codex_home, ignore_errors=True)
+                    # Workspaces survive turns; the private Codex home belongs
+                    # to this invocation unless its warm process was parked.
+                    if lease is None or not lease.detached:
+                        await asyncio.to_thread(shutil.rmtree, codex_home, True)
                     _end_span(call_llm_span)
 
         # `_emit_call_llm_telemetry`'s contract is one record per invocation:
@@ -500,17 +614,21 @@ class CodexRuntime(BaseRuntime):
                     await _cleanup()
                     return
 
-            runtime_call = await build_runtime_llm_request(
-                agent,
-                ctx,
-                model=model,
-                tools_dict=tool_bundle.tools,
+            runtime_call = await _await_setup(
+                build_runtime_llm_request(
+                    agent,
+                    ctx,
+                    model=model,
+                    tools_dict=tool_bundle.tools,
+                )
             )
-            short_circuit = await run_before_model_callbacks(
-                agent,
-                ctx,
-                runtime_call.llm_request,
-                runtime_call.model_response_event,
+            short_circuit = await _await_setup(
+                run_before_model_callbacks(
+                    agent,
+                    ctx,
+                    runtime_call.llm_request,
+                    runtime_call.model_response_event,
+                )
             )
             if short_circuit is not None:
                 event = llm_response_to_event(
@@ -531,7 +649,14 @@ class CodexRuntime(BaseRuntime):
                 )
             if callback_model != model:
                 model = callback_model
-                _prepare_codex_home(route, model, runtime_config, codex_home=codex_home)
+                _prepare_codex_home(
+                    route,
+                    model,
+                    runtime_config,
+                    workspace=workspace,
+                    codex_home=codex_home,
+                )
+                _check_setup_deadline()
 
             sync_bundle_to_tools_dict(
                 tool_bundle,
@@ -555,6 +680,8 @@ class CodexRuntime(BaseRuntime):
             bound_executors = bind_workspace_to_executors(
                 tool_bundle.executors, workspace
             )
+            # The MCP bridge registers below, once it is known whether a warm
+            # process (whose token is fixed in its env) serves this turn.
             if shim is not None:
                 turn_token = shim.register_turn(
                     tool_bundle.specs,
@@ -563,15 +690,6 @@ class CodexRuntime(BaseRuntime):
                     invocation_id=ctx.invocation_id,
                     model_extra_config=agent.model_extra_config,
                     on_model_call=lambda: _charge_llm_call(ctx),
-                )
-            elif bridge is not None and tool_bundle.specs:
-                bridge_token = bridge.register_turn(
-                    tool_bundle.specs,
-                    bound_executors,
-                    invocation_id=ctx.invocation_id,
-                    otel_context=_current_otel_context(),
-                    max_tool_iterations=runtime_config.max_tool_iterations,
-                    on_error=event_queue.put,
                 )
             # Keep privileged instructions out of the user transcript. The SDK
             # exposes a native developer-instruction channel for them.
@@ -623,10 +741,25 @@ class CodexRuntime(BaseRuntime):
                     else ""
                 ),
             )
+
             # A resumed thread already holds every earlier turn Codex took
             # part in, so it gets the current message only -- plus whatever
             # other agents and the user said while this agent was not running,
             # which its thread never saw.
+            def _resumed_input(covered_invocation_id: str) -> list[object]:
+                return _build_codex_input(
+                    _with_backfill(
+                        build_prompt_from_llm_request(
+                            runtime_call.llm_request, include_history=False
+                        ),
+                        _turns_since_own(ctx, agent.name, covered_invocation_id),
+                        _resumed_tool_results(resumed_events),
+                        workspace_reset=workspace_created,
+                    ),
+                    runtime_call.llm_request,
+                    workspace,
+                )
+
             resume_input_items: list[object] = []
             resume_thread_id: str | None = None
             if persistent:
@@ -634,24 +767,104 @@ class CodexRuntime(BaseRuntime):
                 if thread_store is None:
                     persistent = False
             if persistent and thread_key is not None and thread_store is not None:
-                await lock_stack.enter_async_context(
-                    _SESSION_LOCKS.hold(
-                        session_key(
-                            thread_key.app_name,
-                            thread_key.user_id,
-                            thread_key.session_id,
-                            thread_key.agent_name,
-                        )
-                    )
+                pool_key = session_key(
+                    thread_key.app_name,
+                    thread_key.user_id,
+                    thread_key.session_id,
+                    thread_key.agent_name,
+                ) + (thread_store.pool_namespace,)
+                await _await_setup(
+                    lock_stack.enter_async_context(_SESSION_LOCKS.hold(pool_key))
                 )
                 thread_instruction_hash = instruction_hash(developer_instructions)
+            # CodexConfig.env is copied into only this subprocess. Never mutate
+            # process-wide CODEX_HOME or credential variables. The route's own
+            # credentials go in *after* the masking, which would otherwise
+            # blank the direct key along with the host's.
+            # The shim route was built before its turn token existed, so its
+            # env is not used: `codex_subprocess_env` sets the token itself.
+            subprocess_env = codex_subprocess_env(codex_home, turn_token or "")
+            thread_config: dict[str, Any] | None = None
+            uses_bridge = bridge is not None and bool(tool_bundle.specs)
+            guarded_bridge = (
+                uses_bridge
+                and runtime_config.mcp_process_reuse
+                and pool_key is not None
+                and pool_size() > 0
+            )
+            if bridge is not None:
+                subprocess_env.update(route.env)
+                direct_config = route.thread_config()
+                if runtime_config.auto_compact_token_limit:
+                    direct_config["model_auto_compact_token_limit"] = (
+                        runtime_config.auto_compact_token_limit
+                    )
+                if uses_bridge:
+                    direct_config["mcp_servers"] = {
+                        McpBridge.SERVER_NAME: bridge.codex_server_config(
+                            bearer_token_env_var=_MCP_TOKEN_ENV,
+                            tool_timeout_seconds=runtime_config.tool_timeout_seconds,
+                        )
+                    }
+                thread_config = direct_config
+            warm: WarmCodex | None = None
+            if (
+                pool_key is not None
+                and pool_size() > 0
+                and (not uses_bridge or guarded_bridge)
+            ):
+                # Everything the process was spawned with or its thread was
+                # started with. The per-process paths and token are excluded:
+                # a warm process brings its own.
+                home_digest = await asyncio.to_thread(tree_digest, codex_home)
+                _check_setup_deadline()
+                process_fingerprint = process_fingerprint_of(
+                    home_digest,
+                    {
+                        name: value
+                        for name, value in subprocess_env.items()
+                        if name not in ("CODEX_HOME", _MCP_TOKEN_ENV)
+                    },
+                    thread_config,
+                    tool_bundle.specs,
+                    workspace,
+                    model,
+                    thread_instruction_hash,
+                )
+                warm = await _await_setup(
+                    _take_warm_process(
+                        pool_key,
+                        process_fingerprint,
+                        thread_store,
+                        thread_key,
+                        ctx,
+                    )
+                )
+            lease = CodexProcessLease(
+                lambda: AsyncCodex(config=sdk_config),
+                warm,
+                reusable=pool_key is not None and (not uses_bridge or guarded_bridge),
+            )
+            if warm is not None:
+                # The warm process keeps its own CODEX_HOME, which the
+                # fingerprint shows matches this invocation's fresh one.
+                await asyncio.to_thread(shutil.rmtree, codex_home, True)
+                _check_setup_deadline()
+                codex_home = warm.codex_home
+                expected_version = warm.version
+                resume_input_items = _resumed_input(warm.covered_invocation_id)
+            elif persistent and thread_key is not None and thread_store is not None:
                 try:
-                    thread_record = await _load_thread(thread_store, thread_key, ctx)
+                    thread_record = await _await_setup(
+                        _load_thread(thread_store, thread_key, ctx)
+                    )
                 except ThreadStoreIncompatible:
                     # Written by a newer VeADK: run this turn on a new thread
                     # and do not save it, which would overwrite a record the
                     # newer instance still needs.
                     thread_store = None
+                if thread_record is not None:
+                    expected_version = thread_record.version
                 if (
                     thread_record is not None
                     and thread_record.instruction_hash == thread_instruction_hash
@@ -659,22 +872,10 @@ class CodexRuntime(BaseRuntime):
                     await asyncio.to_thread(
                         import_rollout, codex_home, thread_record.rollout
                     )
+                    _check_setup_deadline()
                     resume_thread_id = thread_record.thread_id
-                    resume_input_items = _build_codex_input(
-                        _with_backfill(
-                            build_prompt_from_llm_request(
-                                runtime_call.llm_request, include_history=False
-                            ),
-                            _turns_since_own(
-                                ctx,
-                                agent.name,
-                                thread_record.covered_invocation_id,
-                            ),
-                            _resumed_tool_results(resumed_events),
-                            workspace_reset=_workspace_is_empty(workspace),
-                        ),
-                        runtime_call.llm_request,
-                        workspace,
+                    resume_input_items = _resumed_input(
+                        thread_record.covered_invocation_id
                     )
                 elif thread_record is not None:
                     codex_metrics.record_resume("instructions_changed")
@@ -687,6 +888,29 @@ class CodexRuntime(BaseRuntime):
                         "reason=instructions_changed",
                         ctx.invocation_id,
                     )
+            if uses_bridge and bridge is not None:
+                process_token = (
+                    warm.bridge_token
+                    if warm is not None
+                    else (
+                        bridge.register_process(tool_bundle.specs)
+                        if guarded_bridge
+                        else None
+                    )
+                )
+                # Keep ownership even if registration fails during setup.
+                bridge_token = process_token
+                bridge_token = bridge.register_turn(
+                    tool_bundle.specs,
+                    bound_executors,
+                    invocation_id=ctx.invocation_id,
+                    otel_context=_current_otel_context(),
+                    max_tool_iterations=runtime_config.max_tool_iterations,
+                    on_error=event_queue.put,
+                    token=process_token,
+                )
+                assert bridge_token is not None
+                subprocess_env[_MCP_TOKEN_ENV] = bridge_token
             logger.info(
                 "codex_runtime_start invocation_id=%s agent=%s model=%s "
                 "transport=%s sandbox=%s approval_mode=%s network_access=%s "
@@ -733,30 +957,6 @@ class CodexRuntime(BaseRuntime):
                     ctx.invocation_id,
                     runtime_config.approval_mode,
                 )
-            # CodexConfig.env is copied into only this subprocess. Never mutate
-            # process-wide CODEX_HOME or credential variables. The route's own
-            # credentials go in *after* the masking, which would otherwise
-            # blank the direct key along with the host's.
-            # The shim route was built before its turn token existed, so its
-            # env is not used: `codex_subprocess_env` sets the token itself.
-            subprocess_env = codex_subprocess_env(codex_home, turn_token or "")
-            thread_config: dict[str, Any] | None = None
-            if bridge is not None:
-                subprocess_env.update(route.env)
-                direct_config = route.thread_config()
-                if runtime_config.auto_compact_token_limit:
-                    direct_config["model_auto_compact_token_limit"] = (
-                        runtime_config.auto_compact_token_limit
-                    )
-                if bridge_token is not None:
-                    subprocess_env[_MCP_TOKEN_ENV] = bridge_token
-                    direct_config["mcp_servers"] = {
-                        McpBridge.SERVER_NAME: bridge.codex_server_config(
-                            bearer_token_env_var=_MCP_TOKEN_ENV,
-                            tool_timeout_seconds=runtime_config.tool_timeout_seconds,
-                        )
-                    }
-                thread_config = direct_config
             sdk_config = CodexConfig(cwd=workspace, env=subprocess_env)
         except BaseException as e:
             logger.error(
@@ -782,27 +982,41 @@ class CodexRuntime(BaseRuntime):
         # are no use as a target (they are never persisted), so any that follow
         # the held-back one are buffered behind it rather than overtaking it.
         merge_target: "Event | None" = None
+        thread: Any = None
         try:
-            async with AsyncCodex(config=sdk_config) as codex:
-                thread = None
+            await _await_setup(lease.__aenter__())
+            async with lease:
+                codex = lease.codex
+                thread = lease.thread
                 turn_input = input_items
-                if resume_thread_id is not None:
+                if thread is not None:
+                    # The warm thread already holds the session's history.
+                    turn_input = resume_input_items
+                    codex_metrics.record_resume("warm")
+                    logger.info(
+                        "codex_thread_warm invocation_id=%s thread_id=%s",
+                        ctx.invocation_id,
+                        getattr(thread, "id", None),
+                    )
+                elif resume_thread_id is not None:
                     try:
                         # Every setting is passed again: Codex does not carry
                         # the model or sandbox over into a resumed thread in a
                         # new process, it falls back to its own defaults.
-                        thread, resume_retried = await _resume_with_retry(
-                            codex,
-                            resume_thread_id,
-                            ctx,
-                            include_turns=False,
-                            model=model,
-                            model_provider=route.provider_id,
-                            cwd=workspace,
-                            approval_mode=_approval_mode(runtime_config),
-                            sandbox=_sandbox(runtime_config),
-                            personality=runtime_config.personality,
-                            **({"config": thread_config} if thread_config else {}),
+                        thread, resume_retried = await _await_setup(
+                            _resume_with_retry(
+                                codex,
+                                resume_thread_id,
+                                ctx,
+                                include_turns=False,
+                                model=model,
+                                model_provider=route.provider_id,
+                                cwd=workspace,
+                                approval_mode=_approval_mode(runtime_config),
+                                sandbox=_sandbox(runtime_config),
+                                personality=runtime_config.personality,
+                                **({"config": thread_config} if thread_config else {}),
+                            )
                         )
                         turn_input = resume_input_items
                         codex_metrics.record_resume(
@@ -828,16 +1042,18 @@ class CodexRuntime(BaseRuntime):
                 if thread is None:
                     if persistent and thread_record is None:
                         codex_metrics.record_resume("new_thread")
-                    thread = await codex.thread_start(
-                        model=model,
-                        model_provider=route.provider_id,
-                        developer_instructions=developer_instructions or None,
-                        cwd=workspace,
-                        ephemeral=not persistent,
-                        approval_mode=_approval_mode(runtime_config),
-                        sandbox=_sandbox(runtime_config),
-                        personality=runtime_config.personality,
-                        **({"config": thread_config} if thread_config else {}),
+                    thread = await _await_setup(
+                        codex.thread_start(
+                            model=model,
+                            model_provider=route.provider_id,
+                            developer_instructions=developer_instructions or None,
+                            cwd=workspace,
+                            ephemeral=not persistent,
+                            approval_mode=_approval_mode(runtime_config),
+                            sandbox=_sandbox(runtime_config),
+                            personality=runtime_config.personality,
+                            **({"config": thread_config} if thread_config else {}),
+                        )
                     )
                     logger.info(
                         "codex_thread_started invocation_id=%s thread_id=%s "
@@ -848,15 +1064,20 @@ class CodexRuntime(BaseRuntime):
                     )
                 if persistent:
                     active_thread_id = thread.id
-                turn = await thread.turn(
-                    turn_input,
-                    cwd=workspace,
-                    approval_mode=_approval_mode(runtime_config),
-                    sandbox=_sandbox(runtime_config),
-                    effort=runtime_config.reasoning_effort,
+                turn = await _await_setup(
+                    thread.turn(
+                        turn_input,
+                        cwd=workspace,
+                        approval_mode=_approval_mode(runtime_config),
+                        sandbox=_sandbox(runtime_config),
+                        effort=runtime_config.reasoning_effort,
+                    )
                 )
+                if guarded_bridge and bridge is not None and bridge_token is not None:
+                    bridge.activate_turn(bridge_token, thread.id, turn.id)
                 stream = turn.stream()
                 completion = TurnCompletion(str(getattr(turn, "id", "") or ""))
+                lease.completion = completion
                 codex_metrics.record_startup(
                     transport, time.monotonic() - run_started_at
                 )
@@ -871,8 +1092,8 @@ class CodexRuntime(BaseRuntime):
                     {
                         "thread_id": getattr(thread, "id", None),
                         "turn_id": getattr(turn, "id", None),
-                        "thread_resumed": turn_input is resume_input_items
-                        and resume_thread_id is not None,
+                        "thread_resumed": turn_input is resume_input_items,
+                        "process_reused": lease.warm is not None,
                     },
                 )
                 # This turn's usage. A resumed thread's `total` includes every
@@ -957,7 +1178,12 @@ class CodexRuntime(BaseRuntime):
                         await event_queue.put(_QUEUE_DONE)
 
                 pump = asyncio.create_task(_pump_codex())
-                if runtime_config.turn_timeout_seconds:
+                remaining_timeout = (
+                    max(0.0, turn_deadline - asyncio.get_running_loop().time())
+                    if turn_deadline is not None
+                    else None
+                )
+                if remaining_timeout is not None:
                     # Past the deadline the turn is interrupted, given a grace
                     # period to wind down, and the watchdog then raises a
                     # `TimeoutError`; the pump ending (normally or not) lets
@@ -967,7 +1193,7 @@ class CodexRuntime(BaseRuntime):
                             turn,
                             pump,
                             completion=completion,
-                            timeout=runtime_config.turn_timeout_seconds,
+                            timeout=remaining_timeout,
                             grace=_TURN_STOP_GRACE_SECONDS,
                         )
                     )
@@ -1259,6 +1485,12 @@ class CodexRuntime(BaseRuntime):
             raise e
         finally:
             turn_scope.close()
+            if guarded_bridge and bridge is not None and bridge_token is not None:
+                reusable_bridge = await bridge.finish_turn(bridge_token)
+                if (
+                    not reusable_bridge or run_status != "completed"
+                ) and lease is not None:
+                    await lease.close()
             if watchdog is not None and not watchdog.done():
                 watchdog.cancel()
                 await asyncio.gather(watchdog, return_exceptions=True)
@@ -1269,22 +1501,56 @@ class CodexRuntime(BaseRuntime):
             # the rollout records the steps already taken, so the next turn
             # resumes from them instead of repeating them. Before `_cleanup`,
             # which deletes CODEX_HOME and releases the session lock.
+            saved_version: int | None = None
             try:
                 if (
                     thread_store is not None
                     and thread_key is not None
                     and active_thread_id is not None
                 ):
-                    await _save_thread(
+                    saved_version = await _save_thread(
                         thread_store,
                         thread_key,
                         codex_home,
                         active_thread_id,
                         thread_instruction_hash,
-                        thread_record,
+                        expected_version,
                         ctx,
                     )
             finally:
+                # Park the process only once the store holds exactly what its
+                # thread holds; otherwise `_cleanup` closes it.
+                if (
+                    lease is not None
+                    and lease.kept
+                    and saved_version is not None
+                    and active_thread_id is not None
+                ):
+                    parked = _PROCESS_POOL.put(
+                        pool_key,
+                        WarmCodex(
+                            codex=lease.codex,
+                            codex_home=codex_home,
+                            fingerprint=process_fingerprint,
+                            bridge_token=bridge_token or "",
+                            thread=thread,
+                            thread_id=active_thread_id,
+                            version=saved_version,
+                            covered_invocation_id=ctx.invocation_id,
+                            turns=(lease.warm.turns if lease.warm else 0) + 1,
+                            on_close=(
+                                lambda b=bridge, token=bridge_token: b.release_process(
+                                    token
+                                )
+                            )
+                            if guarded_bridge
+                            and bridge is not None
+                            and bridge_token is not None
+                            else None,
+                        ),
+                    )
+                    if parked:
+                        lease.detach()
                 _annotate_span(
                     call_llm_span,
                     {
@@ -1336,11 +1602,110 @@ class CodexRuntime(BaseRuntime):
         return name
 
 
+#: The permissions profile VeADK generates for sandboxed commands.
+_PERMISSIONS_PROFILE = "veadk"
+#: Extra paths sandboxed commands may not read (``os.pathsep``-separated), for
+#: host files the temp-dir denial does not cover: the application's config and
+#: ``.env``, a local SQLite session database, credentials.
+_DENY_READ_PATHS_ENV = "VEADK_CODEX_DENY_READ_PATHS"
+
+
+def _nested_read_access() -> str:
+    """The grant for a path that must be readable under a denied parent.
+
+    Codex's Linux sandbox (bubblewrap; 0.159.2 and later at the time of
+    writing) bind-mounts a ``write`` grant under a denied parent but generates
+    no ``--ro-bind`` for a ``read`` grant, which therefore stays unreachable:
+    a ``read_only`` turn failed reading its own workspace's AGENTS.md, and
+    skills under ``CODEX_HOME`` were unreadable. Seatbelt (macOS) honours both.
+    Until Codex fixes it, Linux grants such paths ``write``; they are the
+    session's own workspace and skills copy, so other sessions stay
+    unreachable either way.
+    """
+    return "write" if sys.platform.startswith("linux") else "read"
+
+
+def _sandbox_profile(
+    runtime_config: CodexRuntimeConfig, workspace: str, codex_home: str
+) -> dict[str, Any] | None:
+    """Codex settings confining sandboxed commands to this session's files.
+
+    Every session's workspace and ``CODEX_HOME`` live on the same host under
+    the same OS user (by default all under the temp dir), and Codex's
+    ``workspace-write`` preset lets commands read the whole disk and write
+    ``$TMPDIR`` and ``/tmp`` too, so one session's model could read, or
+    rewrite, another session's files and rollout. This profile (measured on
+    Codex 0.159.2) starts from ``:read-only`` (read anywhere, write nowhere),
+    denies the temp dirs, the session-workspace root and any
+    ``VEADK_CODEX_DENY_READ_PATHS`` outright, and grants
+    back only this session's workspace (``write``; ``read`` for ``read_only``)
+    and its own skills (``read``) -- on Linux both as ``write``, see
+    :func:`_nested_read_access`. A more specific path wins over a denied
+    parent; deny globs cannot be carved out, so plain paths are used.
+    Commands get the workspace as ``TMPDIR``, since the temp dirs are denied.
+
+    ``full_access`` gets no profile: it is unrestricted by request.
+
+    Returns:
+        The settings to merge into the config, or ``None`` for ``full_access``.
+    """
+    if runtime_config.sandbox == "full_access":
+        return None
+    own = os.path.realpath(workspace)
+    denied = {
+        os.path.realpath(tempfile.gettempdir()),
+        os.path.realpath("/tmp"),
+    }
+    if runtime_config.workspace_root and not runtime_config.reuse_workspace:
+        denied.add(os.path.realpath(runtime_config.workspace_root))
+    denied.update(
+        os.path.realpath(os.path.expanduser(path.strip()))
+        for path in os.getenv(_DENY_READ_PATHS_ENV, "").split(os.pathsep)
+        if path.strip()
+    )
+    filesystem: dict[str, str] = {path: "deny" for path in sorted(denied)}
+    writable = runtime_config.sandbox == "workspace_write"
+    filesystem[own] = "write" if writable else _nested_read_access()
+    filesystem[os.path.realpath(os.path.join(codex_home, "skills"))] = (
+        _nested_read_access()
+    )
+    settings: dict[str, Any] = {
+        "default_permissions": _PERMISSIONS_PROFILE,
+        # Codex otherwise walks up from the workspace looking for a project
+        # root and its AGENTS.md: the parents are denied (on Linux that fails
+        # the turn with "failed to load AGENTS.md instructions ... Permission
+        # denied"), and instructions from outside the session's workspace must
+        # not reach it anyway. The workspace's own AGENTS.md is still loaded.
+        "project_root_markers": [],
+        "permissions": {
+            _PERMISSIONS_PROFILE: {
+                "extends": ":read-only",
+                "filesystem": filesystem,
+                # `network_access` only ever applied to `workspace_write`.
+                "network": {"enabled": writable and runtime_config.network_access},
+            }
+        },
+    }
+    if writable:
+        settings["shell_environment_policy"] = {"set": {"TMPDIR": own}}
+    return settings
+
+
+def _merge_settings(target: dict[str, Any], extra: dict[str, Any]) -> None:
+    """Deep-merge ``extra`` into ``target`` (tables merge, values replace)."""
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _merge_settings(target[key], value)
+        else:
+            target[key] = value
+
+
 def _prepare_codex_home(
     route: CodexModelRoute,
     model: str,
     runtime_config: CodexRuntimeConfig,
     *,
+    workspace: str,
     codex_home: str | None = None,
 ) -> str:
     """Create an invocation-isolated CODEX_HOME with a config.toml.
@@ -1350,27 +1715,30 @@ def _prepare_codex_home(
     touches the host's ``~/.codex``. Credentials are never written here: the
     provider names the env var that carries them.
     """
-    home = codex_home or tempfile.mkdtemp(prefix="veadk-codex-")
+    home = codex_home or tempfile.mkdtemp(prefix="home-", dir=_ensure_codex_home_root())
     os.chmod(home, 0o700)
     approval_policy = (
         "on-request" if runtime_config.approval_mode == "auto_review" else "never"
     )
-    sandbox_mode = {
-        "read_only": "read-only",
-        "workspace_write": "workspace-write",
-        "full_access": "danger-full-access",
-    }[runtime_config.sandbox]
-    pinned_scalars, pinned_tables = _toml_settings(pinned_codex_settings())
+    settings = pinned_codex_settings()
+    profile = _sandbox_profile(runtime_config, workspace, home)
+    if profile is not None:
+        _merge_settings(settings, profile)
+    pinned_scalars, pinned_tables = _toml_settings(settings)
     provider_block = "".join(
         f"{key} = {_toml_value(value)}\n"
         for key, value in route.provider_config.items()
     )
+    # A permissions profile must not be combined with `sandbox_mode` or
+    # `[sandbox_workspace_write]` (Codex's config reference), so those only
+    # remain for `full_access`, which has no profile.
+    legacy_sandbox = 'sandbox_mode = "danger-full-access"\n' if profile is None else ""
     config = (
         f"model = {toml_string(model)}\n"
         f"model_provider = {toml_string(route.provider_id)}\n"
         f"review_model = {toml_string(model)}\n"
         f"approval_policy = {toml_string(approval_policy)}\n"
-        f"sandbox_mode = {toml_string(sandbox_mode)}\n"
+        f"{legacy_sandbox}"
         # `disable_response_storage` is intentionally absent: it was removed
         # upstream (absent from config.schema.json and from the pinned CLI
         # binary) and `store: false` is now unconditional in Codex's client,
@@ -1378,12 +1746,11 @@ def _prepare_codex_home(
         f"model_reasoning_effort = {toml_string(runtime_config.reasoning_effort)}\n"
         f"personality = {toml_string(runtime_config.personality)}\n"
         # Pinned settings shared with the direct transport's thread config;
-        # see `pinned_codex_settings` for why each one is needed.
+        # see `pinned_codex_settings` for why each one is needed. They carry
+        # the sandbox's permissions profile too.
         f"{pinned_scalars}\n"
         f"[model_providers.{route.provider_id}]\n"
         f"{provider_block}\n"
-        f"[sandbox_workspace_write]\n"
-        f"network_access = {str(runtime_config.network_access).lower()}\n\n"
         f"{pinned_tables}"
     )
     with open(os.path.join(home, "config.toml"), "w", encoding="utf-8") as f:
@@ -1485,6 +1852,73 @@ def _thread_binding(
         return None, None
 
 
+async def release_codex_session(app_name: str, user_id: str, session_id: str) -> int:
+    """Close the warm Codex processes of one session, for every agent.
+
+    Call it when a session is deleted; otherwise its processes stay until the
+    idle TTL (``VEADK_CODEX_PROCESS_IDLE_TTL_SECONDS``). Only this process's
+    pool is affected, and a turn still running is not interrupted.
+
+    Returns:
+        The number of processes closed.
+    """
+    target = (app_name, user_id, session_id)
+    return await _PROCESS_POOL.release(
+        lambda key: isinstance(key, tuple) and tuple(key[:3]) == target
+    )
+
+
+async def shutdown_codex_runtime() -> None:
+    """Close every warm Codex process, the MCP bridge and the model shims.
+
+    For a server's shutdown (the AgentKit app calls it from its lifespan); the
+    ``atexit`` hooks remain the fallback when nothing calls it.
+    """
+    await _PROCESS_POOL.close_all()
+    await shutdown_bridge()
+    await shutdown_shims()
+
+
+async def _take_warm_process(
+    pool_key: Any,
+    process_fingerprint: str,
+    store: CodexThreadStore | None,
+    key: ThreadKey | None,
+    ctx: "InvocationContext",
+) -> WarmCodex | None:
+    """The session's warm process, if it is still current; else ``None``.
+
+    Current means: same settings, still running, and the store still holds the
+    rollout version this process saved -- another instance serving the session
+    may have advanced the thread since.
+    """
+    if store is None or key is None:
+        return None
+    warm = _PROCESS_POOL.take(pool_key, process_fingerprint)
+    if warm is None:
+        return None
+    try:
+        identity = await store.current_identity(key)
+    except asyncio.CancelledError:
+        _PROCESS_POOL.discard(warm)
+        raise
+    except Exception as e:  # noqa: BLE001 - the cold path reports the store
+        logger.warning(
+            "codex_thread_version_check_failed invocation_id=%s error_type=%s",
+            ctx.invocation_id,
+            type(e).__name__,
+        )
+        identity = None
+    if identity != (warm.thread_id, warm.version):
+        logger.info(
+            "codex_process_discarded invocation_id=%s reason=store_advanced",
+            ctx.invocation_id,
+        )
+        _PROCESS_POOL.discard(warm)
+        return None
+    return warm
+
+
 async def _load_thread(
     store: CodexThreadStore, key: ThreadKey, ctx: "InvocationContext"
 ) -> ThreadRecord | None:
@@ -1534,15 +1968,18 @@ async def _save_thread(
     codex_home: str,
     thread_id: str,
     instructions_hash: str,
-    previous: ThreadRecord | None,
+    expected_version: int | None,
     ctx: "InvocationContext",
-) -> None:
+) -> int | None:
     """Write the thread's rollout back; never fails the invocation.
 
-    ``previous`` is the record this invocation started from (or replaced): the
-    save only succeeds if nobody else wrote since, so of two instances racing
-    on one session the later writer loses instead of silently dropping the
-    other's turn.
+    ``expected_version`` is the version of the record this invocation started
+    from (or replaced), ``None`` if there was none: the save only succeeds if
+    nobody else wrote since, so of two instances racing on one session the
+    later writer loses instead of silently dropping the other's turn.
+
+    Returns:
+        The saved record's version, or ``None`` if nothing was saved.
     """
     try:
         rollout = await asyncio.to_thread(export_rollout, codex_home, thread_id)
@@ -1552,16 +1989,17 @@ async def _save_thread(
                 "codex_thread_save_skipped invocation_id=%s reason=no_rollout",
                 ctx.invocation_id,
             )
-            return
-        await store.save(
+            return None
+        version = await store.save(
             key,
             thread_id,
             rollout,
             instructions_hash,
-            expected_version=previous.version if previous is not None else None,
+            expected_version=expected_version,
             covered_invocation_id=ctx.invocation_id,
         )
         codex_metrics.record_save("saved")
+        return version
     except RolloutTooLarge as e:
         # Every later save of this thread would be refused too, while the
         # stored copy only falls further behind. Drop the binding: the next
@@ -1588,7 +2026,7 @@ async def _save_thread(
             thread_id,
             key.session_id,
             key.agent_name,
-            previous.version if previous is not None else None,
+            expected_version,
         )
     except asyncio.CancelledError:
         # Cancellation must reach the caller; the turn's rollout is lost.
@@ -1631,9 +2069,9 @@ def _turns_since_own(
     """
     get_events = getattr(ctx, "_get_events", None)
     events = (
-        list(get_events(current_branch=True))
+        list(cast(Any, get_events(current_branch=True)))
         if callable(get_events)
-        else list(getattr(ctx.session, "events", None) or [])
+        else list(cast(Any, getattr(ctx.session, "events", None)) or [])
     )
     events = [event for event in events if not getattr(event, "partial", False)]
     anchor = None
@@ -1769,7 +2207,8 @@ def _turn_usage(usage: dict[str, Any], baseline: dict[str, Any]) -> dict[str, An
     if not isinstance(total, dict):
         return usage
     if not baseline:
-        last = usage.get("last") if isinstance(usage.get("last"), dict) else {}
+        last_raw = usage.get("last")
+        last = last_raw if isinstance(last_raw, dict) else {}
         baseline.update(
             {
                 key: value - int(last.get(key) or 0)
@@ -1902,10 +2341,18 @@ def _prepare_workspace(
     Returns:
         str: Absolute path to the workspace directory.
     """
+    return _prepare_workspace_state(runtime_config, ctx)[0]
+
+
+def _prepare_workspace_state(
+    runtime_config: CodexRuntimeConfig, ctx: InvocationContext
+) -> tuple[str, bool]:
+    """Return the workspace and whether this invocation created its directory."""
     root = runtime_config.workspace_root
     if root and runtime_config.reuse_workspace:
+        created = not Path(root).is_dir()
         Path(root).mkdir(parents=True, exist_ok=True)
-        return root
+        return root, created
 
     session = getattr(ctx, "session", None)
     session_id = str(getattr(session, "id", "session"))
@@ -1922,11 +2369,12 @@ def _prepare_workspace(
     base = Path(root or _ensure_session_workspace_root())
     base.mkdir(parents=True, exist_ok=True)
     workspace = base / f"{safe_id or 'session'}-{digest}"
+    created = not workspace.is_dir()
     workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(workspace, 0o700)
     # Mark the session active so the reaper keeps it for another TTL window.
     os.utime(workspace)
-    return str(workspace)
+    return str(workspace), created
 
 
 async def _maybe_reap_workspaces(runtime_config: CodexRuntimeConfig) -> None:
@@ -2135,12 +2583,15 @@ def _approval_mode(config: CodexRuntimeConfig) -> ApprovalMode:
     )
 
 
-def _sandbox(config: CodexRuntimeConfig) -> Sandbox:
-    return {
-        "read_only": Sandbox.read_only,
-        "workspace_write": Sandbox.workspace_write,
-        "full_access": Sandbox.full_access,
-    }[config.sandbox]
+def _sandbox(config: CodexRuntimeConfig) -> Sandbox | None:
+    """The SDK sandbox preset to pass, or ``None`` to keep the profile.
+
+    A preset passed on ``thread_start``/``turn`` replaces the config's
+    permissions profile with the preset's defaults (on a turn, the SDK sends a
+    bare ``workspaceWrite`` policy, which also re-allows ``$TMPDIR`` and
+    ``/tmp``), so only ``full_access``, which has no profile, passes one.
+    """
+    return Sandbox.full_access if config.sandbox == "full_access" else None
 
 
 def _build_codex_input(

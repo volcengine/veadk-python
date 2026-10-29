@@ -1111,7 +1111,13 @@ async def test_direct_transport_stops_the_turn_when_a_tool_needs_confirmation(
 
 
 async def _direct_session(
-    monkeypatch, plan, *, codex_class=None, instruction="Answer.", tools=None
+    monkeypatch,
+    plan,
+    *,
+    codex_class=None,
+    instruction="Answer.",
+    tools=None,
+    runtime_config=None,
 ):
     """A Runner on one session, on the direct transport, for multi-turn tests.
 
@@ -1141,7 +1147,7 @@ async def _direct_session(
         model_api_base="https://backend.invalid/v1",
         model_api_key="backend-key",
         runtime="codex",
-        **_DIRECT,
+        codex_runtime_config={"model_transport": "direct", **(runtime_config or {})},
     )
     session_service = InMemorySessionService()
     session_id = f"session-{uuid.uuid4().hex[:8]}"
@@ -1814,3 +1820,436 @@ async def test_lost_rollout_save_backfills_completed_tool_transaction(monkeypatc
     assert "function_call" in restored and "function_response" in restored
     assert "completed" in restored
     assert executions == ["book"]
+
+
+# ---------------------------------------------------------------------------
+# Warm Codex processes: one app-server per session thread, reused across turns
+# ---------------------------------------------------------------------------
+
+
+class _FakeProc:
+    """The pinned SDK's ``Popen`` as far as the process pool looks at it."""
+
+    def __init__(self) -> None:
+        self.returncode: int | None = None
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+
+def _warm_capable_codex() -> type:
+    """A direct fake that exposes a live process, so the pool may keep it."""
+    from types import SimpleNamespace
+
+    base = fake_codex_sdk.DirectDrivingCodex.configured()
+
+    class WarmCapableCodex(base):  # type: ignore[misc, valid-type]
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self.closed = False
+            self._client = SimpleNamespace(
+                _sync=SimpleNamespace(_proc=_FakeProc(), _reader_thread=None)
+            )
+
+        async def __aexit__(self, *exc: Any) -> None:
+            self.closed = True
+            self._client._sync._proc.returncode = 0
+
+    return WarmCapableCodex
+
+
+async def _close_process_pool() -> None:
+    from veadk.runtime.codex import runtime as runtime_module
+
+    await runtime_module._PROCESS_POOL.close_all()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_with", ["config", "environment"])
+async def test_disabled_tool_reuse_keeps_the_cold_process_path(
+    monkeypatch,
+    disable_with,
+) -> None:
+    """Both public switches preserve per-invocation process/token ownership."""
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    recorded: list[str] = []
+    monkeypatch.delenv("VEADK_CODEX_MCP_PROCESS_REUSE", raising=False)
+    runtime_config = {"mcp_process_reuse": False} if disable_with == "config" else {}
+    if disable_with == "environment":
+        monkeypatch.setenv("VEADK_CODEX_MCP_PROCESS_REUSE", "0")
+
+    def remember(fact: str) -> dict:
+        """Record a fact."""
+        recorded.append(fact)
+        return {"ok": True}
+
+    send, backend, codex_class, _ = await _direct_session(
+        monkeypatch,
+        (
+            Round(text="first answer", usage=(1, 1)),
+            Round(tool_calls=(("remember", {"fact": "PAPAYA"}),), usage=(1, 1)),
+            Round(text="second answer", usage=(1, 1)),
+        ),
+        codex_class=_warm_capable_codex(),
+        tools=[remember],
+        runtime_config=runtime_config,
+    )
+    try:
+        assert await send("remember the word PAPAYA") is None
+        assert await send("store it with the tool") is None
+    finally:
+        await _close_process_pool()
+        await shutdown_bridge()
+
+    assert _starts_and_resumes(codex_class) == [(1, 0), (0, 1)]
+    assert recorded == ["PAPAYA"], "the warm thread lost the bridged tools"
+    second = json.dumps(backend.raw_requests[1], default=str)
+    assert "remember the word PAPAYA" in second, "the warm thread lost its history"
+    assert all(client.closed for client in codex_class.instances)
+
+
+@pytest.mark.asyncio
+async def test_tool_free_turns_still_reuse_their_warm_codex_process(
+    monkeypatch,
+) -> None:
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    send, _, codex_class, _ = await _direct_session(
+        monkeypatch,
+        (Round(text="first", usage=(1, 1)), Round(text="second", usage=(1, 1))),
+        codex_class=_warm_capable_codex(),
+    )
+    try:
+        assert await send("hello") is None
+        assert await send("again") is None
+    finally:
+        await _close_process_pool()
+        await shutdown_bridge()
+
+    assert _starts_and_resumes(codex_class) == [(1, 0)]
+    assert all(client.closed for client in codex_class.instances)
+
+
+@pytest.mark.asyncio
+async def test_default_tool_turns_reuse_and_rebind_invocation(monkeypatch):
+    from veadk.runtime.codex import runtime as runtime_module
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    monkeypatch.delenv("VEADK_CODEX_MCP_PROCESS_REUSE", raising=False)
+    recorded = []
+
+    def remember(fact: str) -> dict:
+        """Record a synthetic fact."""
+        recorded.append(fact)
+        return {"ok": True}
+
+    send, _, codex_class, _ = await _direct_session(
+        monkeypatch,
+        tuple(
+            r
+            for fact in ("ALPHA", "BETA", "GAMMA")
+            for r in (
+                Round(tool_calls=(("remember", {"fact": fact}),), usage=(1, 1)),
+                Round(text=fact, usage=(1, 1)),
+            )
+        ),
+        codex_class=_warm_capable_codex(),
+        tools=[remember],
+        runtime_config={"max_tool_iterations": 1},
+    )
+    try:
+        for fact in ("ALPHA", "BETA", "GAMMA"):
+            assert await send(f"store {fact}") is None
+        assert _starts_and_resumes(codex_class) == [(1, 0)]
+        assert recorded == ["ALPHA", "BETA", "GAMMA"]
+        assert len(runtime_module._PROCESS_POOL._idle) == 1
+        calls = codex_class.instances[0].mcp_calls
+        assert len({c["meta"]["x-codex-turn-metadata"]["turn_id"] for c in calls}) == 3
+    finally:
+        await _close_process_pool()
+        await shutdown_bridge()
+
+
+@pytest.mark.asyncio
+async def test_independent_store_same_session_never_reuses_process(monkeypatch):
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+    from veadk.runtime.codex.thread_store import InMemoryThreadStore
+
+    a, b = InMemoryThreadStore(), InMemoryThreadStore()
+    send, _, codex_class, _ = await _direct_session(
+        monkeypatch,
+        (Round(text="first", usage=(1, 1)), Round(text="second", usage=(1, 1))),
+        codex_class=_warm_capable_codex(),
+    )
+    try:
+        _use_thread_store(monkeypatch, a)
+        assert await send("hello") is None
+        _use_thread_store(monkeypatch, b)
+        assert await send("hello in another store") is None
+        assert _starts_and_resumes(codex_class) == [(1, 0), (1, 0)]
+    finally:
+        await _close_process_pool()
+        await shutdown_bridge()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_warm_mcp_turn_revokes_credentials_and_executors(monkeypatch):
+    from veadk.runtime.codex import runtime as runtime_module
+    from veadk.runtime.codex.mcp_bridge import get_bridge, shutdown_bridge
+
+    monkeypatch.setenv("VEADK_CODEX_MCP_PROCESS_REUSE", "1")
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def slow() -> dict:
+        """Wait for the synthetic operation."""
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        finally:
+            cancelled.set()
+        return {"ok": True}
+
+    send, _, codex_class, _ = await _direct_session(
+        monkeypatch,
+        (
+            Round(text="first", usage=(1, 1)),
+            Round(tool_calls=(("slow", {}),), usage=(1, 1)),
+        ),
+        codex_class=_warm_capable_codex(),
+        tools=[slow],
+    )
+    try:
+        assert await send("first") is None
+        bridge = await get_bridge()
+        task = asyncio.create_task(send("wait"))
+        await asyncio.wait_for(started.wait(), 5)
+        task.cancel()
+        assert isinstance(await asyncio.wait_for(task, 5), asyncio.CancelledError)
+        assert cancelled.is_set()
+        assert not runtime_module._PROCESS_POOL._idle
+        assert not bridge._turns and not bridge._processes
+        assert all(client.closed for client in codex_class.instances)
+    finally:
+        await _close_process_pool()
+        await shutdown_bridge()
+
+
+@pytest.mark.asyncio
+async def test_zero_pool_overrides_mcp_reuse_opt_in(monkeypatch):
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    monkeypatch.setenv("VEADK_CODEX_MCP_PROCESS_REUSE", "1")
+    monkeypatch.setenv("VEADK_CODEX_PROCESS_POOL_SIZE", "0")
+    send, _, codex_class, _ = await _direct_session(
+        monkeypatch,
+        (Round(text="first", usage=(1, 1)), Round(text="second", usage=(1, 1))),
+        codex_class=_warm_capable_codex(),
+        tools=[record_fact],
+    )
+    try:
+        assert await send("first") is None
+        assert await send("second") is None
+        assert _starts_and_resumes(codex_class) == [(1, 0), (0, 1)]
+        assert all(client.closed for client in codex_class.instances)
+    finally:
+        await _close_process_pool()
+        await shutdown_bridge()
+
+
+@pytest.mark.asyncio
+async def test_another_writer_invalidates_the_warm_codex_process(monkeypatch) -> None:
+    """A store record this process did not write is resumed cold, not ignored.
+
+    Another instance serving the same session advanced the thread, so the warm
+    copy is stale: it is closed and the next turn resumes the stored rollout.
+    """
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+    from veadk.runtime.codex.thread_store import InMemoryThreadStore
+
+    store = InMemoryThreadStore()
+    send, _, codex_class, _ = await _direct_session(
+        monkeypatch,
+        (Round(text="first", usage=(1, 1)), Round(text="second", usage=(1, 1))),
+        codex_class=_warm_capable_codex(),
+    )
+    _use_thread_store(monkeypatch, store)
+    try:
+        assert await send("hello") is None
+        key = next(iter(store._records))
+        record = await store.load(key)
+        assert record is not None
+        await store.save(
+            key,
+            record.thread_id,
+            record.rollout,
+            record.instruction_hash,
+            expected_version=record.version,
+            covered_invocation_id=record.covered_invocation_id,
+        )
+        assert await send("again") is None
+    finally:
+        await _close_process_pool()
+        await shutdown_bridge()
+
+    assert _starts_and_resumes(codex_class) == [(1, 0), (0, 1)]
+    assert codex_class.instances[0].closed, "the stale process was left running"
+
+
+@pytest.mark.asyncio
+async def test_process_pool_size_zero_keeps_one_process_per_invocation(
+    monkeypatch,
+) -> None:
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    monkeypatch.setenv("VEADK_CODEX_PROCESS_POOL_SIZE", "0")
+    send, _, codex_class, _ = await _direct_session(
+        monkeypatch,
+        (Round(text="first", usage=(1, 1)), Round(text="second", usage=(1, 1))),
+        codex_class=_warm_capable_codex(),
+    )
+    try:
+        assert await send("hello") is None
+        assert await send("again") is None
+    finally:
+        await _close_process_pool()
+        await shutdown_bridge()
+
+    assert _starts_and_resumes(codex_class) == [(1, 0), (0, 1)]
+    assert all(client.closed for client in codex_class.instances)
+
+
+@pytest.mark.asyncio
+async def test_tool_setup_failure_releases_the_turn_slot(monkeypatch) -> None:
+    """A failure after admission must not strand the process-wide permit."""
+    from veadk.runtime.codex import runtime as runtime_module
+    from veadk.runtime.codex.turn_control import TurnSlots
+
+    slots = TurnSlots()
+    monkeypatch.setattr(runtime_module, "_TURN_SLOTS", slots)
+    monkeypatch.setenv("VEADK_CODEX_MAX_CONCURRENT_TURNS", "1")
+
+    async def fail_tool_setup(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("simulated tool setup failure")
+
+    monkeypatch.setattr(runtime_module, "build_executable_tools", fail_tool_setup)
+    _events, _session, _backend, error = await _run_turn(
+        monkeypatch,
+        plan=(Round(text="never reached"),),
+        agent_kwargs={
+            "codex_runtime_config": {
+                "turn_timeout_seconds": 0.05,
+            }
+        },
+    )
+    assert isinstance(error, RuntimeError), error
+    assert str(error) == "simulated tool setup failure"
+
+    async def acquire_from_another_task() -> None:
+        async with slots.hold(timeout=0.05):
+            pass
+
+    # Child tasks inherit ContextVars, so this also proves reentrancy is
+    # granted by exact task identity rather than inherited context alone.
+    await asyncio.create_task(acquire_from_another_task())
+
+
+@pytest.mark.asyncio
+async def test_turn_admission_times_out_before_allocating_resources(
+    monkeypatch,
+) -> None:
+    """Queued invocations spend no workspace, home, tool, or session resources."""
+    from veadk.runtime.codex import CodexTurnAdmissionTimeout
+    from veadk.runtime.codex import runtime as runtime_module
+    from veadk.runtime.codex.turn_control import TurnSlots
+
+    slots = TurnSlots()
+    monkeypatch.setattr(runtime_module, "_TURN_SLOTS", slots)
+    monkeypatch.setenv("VEADK_CODEX_MAX_CONCURRENT_TURNS", "1")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def occupy_only_slot() -> None:
+        async with slots.hold():
+            entered.set()
+            await release.wait()
+
+    holder = asyncio.create_task(occupy_only_slot())
+    await entered.wait()
+
+    touched: list[str] = []
+
+    def forbidden(name: str):
+        def fail(*args: Any, **kwargs: Any) -> Any:
+            touched.append(name)
+            raise AssertionError(f"{name} ran before turn admission")
+
+        return fail
+
+    async def forbidden_async(name: str, *args: Any, **kwargs: Any) -> Any:
+        touched.append(name)
+        raise AssertionError(f"{name} ran before turn admission")
+
+    monkeypatch.setattr(runtime_module, "get_bridge", lambda: forbidden_async("bridge"))
+    monkeypatch.setattr(runtime_module, "_prepare_workspace", forbidden("workspace"))
+    monkeypatch.setattr(runtime_module, "_prepare_codex_home", forbidden("home"))
+    monkeypatch.setattr(
+        runtime_module,
+        "build_executable_tools",
+        lambda *args, **kwargs: forbidden_async("tools", *args, **kwargs),
+    )
+    monkeypatch.setattr(runtime_module._SESSION_LOCKS, "hold", forbidden("session"))
+
+    try:
+        _events, _session, _backend, error = await _run_turn(
+            monkeypatch,
+            plan=(Round(text="never reached"),),
+            agent_kwargs={
+                "codex_runtime_config": {
+                    "model_transport": "direct",
+                    "turn_timeout_seconds": 0.05,
+                }
+            },
+        )
+    finally:
+        release.set()
+        await holder
+
+    assert isinstance(error, CodexTurnAdmissionTimeout), error
+    assert error.timeout == 0.05
+    assert touched == []
+
+
+@pytest.mark.asyncio
+async def test_turn_setup_uses_the_same_admission_deadline(monkeypatch) -> None:
+    """Slow setup fails before a process starts and releases its admitted slot."""
+    from veadk.runtime.codex import CodexTurnAdmissionTimeout
+    from veadk.runtime.codex import runtime as runtime_module
+    from veadk.runtime.codex.turn_control import TurnSlots
+
+    slots = TurnSlots()
+    monkeypatch.setattr(runtime_module, "_TURN_SLOTS", slots)
+    monkeypatch.setenv("VEADK_CODEX_MAX_CONCURRENT_TURNS", "1")
+
+    async def slow_tool_setup(*args: Any, **kwargs: Any) -> Any:
+        await asyncio.sleep(0.2)
+        raise AssertionError("setup continued past the shared deadline")
+
+    monkeypatch.setattr(runtime_module, "build_executable_tools", slow_tool_setup)
+    _events, _session, _backend, error = await _run_turn(
+        monkeypatch,
+        plan=(Round(text="never reached"),),
+        agent_kwargs={
+            "codex_runtime_config": {
+                "turn_timeout_seconds": 0.05,
+            }
+        },
+    )
+
+    assert isinstance(error, CodexTurnAdmissionTimeout), error
+
+    async def acquire_from_another_task() -> None:
+        async with slots.hold(timeout=0.05):
+            pass
+
+    await asyncio.create_task(acquire_from_another_task())

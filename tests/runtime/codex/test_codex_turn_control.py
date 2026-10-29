@@ -30,6 +30,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -1008,3 +1009,144 @@ async def test_real_compact_and_wait_then_new_turn_succeeds() -> None:
             for t in read.thread.turns
         ]
         assert ["contextCompaction"] in kinds
+
+
+@pytest.mark.asyncio
+async def test_turn_slots_cap_concurrent_turns_but_not_nested_ones(monkeypatch):
+    """Over the cap invocations queue; a nested one in the holder's task does not."""
+    from veadk.runtime.codex.turn_control import MAX_CONCURRENT_TURNS_ENV, TurnSlots
+
+    monkeypatch.setenv(MAX_CONCURRENT_TURNS_ENV, "1")
+    slots = TurnSlots()
+    running = 0
+    peak = 0
+
+    async def turn() -> None:
+        nonlocal running, peak
+        async with slots.hold():
+            running += 1
+            peak = max(peak, running)
+            async with slots.hold():  # e.g. a transferred-to Codex agent
+                await asyncio.sleep(0.01)
+            running -= 1
+
+    await asyncio.wait_for(asyncio.gather(turn(), turn(), turn()), 5)
+    assert peak == 1
+
+    monkeypatch.delenv(MAX_CONCURRENT_TURNS_ENV)
+    running = peak = 0
+    await asyncio.gather(turn(), turn())
+    assert peak == 2, "no cap unless configured"
+
+
+@pytest.mark.asyncio
+async def test_turn_slots_child_task_does_not_inherit_reentrant_access(monkeypatch):
+    from veadk.runtime.codex.turn_control import MAX_CONCURRENT_TURNS_ENV, TurnSlots
+
+    monkeypatch.setenv(MAX_CONCURRENT_TURNS_ENV, "1")
+    slots = TurnSlots()
+    child_entered = asyncio.Event()
+
+    async with slots.hold():
+        child = asyncio.create_task(_enter_slot(slots, child_entered))
+        await asyncio.sleep(0.05)
+        assert not child_entered.is_set()
+    await asyncio.wait_for(child, 1)
+    assert child_entered.is_set()
+
+
+async def _enter_slot(slots, entered) -> None:
+    async with slots.hold():
+        entered.set()
+
+
+def test_turn_slots_limit_is_shared_across_event_loops(monkeypatch) -> None:
+    from veadk.runtime.codex.turn_control import MAX_CONCURRENT_TURNS_ENV, TurnSlots
+
+    monkeypatch.setenv(MAX_CONCURRENT_TURNS_ENV, "1")
+    slots = TurnSlots()
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
+
+    def run_first() -> None:
+        async def first() -> None:
+            async with slots.hold():
+                first_entered.set()
+                await asyncio.to_thread(release_first.wait)
+
+        asyncio.run(first())
+
+    def run_second() -> None:
+        async def second() -> None:
+            async with slots.hold():
+                second_entered.set()
+
+        asyncio.run(second())
+
+    one = threading.Thread(target=run_first)
+    two = threading.Thread(target=run_second)
+    one.start()
+    assert first_entered.wait(1)
+    two.start()
+    assert not second_entered.wait(0.1)
+    release_first.set()
+    one.join(2)
+    two.join(2)
+    assert second_entered.is_set()
+    assert not one.is_alive() and not two.is_alive()
+
+
+@pytest.mark.asyncio
+async def test_turn_slots_timeout_and_cancelled_waiters_release_cleanly(monkeypatch):
+    from veadk.runtime.codex.turn_control import (
+        MAX_CONCURRENT_TURNS_ENV,
+        CodexTurnAdmissionTimeout,
+        TurnSlots,
+    )
+
+    monkeypatch.setenv(MAX_CONCURRENT_TURNS_ENV, "1")
+    slots = TurnSlots()
+
+    async with slots.hold():
+        with pytest.raises(CodexTurnAdmissionTimeout):
+            await asyncio.create_task(_wait_for_slot(slots, timeout=0.01))
+
+        cancelled = asyncio.create_task(_wait_for_slot(slots))
+        await asyncio.sleep(0)
+        cancelled.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled
+
+    # Neither waiter consumed nor leaked the permit released above.
+    await asyncio.wait_for(
+        asyncio.create_task(_wait_for_slot(slots, timeout=0.1)), timeout=1
+    )
+
+
+@pytest.mark.asyncio
+async def test_turn_slots_cancel_reserved_waiter_hands_off_permit(monkeypatch):
+    from veadk.runtime.codex.turn_control import MAX_CONCURRENT_TURNS_ENV, TurnSlots
+
+    monkeypatch.setenv(MAX_CONCURRENT_TURNS_ENV, "1")
+    slots = TurnSlots()
+    holder = slots.hold()
+    await holder.__aenter__()
+    waiter = asyncio.create_task(_wait_for_slot(slots))
+    await asyncio.sleep(0)
+
+    # Release reserves the permit and schedules the cross-loop-safe callback.
+    # Cancelling before that callback runs must pass the permit onward.
+    await holder.__aexit__(None, None, None)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    await asyncio.wait_for(
+        asyncio.create_task(_wait_for_slot(slots, timeout=0.1)), timeout=1
+    )
+
+
+async def _wait_for_slot(slots, *, timeout=None) -> None:
+    async with slots.hold(timeout=timeout):
+        pass

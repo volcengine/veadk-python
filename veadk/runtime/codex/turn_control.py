@@ -61,8 +61,10 @@ How ``CodexRuntime.run_async`` uses them (one invocation = one turn):
 - :func:`interrupt_turn` stops the turn on cancellation (``CancelledError`` or
   the consumer closing the generator).
 
-Not wired into the runtime today: :func:`start_fresh_turn` (every invocation
-runs in a fresh Codex process, so no earlier turn can be joined) and
+Not wired into the runtime today: :func:`start_fresh_turn` (an invocation runs
+in a fresh Codex process, or in a warm one parked only after its previous turn
+reached ``turn/completed`` -- see :mod:`veadk.runtime.codex.process_pool` -- so
+no earlier turn can be joined) and
 :func:`compact_and_wait` (compaction is left to Codex via
 ``auto_compact_token_limit``). They are kept, tested, for an explicit
 compaction API and for a long-lived shared Codex client.
@@ -75,7 +77,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
+import os
+import threading
 from collections.abc import AsyncIterator, Awaitable, Hashable, Iterator
+from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
 
 from openai_codex import (  # type: ignore[import-not-found]
@@ -682,3 +688,125 @@ async def run_with_turn_timeout(
     finally:
         if owned and not task.done():
             task.cancel()
+
+
+#: Caps the Codex processes running a turn at once in this process (each one is
+#: a ``codex app-server`` of ~100MB); unset or ``0`` means no cap.
+MAX_CONCURRENT_TURNS_ENV = "VEADK_CODEX_MAX_CONCURRENT_TURNS"
+
+# Set while the current task holds a slot, so an agent transferred to from
+# inside a turn (same task) does not wait for a slot its caller holds.
+_TURN_SLOT_OWNER: contextvars.ContextVar[asyncio.Task[Any] | None] = (
+    contextvars.ContextVar("veadk_codex_turn_slot_owner", default=None)
+)
+
+
+def max_concurrent_turns() -> int:
+    raw = os.getenv(MAX_CONCURRENT_TURNS_ENV, "").strip()
+    try:
+        return max(0, int(raw)) if raw else 0
+    except ValueError:
+        logger.warning("codex_max_concurrent_turns_invalid value_ignored=true")
+        return 0
+
+
+class CodexTurnAdmissionTimeout(TimeoutError):
+    """A Codex invocation could not obtain a process slot before its deadline."""
+
+    def __init__(self, timeout: float) -> None:
+        self.timeout = timeout
+        super().__init__(f"Codex turn admission exceeded its {timeout:g}s timeout")
+
+
+@dataclass(eq=False)
+class _SlotWaiter:
+    loop: asyncio.AbstractEventLoop
+    future: asyncio.Future[None]
+    state: str = "queued"
+
+
+class TurnSlots:
+    """Process-wide cap on concurrent Codex turns across event loops.
+
+    A lock-protected FIFO registry coordinates Futures owned by different
+    loops. Nested invocations in the exact task already holding a slot pass
+    through; child tasks inherit context but not the owning task identity.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._in_use = 0
+        self._waiters: list[_SlotWaiter] = []
+
+    @contextlib.asynccontextmanager
+    async def hold(self, *, timeout: float | None = None) -> AsyncIterator[None]:
+        limit = max_concurrent_turns()
+        task = asyncio.current_task()
+        if limit <= 0 or _TURN_SLOT_OWNER.get() is task:
+            yield
+            return
+        loop = asyncio.get_running_loop()
+        waiter: _SlotWaiter | None = None
+        with self._lock:
+            if self._in_use < limit and not self._waiters:
+                self._in_use += 1
+            else:
+                waiter = _SlotWaiter(loop, loop.create_future())
+                self._waiters.append(waiter)
+        if waiter is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(waiter.future), timeout)
+            except (TimeoutError, asyncio.TimeoutError) as e:
+                self._cancel_waiter(waiter)
+                raise CodexTurnAdmissionTimeout(timeout or 0) from e
+            except BaseException:
+                self._cancel_waiter(waiter)
+                raise
+        token = _TURN_SLOT_OWNER.set(task)
+        try:
+            yield
+        finally:
+            _TURN_SLOT_OWNER.reset(token)
+            self._release()
+
+    def _cancel_waiter(self, waiter: _SlotWaiter) -> None:
+        next_waiter: _SlotWaiter | None = None
+        with self._lock:
+            if waiter.state == "queued":
+                waiter.state = "cancelled"
+                with contextlib.suppress(ValueError):
+                    self._waiters.remove(waiter)
+            elif waiter.state in ("reserved", "granted"):
+                waiter.state = "cancelled"
+                next_waiter = self._release_locked()
+        if next_waiter is not None:
+            self._schedule(next_waiter)
+
+    def _release(self) -> None:
+        with self._lock:
+            next_waiter = self._release_locked()
+        if next_waiter is not None:
+            self._schedule(next_waiter)
+
+    def _release_locked(self) -> _SlotWaiter | None:
+        while self._waiters:
+            waiter = self._waiters.pop(0)
+            if waiter.state == "queued":
+                waiter.state = "reserved"
+                return waiter
+        self._in_use = max(0, self._in_use - 1)
+        return None
+
+    def _schedule(self, waiter: _SlotWaiter) -> None:
+        try:
+            waiter.loop.call_soon_threadsafe(self._grant, waiter)
+        except RuntimeError:
+            self._cancel_waiter(waiter)
+
+    def _grant(self, waiter: _SlotWaiter) -> None:
+        with self._lock:
+            if waiter.state != "reserved":
+                return
+            waiter.state = "granted"
+        if not waiter.future.done():
+            waiter.future.set_result(None)

@@ -360,7 +360,7 @@ def _load_config_default_map(
     help=(
         "YAML config supplying option defaults (e.g. PG/OpenViking settings and "
         "secrets). Explicit CLI options override it. The file must NOT be "
-        "committed to git; see mpa-create.config.example.yaml."
+        "committed to git; see the managed MPA README for YAML examples."
     ),
 )
 @click.option("--image", required=True, help="Prebuilt mpa-agent container image URL.")

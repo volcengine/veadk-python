@@ -192,6 +192,8 @@ cython_debug/
 
 # docs
 **/node_modules/
+prd-spec/
+specs/
 
 # 忽略所有 .temp 目录
 **/.temp/
@@ -212,7 +214,8 @@ cython_debug/
 **/.adk/
 
 # Local AI/design and verification artifacts. Keep evidence summaries in
-# PRD/spec documents, not raw screenshots, traces, manifests, or run logs.
+# change records or spec documents, not raw screenshots, traces, manifests,
+# or run logs.
 /.artifacts/
 /.superpowers/
 /evidence/

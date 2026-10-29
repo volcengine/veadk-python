@@ -25,17 +25,37 @@ routinely run by other runtimes, and by unit tests).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from veadk.runtime.codex.config import CodexRuntimeConfig
 from veadk.runtime.codex.workspace import current_workspace
 
-__all__ = ["CodexRuntime", "CodexRuntimeConfig", "current_workspace"]
+if TYPE_CHECKING:
+    from veadk.runtime.codex.runtime import CodexRuntime
+    from veadk.runtime.codex.runtime import release_codex_session
+    from veadk.runtime.codex.runtime import shutdown_codex_runtime
+    from veadk.runtime.codex.turn_control import CodexTurnAdmissionTimeout
+
+__all__ = [
+    "CodexRuntime",
+    "CodexRuntimeConfig",
+    "CodexTurnAdmissionTimeout",
+    "current_workspace",
+    "release_codex_session",
+    "shutdown_codex_runtime",
+]
+
+_RUNTIME_LAZY = ("CodexRuntime", "release_codex_session", "shutdown_codex_runtime")
+_TURN_CONTROL_LAZY = ("CodexTurnAdmissionTimeout",)
 
 
 def __getattr__(name: str) -> Any:
-    if name != "CodexRuntime":
-        raise AttributeError(name)
-    from veadk.runtime.codex.runtime import CodexRuntime
+    if name in _RUNTIME_LAZY:
+        from veadk.runtime.codex import runtime
 
-    return CodexRuntime
+        return getattr(runtime, name)
+    if name in _TURN_CONTROL_LAZY:
+        from veadk.runtime.codex import turn_control
+
+        return getattr(turn_control, name)
+    raise AttributeError(name)

@@ -57,6 +57,7 @@ import os
 import tempfile
 import threading
 import weakref
+from functools import cached_property
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -277,6 +278,11 @@ class CodexThreadStore(ABC):
     ``expected_version`` wins.
     """
 
+    @cached_property
+    def pool_namespace(self) -> object:
+        """Opaque process-local identity, distinct even for equal store IDs."""
+        return object()
+
     @abstractmethod
     async def load(self, key: ThreadKey) -> ThreadRecord | None:
         """Return the record for ``key``, or ``None`` if there is none."""
@@ -297,6 +303,21 @@ class CodexThreadStore(ABC):
     @abstractmethod
     async def delete(self, key: ThreadKey) -> None:
         """Remove the record for ``key``; a no-op if it does not exist."""
+
+    async def current_version(self, key: ThreadKey) -> int | None:
+        """The record's version, or ``None`` if there is none.
+
+        Lets a warm Codex process check that the store still holds the rollout
+        it saved. The default loads the record; stores override it to skip
+        reading the rollout.
+        """
+        record = await self.load(key)
+        return record.version if record is not None else None
+
+    async def current_identity(self, key: ThreadKey) -> tuple[str, int] | None:
+        """Thread identity/version, with a compatible fallback for custom stores."""
+        record = await self.load(key)
+        return (record.thread_id, record.version) if record is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +397,22 @@ class InMemoryThreadStore(CodexThreadStore):
     def __len__(self) -> int:
         with self._lock:
             return len(self._records)
+
+    async def current_version(self, key: ThreadKey) -> int | None:
+        with self._lock:
+            entry = self._records.get(key)
+            if entry is None:
+                return None
+            self._records.move_to_end(key)
+            return entry.version
+
+    async def current_identity(self, key: ThreadKey) -> tuple[str, int] | None:
+        with self._lock:
+            entry = self._records.get(key)
+            if entry is None:
+                return None
+            self._records.move_to_end(key)
+            return entry.thread_id, entry.version
 
     async def load(self, key: ThreadKey) -> ThreadRecord | None:
         with self._lock:
@@ -752,6 +789,40 @@ class DatabaseThreadStore(CodexThreadStore):
             & (t.c.session_id == key.session_id)
             & (t.c.agent_name == key.agent_name)
         )
+
+    async def current_version(self, key: ThreadKey) -> int | None:
+        from sqlalchemy import select
+
+        await self._ensure_table()
+        t = self._table
+        async with self._engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    select(t.c.schema_version, t.c.version).where(self._where(key))
+                )
+            ).first()
+        if row is None:
+            return None
+        _check_schema_version(row.schema_version, "thread record")
+        return int(row.version)
+
+    async def current_identity(self, key: ThreadKey) -> tuple[str, int] | None:
+        from sqlalchemy import select
+
+        await self._ensure_table()
+        t = self._table
+        async with self._engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    select(t.c.schema_version, t.c.thread_id, t.c.version).where(
+                        self._where(key)
+                    )
+                )
+            ).first()
+        if row is None:
+            return None
+        _check_schema_version(row.schema_version, "thread record")
+        return row.thread_id, int(row.version)
 
     async def load(self, key: ThreadKey) -> ThreadRecord | None:
         from sqlalchemy import select

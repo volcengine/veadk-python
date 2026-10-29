@@ -152,7 +152,9 @@ agent = Agent(
 The Codex SDK's built-in approval handler answers every `requestApproval` notification with `accept`, and `AsyncCodex` exposes no hook to replace it. So `auto_review` auto-approves every sandbox escalation and file change without consulting a human or ADK. Only the default `deny_all` actually keeps Codex inside the sandbox. Do not use `auto_review` for multi-tenant deployments or untrusted input.
 </Callout>
 
-One sandbox/network combination is easy to misread: `network_access` is written to the `[sandbox_workspace_write]` table of Codex's `config.toml`, and **only the `workspace_write` sandbox reads it**.
+**Session isolation.** For `workspace_write` and `read_only`, VeADK runs Codex's sandboxed commands under its own permissions profile (`default_permissions = "veadk"` in the generated `config.toml`) instead of Codex's `workspace-write`/`read-only` presets, which let commands read the whole disk and write `$TMPDIR` and `/tmp`, where every session's workspace and `CODEX_HOME` live. The profile starts from read-only access, denies the temp dirs (and a non-shared `workspace_root`), and grants back only this session's workspace (writable under `workspace_write`) and its own skills (readable). Commands get the workspace as `TMPDIR`. On Linux, Codex's sandbox (bubblewrap) cannot reach a read-only grant beneath a denied directory, so there the session's own workspace and skills are granted write access instead, which means `read_only` on Linux still lets commands write the session's own workspace; other sessions stay unreachable. So one session's shell can neither read nor modify another session's workspace, rollout or configuration. Files elsewhere on the host (for example the application's own config or a local SQLite session database) remain readable; isolate tenants at the container or OS-user level when that matters. The Linux sandbox differs from macOS Seatbelt: verify on your deployment image with `CODEX_RUN_SMOKE=1 uv run --extra dev pytest -m codex_smoke -p no:xdist tests/runtime/codex/test_codex_sandbox_isolation_smoke.py`.
+
+One sandbox/network combination is easy to misread: `network_access` is written to that permissions profile's `network` table, and **only the `workspace_write` sandbox honours it**.
 
 | `sandbox` | Is `network_access` honoured? |
 | :--- | :--- |
@@ -298,6 +300,7 @@ Either way, a path that came from the *model* is untrusted input: resolve it aga
 | :--- | :--- | :--- |
 | `reasoning_effort` | `"medium"` | Reasoning budget: `minimal`/`low`/`medium`/`high`/`xhigh`. Higher is slower and uses more tokens. |
 | `personality` | `"pragmatic"` | Codex's own reply style: `none`/`friendly`/`pragmatic`. |
+| `mcp_process_reuse` | `True` | Same-instance reuse for stable ADK/MCP tools on `direct` + `resume`, with fresh per-invocation executors and SDK thread/turn identity validation. Set `False` to disable MCP process reuse. |
 | `model_transport` | `"auto"` | How Codex reaches the model. `direct`: Codex calls a Responses-capable backend itself and uses the agent's tools through a local MCP server the runtime runs for the turn, so Codex drives the tool loop. `shim`: an in-process Responses→Chat shim sits in between and executes the tools, for chat-only backends. `auto` picks `direct` for Volcengine Ark (`*.volces.com`), BytePlus (`*.bytepluses.com`) and `api.openai.com`, `shim` otherwise; an agent whose `model_extra_config` has a non-empty `extra_body` stays on `shim` under `auto`, because `direct` cannot forward a request body. With an explicit `direct`, `extra_body` is not forwarded and a warning is logged. |
 | `turn_timeout_seconds` | `1800.0` | Upper bound for one Codex turn, in seconds; past it the turn is interrupted and a `TimeoutError` is raised. `None` means no bound. On the `direct` transport with `thread_mode="resume"`, invocations of one session queue on a per-session lock, so an unbounded turn would also block every later invocation of that session; the default is therefore 30 minutes. In the other modes invocations of one session may run concurrently. |
 | `auto_compact_token_limit` | `None` | Token count at which Codex compacts the history itself (Codex's `model_auto_compact_token_limit`). `direct` transport only; `None` keeps Codex's default. |
@@ -310,6 +313,20 @@ Either way, a path that came from the *model* is untrusted input: resolve it aga
 **Behavior change: `max_tool_iterations` changed meaning, and its default went from `8` to `32`.**
 It now bounds the **whole Codex turn**, not a single backend request. Codex issues a fresh backend request after every native tool round, so the old per-request counter actually allowed *rounds × budget* tool executions. The default was raised at the same time so that turns which reach for an ADK tool only after several native tool rounds are not cut short. If you were relying on `8` as a cost backstop, re-evaluate — `RunConfig(max_llm_calls=...)` (below) is now the better ceiling.
 </Callout>
+
+
+### Parallel and batch tool workloads
+
+Independent async function tools can already execute concurrently when Codex emits them in the same model response. Mark independence in application instructions and concise tool descriptions; dependent reads and writes must retain their required ordering. An application-owned batch tool can bound independent reads and return a result or explicit error for each item. Authorize each item: ADK tools execute on the host, so the Codex sandbox does not replace business permissions. One batch is one SDK tool invocation, and the application must cap the number of business reads separately.
+
+The checkout provides a local example and benchmark, `scripts/benchmark_codex_tools.py`, with `single`, `parallel`, `serial` and `batch` scenarios. Its `bounded_batch_lookup` example limits admission, applies per-item timeouts, preserves cancellation and reports partial failures. It never combines arbitrary registered tools automatically.
+
+```bash
+uv run --extra dev python scripts/benchmark_codex_tools.py --scenario parallel --turns 5 --pool-size 20
+uv run --extra dev python scripts/benchmark_codex_tools.py --scenario parallel --turns 5 --pool-size 0
+```
+
+These runs use the real Codex binary and a scripted loopback model without provider tokens. They validate warm hits, model request counts, context growth and tool results; their latency is framework/simulation evidence, not a real-model performance claim. Run the real-binary regression separately with `CODEX_RUN_SMOKE=1 uv run --extra dev pytest tests/runtime/codex/test_codex_tool_workloads.py -m codex_smoke -p no:xdist -rs`.
 
 ### How instructions reach Codex
 
@@ -329,7 +346,7 @@ The `direct` transport removes `request_user_input` (and `web_search`, multi-age
 ### Codex environment variables
 
 <Callout type="warn">
-The six variables below **override** the Python `CodexRuntimeConfig` rather than acting as defaults for it. A hard-coded `sandbox="workspace_write"` in your code is still overridden by `VEADK_CODEX_SANDBOX=full_access` in the deployment environment. This precedence is the opposite of most settings and matters most where the platform injects environment variables (containers, FaaS).
+The variables below **override** the Python `CodexRuntimeConfig` rather than acting as defaults for it. A hard-coded `sandbox="workspace_write"` in your code is still overridden by `VEADK_CODEX_SANDBOX=full_access` in the deployment environment. This precedence is the opposite of most settings and matters most where the platform injects environment variables (containers, FaaS).
 </Callout>
 
 | Variable | Overrides | Notes |
@@ -340,6 +357,22 @@ The six variables below **override** the Python `CodexRuntimeConfig` rather than
 | `VEADK_CODEX_NETWORK_ACCESS` | `network_access` | `1`/`true`/`yes`/`on` enable it; anything else disables it. |
 | `VEADK_CODEX_MODEL_TRANSPORT` | `model_transport` | `auto`/`direct`/`shim`. |
 | `VEADK_CODEX_THREAD_MODE` | `thread_mode` | `resume`/`ephemeral`. |
+| `VEADK_CODEX_MCP_PROCESS_REUSE` | `mcp_process_reuse` | Guarded MCP process reuse is enabled by default. `0`/`false`/`no`/`off` disable it; `1`/`true`/`yes`/`on` enable it. `VEADK_CODEX_PROCESS_POOL_SIZE=0` disables all reuse. |
+
+On the `direct` transport with `thread_mode="resume"`, both tool-free turns and turns exposing stable ADK/MCP tools may keep their process by default. Set `mcp_process_reuse=False` or `VEADK_CODEX_MCP_PROCESS_REUSE=0` to disable MCP process reuse while retaining tool-free reuse. Each invocation binds fresh executors, callbacks, workspace and tool budgets. Before execution the bridge requires the SDK-owned thread/turn IDs; stale, missing or inconsistent identities and repeated process-wide request IDs are rejected. Idle processes admit no tool calls. The process is reused only in the same store/session/thread with unchanged model, permissions, skills, instructions and tool manifest and matching stored thread identity/version. Errors, interruptions, failed persistence and ambiguous request lifecycles close it. `VEADK_CODEX_PROCESS_POOL_SIZE=0` retains the cold path for all invocations.
+
+Keeping processes alive trades resident memory for lower setup and context costs; model latency still affects whole-turn performance. Repeated request IDs after an MCP reconnect are rejected before execution, and the process is closed rather than replaying an already started turn. Use the disable switch when the application needs per-invocation process lifetime.
+
+Reuse avoids repeated skills/environment injection on the warm path; actual cold recovery still keeps the required context. An existing empty workspace is not reported as reset; a newly recreated workspace is.
+
+| Variable | Default | Notes |
+| :--- | :--- | :--- |
+| `VEADK_CODEX_PROCESS_POOL_SIZE` | `20` | Idle processes kept per VeADK process; the least recently used is closed beyond it. `0` disables reuse (one process per invocation). |
+| `VEADK_CODEX_PROCESS_IDLE_TTL_SECONDS` | `600` | An idle process is closed after this many seconds. |
+| `VEADK_CODEX_MAX_CONCURRENT_TURNS` | unset (no cap) | Maximum Codex turns (each its own `codex app-server`, roughly 100MB) running at once per VeADK process; further invocations wait for a slot before allocating a workspace, private home, tools, session lock, or child process. Admission, setup, and execution share `turn_timeout_seconds`; pre-turn expiry raises `CodexTurnAdmissionTimeout`. A recursively transferred Codex agent in the same task does not take a second slot. |
+| `VEADK_CODEX_DENY_READ_PATHS` | unset | Extra host paths (separated by `os.pathsep`, `:` on Linux/macOS) that sandboxed commands may not read, e.g. the application's config and `.env`, or a local SQLite session database. |
+
+Warm processes are released on their own after the idle TTL. To release them earlier, `await veadk.runtime.codex.release_codex_session(app_name, user_id, session_id)` closes one session's warm processes (call it when deleting a session), and `await veadk.runtime.codex.shutdown_codex_runtime()` closes all of them together with the MCP bridge and shims; the AgentKit app calls the latter on shutdown. If a VeADK process is killed, its Codex processes exit with it, and a later VeADK process on the host removes locked workspace and `CODEX_HOME` roots only when it can prove their owner is gone. Ownerless directories from older VeADK versions are retained because age alone cannot prove that no live process uses them.
 
 Four more variables tune the Responses→Chat shim. These are not part of the override rule above — they only tune the shim itself:
 
