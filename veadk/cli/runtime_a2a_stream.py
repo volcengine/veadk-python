@@ -24,6 +24,9 @@ from typing import Any
 from uuid import uuid4
 
 _MAX_EVENT_TEXT_CHARS = 64_000
+_TERMINAL_TASK_STATES = frozenset(
+    {"completed", "failed", "canceled", "cancelled", "rejected"}
+)
 
 
 @dataclass
@@ -46,7 +49,10 @@ class A2AStreamDecoder:
         self._heartbeat_states: set[tuple[str, str]] = set()
         self._usage_snapshots: dict[str, dict[str, int]] = {}
         self._terminal_state = ""
+        self._latest_state = ""
+        self._completed_projection_seen = False
         self._sandbox_final_answers: dict[str, set[str]] = {}
+        self._final_answer_texts: dict[str, set[str]] = {}
         self._projected_sandbox_ids: set[tuple[str, str, str, str]] = set()
 
     def feed(self, chunk: str | bytes) -> list[dict[str, Any]]:
@@ -96,16 +102,20 @@ class A2AStreamDecoder:
             else "unknown"
         )
         metadata = event.get("metadata") if isinstance(event, Mapping) else None
-        if isinstance(event, Mapping) and (
-            (event.get("kind") == "status-update" and event.get("final") is True)
-            or event.get("kind") == "task"
-        ):
+        if isinstance(event, Mapping):
             status = event.get("status")
-            self._terminal_state = (
+            state = (
                 str(status.get("state") or "").lower()
                 if isinstance(status, Mapping)
                 else ""
             )
+            if state:
+                self._latest_state = state
+            if state and (
+                (event.get("kind") == "status-update" and event.get("final") is True)
+                or event.get("kind") == "task"
+            ):
+                self._terminal_state = state
         cumulative_snapshot = (
             isinstance(event, Mapping)
             and event.get("kind") == "status-update"
@@ -224,15 +234,27 @@ class A2AStreamDecoder:
                 ):
                     output.append(item)
                     continue
+            item_metadata = item.get("customMetadata")
+            answer_texts = _answer_texts_from_event(item)
+            if (
+                item.get("partial") is False
+                and isinstance(item_metadata, Mapping)
+                and item_metadata.get("projectionSource") == "a2a-terminal-status"
+                and answer_texts
+                and all(
+                    text in self._final_answer_texts.get(task_id, set())
+                    for text in answer_texts
+                )
+            ):
+                continue
             if item.get("partial") is not True:
-                parts = item.get("content", {}).get("parts", [])
-                if any(
-                    isinstance(part, Mapping)
-                    and part.get("thought") is not True
-                    and str(part.get("text") or "")
-                    for part in parts
-                ):
+                if answer_texts:
                     self._partial_text["answer"] = ""
+                    self._final_answer_texts.setdefault(task_id, set()).update(
+                        answer_texts
+                    )
+                if item.get("turnComplete") is True:
+                    self._completed_projection_seen = True
                 output.append(item)
                 continue
             parts = item.get("content", {}).get("parts", [])
@@ -314,6 +336,15 @@ class A2AStreamDecoder:
                 self._partial_text[stream] += text
             output.append(item)
         return output
+
+    def stream_incomplete_error(self) -> str:
+        if (
+            self._terminal_state in _TERMINAL_TASK_STATES
+            or self._completed_projection_seen
+        ):
+            return ""
+        state = self._latest_state or "unknown"
+        return f"A2A stream ended before a terminal task status (last state: {state})."
 
     def _normalize_mpa_reasoning(
         self, item: dict[str, Any], task_id: str, cumulative: bool
@@ -477,23 +508,45 @@ def a2a_event_to_studio_events(event: Any, *, author: str) -> list[dict[str, Any
         return []
     if event.get("kind") == "status-update":
         status = event.get("status")
-        if not isinstance(status, Mapping) or event.get("final") is True:
+        if not isinstance(status, Mapping):
             return []
-        state = str(status.get("state") or "")
+        state = str(status.get("state") or "").lower()
+        task_id = str(event.get("taskId") or event.get("id") or "unknown")
+        message = status.get("message")
+        if event.get("final") is True:
+            if state == "completed" and isinstance(message, Mapping):
+                if message.get("role") == "user":
+                    return []
+                return _message_to_studio_events(
+                    message,
+                    author=author,
+                    partial=False,
+                    turn_complete=True,
+                    event_id_prefix=f"a2a-{task_id}-final",
+                    projection_source="a2a-terminal-status",
+                )
+            if state in _TERMINAL_TASK_STATES - {"completed"}:
+                return [
+                    _terminal_status_error_event(
+                        state=state,
+                        message=message,
+                        author=author,
+                        task_id=task_id,
+                    )
+                ]
+            return []
         if state not in {"submitted", "working"}:
             return []
-        message = status.get("message")
         if isinstance(message, Mapping) and message.get("role") == "user":
             return []
         if state == "working" and isinstance(message, Mapping):
             projected = (
-                _message_to_partial_events(message, author=author)
+                _message_to_studio_events(message, author=author, partial=True)
                 if message.get("role") == "agent"
                 else []
             )
             if projected:
                 return projected
-        task_id = str(event.get("taskId") or event.get("id") or "unknown")
         return [
             {
                 "id": f"a2a-{task_id}-{state}",
@@ -513,6 +566,31 @@ def a2a_event_to_studio_events(event: Any, *, author: str) -> list[dict[str, Any
                     turn_complete=True,
                 )
             )
+        status = event.get("status")
+        if isinstance(status, Mapping):
+            state = str(status.get("state") or "").lower()
+            task_id = str(event.get("id") or event.get("taskId") or "unknown")
+            message = status.get("message")
+            if state == "completed" and isinstance(message, Mapping):
+                events.extend(
+                    _message_to_studio_events(
+                        message,
+                        author=author,
+                        partial=False,
+                        turn_complete=True,
+                        event_id_prefix=f"a2a-{task_id}-final",
+                        projection_source="a2a-terminal-status",
+                    )
+                )
+            elif state in _TERMINAL_TASK_STATES - {"completed"}:
+                events.append(
+                    _terminal_status_error_event(
+                        state=state,
+                        message=message,
+                        author=author,
+                        task_id=task_id,
+                    )
+                )
         return events
     if event.get("kind") != "artifact-update":
         return []
@@ -595,11 +673,47 @@ def _coalesce_mpa_thought_parts(event: Any) -> Any:
     return event
 
 
-def _message_to_partial_events(
-    message: Mapping[str, Any], *, author: str
+def _answer_texts_from_event(event: Mapping[str, Any]) -> list[str]:
+    parts = event.get("content", {}).get("parts", [])
+    if not isinstance(parts, list):
+        return []
+    texts: list[str] = []
+    for part in parts:
+        if not isinstance(part, Mapping) or part.get("thought") is True:
+            continue
+        text = str(part.get("text") or "").strip()
+        if text:
+            texts.append(text)
+    return texts
+
+
+def _message_visible_text(message: Any) -> str:
+    if not isinstance(message, Mapping) or message.get("role") == "user":
+        return ""
+    texts: list[str] = []
+    for part in message.get("parts") or []:
+        if not isinstance(part, Mapping):
+            continue
+        metadata = part.get("metadata")
+        if isinstance(metadata, Mapping) and metadata.get("adk_thought") is True:
+            continue
+        text = str(part.get("text") or "").strip()
+        if text:
+            texts.append(text[:_MAX_EVENT_TEXT_CHARS])
+    return "\n".join(texts)[:_MAX_EVENT_TEXT_CHARS]
+
+
+def _message_to_studio_events(
+    message: Mapping[str, Any],
+    *,
+    author: str,
+    partial: bool,
+    turn_complete: bool = False,
+    event_id_prefix: str = "",
+    projection_source: str = "a2a-status",
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
-    message_id = str(message.get("messageId") or uuid4())
+    message_id = event_id_prefix or str(message.get("messageId") or uuid4())
     for index, part in enumerate(message.get("parts") or []):
         if not isinstance(part, Mapping):
             continue
@@ -608,28 +722,45 @@ def _message_to_partial_events(
         text = str(part.get("text") or "")[:_MAX_EVENT_TEXT_CHARS]
         if not text:
             continue
+        custom_metadata: dict[str, Any] = {}
+        if thought or projection_source != "a2a-status":
+            custom_metadata["projectionSource"] = projection_source
+        if thought:
+            custom_metadata["thoughtKind"] = "reasoning"
+            if (
+                isinstance(metadata, Mapping)
+                and metadata.get("reasoningSnapshot") is True
+            ):
+                custom_metadata["reasoningSnapshot"] = True
         events.append(
             _text_event(
                 text,
                 author=author,
                 event_id=f"{message_id}-{index}",
-                partial=True,
+                partial=partial,
+                turn_complete=turn_complete,
                 thought=thought,
-                custom_metadata={
-                    "thoughtKind": "reasoning",
-                    "projectionSource": "a2a-status",
-                    **(
-                        {"reasoningSnapshot": True}
-                        if isinstance(metadata, Mapping)
-                        and metadata.get("reasoningSnapshot") is True
-                        else {}
-                    ),
-                }
-                if thought
-                else None,
+                custom_metadata=custom_metadata or None,
             )
         )
     return events
+
+
+def _terminal_status_error_event(
+    *,
+    state: str,
+    message: Any,
+    author: str,
+    task_id: str,
+) -> dict[str, Any]:
+    detail = _message_visible_text(message)
+    return {
+        "id": f"a2a-{task_id}-{state}-error",
+        "author": author,
+        "partial": False,
+        "content": {"role": "model", "parts": []},
+        "error": f"A2A task {state}: {detail}" if detail else f"A2A task {state}.",
+    }
 
 
 def _artifact_to_studio_events(
