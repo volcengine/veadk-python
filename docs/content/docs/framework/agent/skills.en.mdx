@@ -2,7 +2,7 @@
 title: "Skills"
 ---
 
-Skills are reusable "prompt packages" that inject specific domain knowledge, operating procedures, and scripts into an Agent. For local skill loading and execution, the recommended integration is Google ADK's official `load_skill_from_dir` / `SkillToolset` path. VeADK's legacy `Agent(skills=..., skills_mode="local")` local entry point remains compatible, but is deprecated. The `skills_sandbox` and `aio_sandbox` modes keep their existing behavior.
+Skills are reusable "prompt packages" that inject specific domain knowledge, operating procedures, and scripts into an Agent. For local skill loading and execution, the recommended integration is Google ADK's official `load_skill_from_dir` / `SkillToolset` path. VeADK's legacy `Agent(skills=..., skills_mode="local")` local entry point remains compatible, but is deprecated. `skills_sandbox` executes through cloud Skill Spaces; `aio_sandbox` loads skills and executes file and Shell tools in a bound sandbox.
 
 ## Recommended: ADK SkillToolset
 
@@ -70,7 +70,7 @@ The `skills` parameter still supports three skill execution modes. Only the lega
 | :- | :- |
 | `local` | Deprecated. Skills are loaded by VeADK's legacy `skills_tool` plus file/Shell helper tools; migrate to ADK `SkillToolset` for local execution. |
 | `skills_sandbox` | Skills are hosted in a cloud Skill Space and executed in a sandbox through the `execute_skills` tool. |
-| `aio_sandbox` | All-in-one sandbox mode, suitable for the AgentKit-hosted tool runtime. |
+| `aio_sandbox` | Runtime owns inference; a bound All-in-one sandbox provides Skill files and basic tools. `skills` contains absolute sandbox directories. |
 
 When `skills_mode` is not set explicitly, VeADK infers it from the runtime environment: local runs default to `local`; in the AgentKit tool runtime, it automatically selects `skills_sandbox` or `aio_sandbox` based on the tool type.
 
@@ -103,6 +103,24 @@ agent = Agent(
     tools=[execute_skills],
 )
 ```
+
+### AIO Sandbox Mode
+
+```python
+from veadk import Agent
+
+agent = Agent(
+    model_name="doubao-seed-evolving",
+    skills_mode="aio_sandbox",
+    skills=["/workspace/skills"],
+)
+```
+
+Configure `VOLCENGINE_ACCESS_KEY`, `VOLCENGINE_SECRET_KEY`, `AGENTKIT_TOOL_ID` and model credentials, then create a Session and run the Agent through ADK/VeADK Runner. Construction never reads host Skill files. Before first execution, VeADK creates or reuses an AgentKit sandbox for the app/user/session identity; subsequent turns retain the same sandbox. Expired or failed sandboxes raise errors without automatic replacement or local fallback. Applications own instance lifecycle; idle instances expire by TTL.
+
+VeADK retains `SkillsToolset` and automatically supplies `skills_tool`, `bash_tool`, `read_file_tool`, `write_file_tool`, and `edit_file_tool`. Metadata comes from sandbox `GET /v1/skills`; instructions are read lazily through the remote file API. Commands and file operations execute inside the sandbox; relative paths use `/workspace`. Host environment variables are not forwarded to commands. Additional caller-supplied custom tools remain the caller's responsibility.
+
+`skills` accepts multiple absolute sandbox directories, sent as repeated `path` query parameters. Omitted or empty lists use the sandbox default `/workspace/skills`. Cloud SkillSpace IDs are not accepted here; existing AIO callers must migrate to sandbox paths. The sandbox must support `/v1/skills`, file APIs and Bash APIs. Optional `SANDBOX_API_KEY` authenticates sandbox HTTP requests; configured ADK `inbound_auth` credentials are reused. Bash timeout/cancellation attempts to kill remote commands and close temporary shells. Cleanup failures are reported; mutations are not retried automatically.
 
 ### Skill Checklist
 
@@ -137,7 +155,7 @@ agent = Agent(
 
 | Parameter | Type | Description |
 | :- | :- | :- |
-| `skills` | `list[str]` | Skill list; each item is a local skills root path or a cloud skill-space identifier. The legacy local loading path is deprecated when `skills_mode="local"`. |
-| `skills_mode` | `"local" \| "skills_sandbox" \| "aio_sandbox"` | Skill execution mode; inferred automatically when omitted. The legacy `local` path is deprecated, while `skills_sandbox` / `aio_sandbox` keep their existing behavior. |
+| `skills` | `list[str]` | Skill list; AIO items are absolute sandbox directories; other modes use local skills root paths or cloud skill-space identifiers. The legacy local loading path is deprecated when `skills_mode="local"`. |
+| `skills_mode` | `"local" \| "skills_sandbox" \| "aio_sandbox"` | Skill execution mode; inferred automatically when omitted. The legacy `local` path is deprecated, `skills_sandbox` retains its behavior, and `aio_sandbox` uses remote directories and basic tools. |
 | `enable_skills_checklist` | `bool` | Whether to enable the legacy skill checklist; defaults to `False`. |
 | `enable_dynamic_load_skills` | `bool` | Whether to enable dynamic loading for legacy skills; defaults to `False`. |
