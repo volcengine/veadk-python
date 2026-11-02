@@ -45,7 +45,7 @@ def _text_of_content(content: Any) -> str:
     )
 
 
-class ContentSafetyPlugin(BasePlugin):
+class DecisionPlugin(BasePlugin):
     """Audit model and tool content with the System One decision API.
 
     Mount it explicitly::
@@ -66,7 +66,7 @@ class ContentSafetyPlugin(BasePlugin):
         state_builder: StateBuilder | None = None,
     ):
         if config.provider is not Provider.DECISION:
-            raise ValueError("ContentSafetyPlugin requires provider=decision")
+            raise ValueError("DecisionPlugin requires provider=decision")
         super().__init__(name="content_safety_decision")
         # Deep-copy through model validation so later mutation of the caller's
         # dict cannot change behavior mid-invocation.
@@ -84,19 +84,6 @@ class ContentSafetyPlugin(BasePlugin):
     @property
     def block_message(self) -> str:
         return self._config.block_message
-
-    async def audit_skill_text(self, invocation_id: str, text: str) -> bool:
-        """Audit skill metadata/body/resource/script before activation.
-
-        Intended for :class:`veadk.content_safety.adapters.skill.AuditedSkillToolset`.
-        ``False`` means the caller must not activate or execute.
-        """
-        result = await self._audit(
-            invocation_id=invocation_id,
-            checkpoint=Checkpoint.BEFORE_TOOL,
-            state=self._state.prepare(f"[skill]\n{text}"),
-        )
-        return result.action is not AuditAction.BLOCK
 
     def last_result(
         self, invocation_id: str, checkpoint: Checkpoint | None = None
@@ -150,7 +137,7 @@ class ContentSafetyPlugin(BasePlugin):
         result = await self._audit(
             invocation_id=invocation_id,
             checkpoint=Checkpoint.AFTER_MODEL,
-            state=self._state.prepare(f"[model_output]\n{raw_text}"),
+            state=self._state.build_after_model(llm_response),
         )
         self._remember_audited_text(invocation_id, raw_text)
         if result.action is AuditAction.BLOCK:

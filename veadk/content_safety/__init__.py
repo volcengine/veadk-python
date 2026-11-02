@@ -25,7 +25,6 @@ plugin explicitly and mount it on an ADK ``App``::
     app = App(name="my_app", root_agent=agent, plugins=[plugin] if plugin else [])
 """
 
-from .adapters.skill import AuditedSkillToolset, SkillAuditUnavailable
 from .client import DecisionClient, DecisionClientError, DecisionJudge
 from .config import (
     DEFAULT_BLOCK_MESSAGE,
@@ -41,7 +40,7 @@ from .config import (
 )
 from .decider import ThresholdDecider
 from .factory import build_content_safety
-from .plugin import ContentSafetyPlugin
+from .plugin import DecisionPlugin
 from .state import StateBuilder
 from .types import (
     AuditAction,
@@ -54,13 +53,12 @@ from .types import (
 
 __all__ = [
     "AuditAction",
-    "AuditedSkillToolset",
     "AuditResult",
     "AuditStatus",
     "Checkpoint",
     "ContentSafetyConfig",
     "ContentSafetyConfigError",
-    "ContentSafetyPlugin",
+    "DecisionPlugin",
     "DecisionClient",
     "DecisionClientError",
     "DecisionConfig",
@@ -68,7 +66,6 @@ __all__ = [
     "Provider",
     "QuestionConfig",
     "QuestionResult",
-    "SkillAuditUnavailable",
     "StateBuilder",
     "DEFAULT_BLOCK_MESSAGE",
     "DEFAULT_DECISION_MODEL",

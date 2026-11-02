@@ -23,7 +23,7 @@ from veadk.content_safety import ContentSafetyConfig, build_content_safety
 from veadk.content_safety.factory import _ark_defaults, _systemone_url
 from veadk.content_safety.adapters.llm_shield import LLMShieldPluginAdapter
 from veadk.content_safety.client import DecisionClient
-from veadk.content_safety.plugin import ContentSafetyPlugin
+from veadk.content_safety.plugin import DecisionPlugin
 
 
 class FakeJudge:
@@ -76,13 +76,13 @@ def test_none_provider_returns_none():
 def test_decision_provider_uses_injected_client():
     client = FakeJudge()
     plugin = build_content_safety(decision_config(), client=client)
-    assert isinstance(plugin, ContentSafetyPlugin)
+    assert isinstance(plugin, DecisionPlugin)
     assert plugin._client is client
 
 
 def test_decision_provider_builds_default_client():
     plugin = build_content_safety(decision_config())
-    assert isinstance(plugin, ContentSafetyPlugin)
+    assert isinstance(plugin, DecisionPlugin)
     assert isinstance(plugin._client, DecisionClient)
     assert plugin._client.endpoint == "https://systemone.example/v1/judge"
 

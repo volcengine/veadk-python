@@ -20,7 +20,7 @@ from google.genai import types
 
 from veadk.content_safety.client import DecisionClientError
 from veadk.content_safety.config import ContentSafetyConfig
-from veadk.content_safety.plugin import ContentSafetyPlugin
+from veadk.content_safety.plugin import DecisionPlugin
 from veadk.content_safety.types import AuditAction, AuditStatus, Checkpoint
 
 LOW = {"answers": {"q": {"type": "noul", "noul": 0.1}}}
@@ -81,7 +81,7 @@ def config(*, on_error="allow", questions=None):
 
 def make_plugin(*responses, on_error="allow", questions=None):
     judge = FakeJudge(*responses)
-    plugin = ContentSafetyPlugin(
+    plugin = DecisionPlugin(
         config=config(on_error=on_error, questions=questions), client=judge
     )
     return plugin, judge
@@ -112,7 +112,7 @@ def context(invocation_id="inv"):
 
 def test_constructor_requires_decision_provider():
     try:
-        ContentSafetyPlugin(config=ContentSafetyConfig(), client=FakeJudge())
+        DecisionPlugin(config=ContentSafetyConfig(), client=FakeJudge())
     except ValueError as exc:
         assert "provider=decision" in str(exc)
     else:  # pragma: no cover
@@ -500,6 +500,11 @@ def test_replace_event_text_can_clear_without_text_parts():
     assert replaced.content.parts[0].inline_data is not None
 
 
+def test_block_message_is_exposed():
+    plugin, _ = make_plugin()
+    assert plugin.block_message == config().block_message
+
+
 def test_last_result_shapes():
     plugin, _ = make_plugin(LOW)
     assert plugin.last_result("missing") is None
@@ -536,14 +541,3 @@ def test_after_run_clears_buffers_and_bounds_audit_cache():
     assert "inv" not in plugin._audited_text_hashes
     assert len(plugin._audits) == 256
     assert "inv-0" not in plugin._audits
-
-
-def test_audit_skill_text_allows_and_blocks():
-    plugin, judge = make_plugin(LOW, HIGH)
-    assert asyncio.run(plugin.audit_skill_text("inv", "safe skill")) is True
-    assert asyncio.run(plugin.audit_skill_text("inv", "bad skill")) is False
-    assert len(judge.calls) == 2
-    assert plugin.block_message
-    assert (
-        plugin.last_result("inv", Checkpoint.BEFORE_TOOL).status is AuditStatus.RISK_HIT
-    )

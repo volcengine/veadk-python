@@ -22,7 +22,7 @@ from google.adk.plugins import BasePlugin
 from .client import DecisionClient, DecisionJudge
 from .config import ContentSafetyConfig
 from .decider import ThresholdDecider
-from .plugin import ContentSafetyPlugin
+from .plugin import DecisionPlugin
 from .state import StateBuilder
 from .types import Provider
 
@@ -85,7 +85,7 @@ def build_content_safety(
                 api_key=api_key,
                 model=config.decision.model,
             )
-        return ContentSafetyPlugin(
+        return DecisionPlugin(
             config=config,
             client=judge,
             decider=decider,
