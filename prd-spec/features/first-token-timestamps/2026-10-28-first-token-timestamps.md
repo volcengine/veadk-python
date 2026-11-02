@@ -2,6 +2,9 @@
 
 [中文版](2026-10-28-first-token-timestamps.zh.md)
 
+
+Successor: [APMPlus streaming and TTFT telemetry](../../bugfixes/apmplus-ttft/2026-11-02-apmplus-ttft.md) adds standard per-request attributes and TTFT Histogram recording. The historical scope and evidence below predate that extension.
+
 Change ID: `first-token-timestamps`; created/revised: 2026-10-28; status: approved (implementation and local verification complete; current publication checks are tracked in PR #1190).
 Component: [model-timing](../../../specs/model-timing/README.md). Base: `23014771`.
 

@@ -99,6 +99,21 @@ async def test_default_litellm_adapter_records_before_adk_aggregation(
             r async for r in model.generate_content_async(request, stream=stream)
         ]
     assert responses
+    attempt = next(
+        s for s in exporter.get_finished_spans() if s.name == "model_request"
+    )
+    assert attempt.attributes["gen_ai.request.stream"] is stream
+    ttft = "gen_ai.chat_completions.streaming_time_to_first_token"
+    assert (ttft in attempt.attributes) is stream
+    if stream:
+        assert (
+            attempt.attributes[ttft]
+            == (
+                attempt.attributes["veadk.model.first_token_time_unix_ns"]
+                - attempt.attributes["veadk.model.start_time_unix_ns"]
+            )
+            / 1e9
+        )
     assert owner.attributes["veadk.model.streaming"] is stream
     assert owner.attributes["veadk.model.first_token_status"] == (
         "observed" if stream else "non_streaming"
@@ -258,6 +273,10 @@ async def test_ark_raw_events_and_terminal_paths(monkeypatch, spans, mode):
         if mode in {"empty", "error"}
         else "observed"
     )
+    assert attempt.attributes["gen_ai.request.stream"] is (mode != "non_streaming")
+    assert (
+        "gen_ai.chat_completions.streaming_time_to_first_token" in attempt.attributes
+    ) is (status == "observed")
     assert owner.attributes["veadk.model.first_token_status"] == status
     if status == "observed":
         assert owner.attributes["veadk.model.first_token_type"] == (

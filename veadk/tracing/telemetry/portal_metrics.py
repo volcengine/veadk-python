@@ -262,6 +262,20 @@ class PortalMetricRecorder:
         force_flush = getattr(self.provider, "force_flush", None)
         return bool(force_flush()) if force_flush else True
 
+    def record_model_ttft(self, duration: float, *, model: str) -> None:
+        """Record seconds at the first SDK output, without requiring usage."""
+        try:
+            self.streaming_time_to_first_token.record(
+                duration,
+                attributes={
+                    "gen_ai.request.model": model,
+                    "gen_ai.operation.name": "chat",
+                },
+            )
+        except Exception:
+            # Telemetry must not replace model output or expose backend details.
+            logger.warning("Failed to record model TTFT metric")
+
     def record_call_llm(
         self,
         invocation_context: InvocationContext,
@@ -343,13 +357,6 @@ class PortalMetricRecorder:
                     "error_type": llm_response.error_code,
                 }
                 self.chat_exception_counter.add(1, exception_attributes)
-
-            # TODO: Get streaming time to first token
-            # time_to_frist_token = 0.1
-            # if self.streaming_time_to_first_token:
-            #     self.streaming_time_to_first_token.record(
-            #         time_to_frist_token, attributes=attributes
-            #     )
 
             # TODO: Get streaming time to generate
             # time_to_generate = 1.0

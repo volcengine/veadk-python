@@ -2,6 +2,9 @@
 
 [English](2026-10-28-first-token-timestamps.md)
 
+
+后续设计：[APMPlus 流式与 TTFT 遥测](../../bugfixes/apmplus-ttft/2026-11-02-apmplus-ttft.zh.md) 添加逐请求标准属性和 TTFT Histogram 记录。下列历史范围与证据早于该扩展。
+
 变更 ID：`first-token-timestamps`；创建/修订：2026-10-28；状态：approved（实现与本地验证已完成；当前发布检查由 PR #1190 记录）。
 组件：[model-timing](../../../specs/model-timing/README.zh.md)。基线：`23014771`。
 

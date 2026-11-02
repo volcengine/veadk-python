@@ -28,6 +28,11 @@ from typing import Any
 from opentelemetry import trace
 from opentelemetry.trace import Span
 
+from veadk.tracing.telemetry import portal_metrics
+from veadk.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 @dataclass(frozen=True)
 class RequestStart:
@@ -115,17 +120,24 @@ def annotate_request_start(span: Span) -> None:
 class ModelTiming:
     """One SDK request; this context manager never attaches OTel context."""
 
-    def __init__(self, *, streaming: bool, model: str):
+    def __init__(self, *, streaming: bool, model: str) -> None:
         self.streaming = streaming
+        self.model = str(model)
         self.first_token_time: int | None = None
         self.owner = trace.get_current_span()
         self.span = trace.get_tracer(__name__).start_span(
-            "model_request", attributes={"gen_ai.request.model": str(model)}
+            "model_request",
+            attributes={
+                "gen_ai.request.model": self.model,
+                "gen_ai.span.kind": "llm",
+                "gen_ai.request.stream": streaming,
+            },
         )
         self._spans = (self.span, self.owner)
         for span in self._spans:
             annotate_request_start(span)
-        self._set("veadk.model.start_time_unix_ns", time.time_ns())
+        self.start_time = time.time_ns()
+        self._set("veadk.model.start_time_unix_ns", self.start_time)
         self._set("veadk.model.streaming", streaming)
         self._set("veadk.model.request_scope", "sdk_request")
         self._set(
@@ -155,6 +167,21 @@ class ModelTiming:
                     {"veadk.model.first_token_type": output_type},
                     timestamp=self.first_token_time,
                 )
+        self._record_first_token_duration(self.first_token_time)
+
+    def _record_first_token_duration(self, first_token_time: int) -> None:
+        """Record one SDK request's observed duration, independent of tracing."""
+        duration = (first_token_time - self.start_time) / 1e9
+        if duration < 0:
+            logger.warning("Skipping TTFT because the wall clock moved backwards")
+            return
+        if self.span.is_recording():
+            self.span.set_attribute(
+                portal_metrics.Meters.LLM_STREAMING_TIME_TO_FIRST_TOKEN, duration
+            )
+        portal_metrics.portal_metric_recorder.record_model_ttft(
+            duration, model=self.model
+        )
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         outcome = "completed"
