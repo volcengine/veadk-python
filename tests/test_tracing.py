@@ -101,6 +101,7 @@ def test_local_cache_limits_preserve_cloud_spans_annotations_and_dumps(
     token = context_api.attach(context_api.Context())
     try:
         with otel_tracer.start_as_current_span("invocation") as invocation:
+            assert invocation.attributes["era.span_type"] == "root"
             assert (
                 context_api.get_value("suppress_language_model_instrumentation") is True
             )
@@ -119,6 +120,8 @@ def test_local_cache_limits_preserve_cloud_spans_annotations_and_dumps(
     assert spans[2].attributes["gen_ai.output"] == payload
     assert spans[3].attributes["gen_ai.span.kind"] == "agent"
     assert spans[4].attributes["gen_ai.span.kind"] == "workflow"
+    assert spans[4].attributes["era.span_type"] == "root"
+    assert all("era.span_type" not in span.attributes for span in spans[:4])
     assert spans[4].attributes["gen_ai.usage.total_tokens"] == 0
     assert tracer.trace_id == format(invocation.context.trace_id, "032x")
     cache = tracer._inmemory_exporter._exporter
