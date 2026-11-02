@@ -197,6 +197,7 @@ class _InMemorySpanProcessor(export.SimpleSpanProcessor):
             parent_context: Parent OpenTelemetry context
         """
         if span.name.startswith("invocation"):
+            span.set_attribute("era.span_type", "root")
             span.set_attribute("gen_ai.operation.name", "chain")
             span.set_attribute("gen_ai.span.kind", "workflow")
             span.set_attribute("gen_ai.usage.total_tokens", 0)
