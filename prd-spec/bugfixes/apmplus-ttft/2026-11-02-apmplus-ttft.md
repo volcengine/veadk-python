@@ -7,6 +7,8 @@ Component: [model-timing](../../../specs/model-timing/README.md).
 Predecessor: [first-token-timestamps](../../features/first-token-timestamps/2026-10-28-first-token-timestamps.md).
 Inspected revision: `d9ef697b82fde94373737aae518148df348e60b0` on `feat/first-token-timestamps` (PR #1190).
 
+Current contract: the standards-only revision at the end of this document supersedes the earlier custom-field preservation decision. Earlier sections retain historical evidence.
+
 ## Background and evidence
 
 The [PR review comment](https://github.com/volcengine/veadk-python/pull/1190#issuecomment-6514480806) requires the standard streaming flag, a seconds-valued TTFT span attribute, and actual TTFT Histogram recording. The supplied APMPlus Trace specification (revision 261) and Metrics specification (revision 17), read on 2026-11-02, agree with those requirements.
@@ -124,3 +126,53 @@ The user explicitly authorized commit and push. PR #1190 had already been squash
 After synchronization, `uv run --no-sync --extra dev pytest tests/models tests/test_model_ttft.py tests/test_model_timing.py tests/test_portal_metrics.py tests/test_tracing.py tests/test_tracing_content.py tests/test_inmemory_exporter.py -q` passed all **156 tests**. `uv run --no-sync --extra dev pre-commit run --all-files` passed.
 
 `uv run --no-sync --extra dev pytest -n 2 -m "not codex_smoke and not piagent_smoke" -q` finished with **8044 passed, 1 failed, 55 skipped, 4 xfailed**, plus **6 passing subtests**, in 407.20s. The sole failure remains the previously reproduced baseline Markdown MIME mismatch; its production/test files are unchanged between the original PR head and the synchronized base. The repository-wide gate remains `fail`; no assertion was weakened. This authorization covers pushing `fix/apmplus-ttft`, not opening another PR.
+
+## Approved standards-only revision (2026-11-02)
+
+The user explicitly removed consumer compatibility as a requirement and authorized immediate implementation. This supersedes FR-1/2/4/5/6 preservation of custom telemetry: remove all `veadk.request.*` / `veadk.model.*` timing attributes and the custom first-token event. Native HTTP/Runner spans own request start/end; SDK spans use the exact SDK start as native `start_time`. Only the standard stream and TTFT attributes/Histogram remain. Failed requests use Status `ERROR` with bounded `error.type`; timeout and cancellation are identified, while explicit generator closure is not an error. Do not capture exception text.
+
+Update request context propagation, final telemetry/exporter hooks, timing/adapter tests, and both documentation languages. Preserve generator yield isolation, stream cleanup, independent retries, no-usage metrics, and no-output omission. Verify negative assertions for custom attributes/events, exact native start, request/model parentage, status/error privacy, and existing response behavior. Native request spans are the replacement for request-start attributes; this is not removal of request timing. The user approved this contract change; no old aliases or compatibility bridge are required. Historical test results above describe the preceding revision only.
+
+### Standards-only implementation and evidence (2026-11-02)
+
+Comparison base: `95fd4c63`; the working diff replaces custom telemetry without compatibility aliases, as explicitly requested. Production changes are limited to `timing.py`, removal of final-response annotation from `telemetry.py`, and removal of exporter annotation from `inmemory_exporter.py`. Native request spans retain request-boundary timing and preserve context across producer advancement/closure without leaking it through yields. Existing app factories and Runner use their existing installation points. No credentials, dependency metadata, deployment, commit, or push changes are part of this revision.
+
+| Gate | Status | Evidence or limitation |
+| --- | --- | --- |
+| Change Basis | PASS | Complete working diff against `95fd4c63`; no unrelated changes. |
+| Contract | PASS | User-approved removal; updated CON-1..9 use native intervals and standard attributes/status. |
+| Impact | PASS | S-1..4 include request/model spans, callbacks/exporters, lifecycle, and docs. |
+| Portfolio | PASS | Native span and Histogram assertions, provider-boundary tests, HTTP/Runner tests, failure injection, regression. |
+| Baseline | PASS | Four new regression cases failed before implementation, then passed. |
+| Execution | BLOCKED | Scoped checks pass; default regression retains the previously reproduced unrelated MIME failure. |
+| Evaluation | PASS | 56/56 changed executable production lines; no missing changed decision arcs. |
+| Handoff | PASS | Local implementation and limitations documented; no compatibility alias or unverified cloud claim. |
+
+#### Change Impact
+
+| Change ID | Changed contract | Affected surface | Repository evidence | Failure mode | Risk |
+| --- | --- | --- | --- | --- | --- |
+| Standard-only | CON-1/2/6/7 | Request/model spans and exports | `timing.py`, annotation removals | Custom fields persist; native interval or parentage is wrong | S-1 Medium |
+| Standard-only | CON-3/4/8/9 | TTFT and Histogram | Existing recorder plus timing/adapter tests | Missing/duplicate samples or changed units | S-2 Medium |
+| Standard-only | CON-5 | Request context, retries, failure/close | Middleware, Runner wrapper, real SDK adapters | Context leak, wrong status, lost original error or cleanup | S-3 High |
+| Standard-only | CON-1..9 | Bilingual specs and user docs | Updated tracing MDX and component pair | Old custom-field contract is presented as current | S-4 Medium |
+
+#### Test Portfolio
+
+| Risk ID | Boundary | Method | Cases | Oracle | Evidence | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| S-1 | OTel exporter and ASGI/Runner | Contract/integration | Exact model start, request before body read, parentage, unsupported mode | Native times/parents; zero custom attributes/events | 84 focused and 294 affected tests | VERIFIED |
+| S-2 | Real OTel reader and adapters | Controlled clock/state transitions | All output kinds, no output/usage, retries, no trace sampling, metric failure | Exact seconds/count/sum and omissions | Focused/affected tests retain prior Histogram assertions | VERIFIED |
+| S-3 | Async producer and request spans | Failure injection/concurrency | Timeout, cancellation, explicit close, close error, HTTP 5xx, inherited scope | Original errors/outputs; correct ERROR/error.type; no exception text; context restored | Focused/affected tests and default regression | VERIFIED |
+| S-4 | Bilingual documentation | Identifier/link review and site build | Current standard-only contract and historical predecessor labels | Equivalent identifiers and successful type/build checks | Documentation/static checks | VERIFIED |
+
+Executed checks:
+
+- `uv run --no-sync --extra dev pytest tests/test_model_ttft.py -q -k 'only_standard or model_failure'`: before implementation **4 failed, 20 deselected**; after implementation **4 passed, 20 deselected**.
+- `uv run --no-sync --extra dev pytest tests/test_model_timing.py tests/test_model_ttft.py tests/models/test_model_timing_adapters.py -q`: **84 passed**, zero failures/skips, including the strengthened HTTP-before-body assertion.
+- `MODEL_AGENT_API_KEY=offline-test-placeholder uv run --no-sync --extra dev pytest tests/models tests/test_model_timing.py tests/test_model_ttft.py tests/test_portal_metrics.py tests/test_tracing.py tests/test_tracing_content.py tests/test_inmemory_exporter.py tests/test_runner.py tests/runner/test_runner_contract.py tests/integrations/agentkit/test_app.py tests/cloud/test_harness_app_contract.py tests/cloud/test_harness_app_http.py -q --cov=veadk --cov-branch --cov-report=json:/tmp/veadk-standard-coverage.json`: **294 passed**, zero failures/skips. The value is synthetic and provider calls are controlled. Changed executable production-line coverage: **56/56 (100%)**; no coverage exclusions added.
+- `uv run --no-sync --extra dev pytest -n 2 -m 'not codex_smoke and not piagent_smoke' -q`: **8053 passed, 1 failed, 55 skipped, 4 xfailed**, plus **6 passing subtests**, 422.58s. The sole failure is the previously reproduced `test_success_uses_trusted_scope_and_hashes_utf8_bytes` baseline mismatch. Production/test files for that failure remain unchanged. No failures were hidden or assertions loosened.
+- `uv run --no-sync --extra dev pre-commit run --all-files`: **pass** after formatting; includes Ruff and secret checks. `npm --prefix docs run types:check`, `npm --prefix docs run build`, paired identifiers, relative links, function-length and diff-whitespace checks: **pass**.
+- Live cloud/provider validation: **not_run**, outside the authorized local scope. The original feature's cloud evidence does not validate this new span topology. Residual compatibility impact is deliberate removal of custom fields and added native request parent spans.
+
+Publication authorization (2026-11-02): the user explicitly requested committing and pushing the standards-only revision. Fetch confirmed unchanged remote base `65f30f28` and branch head `95fd4c63`; rebase onto `origin/main` was up to date. After synchronization, all 294 affected tests and all applicable pre-commit hooks passed. The previously recorded full-regression baseline limitation remains unchanged.

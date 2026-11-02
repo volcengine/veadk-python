@@ -7,6 +7,8 @@
 前序设计：[first-token-timestamps](../../features/first-token-timestamps/2026-10-28-first-token-timestamps.zh.md)。
 检查版本：`feat/first-token-timestamps` 的 `d9ef697b82fde94373737aae518148df348e60b0`（PR #1190）。
 
+当前契约：本文末尾的仅标准字段修订取代前文保留自定义字段的决定。前文保留历史证据。
+
 ## 背景与证据
 
 [PR 评论](https://github.com/volcengine/veadk-python/pull/1190#issuecomment-6514480806) 要求补齐标准流式标记、以秒为单位的 TTFT Span 属性及真正的 TTFT Histogram 记录。2026-11-02 读取的指定 APMPlus Trace 规范（revision 261）和 Metrics 规范（revision 17）与这些要求一致。
@@ -124,3 +126,53 @@ R-1/2/4 跨可观测契约，定为 Medium。R-3 可能影响常用路径的模�
 同步后，`uv run --no-sync --extra dev pytest tests/models tests/test_model_ttft.py tests/test_model_timing.py tests/test_portal_metrics.py tests/test_tracing.py tests/test_tracing_content.py tests/test_inmemory_exporter.py -q` 的 **156 项测试全部通过**。`uv run --no-sync --extra dev pre-commit run --all-files` 通过。
 
 `uv run --no-sync --extra dev pytest -n 2 -m "not codex_smoke and not piagent_smoke" -q` 结果为 **8044 passed、1 failed、55 skipped、4 xfailed**，另有 **6 项子测试通过**，耗时 407.20s。唯一失败仍为此前已复现的基线 Markdown MIME 不匹配；其生产/测试文件在原 PR head 与同步后基线之间没有变化。仓库级检查仍为 `fail`，没有放宽断言。本次授权包含推送 `fix/apmplus-ttft`，不包含新建另一个 PR。
+
+## 已批准的仅标准字段修订（2026-11-02）
+
+用户明确不考虑已有消费者，并授权立即实施。本修订替代 FR-1/2/4/5/6 中保留自定义遥测的决定：移除全部 `veadk.request.*` / `veadk.model.*` 计时属性及自定义首 Token 事件。原生 HTTP/Runner Span 负责请求起止时间；SDK Span 将精确 SDK 开始时间设为原生 `start_time`。只保留标准流式与 TTFT 属性/Histogram。失败请求使用 Status `ERROR` 和有限类别的 `error.type`；区分超时、取消，主动关闭生成器不算错误。不采集异常正文。
+
+同步请求上下文传递、最终遥测/导出器钩子、计时/适配器测试及双语文档。保留生成器 yield 隔离、流清理、独立重试、无 usage 指标及无输出省略行为。验证无自定义属性/事件、精确原生起点、请求/模型父子关系、错误状态/隐私及原响应行为。原生请求 Span 替代请求开始属性，不删除请求计时能力。用户已批准该契约变化，无需旧别名或兼容桥接。上方历史测试结果仅适用于前一修订。
+
+### 仅标准字段实现与证据（2026-11-02）
+
+比较基线：`95fd4c63`；工作区差异按用户明确要求替代自定义遥测，不保留兼容别名。生产修改仅包含 `timing.py`、移除 `telemetry.py` 中最终响应注解、移除 `inmemory_exporter.py` 中导出器注解。原生请求 Span 保留请求边界计时，并在生产者推进/关闭时绑定上下文，不跨 yield 泄漏。应用工厂和 Runner 复用既有安装点。本修订不包含凭证、依赖清单、部署、提交或推送变更。
+
+| Gate | 状态 | 证据或限制 |
+| --- | --- | --- |
+| Change Basis | PASS | 已检查相对 `95fd4c63` 的全部工作区差异；无无关修改。 |
+| Contract | PASS | 用户批准删除；更新的 CON-1..9 使用原生区间及标准属性/状态。 |
+| Impact | PASS | S-1..4 覆盖请求/模型 Span、回调/导出器、生命周期和文档。 |
+| Portfolio | PASS | 原生 Span 与 Histogram 断言、供应商边界测试、HTTP/Runner 测试、故障注入及回归。 |
+| Baseline | PASS | 四个新增回归场景在实现前失败，实现后通过。 |
+| Execution | BLOCKED | 范围内检查通过；默认回归保留此前已复现的无关 MIME 失败。 |
+| Evaluation | PASS | 覆盖 56/56 个变更生产可执行行；无缺失变更分支。 |
+| Handoff | PASS | 本地实现与限制已记录；无兼容别名或未经验证的云端声明。 |
+
+#### Change Impact
+
+| Change ID | 变更契约 | 受影响面 | 仓库证据 | 失败模式 | 风险 |
+| --- | --- | --- | --- | --- | --- |
+| Standard-only | CON-1/2/6/7 | 请求/模型 Span 及导出 | `timing.py`、注解移除 | 自定义字段残留；原生区间或父子关系错误 | S-1 Medium |
+| Standard-only | CON-3/4/8/9 | TTFT 和 Histogram | 既有 recorder 与计时/适配器测试 | 样本遗漏/重复或单位改变 | S-2 Medium |
+| Standard-only | CON-5 | 请求上下文、重试、失败/关闭 | 中间件、Runner 包装、真实 SDK 适配器 | 上下文泄漏、状态错误、原异常或清理丢失 | S-3 High |
+| Standard-only | CON-1..9 | 双语契约与用户文档 | 更新的 tracing MDX 和组件文档对 | 把旧自定义字段契约表述为现状 | S-4 Medium |
+
+#### Test Portfolio
+
+| Risk ID | 边界 | 方法 | 场景 | 判定依据 | 证据 | 状态 |
+| --- | --- | --- | --- | --- | --- | --- |
+| S-1 | OTel exporter 和 ASGI/Runner | 契约/集成 | 精确模型起点、读取 body 前请求范围、父子关系、未知模式 | 原生时间/父子关系；零自定义属性/事件 | 84 项定向与 294 项受影响测试 | VERIFIED |
+| S-2 | 真实 OTel reader 和适配器 | 受控时钟/状态转换 | 所有输出类型、无输出/usage、重试、不采样 Trace、指标失败 | 精确秒数/count/sum 及省略规则 | 定向/受影响测试保留先前 Histogram 断言 | VERIFIED |
+| S-3 | 异步生产者和请求 Span | 故障注入/并发 | 超时、取消、主动关闭、关闭异常、HTTP 5xx、继承范围 | 原始异常/输出；正确 ERROR/error.type；无异常正文；上下文恢复 | 定向/受影响测试及默认回归 | VERIFIED |
+| S-4 | 双语文档 | 标识符/链接评审及站点构建 | 现行仅标准字段契约和前序历史标记 | 标识符等价，类型/构建检查成功 | 文档/静态检查 | VERIFIED |
+
+已执行检查：
+
+- `uv run --no-sync --extra dev pytest tests/test_model_ttft.py -q -k 'only_standard or model_failure'`：实现前 **4 failed、20 deselected**；实现后 **4 passed、20 deselected**。
+- `uv run --no-sync --extra dev pytest tests/test_model_timing.py tests/test_model_ttft.py tests/models/test_model_timing_adapters.py -q`：**84 passed**，零失败/跳过，包含加强的读取 HTTP body 前断言。
+- `MODEL_AGENT_API_KEY=offline-test-placeholder uv run --no-sync --extra dev pytest tests/models tests/test_model_timing.py tests/test_model_ttft.py tests/test_portal_metrics.py tests/test_tracing.py tests/test_tracing_content.py tests/test_inmemory_exporter.py tests/test_runner.py tests/runner/test_runner_contract.py tests/integrations/agentkit/test_app.py tests/cloud/test_harness_app_contract.py tests/cloud/test_harness_app_http.py -q --cov=veadk --cov-branch --cov-report=json:/tmp/veadk-standard-coverage.json`：**294 passed**，零失败/跳过。该值为合成占位值，供应商调用受控。生产变更可执行行覆盖率：**56/56（100%）**；没有添加覆盖率排除。
+- `uv run --no-sync --extra dev pytest -n 2 -m 'not codex_smoke and not piagent_smoke' -q`：**8053 passed、1 failed、55 skipped、4 xfailed**，另有 **6 项子测试通过**，耗时 422.58s。唯一失败为此前已复现的 `test_success_uses_trusted_scope_and_hashes_utf8_bytes` 基线不匹配。该失败涉及的生产/测试文件未修改。没有隐藏失败或放宽断言。
+- `uv run --no-sync --extra dev pre-commit run --all-files`：格式化后 **pass**，包含 Ruff 与密钥扫描。`npm --prefix docs run types:check`、`npm --prefix docs run build`、双语标识符、相对链接、函数长度及 diff 空白检查：**pass**。
+- 真实云/供应商验证：**not_run**，超出本次授权的本地范围。原功能的云端证据不能证明新的 Span 拓扑。剩余兼容性影响是有意删除自定义字段，以及增加原生请求父 Span。
+
+发布授权（2026-11-02）：用户明确要求提交并推送仅标准字段修订。Fetch 确认远端基线 `65f30f28` 和分支 head `95fd4c63` 未变化；rebase 到 `origin/main` 已是最新。同步后 294 项受影响测试及所有适用 pre-commit 检查通过。此前记录的全量回归基线限制未变化。

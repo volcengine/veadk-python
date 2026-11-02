@@ -24,6 +24,7 @@ from google.genai import types
 from litellm import ModelResponse
 from litellm.types.utils import ModelResponseStream
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.trace import StatusCode
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from volcenginesdkarkruntime.types.responses import (
@@ -106,25 +107,10 @@ async def test_default_litellm_adapter_records_before_adk_aggregation(
     ttft = "gen_ai.chat_completions.streaming_time_to_first_token"
     assert (ttft in attempt.attributes) is stream
     if stream:
-        assert (
-            attempt.attributes[ttft]
-            == (
-                attempt.attributes["veadk.model.first_token_time_unix_ns"]
-                - attempt.attributes["veadk.model.start_time_unix_ns"]
-            )
-            / 1e9
-        )
-    assert owner.attributes["veadk.model.streaming"] is stream
-    assert owner.attributes["veadk.model.first_token_status"] == (
-        "observed" if stream else "non_streaming"
-    )
-    if stream:
-        assert (
-            owner.attributes["veadk.model.first_token_time_unix_ns"]
-            >= owner.attributes["veadk.model.start_time_unix_ns"]
-        )
-    else:
-        assert "veadk.model.first_token_time_unix_ns" not in owner.attributes
+        assert attempt.attributes[ttft] >= 0
+        assert attempt.start_time + attempt.attributes[ttft] * 1e9 <= attempt.end_time
+    assert not owner.attributes
+    assert not owner.events
     assert (
         len([s for s in exporter.get_finished_spans() if s.name == "model_request"])
         == 1
@@ -173,11 +159,11 @@ async def test_litellm_terminal_paths_close_original_stream(monkeypatch, spans, 
             _ = [r async for r in response]
     attempt = exporter.get_finished_spans()[0]
     assert closed == [True]
-    assert attempt.attributes["veadk.model.outcome"] == {
-        "error": "error",
-        "cancel": "cancelled",
-        "close": "cancelled",
-    }.get(mode, "completed")
+    error_type = {"error": "llm_error", "cancel": "cancelled"}.get(mode)
+    assert attempt.attributes.get("error.type") == error_type
+    assert attempt.status.status_code is (
+        StatusCode.ERROR if error_type else StatusCode.UNSET
+    )
 
 
 @pytest.mark.asyncio
@@ -190,7 +176,7 @@ async def test_litellm_request_failure_does_not_leak_span(monkeypatch, spans):
     monkeypatch.setattr(LiteLLMClient, "acompletion", complete)
     with pytest.raises(RuntimeError, match="request failed"):
         await TimedLiteLLMClient().acompletion("test", [], [], stream=True)
-    assert exporter.get_finished_spans()[0].attributes["veadk.model.outcome"] == "error"
+    assert exporter.get_finished_spans()[0].status.status_code is StatusCode.ERROR
 
 
 @pytest.mark.asyncio
@@ -277,13 +263,11 @@ async def test_ark_raw_events_and_terminal_paths(monkeypatch, spans, mode):
     assert (
         "gen_ai.chat_completions.streaming_time_to_first_token" in attempt.attributes
     ) is (status == "observed")
-    assert owner.attributes["veadk.model.first_token_status"] == status
-    if status == "observed":
-        assert owner.attributes["veadk.model.first_token_type"] == (
-            "tool_call" if mode == "tool_call" else "text"
-        )
-    else:
-        assert "veadk.model.first_token_time_unix_ns" not in owner.attributes
+    assert not owner.attributes
+    assert not owner.events
+    assert attempt.status.status_code is (
+        StatusCode.ERROR if mode == "error" else StatusCode.UNSET
+    )
     assert attempt.end_time is not None
     if mode != "non_streaming":
         assert closed == [True]
@@ -313,8 +297,11 @@ async def test_litellm_close_before_iteration_ends_attempt(monkeypatch, spans):
     await response.aclose()
     assert closed == [True]
     attempt = exporter.get_finished_spans()[0]
-    assert attempt.attributes["veadk.model.outcome"] == "cancelled"
-    assert attempt.attributes["veadk.model.first_token_status"] == "no_output"
+    assert attempt.status.status_code is StatusCode.UNSET
+    assert (
+        "gen_ai.chat_completions.streaming_time_to_first_token"
+        not in attempt.attributes
+    )
     with pytest.raises(StopAsyncIteration):
         await anext(response)
 
@@ -340,7 +327,7 @@ async def test_litellm_close_failure_propagates_and_ends_span(monkeypatch, spans
     response = await TimedLiteLLMClient().acompletion("test", [], [], stream=True)
     with pytest.raises(RuntimeError, match="close failed"):
         await anext(response)
-    assert exporter.get_finished_spans()[0].attributes["veadk.model.outcome"] == "error"
+    assert exporter.get_finished_spans()[0].status.status_code is StatusCode.ERROR
 
 
 @pytest.mark.asyncio
@@ -372,7 +359,7 @@ async def test_veadk_retry_exports_distinct_sdk_attempts(monkeypatch, spans):
         model=model.model,
         contents=[types.Content(role="user", parts=[types.Part(text="hello")])],
     )
-    with timing.bind_request_start(timing.RequestStart(1, "runner")):
+    with tracer.start_as_current_span("runner_request"):
         with tracer.start_as_current_span("call_llm") as owner:
             responses = [
                 r async for r in model.generate_content_async(request, stream=True)
@@ -380,14 +367,14 @@ async def test_veadk_retry_exports_distinct_sdk_attempts(monkeypatch, spans):
     assert responses and requests == ["openai/test", "openai/test"]
     attempts = [s for s in exporter.get_finished_spans() if s.name == "model_request"]
     assert len(attempts) == 2
-    assert attempts[0].attributes["veadk.model.outcome"] == "error"
-    assert attempts[0].attributes["veadk.model.first_token_status"] == "no_output"
-    assert "veadk.model.first_token_time_unix_ns" not in attempts[0].attributes
-    assert attempts[1].attributes["veadk.model.outcome"] == "completed"
-    assert attempts[1].attributes["veadk.model.first_token_status"] == "observed"
-    assert (
-        owner.attributes["veadk.model.first_token_time_unix_ns"]
-        == attempts[1].attributes["veadk.model.first_token_time_unix_ns"]
-    )
+    assert attempts[0].status.status_code is StatusCode.ERROR
+    assert attempts[0].attributes["error.type"] == "llm_error"
+    ttft = "gen_ai.chat_completions.streaming_time_to_first_token"
+    assert ttft not in attempts[0].attributes
+    assert attempts[1].status.status_code is StatusCode.UNSET
+    assert ttft in attempts[1].attributes
+    assert not owner.attributes
     assert all(s.parent.span_id == owner.context.span_id for s in attempts)
-    assert all(s.attributes["veadk.request.start_time_unix_ns"] == 1 for s in attempts)
+    assert all(
+        not any(key.startswith("veadk.") for key in s.attributes) for s in attempts
+    )

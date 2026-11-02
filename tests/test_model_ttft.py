@@ -72,19 +72,18 @@ def test_ttft_seconds_are_recorded_once_without_usage(
     tracer, exporter, reader, _ = telemetry
     clock = iter([10_000_000_000, 10_250_000_000])
     monkeypatch.setattr(timing.time, "time_ns", lambda: next(clock))
-    with timing.bind_request_start(timing.RequestStart(1, "http")):
-        with tracer.start_as_current_span("call_llm") as owner:
-            with timing.ModelTiming(streaming=True, model="openai/test") as call:
-                call.observe(None)
-                call.observe(kind)
-                call.observe("text")
-            assert TTFT not in owner.attributes
+    with tracer.start_as_current_span("call_llm") as owner:
+        with timing.ModelTiming(streaming=True, model="openai/test") as call:
+            call.observe(None)
+            call.observe(kind)
+            call.observe("text")
+        assert TTFT not in owner.attributes
     attempt = exporter.get_finished_spans()[0]
     assert attempt.attributes["gen_ai.span.kind"] == "llm"
     assert attempt.attributes["gen_ai.request.stream"] is True
     assert type(attempt.attributes[TTFT]) is float
     assert attempt.attributes[TTFT] == 0.25
-    assert attempt.attributes["veadk.model.first_token_time_unix_ns"] == 10_250_000_000
+    assert attempt.start_time == 10_000_000_000
     points = ttft_points(reader)
     assert len(points) == 1
     assert (points[0].count, points[0].sum) == (1, 0.25)
@@ -99,7 +98,6 @@ def test_missing_observation_has_no_ttft(telemetry: tuple, mode: str) -> None:
     tracer, exporter, reader, _ = telemetry
     with tracer.start_as_current_span("call_llm") as owner:
         if mode == "unsupported":
-            timing.mark_uninstrumented_model(owner, streaming=True)
             assert "gen_ai.request.stream" not in owner.attributes
         else:
             with timing.ModelTiming(streaming=mode == "empty", model="test") as call:
@@ -124,7 +122,7 @@ def test_clock_boundary(
         call.observe("text")
         call.observe("text")
     attempt = exporter.get_finished_spans()[0]
-    assert attempt.attributes["veadk.model.first_token_status"] == "observed"
+    assert call.first_token_time == 1_000_000_000 + offset
     assert diagnostic.call_count == int(offset < 0)
     if offset < 0:
         assert TTFT not in attempt.attributes
@@ -283,3 +281,45 @@ def test_unconfigured_meter_provider_needs_no_exporter(
         call.observe("text")
     assert TTFT in exporter.get_finished_spans()[0].attributes
     assert ttft_points(reader) == []
+
+
+def test_only_standard_fields_and_native_model_start(
+    monkeypatch: pytest.MonkeyPatch, telemetry: tuple
+) -> None:
+    tracer, exporter, _, _ = telemetry
+    clock = iter([10_000_000_000, 10_250_000_000])
+    monkeypatch.setattr(timing.time, "time_ns", lambda: next(clock))
+    with tracer.start_as_current_span("call_llm"):
+        with timing.ModelTiming(streaming=True, model="test") as call:
+            call.observe("text")
+    model, owner = exporter.get_finished_spans()
+    assert model.start_time == 10_000_000_000
+    assert model.attributes[TTFT] == 0.25
+    for span in (model, owner):
+        assert not any(key.startswith("veadk.") for key in span.attributes)
+        assert not any(event.name.startswith("veadk.") for event in span.events)
+
+
+@pytest.mark.parametrize(
+    "error,error_type",
+    [
+        (RuntimeError, "llm_error"),
+        (TimeoutError, "timeout"),
+        (asyncio.CancelledError, "cancelled"),
+    ],
+)
+def test_model_failure_uses_standard_error_status(
+    telemetry: tuple, error: type[BaseException], error_type: str
+) -> None:
+    from opentelemetry.trace import StatusCode
+
+    _, exporter, _, _ = telemetry
+    with pytest.raises(error):
+        with timing.ModelTiming(streaming=True, model="test"):
+            raise error("private details")
+    span = exporter.get_finished_spans()[0]
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["error.type"] == error_type
+    assert "private details" not in str(span.attributes)
+    assert span.status.description is None
+    assert not span.events
