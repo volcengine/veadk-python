@@ -11,8 +11,6 @@ title: "埋点字段说明"
 - [调用模型时](https://github.com/google/adk-python/blob/v1.17.0/src/google/adk/flows/llm_flows/base_llm_flow.py)：在 BaseLlmFlow 的 `_call_llm_with_tracing` 函数中埋点，Span 名称为 `call_llm`
 - [调用工具时](https://github.com/google/adk-python/blob/v1.17.0/src/google/adk/flows/llm_flows/functions.py)：在 BaseLlmFlow 的 `_execute_single_function_call_async` 函数中埋点，Span 名称为 `execute_tool {tool.name}`
 
-启用 VeADK OpenTelemetry Tracing 时，`invocation` Span 在创建时写入 `era.span_type="root"`，用于标识 VeADK 调用入口。即使存在上游父 Span，也会保留该标识；写入不依赖模型响应或输入输出内容采集。
-
 在每个时机时，都会创建对应名字的 Span，用于记录该时机的详细信息。当某阶段结束时，会调用对应的打点函数，将该阶段的信息记录到 Span 中：
 
 - Google ADK [打点文件](https://github.com/google/adk-python/blob/v1.17.0/src/google/adk/telemetry/tracing.py)
