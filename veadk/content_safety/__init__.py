@@ -1,0 +1,81 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""Opt-in content safety for VeADK agents.
+
+This package does not change any existing default. To enable it, build a
+plugin explicitly and mount it on an ADK ``App``::
+
+    from veadk.content_safety import (
+        ContentSafetyConfig, build_content_safety,
+    )
+
+    config = ContentSafetyConfig.from_dict({...})
+    plugin = build_content_safety(config)
+    app = App(name="my_app", root_agent=agent, plugins=[plugin] if plugin else [])
+"""
+
+from .adapters.skill import AuditedSkillToolset, SkillAuditUnavailable
+from .client import DecisionClient, DecisionClientError, DecisionJudge
+from .config import (
+    DEFAULT_BLOCK_MESSAGE,
+    DEFAULT_DECISION_MODEL,
+    DEFAULT_QUESTION_INSTRUCTIONS,
+    DEFAULT_QUESTION_THRESHOLD,
+    ContentSafetyConfig,
+    ContentSafetyConfigError,
+    DecisionConfig,
+    QuestionConfig,
+    default_questions,
+    load_content_safety_config,
+)
+from .decider import ThresholdDecider
+from .factory import build_content_safety
+from .plugin import ContentSafetyPlugin
+from .state import StateBuilder
+from .types import (
+    AuditAction,
+    AuditResult,
+    AuditStatus,
+    Checkpoint,
+    Provider,
+    QuestionResult,
+)
+
+__all__ = [
+    "AuditAction",
+    "AuditedSkillToolset",
+    "AuditResult",
+    "AuditStatus",
+    "Checkpoint",
+    "ContentSafetyConfig",
+    "ContentSafetyConfigError",
+    "ContentSafetyPlugin",
+    "DecisionClient",
+    "DecisionClientError",
+    "DecisionConfig",
+    "DecisionJudge",
+    "Provider",
+    "QuestionConfig",
+    "QuestionResult",
+    "SkillAuditUnavailable",
+    "StateBuilder",
+    "DEFAULT_BLOCK_MESSAGE",
+    "DEFAULT_DECISION_MODEL",
+    "DEFAULT_QUESTION_INSTRUCTIONS",
+    "DEFAULT_QUESTION_THRESHOLD",
+    "default_questions",
+    "ThresholdDecider",
+    "build_content_safety",
+    "load_content_safety_config",
+]
