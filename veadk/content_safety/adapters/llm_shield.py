@@ -42,16 +42,20 @@ class LLMShieldPluginAdapter(BasePlugin):
         inner: Any | None = None,
     ) -> "LLMShieldPluginAdapter":
         if inner is None:
-            # Imported lazily: this module has an import-time env dependency,
-            # so merely selecting provider=decision must never touch it.
-            from veadk.tools.builtin_tools.llm_shield import LLMShieldPlugin
-
+            # Imported lazily inside the lock: the legacy module constructs a
+            # module-level plugin at import time, which reads the App ID env
+            # immediately. Set the configured value first so config-only app
+            # IDs work, and restore the env even if the import itself fails.
             added = False
             with _ENV_LOCK:
                 if config.llm_shield_app_id and not os.getenv(_APP_ID_ENV):
                     os.environ[_APP_ID_ENV] = config.llm_shield_app_id
                     added = True
                 try:
+                    from veadk.tools.builtin_tools.llm_shield import (
+                        LLMShieldPlugin,
+                    )
+
                     inner = LLMShieldPlugin()
                 finally:
                     if added:

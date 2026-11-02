@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import builtins
 import os
 import sys
 from types import SimpleNamespace
@@ -131,6 +132,48 @@ def test_llm_shield_provider_preserves_existing_env(monkeypatch):
     adapter = build_content_safety(config)
     assert adapter._inner.seen_app_id == "existing"
     assert os.getenv("TOOL_LLM_SHIELD_APP_ID") == "existing"
+
+
+def test_llm_shield_provider_sets_app_id_before_legacy_import(monkeypatch):
+    monkeypatch.delenv("TOOL_LLM_SHIELD_APP_ID", raising=False)
+    real_import = builtins.__import__
+    imported_with: list[str | None] = []
+
+    def fake_import(name, *args, **kwargs):
+        if name == "veadk.tools.builtin_tools.llm_shield":
+            imported_with.append(os.getenv("TOOL_LLM_SHIELD_APP_ID"))
+            return SimpleNamespace(LLMShieldPlugin=FakeInner)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    config = ContentSafetyConfig.from_dict(
+        {"provider": "llm_shield", "llm_shield_app_id": "app-from-config"}
+    )
+    adapter = build_content_safety(config)
+    assert imported_with == ["app-from-config"]
+    assert adapter._inner.seen_app_id == "app-from-config"
+    assert os.getenv("TOOL_LLM_SHIELD_APP_ID") is None
+
+
+def test_llm_shield_provider_restores_env_when_legacy_import_fails(monkeypatch):
+    monkeypatch.delenv("TOOL_LLM_SHIELD_APP_ID", raising=False)
+    real_import = builtins.__import__
+    imported_with: list[str | None] = []
+
+    def fake_import(name, *args, **kwargs):
+        if name == "veadk.tools.builtin_tools.llm_shield":
+            imported_with.append(os.getenv("TOOL_LLM_SHIELD_APP_ID"))
+            raise RuntimeError("legacy import failed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    config = ContentSafetyConfig.from_dict(
+        {"provider": "llm_shield", "llm_shield_app_id": "app-from-config"}
+    )
+    with pytest.raises(RuntimeError, match="legacy import failed"):
+        build_content_safety(config)
+    assert imported_with == ["app-from-config"]
+    assert os.getenv("TOOL_LLM_SHIELD_APP_ID") is None
 
 
 def test_unsupported_provider_raises():
