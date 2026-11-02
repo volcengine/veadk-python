@@ -5,21 +5,23 @@ VeADK includes a Python SDK, CLI/runtime integrations, and AgentKit Studio with 
 ## Language and document ownership
 
 - Keep this repository-wide development standard in English. Use English for new code identifiers, comments, and docstrings; user-facing text follows the owning area's localization rules.
-- Keep durable change intent, scope, tasks, evidence, and acceptance in the PR/MR description, linked issue, external design document, or affected user documentation when the change needs long-lived context. Do not create repository-local design or component-spec files by default.
+- Do not create standalone PRD or component-spec files, or recreate the root `prd-spec/` and `specs/` directories, as part of routine development. Create such documents only when the user explicitly requests them; generic skills or workflow templates do not make them mandatory.
+- Discuss change-specific intent, scope, design decisions, and acceptance criteria in the conversation or PR description. Update existing maintained documentation when an affected interface or behavior needs clarification.
+- When updating existing bilingual documentation, keep its language counterparts semantically equivalent in the same change, including identifiers, commands, examples, limits, and acceptance criteria.
 - Before modifying frontend code, read `frontend/SPEC.md`; also apply it to its supporting backend interfaces as specified there. It remains the Studio development standard and is not replaced or translated by this document.
 - Preserve existing user-documentation conventions: the documentation site uses Chinese `.mdx` and English `.en.mdx`; bilingual module/example READMEs use English `README.md` and Chinese `README.zh.md`.
 
 ## Required development workflow
 
 1. **Inspect and agree on scope.** Read the affected implementation, tests, and contracts. When the user describes a requirement, propose an implementation plan and wait for the user to be satisfied before making edits. Distinguish verified facts from assumptions.
-2. **Plan before implementation.** For features, refactors, and bugfixes, size the change against the affected contracts and risk. Record background/evidence, goals, non-goals, affected files, tasks, tests, risks, and acceptance criteria in the PR/MR description, linked issue, external design document, or user documentation when the change needs durable context.
-3. **Assess contracts.** Identify changes to ownership, APIs, configuration, state/data, events, permissions, security, compatibility, runtime behavior, or observability. Record the contract impact or no-impact rationale in the PR/MR description, linked issue, external design document, or user documentation as appropriate. Do not backfill unrelated contracts.
-4. **Clear scope review.** Review plan consistency, feasibility, boundaries, errors, security, compatibility, and testability. Resolve blockers and record user approval before modifying production code or tests.
-5. **Implement against the approved design.** Map changes to requirements/tasks, write a failing regression or contract test first, then implement and refactor within scope. Contract or scope changes return to design review before implementation proceeds.
+2. **Plan before implementation.** Explain the implementation approach, affected areas, risks, and verification plan in the conversation. Scale the detail to the change; no separate design document is required.
+3. **Assess component contracts.** Check affected ownership, APIs, configuration, state/data, events, permissions, security, compatibility, runtime behavior, and observability. Update relevant existing documentation when necessary; do not generate separate component specs or no-impact reports by default.
+4. **Review the approach.** Check feasibility, boundaries, errors, security, compatibility, and testability before editing. Resolve blockers and obtain user agreement for material scope changes. No standalone design review artifact or PRD/spec approval gate is required.
+5. **Implement within the agreed scope.** Write a failing regression or contract test first for bugfixes, then implement and refactor within scope. Reassess the plan when contracts or scope change.
 6. **Verify and review.** Run affected tests first, then required repository and component gates. Review both implementation correctness and edge cases, resource handling, security, test quality, and contract alignment. Fix blocking findings and rerun affected checks.
-7. **Reconcile and deliver.** Synchronize affected user docs/examples and required generated artifacts. Record actual verification commands, results, unverified areas, and remaining risks. All agreed tasks and acceptance criteria must be satisfied before declaring completion; deferred scope requires user agreement.
+7. **Reconcile and deliver.** Update affected existing user docs/examples, their applicable language counterparts, and required generated artifacts. Summarize actual verification commands, results, unverified areas, and remaining risks in the conversation or PR description. All agreed tasks and acceptance criteria must be satisfied before declaring completion; deferred scope requires user agreement.
 
-Pure documentation, translation, or formatting changes that preserve runtime behavior and public contracts do not need a separate change design. They still require an agreed approach, applicable bilingual updates where the owning document convention requires them, and proportionate checks. This exception includes maintaining these development guidelines; it does not exempt code or behavioral changes.
+Documentation, translation, formatting, and development-guideline changes require an agreed approach, applicable updates to existing language counterparts, and proportionate checks. They do not require a separate design document.
 
 ## Implementation boundaries
 
@@ -57,7 +59,7 @@ Use the repository-local Python environment and current `pyproject.toml`, `pytes
 - Before committing, run `uv run --extra dev pre-commit run --all-files` and unit tests after synchronizing the branch as described below. Pre-commit includes Ruff and secret scanning; it does not replace browser, integration, or runtime verification.
 - Prefer targeted checks during iteration. Expand to affected integration/E2E and regression gates for shared or high-risk changes and final delivery; explain any omitted required check.
 - Record check outcomes as `pass`, `fail`, `blocked`, `not_run`, or `not_applicable`, with reasons for the last three. Include the tested revision/diff scope and execution date. Skipped tests do not prove the relevant behavior.
-- Keep change-specific review and verification summaries in the PR/MR description, linked issue, external design document, or affected user documentation as appropriate. Separate evidence artifacts are optional when useful; OpenSpec and a multi-report hierarchy are not prerequisites.
+- Keep change-specific review and verification summaries in the conversation or PR/MR description by default, with links to existing issues or external documentation when useful. Do not generate PRD/spec files, OpenSpec records, or a multi-report hierarchy unless the user requests them.
 
 ## Git and execution safety
 
