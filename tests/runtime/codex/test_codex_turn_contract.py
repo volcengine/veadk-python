@@ -2137,20 +2137,17 @@ async def test_tool_setup_failure_releases_the_turn_slot(monkeypatch) -> None:
         raise RuntimeError("simulated tool setup failure")
 
     monkeypatch.setattr(runtime_module, "build_executable_tools", fail_tool_setup)
+    # This exercises permit cleanup, not setup speed on a loaded CI worker.
+    # Admission and setup deadlines have their own tests below.
     _events, _session, _backend, error = await _run_turn(
         monkeypatch,
         plan=(Round(text="never reached"),),
-        agent_kwargs={
-            "codex_runtime_config": {
-                "turn_timeout_seconds": 0.05,
-            }
-        },
     )
     assert isinstance(error, RuntimeError), error
     assert str(error) == "simulated tool setup failure"
 
     async def acquire_from_another_task() -> None:
-        async with slots.hold(timeout=0.05):
+        async with slots.hold(timeout=5):
             pass
 
     # Child tasks inherit ContextVars, so this also proves reentrancy is
