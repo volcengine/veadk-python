@@ -76,6 +76,7 @@ async def build_executable_tools(
     ctx: "InvocationContext",
     *,
     event_sink: EventSink | None = None,
+    on_tool_pending: Callable[[], Awaitable[None]] | None = None,
     timeout_seconds: float | None = None,
 ) -> CodexToolBundle:
     """Collect the agent's ADK tools as shim-executable functions.
@@ -117,6 +118,7 @@ async def build_executable_tools(
             tool,
             ctx,
             event_sink=event_sink,
+            on_tool_pending=on_tool_pending,
             timeout_seconds=timeout_seconds,
         )
 
@@ -175,6 +177,7 @@ def add_tool_to_bundle(
     ctx: "InvocationContext",
     *,
     event_sink: EventSink | None = None,
+    on_tool_pending: Callable[[], Awaitable[None]] | None = None,
     timeout_seconds: float | None = None,
 ) -> None:
     """Add one ADK tool to an existing Codex tool bundle."""
@@ -201,6 +204,7 @@ def add_tool_to_bundle(
         tool,
         ctx,
         event_sink=event_sink,
+        on_tool_pending=on_tool_pending,
         timeout_seconds=timeout_seconds,
     )
 
@@ -211,6 +215,7 @@ def sync_bundle_to_tools_dict(
     ctx: "InvocationContext",
     *,
     event_sink: EventSink | None = None,
+    on_tool_pending: Callable[[], Awaitable[None]] | None = None,
     timeout_seconds: float | None = None,
 ) -> None:
     """Rebuild specs/executors so the shim matches callback-mutated tools."""
@@ -224,6 +229,7 @@ def sync_bundle_to_tools_dict(
             tool,
             ctx,
             event_sink=event_sink,
+            on_tool_pending=on_tool_pending,
             timeout_seconds=timeout_seconds,
         )
 
@@ -424,6 +430,7 @@ def _make_executor(
     ctx: "InvocationContext",
     *,
     event_sink: EventSink | None,
+    on_tool_pending: Callable[[], Awaitable[None]] | None = None,
     timeout_seconds: float | None,
 ) -> Executor:
     async def _emit(event: Event) -> None:
@@ -508,6 +515,9 @@ def _make_executor(
             response_event = _error_response_event(ctx, tool.name, call_id, str(e))
 
         if response_event is None:
+            # Preserve ADK's initial execution and callbacks before pausing.
+            if call_event.long_running_tool_ids and on_tool_pending is not None:
+                await on_tool_pending()
             _log_complete("pending")
             return json.dumps(
                 {"status": "pending", "call_id": call_id}, ensure_ascii=False

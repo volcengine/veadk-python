@@ -186,7 +186,7 @@ _TURN_STOP_GRACE_SECONDS = 5.0
 
 
 class _QueueSentinel(enum.Enum):
-    """Single-member enum used as the event queue's end-of-stream marker.
+    """Control markers for the event queue.
 
     An `enum` member rather than a bare `object()` so that `is _QUEUE_DONE`
     narrows the queue's `Event | BaseException | _QueueSentinel` union: the
@@ -194,9 +194,11 @@ class _QueueSentinel(enum.Enum):
     """
 
     DONE = enum.auto()
+    TOOL_PENDING = enum.auto()
 
 
 _QUEUE_DONE = _QueueSentinel.DONE
+_TOOL_PENDING = _QueueSentinel.TOOL_PENDING
 _WORKSPACE_ROOT_PREFIX = WORKSPACE_ROOT_PREFIX
 # The process-owned root that holds every session workspace, created on first
 # use by `_ensure_session_workspace_root`. `None` until then.
@@ -487,6 +489,9 @@ class CodexRuntime(BaseRuntime):
         async def _emit_tool_event(event: "Event") -> None:
             await event_queue.put(event)
 
+        async def _on_tool_pending() -> None:
+            await event_queue.put(_TOOL_PENDING)
+
         # Bound to None up front so the `except` below can tell "tools were
         # built" from "setup failed before that" without inspecting locals().
         tool_bundle = None
@@ -496,6 +501,7 @@ class CodexRuntime(BaseRuntime):
                     agent,
                     ctx,
                     event_sink=_emit_tool_event,
+                    on_tool_pending=_on_tool_pending,
                     timeout_seconds=runtime_config.tool_timeout_seconds,
                 )
             )
@@ -506,6 +512,7 @@ class CodexRuntime(BaseRuntime):
                     build_transfer_tool(transfer_targets),
                     ctx,
                     event_sink=_emit_tool_event,
+                    on_tool_pending=_on_tool_pending,
                     timeout_seconds=runtime_config.tool_timeout_seconds,
                 )
             # These resume paths execute real tools on *this* task, so the
@@ -663,6 +670,7 @@ class CodexRuntime(BaseRuntime):
                 runtime_call.llm_request.tools_dict,
                 ctx,
                 event_sink=_emit_tool_event,
+                on_tool_pending=_on_tool_pending,
                 timeout_seconds=runtime_config.tool_timeout_seconds,
             )
             if "transfer_to_agent" in runtime_call.llm_request.tools_dict:
@@ -1226,10 +1234,21 @@ class CodexRuntime(BaseRuntime):
                 transfer_requested = False
                 deferred_transfer_event: Event | None = None
                 bridge_interrupted = False
+                tool_pending = False
                 while True:
                     queued = await event_queue.get()
                     if queued is _QUEUE_DONE:
                         break
+                    if queued is _TOOL_PENDING:
+                        if not tool_pending:
+                            tool_pending = True
+                            final_text_events.clear()
+                            await interrupt_turn(
+                                turn,
+                                completion=completion,
+                                timeout=_TURN_STOP_GRACE_SECONDS,
+                            )
+                        continue
                     if isinstance(queued, BaseException):
                         # While this loop runs, only the watchdog cancels the
                         # pump: surface its turn timeout, not a cancellation.
@@ -1265,7 +1284,8 @@ class CodexRuntime(BaseRuntime):
                         deferred_transfer_event = event
                         continue
                     if is_codex_final_text_event(event):
-                        final_text_events.append(event)
+                        if not tool_pending:
+                            final_text_events.append(event)
                         continue
                     # Partials go out immediately, even while a durable event
                     # is held back as the merge target. Parking them behind it
@@ -1278,7 +1298,8 @@ class CodexRuntime(BaseRuntime):
                     # so only the order among durable events is observable in
                     # session history, and that order is unchanged.
                     if event.partial:
-                        yield event
+                        if not tool_pending:
+                            yield event
                         continue
                     if merge_target is not None:
                         yield merge_target

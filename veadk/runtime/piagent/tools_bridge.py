@@ -88,6 +88,7 @@ async def build_executable_tools(
     ctx: InvocationContext,
     *,
     event_sink: EventSink | None = None,
+    on_tool_pending: Callable[[], Awaitable[None]] | None = None,
     timeout_seconds: float | None = None,
     runtime_label: str = "piagent",
 ) -> PiToolBundle:
@@ -120,6 +121,7 @@ async def build_executable_tools(
             ctx,
             seen=seen,
             event_sink=event_sink,
+            on_tool_pending=on_tool_pending,
             timeout_seconds=timeout_seconds,
             runtime_label=runtime_label,
             skip=_skip,
@@ -176,6 +178,7 @@ def add_tool_to_bundle(
     *,
     seen: set[str],
     event_sink: EventSink | None = None,
+    on_tool_pending: Callable[[], Awaitable[None]] | None = None,
     timeout_seconds: float | None = None,
     runtime_label: str = "piagent",
     skip: Callable[[str, str], None] | None = None,
@@ -229,6 +232,7 @@ def add_tool_to_bundle(
         tool,
         ctx,
         event_sink=event_sink,
+        on_tool_pending=on_tool_pending,
         timeout_seconds=timeout_seconds,
         runtime_label=runtime_label,
     )
@@ -241,6 +245,7 @@ def sync_bundle_to_tools_dict(
     ctx: InvocationContext,
     *,
     event_sink: EventSink | None = None,
+    on_tool_pending: Callable[[], Awaitable[None]] | None = None,
     timeout_seconds: float | None = None,
     runtime_label: str = "piagent",
 ) -> None:
@@ -258,6 +263,7 @@ def sync_bundle_to_tools_dict(
             ctx,
             seen=seen,
             event_sink=event_sink,
+            on_tool_pending=on_tool_pending,
             timeout_seconds=timeout_seconds,
             runtime_label=runtime_label,
         )
@@ -268,6 +274,7 @@ def _make_executor(
     ctx: InvocationContext,
     *,
     event_sink: EventSink | None,
+    on_tool_pending: Callable[[], Awaitable[None]] | None = None,
     timeout_seconds: float | None,
     runtime_label: str,
 ) -> Executor:
@@ -365,6 +372,9 @@ def _make_executor(
             response_event = _error_response_event(ctx, tool.name, call_id, str(e))
 
         if response_event is None:
+            # Preserve ADK's initial execution and callbacks before pausing.
+            if call_event.long_running_tool_ids and on_tool_pending is not None:
+                await on_tool_pending()
             _log_complete("pending")
             return {"status": "pending", "call_id": call_id}
 

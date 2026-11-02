@@ -311,6 +311,21 @@ def _build_request_contents(
 ) -> list[types.Content]:
     current = getattr(ctx, "user_content", None)
     events = _get_context_events(ctx)
+    # A resumed invocation keeps its original user_content; the new input is
+    # the externally supplied function response persisted in this invocation.
+    for index in range(len(events) - 1, -1, -1):
+        event = events[index]
+        content = _copy_visible_content(getattr(event, "content", None))
+        if getattr(event, "partial", False) or content is None:
+            continue
+        if (
+            event.author == "user"
+            and event.invocation_id == ctx.invocation_id
+            and any(part.function_response for part in content.parts or [])
+        ):
+            current = content
+            events = events[:index] + events[index + 1 :]
+        break
     if (
         events
         and getattr(events[-1], "author", None) == "user"
