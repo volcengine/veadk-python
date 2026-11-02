@@ -16,11 +16,12 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 
 from google.adk.plugins import BasePlugin
 
 from .client import DecisionClient, DecisionJudge
-from .config import ContentSafetyConfig
+from .config import ContentSafetyConfig, ContentSafetyConfigError
 from .decider import ThresholdDecider
 from .plugin import DecisionPlugin
 from .state import StateBuilder
@@ -49,6 +50,62 @@ def _ark_defaults(api_base: str | None, api_key: str | None) -> tuple[str, str]:
     return api_base or settings.model.api_base, api_key or settings.model.api_key
 
 
+_ARK_HOST_SUFFIXES = (".volces.com", ".bytepluses.com")
+
+
+def _is_ark_api_base(api_base: str) -> bool:
+    """Return whether ``api_base`` is a known Ark HTTPS endpoint.
+
+    The content-safety fallback must never derive a System One URL from an
+    arbitrary model endpoint: doing so could send audited content to a
+    non-Ark provider. Custom gateways must be configured explicitly through
+    ``decision.api_url``.
+    """
+    try:
+        parsed = urlsplit(api_base)
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    return (
+        parsed.scheme == "https"
+        and host.startswith("ark.")
+        and host.endswith(_ARK_HOST_SUFFIXES)
+    )
+
+
+def _require_ark_api_base(api_base: str) -> None:
+    if not _is_ark_api_base(api_base):
+        raise ContentSafetyConfigError(
+            "Cannot derive the System One endpoint from a non-Ark model API base. "
+            "Set decision.api_url explicitly to use a custom endpoint."
+        )
+
+
+def _resolve_decision_connection(
+    config: ContentSafetyConfig,
+    ark_api_base: str | None,
+    ark_api_key: str | None,
+) -> tuple[str, str]:
+    """Resolve the System One URL and key without an unsafe cross-provider mix."""
+    api_url = config.decision.api_url
+    api_key = config.decision.api_key
+
+    if api_url:
+        if api_key:
+            return api_url, api_key
+        if not _is_ark_api_base(api_url):
+            raise ContentSafetyConfigError(
+                "decision.api_key is required when decision.api_url is not an Ark "
+                "endpoint; refusing to reuse the Ark credential for a custom endpoint."
+            )
+        _, fallback_key = _ark_defaults(ark_api_base, ark_api_key)
+        return api_url, fallback_key
+
+    base, fallback_key = _ark_defaults(ark_api_base, ark_api_key)
+    _require_ark_api_base(base)
+    return _systemone_url(base), api_key or fallback_key
+
+
 def build_content_safety(
     config: ContentSafetyConfig,
     *,
@@ -66,6 +123,9 @@ def build_content_safety(
 
     ``ark_api_base`` / ``ark_api_key`` let a caller pass the current Agent's
     effective Ark connection when it differs from the global configuration.
+    When no explicit ``decision.api_url`` is configured, the fallback base must
+    be a known Ark endpoint; arbitrary model providers are rejected rather than
+    receiving audited content.
     """
 
     if config.provider is Provider.NONE:
@@ -74,12 +134,9 @@ def build_content_safety(
     if config.provider is Provider.DECISION:
         judge = client
         if judge is None:
-            api_url = config.decision.api_url
-            api_key = config.decision.api_key
-            if not api_url or not api_key:
-                base, key = _ark_defaults(ark_api_base, ark_api_key)
-                api_url = api_url or _systemone_url(base)
-                api_key = api_key or key
+            api_url, api_key = _resolve_decision_connection(
+                config, ark_api_base, ark_api_key
+            )
             judge = DecisionClient(
                 endpoint=api_url,
                 api_key=api_key,

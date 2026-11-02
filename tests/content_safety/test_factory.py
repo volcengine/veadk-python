@@ -19,8 +19,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from veadk.content_safety import ContentSafetyConfig, build_content_safety
-from veadk.content_safety.factory import _ark_defaults, _systemone_url
+from veadk.content_safety import (
+    ContentSafetyConfig,
+    ContentSafetyConfigError,
+    build_content_safety,
+)
+from veadk.content_safety.factory import (
+    _ark_defaults,
+    _is_ark_api_base,
+    _systemone_url,
+)
 from veadk.content_safety.adapters.llm_shield import LLMShieldPluginAdapter
 from veadk.content_safety.client import DecisionClient
 from veadk.content_safety.plugin import DecisionPlugin
@@ -242,6 +250,15 @@ def test_ark_defaults_reads_veadk_settings(monkeypatch):
     )
 
 
+def test_is_ark_api_base_accepts_ark_hosts_and_rejects_unsafe_urls():
+    assert _is_ark_api_base("https://ark.cn-beijing.volces.com/api/v3")
+    assert _is_ark_api_base("https://ark.ap-southeast.bytepluses.com/api/v3")
+    assert not _is_ark_api_base("http://ark.cn-beijing.volces.com/api/v3")
+    assert not _is_ark_api_base("https://ark.example/api/v3")
+    assert not _is_ark_api_base("https://ark.cn-beijing.volces.com.evil.com/api/v3")
+    assert not _is_ark_api_base("https://[::1")
+
+
 def test_decision_provider_derives_default_connection():
     config = ContentSafetyConfig.from_dict(
         {
@@ -251,14 +268,16 @@ def test_decision_provider_derives_default_connection():
     )
     plugin = build_content_safety(
         config,
-        ark_api_base="https://ark.example/api/v3",
+        ark_api_base="https://ark.cn-beijing.volces.com/api/v3",
         ark_api_key="ark-key",
     )
-    assert plugin._client.endpoint == "https://ark.example/api/v1/systemone"
+    assert (
+        plugin._client.endpoint == "https://ark.cn-beijing.volces.com/api/v1/systemone"
+    )
     assert plugin._client._api_key == "ark-key"
 
 
-def test_decision_provider_uses_yaml_api_url_but_resolves_missing_key(monkeypatch):
+def test_decision_provider_derives_from_ark_global_settings(monkeypatch):
     import veadk.config as veadk_config
 
     monkeypatch.setattr(
@@ -266,7 +285,78 @@ def test_decision_provider_uses_yaml_api_url_but_resolves_missing_key(monkeypatc
         "settings",
         SimpleNamespace(
             model=SimpleNamespace(
-                api_base="https://ark.example/api/v3", api_key="ark-key"
+                api_base="https://ark.cn-beijing.volces.com/api/v3",
+                api_key="ark-key",
+            )
+        ),
+    )
+    config = ContentSafetyConfig.from_dict(
+        {
+            "provider": "decision",
+            "questions": {"q": {"instructions": "detect", "threshold": 0.5}},
+        }
+    )
+    plugin = build_content_safety(config)
+    assert (
+        plugin._client.endpoint == "https://ark.cn-beijing.volces.com/api/v1/systemone"
+    )
+    assert plugin._client._api_key == "ark-key"
+
+
+def test_decision_provider_rejects_non_ark_fallback_base():
+    config = ContentSafetyConfig.from_dict(
+        {
+            "provider": "decision",
+            "questions": {"q": {"instructions": "detect", "threshold": 0.5}},
+        }
+    )
+    with pytest.raises(ContentSafetyConfigError, match="decision.api_url"):
+        build_content_safety(
+            config,
+            ark_api_base="https://api.openai.com/v1",
+            ark_api_key="openai-key",
+        )
+
+
+def test_decision_provider_uses_ark_api_url_but_resolves_missing_key(monkeypatch):
+    import veadk.config as veadk_config
+
+    monkeypatch.setattr(
+        veadk_config,
+        "settings",
+        SimpleNamespace(
+            model=SimpleNamespace(
+                api_base="https://ark.cn-beijing.volces.com/api/v3",
+                api_key="ark-key",
+            )
+        ),
+    )
+    config = ContentSafetyConfig.from_dict(
+        {
+            "provider": "decision",
+            "decision": {
+                "api_url": "https://ark.cn-beijing.volces.com/api/v1/systemone"
+            },
+            "questions": {"q": {"instructions": "detect", "threshold": 0.5}},
+        }
+    )
+    plugin = build_content_safety(config)
+    assert (
+        plugin._client.endpoint == "https://ark.cn-beijing.volces.com/api/v1/systemone"
+    )
+    assert plugin._client._api_key == "ark-key"
+
+
+def test_decision_provider_rejects_custom_api_url_without_key(monkeypatch):
+    import veadk.config as veadk_config
+
+    monkeypatch.setattr(
+        veadk_config,
+        "settings",
+        SimpleNamespace(
+            model=SimpleNamespace(
+                api_base="https://ark.cn-beijing.volces.com/api/v3",
+                api_key="ark-key",
             )
         ),
     )
@@ -277,6 +367,5 @@ def test_decision_provider_uses_yaml_api_url_but_resolves_missing_key(monkeypatc
             "questions": {"q": {"instructions": "detect", "threshold": 0.5}},
         }
     )
-    plugin = build_content_safety(config)
-    assert plugin._client.endpoint == "https://custom.example/v1/systemone"
-    assert plugin._client._api_key == "ark-key"
+    with pytest.raises(ContentSafetyConfigError, match="decision.api_key"):
+        build_content_safety(config)
