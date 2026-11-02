@@ -12,131 +12,157 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""SDK-observed model timestamps and isolated request start propagation."""
+"""Native request spans and standard per-SDK-request streaming telemetry."""
 
 from __future__ import annotations
 
 import asyncio
 import functools
 import time
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from types import TracebackType
 from typing import Any
 
 from opentelemetry import trace
-from opentelemetry.trace import Span
+from opentelemetry.trace import Span, SpanKind, StatusCode
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from veadk.tracing.telemetry import portal_metrics
+from veadk.utils.logger import get_logger
+
+logger = get_logger(__name__)
+_REQUEST_SPAN: ContextVar[Span | None] = ContextVar("veadk_request_span", default=None)
 
 
-@dataclass(frozen=True)
-class RequestStart:
-    time_ns: int
-    source: str
-
-
-_REQUEST_START: ContextVar[RequestStart | None] = ContextVar(
-    "veadk_request_start", default=None
-)
-
-
-def current_request_start() -> RequestStart | None:
-    return _REQUEST_START.get()
+def current_request_span() -> Span | None:
+    return _REQUEST_SPAN.get()
 
 
 @contextmanager
-def bind_request_start(start: RequestStart):
-    token = _REQUEST_START.set(start)
+def bind_request_span(span: Span) -> Iterator[Span]:
+    token = _REQUEST_SPAN.set(span)
     try:
-        yield start
+        with trace.use_span(
+            span, record_exception=False, set_status_on_exception=False
+        ):
+            yield span
     finally:
-        _REQUEST_START.reset(token)
+        _REQUEST_SPAN.reset(token)
 
 
-async def with_request_timing(
-    events: AsyncGenerator, start: RequestStart
-) -> AsyncGenerator:
-    """Bind only while advancing/closing; never retain context across yields."""
+def _record_error(span: Span, error: BaseException, fallback: str) -> None:
+    if isinstance(error, GeneratorExit):
+        return
+    error_type = (
+        "timeout"
+        if isinstance(error, TimeoutError)
+        else "cancelled"
+        if isinstance(error, asyncio.CancelledError)
+        else fallback
+    )
+    span.set_attribute("error.type", error_type)
+    span.set_status(StatusCode.ERROR)
+
+
+async def with_request_timing(events: AsyncGenerator, span: Span) -> AsyncGenerator:
+    """Attach request context only while advancing or closing the producer."""
     try:
         while True:
-            with bind_request_start(start):
+            with bind_request_span(span):
                 try:
                     event = await anext(events)
                 except StopAsyncIteration:
                     return
             yield event
     finally:
-        with bind_request_start(start):
+        with bind_request_span(span):
             await events.aclose()
 
 
 def timed_runner(func: Callable) -> Callable:
     @functools.wraps(func)
-    async def wrapper(*args, **kwargs):
-        start = current_request_start() or RequestStart(time.time_ns(), "runner")
-        events = with_request_timing(func(*args, **kwargs), start)
+    async def wrapper(*args: Any, **kwargs: Any) -> AsyncGenerator:
+        inherited = current_request_span()
+        span = (
+            inherited
+            if inherited is not None
+            else trace.get_tracer(__name__).start_span("runner_request")
+        )
+        events = with_request_timing(func(*args, **kwargs), span)
         try:
-            async for event in events:
-                yield event
+            try:
+                async for event in events:
+                    yield event
+            finally:
+                await events.aclose()
+        except BaseException as error:
+            if inherited is None:
+                _record_error(span, error, "request_error")
+            raise
         finally:
-            await events.aclose()
+            if inherited is None:
+                span.end()
 
     return wrapper
 
 
 class RequestTimingMiddleware:
-    """Capture ASGI ingress without inspecting or buffering request bodies."""
+    """Represent the HTTP execution boundary using a native server span."""
 
-    def __init__(self, app):
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        with bind_request_start(RequestStart(time.time_ns(), "http")):
-            await self.app(scope, receive, send)
+        span = trace.get_tracer(__name__).start_span(
+            "http_request", kind=SpanKind.SERVER
+        )
+
+        async def traced_send(message: Message) -> None:
+            if message["type"] == "http.response.start" and message["status"] >= 500:
+                span.set_attribute("error.type", "http_error")
+                span.set_status(StatusCode.ERROR)
+            await send(message)
+
+        try:
+            with bind_request_span(span):
+                await self.app(scope, receive, traced_send)
+        except BaseException as error:
+            _record_error(span, error, "request_error")
+            raise
+        finally:
+            span.end()
 
 
-def install_request_timing(app) -> None:
+def install_request_timing(app: Any) -> None:
     if getattr(app.state, "_veadk_request_timing_installed", False):
         return
     app.add_middleware(RequestTimingMiddleware)
     app.state._veadk_request_timing_installed = True
 
 
-def annotate_request_start(span: Span) -> None:
-    start = current_request_start()
-    if start is not None and span.is_recording():
-        span.set_attribute("veadk.request.start_time_unix_ns", start.time_ns)
-        span.set_attribute("veadk.request.start_source", start.source)
-
-
 class ModelTiming:
-    """One SDK request; this context manager never attaches OTel context."""
+    """One SDK request, with its own native interval and first-output latch."""
 
-    def __init__(self, *, streaming: bool, model: str):
+    def __init__(self, *, streaming: bool, model: str) -> None:
         self.streaming = streaming
+        self.model = str(model)
         self.first_token_time: int | None = None
-        self.owner = trace.get_current_span()
+        self.start_time = time.time_ns()
         self.span = trace.get_tracer(__name__).start_span(
-            "model_request", attributes={"gen_ai.request.model": str(model)}
+            "model_request",
+            kind=SpanKind.CLIENT,
+            start_time=self.start_time,
+            attributes={
+                "gen_ai.request.model": self.model,
+                "gen_ai.span.kind": "llm",
+                "gen_ai.request.stream": streaming,
+            },
         )
-        self._spans = (self.span, self.owner)
-        for span in self._spans:
-            annotate_request_start(span)
-        self._set("veadk.model.start_time_unix_ns", time.time_ns())
-        self._set("veadk.model.streaming", streaming)
-        self._set("veadk.model.request_scope", "sdk_request")
-        self._set(
-            "veadk.model.first_token_status",
-            "no_output" if streaming else "non_streaming",
-        )
-
-    def _set(self, name: str, value: Any) -> None:
-        for span in self._spans:
-            if span.is_recording():
-                span.set_attribute(name, value)
 
     def __enter__(self) -> ModelTiming:
         return self
@@ -145,39 +171,27 @@ class ModelTiming:
         if not self.streaming or self.first_token_time is not None or not output_type:
             return
         self.first_token_time = time.time_ns()
-        self._set("veadk.model.first_token_time_unix_ns", self.first_token_time)
-        self._set("veadk.model.first_token_type", output_type)
-        self._set("veadk.model.first_token_status", "observed")
-        for span in self._spans:
-            if span.is_recording():
-                span.add_event(
-                    "veadk.model.first_token",
-                    {"veadk.model.first_token_type": output_type},
-                    timestamp=self.first_token_time,
-                )
-
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        outcome = "completed"
-        if exc_type is not None:
-            outcome = (
-                "cancelled"
-                if issubclass(exc_type, (asyncio.CancelledError, GeneratorExit))
-                else "error"
+        duration = (self.first_token_time - self.start_time) / 1e9
+        if duration < 0:
+            logger.warning("Skipping TTFT because the wall clock moved backwards")
+            return
+        if self.span.is_recording():
+            self.span.set_attribute(
+                portal_metrics.Meters.LLM_STREAMING_TIME_TO_FIRST_TOKEN, duration
             )
-        self._set("veadk.model.outcome", outcome)
+        portal_metrics.portal_metric_recorder.record_model_ttft(
+            duration, model=self.model
+        )
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        if exc_value is not None:
+            _record_error(self.span, exc_value, "llm_error")
         self.span.end()
-
-
-def mark_uninstrumented_model(span: Span, *, streaming: bool) -> None:
-    annotate_request_start(span)
-    attributes = getattr(span, "attributes", None) or {}
-    if "veadk.model.start_time_unix_ns" in attributes or not span.is_recording():
-        return
-    span.set_attribute("veadk.model.streaming", streaming)
-    span.set_attribute(
-        "veadk.model.first_token_status",
-        "unsupported" if streaming else "non_streaming",
-    )
 
 
 def _field(value: Any, name: str, default=None):

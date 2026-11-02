@@ -21,6 +21,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from opentelemetry import trace
+from opentelemetry.trace import SpanKind, StatusCode
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -40,55 +41,60 @@ def spans(monkeypatch):
 
 
 @pytest.mark.parametrize("kind", ["text", "reasoning", "tool_call"])
-def test_first_output_is_latched_without_usage(monkeypatch, spans, kind):
+def test_first_output_is_latched_without_usage(
+    monkeypatch: pytest.MonkeyPatch, spans: tuple, kind: str
+) -> None:
     tracer, exporter = spans
     clock = iter([100, 200, 300])
     monkeypatch.setattr(timing.time, "time_ns", lambda: next(clock))
-    with timing.bind_request_start(timing.RequestStart(50, "http")):
-        with tracer.start_as_current_span("call_llm") as owner:
-            with timing.ModelTiming(streaming=True, model="openai/test") as call:
-                call.observe(None)
-                call.observe(kind)
-                call.observe("text")
-            assert owner.attributes["veadk.request.start_time_unix_ns"] == 50
-            assert owner.attributes["veadk.model.start_time_unix_ns"] == 100
-            assert owner.attributes["veadk.model.first_token_time_unix_ns"] == 200
-            assert owner.attributes["veadk.model.first_token_type"] == kind
-            assert owner.attributes["veadk.model.first_token_status"] == "observed"
-            assert len(owner.events) == 1
-            assert owner.events[0].timestamp == 200
-    attempt = next(
-        s for s in exporter.get_finished_spans() if s.name == "model_request"
-    )
+    with tracer.start_as_current_span("call_llm") as owner:
+        with timing.ModelTiming(streaming=True, model="openai/test") as call:
+            call.observe(None)
+            call.observe(kind)
+            call.observe("text")
+        assert not owner.attributes
+        assert not owner.events
+    attempt = exporter.get_finished_spans()[0]
     assert attempt.parent.span_id == owner.context.span_id
-    assert attempt.attributes["veadk.model.request_scope"] == "sdk_request"
-    assert attempt.attributes["veadk.model.outcome"] == "completed"
-    assert "content" not in str(dict(attempt.attributes))
+    assert attempt.start_time == 100
+    assert attempt.kind is SpanKind.CLIENT
+    assert (
+        attempt.attributes["gen_ai.chat_completions.streaming_time_to_first_token"]
+        == 1e-7
+    )
+    assert attempt.status.status_code is StatusCode.UNSET
+    assert not any(key.startswith("veadk.") for key in attempt.attributes)
+    assert not attempt.events
 
 
-@pytest.mark.parametrize(
-    "streaming,status", [(False, "non_streaming"), (True, "no_output")]
-)
-def test_no_first_token_is_fabricated(spans, streaming, status):
+@pytest.mark.parametrize("streaming", [False, True])
+def test_no_first_token_is_fabricated(spans: tuple, streaming: bool) -> None:
     tracer, exporter = spans
     with tracer.start_as_current_span("call_llm") as owner:
         with timing.ModelTiming(streaming=streaming, model="test") as call:
             if not streaming:
                 call.observe("text")
-        assert owner.attributes["veadk.model.first_token_status"] == status
-        assert "veadk.model.first_token_time_unix_ns" not in owner.attributes
+        assert not owner.attributes
+    attempt = exporter.get_finished_spans()[0]
+    assert attempt.attributes["gen_ai.request.stream"] is streaming
+    assert (
+        "gen_ai.chat_completions.streaming_time_to_first_token"
+        not in attempt.attributes
+    )
     assert len(exporter.get_finished_spans()) == 2
 
 
 @pytest.mark.parametrize(
-    "error,outcome",
+    "error,error_type",
     [
-        (RuntimeError("failed"), "error"),
+        (RuntimeError("failed"), "llm_error"),
         (asyncio.CancelledError(), "cancelled"),
-        (GeneratorExit(), "cancelled"),
+        (GeneratorExit(), None),
     ],
 )
-def test_interrupted_attempt_retains_output_and_ends(spans, error, outcome):
+def test_interrupted_attempt_retains_output_and_ends(
+    spans: tuple, error: BaseException, error_type: str | None
+) -> None:
     tracer, exporter = spans
     with tracer.start_as_current_span("call_llm"):
         with pytest.raises(type(error)):
@@ -97,11 +103,14 @@ def test_interrupted_attempt_retains_output_and_ends(spans, error, outcome):
                 raise error
     attempt = exporter.get_finished_spans()[0]
     assert attempt.end_time is not None
-    assert attempt.attributes["veadk.model.first_token_status"] == "observed"
-    assert attempt.attributes["veadk.model.outcome"] == outcome
+    assert "gen_ai.chat_completions.streaming_time_to_first_token" in attempt.attributes
+    assert attempt.attributes.get("error.type") == error_type
+    assert attempt.status.status_code is (
+        StatusCode.ERROR if error_type else StatusCode.UNSET
+    )
 
 
-def test_retry_attempts_have_independent_timestamps(spans):
+def test_retry_attempts_have_independent_timestamps(spans: tuple) -> None:
     tracer, exporter = spans
     with tracer.start_as_current_span("call_llm") as owner:
         with pytest.raises(RuntimeError):
@@ -111,29 +120,23 @@ def test_retry_attempts_have_independent_timestamps(spans):
             call.observe("text")
     attempts = [s for s in exporter.get_finished_spans() if s.name == "model_request"]
     assert len(attempts) == 2
-    assert attempts[0].attributes["veadk.model.first_token_status"] == "no_output"
-    assert "veadk.model.first_token_time_unix_ns" not in attempts[0].attributes
-    assert attempts[1].attributes["veadk.model.first_token_status"] == "observed"
-    assert (
-        owner.attributes["veadk.model.start_time_unix_ns"]
-        == attempts[1].attributes["veadk.model.start_time_unix_ns"]
-    )
+    ttft = "gen_ai.chat_completions.streaming_time_to_first_token"
+    assert ttft not in attempts[0].attributes
+    assert attempts[0].status.status_code is StatusCode.ERROR
+    assert ttft in attempts[1].attributes
+    assert attempts[1].status.status_code is StatusCode.UNSET
+    assert attempts[0].start_time <= attempts[1].start_time
+    assert not owner.attributes
 
 
-@pytest.mark.parametrize(
-    "streaming,status", [(True, "unsupported"), (False, "non_streaming")]
-)
-def test_unsupported_models_do_not_use_invocation_start(spans, streaming, status):
+@pytest.mark.parametrize("streaming", [True, False])
+def test_model_timing_does_not_mutate_owner(spans: tuple, streaming: bool) -> None:
     tracer, _ = spans
     with tracer.start_as_current_span("call_llm") as owner:
-        timing.mark_uninstrumented_model(owner, streaming=streaming)
-        assert owner.attributes["veadk.model.first_token_status"] == status
-        assert "veadk.model.start_time_unix_ns" not in owner.attributes
-        assert owner.attributes["veadk.model.streaming"] is streaming
-        with timing.ModelTiming(streaming=True, model="test") as call:
+        with timing.ModelTiming(streaming=streaming, model="test") as call:
             call.observe("text")
-        timing.mark_uninstrumented_model(owner, streaming=False)
-        assert owner.attributes["veadk.model.first_token_status"] == "observed"
+        assert not owner.attributes
+        assert not owner.events
 
 
 @pytest.mark.parametrize(
@@ -157,11 +160,11 @@ def test_unsupported_models_do_not_use_invocation_start(spans, streaming, status
         ({"function_call": {"arguments": "{"}}, "tool_call"),
     ],
 )
-def test_litellm_delta_classification(delta, expected):
+def test_litellm_delta_classification(delta: dict, expected: str | None) -> None:
     assert timing.litellm_output_type(NS(choices=[NS(delta=delta)])) == expected
 
 
-def test_litellm_metadata_and_object_shapes():
+def test_litellm_metadata_and_object_shapes() -> None:
     assert timing.litellm_output_type(NS(choices=[])) is None
     assert timing.litellm_output_type(NS(choices=[NS(delta=None)])) is None
     assert (
@@ -187,34 +190,43 @@ def test_litellm_metadata_and_object_shapes():
         ("response.output_item.added", "", None),
     ],
 )
-def test_ark_delta_classification(event_type, delta, expected):
+def test_ark_delta_classification(
+    event_type: str, delta: dict, expected: str | None
+) -> None:
     assert timing.ark_output_type(NS(type=event_type, delta=delta)) == expected
 
 
 @pytest.mark.asyncio
-async def test_request_context_is_isolated_across_yields_and_tasks():
-    async def events(expected):
-        assert timing.current_request_start() == expected
-        yield expected.time_ns
-        await asyncio.sleep(0)
-        assert timing.current_request_start() == expected
-        yield expected.source
+async def test_request_context_is_isolated_across_yields_and_tasks(
+    spans: tuple,
+) -> None:
+    tracer, _ = spans
 
-    first = timing.RequestStart(1, "runner")
-    second = timing.RequestStart(2, "http")
+    async def events(expected):
+        assert timing.current_request_span() is expected
+        assert trace.get_current_span() is expected
+        yield expected.name
+        await asyncio.sleep(0)
+        assert timing.current_request_span() is expected
+        yield expected.name
+
+    first, second = tracer.start_span("one"), tracer.start_span("two")
     a = timing.with_request_timing(events(first), first)
     b = timing.with_request_timing(events(second), second)
-    assert await asyncio.gather(anext(a), anext(b)) == [1, 2]
-    assert timing.current_request_start() is None
-    assert await asyncio.gather(anext(a), anext(b)) == ["runner", "http"]
-    assert timing.current_request_start() is None
+    assert await asyncio.gather(anext(a), anext(b)) == ["one", "two"]
+    assert timing.current_request_span() is None
+    assert await asyncio.gather(anext(a), anext(b)) == ["one", "two"]
+    assert timing.current_request_span() is None
     await a.aclose()
     await b.aclose()
+    first.end()
+    second.end()
 
 
 @pytest.mark.asyncio
-async def test_request_context_restored_on_error_and_close():
-    inner = timing.RequestStart(2, "runner")
+async def test_request_context_restored_on_error_and_close(spans: tuple) -> None:
+    tracer, _ = spans
+    inner, outer = tracer.start_span("inner"), tracer.start_span("outer")
     closed = []
 
     async def events():
@@ -222,56 +234,66 @@ async def test_request_context_restored_on_error_and_close():
             yield 1
             raise ValueError("original")
         finally:
-            closed.append(timing.current_request_start())
+            closed.append(timing.current_request_span())
 
-    with timing.bind_request_start(timing.RequestStart(1, "http")) as outer:
+    with timing.bind_request_span(outer):
         wrapped = timing.with_request_timing(events(), inner)
         assert await anext(wrapped) == 1
-        assert timing.current_request_start() == outer
+        assert timing.current_request_span() is outer
         with pytest.raises(ValueError, match="original"):
             await anext(wrapped)
-        assert timing.current_request_start() == outer
+        assert trace.get_current_span() is outer
         assert closed == [inner]
         wrapped = timing.with_request_timing(events(), inner)
         await anext(wrapped)
         await wrapped.aclose()
         assert closed == [inner, inner]
-    assert timing.current_request_start() is None
+    assert timing.current_request_span() is None
+    inner.end()
+    outer.end()
 
 
 @pytest.mark.asyncio
-async def test_timed_runner_uses_inherited_or_local_start(monkeypatch):
-    monkeypatch.setattr(timing.time, "time_ns", lambda: 100)
+async def test_timed_runner_uses_inherited_or_local_span(spans: tuple) -> None:
+    tracer, exporter = spans
 
     @timing.timed_runner
     async def run(value):
-        yield (value, timing.current_request_start())
+        with timing.ModelTiming(streaming=False, model="test"):
+            yield (value, timing.current_request_span())
 
-    assert [e async for e in run("hello")] == [
-        ("hello", timing.RequestStart(100, "runner"))
-    ]
-    with timing.bind_request_start(timing.RequestStart(50, "http")):
-        generator = run("http")
-        assert await anext(generator) == ("http", timing.RequestStart(50, "http"))
-        await generator.aclose()
-    assert timing.current_request_start() is None
+    result = [e async for e in run("hello")]
+    assert result[0][0] == "hello"
+    request = result[0][1]
+    assert request.name == "runner_request"
+    assert request.end_time is not None
+    assert exporter.get_finished_spans()[0].parent.span_id == request.context.span_id
+    with tracer.start_as_current_span("http_request") as inherited:
+        with timing.bind_request_span(inherited):
+            generator = run("http")
+            assert await anext(generator) == ("http", inherited)
+            await generator.aclose()
+            assert inherited.is_recording()
+    assert timing.current_request_span() is None
+    assert (
+        len([s for s in exporter.get_finished_spans() if s.name == "runner_request"])
+        == 1
+    )
 
 
 @pytest.mark.asyncio
 async def test_http_boundary_is_before_body_parsing_and_install_is_idempotent(
-    monkeypatch,
-):
-    monkeypatch.setattr(timing.time, "time_ns", lambda: 100)
+    spans: tuple,
+) -> None:
+    _, exporter = spans
     app = FastAPI()
 
     @app.post("/run")
     async def run(payload: dict):
-        start = timing.current_request_start()
-        return {
-            "start": start.time_ns,
-            "source": start.source,
-            "value": payload["value"],
-        }
+        span = timing.current_request_span()
+        assert span.name == "http_request" and span.is_recording()
+        with timing.ModelTiming(streaming=False, model="test"):
+            return {"value": payload["value"]}
 
     timing.install_request_timing(app)
     timing.install_request_timing(app)
@@ -279,17 +301,32 @@ async def test_http_boundary_is_before_body_parsing_and_install_is_idempotent(
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        response = await client.post("/run", json={"value": "hello"})
-    assert response.json() == {"start": 100, "source": "http", "value": "hello"}
-    assert timing.current_request_start() is None
+
+        async def body():
+            request = timing.current_request_span()
+            assert request is not None and request.name == "http_request"
+            assert request.is_recording()
+            yield b'{"value": "hello"}'
+
+        response = await client.post(
+            "/run", content=body(), headers={"content-type": "application/json"}
+        )
+    assert response.json() == {"value": "hello"}
+    model, request = exporter.get_finished_spans()
+    assert request.kind is SpanKind.SERVER
+    assert request.start_time <= model.start_time <= model.end_time <= request.end_time
+    assert model.parent.span_id == request.context.span_id
+    assert not request.attributes
+    assert timing.current_request_span() is None
 
 
 @pytest.mark.asyncio
-async def test_non_http_scopes_and_failures_preserve_context():
+async def test_non_http_scopes_and_failures_preserve_context(spans: tuple) -> None:
+    _, exporter = spans
     received = []
 
     async def app(scope, receive, send):
-        received.append(timing.current_request_start())
+        received.append(timing.current_request_span())
         if scope["type"] == "http":
             raise RuntimeError("original")
 
@@ -298,12 +335,91 @@ async def test_non_http_scopes_and_failures_preserve_context():
     assert received == [None]
     with pytest.raises(RuntimeError, match="original"):
         await middleware({"type": "http"}, None, None)
-    assert received[1].source == "http"
-    assert timing.current_request_start() is None
+    assert received[1].name == "http_request"
+    assert timing.current_request_span() is None
+    span = exporter.get_finished_spans()[0]
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["error.type"] == "request_error"
+    assert not span.events
 
 
-def test_without_recording_tracer():
+@pytest.mark.asyncio
+async def test_http_server_error_response_is_recorded(spans: tuple) -> None:
+    _, exporter = spans
+    sent = []
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 503, "headers": []})
+        await send({"type": "http.response.body", "body": b"unavailable"})
+
+    async def send(message):
+        sent.append(message)
+
+    await timing.RequestTimingMiddleware(app)({"type": "http"}, None, send)
+    span = exporter.get_finished_spans()[0]
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["error.type"] == "http_error"
+    assert sent[1]["body"] == b"unavailable"
+
+
+def test_without_recording_tracer() -> None:
     with trace.use_span(trace.INVALID_SPAN):
         with timing.ModelTiming(streaming=True, model="test") as call:
             call.observe("text")
-        timing.mark_uninstrumented_model(trace.INVALID_SPAN, streaming=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error,error_type",
+    [
+        (RuntimeError, "request_error"),
+        (TimeoutError, "timeout"),
+        (asyncio.CancelledError, "cancelled"),
+    ],
+)
+async def test_runner_failure_sets_status_and_releases_context(
+    spans: tuple, error: type[BaseException], error_type: str
+) -> None:
+    _, exporter = spans
+    closed = []
+
+    @timing.timed_runner
+    async def run():
+        try:
+            yield 1
+            raise error("private")
+        finally:
+            closed.append(timing.current_request_span())
+
+    events = run()
+    assert await anext(events) == 1
+    assert timing.current_request_span() is None
+    with pytest.raises(error):
+        await anext(events)
+    request = exporter.get_finished_spans()[0]
+    assert request.status.status_code is StatusCode.ERROR
+    assert request.attributes["error.type"] == error_type
+    assert not request.events
+    assert closed[0].get_span_context().span_id == request.context.span_id
+    assert timing.current_request_span() is None
+
+
+@pytest.mark.asyncio
+async def test_runner_close_failure_ends_span(spans: tuple) -> None:
+    _, exporter = spans
+
+    @timing.timed_runner
+    async def run():
+        try:
+            yield 1
+        finally:
+            raise RuntimeError("close failed")
+
+    events = run()
+    assert await anext(events) == 1
+    with pytest.raises(RuntimeError, match="close failed"):
+        await events.aclose()
+    request = exporter.get_finished_spans()[0]
+    assert request.status.status_code is StatusCode.ERROR
+    assert request.attributes["error.type"] == "request_error"
+    assert timing.current_request_span() is None

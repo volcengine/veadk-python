@@ -189,20 +189,23 @@ In a multi-agent scenario, spans are linked through `parent_span_id`, showing th
 </Callout>
 
 
-## Request, model, and first-token timestamps
+## Request spans and streaming TTFT
 
-VeADK's default LiteLLM and Ark Responses adapters add the following extension attributes to model spans when OpenTelemetry tracing is enabled. UTC Unix nanoseconds are used throughout.
+VeADK uses native OpenTelemetry span start/end times to describe execution boundaries. VeADK AgentKit/Harness HTTP applications create an `http_request` server span at ASGI ingress, before body parsing, and end it when the application finishes. Direct VeADK Runner execution creates a `runner_request` span; a Runner invoked inside the HTTP request reuses that request scope. These boundaries exclude client/network/gateway delays before the application receives the request.
 
-| Attribute | Meaning |
+Each LiteLLM Chat or Ark Responses SDK request creates a `model_request` client span under the owning model span. Its native start time is the same local SDK-request timestamp used to calculate TTFT; it is not provider inference start. VeADK-issued retries/fallbacks create separate spans. Hidden provider/LiteLLM retries remain within the observed SDK call.
+
+| Attribute | Type / meaning |
 | --- | --- |
-| `veadk.request.start_time_unix_ns` | HTTP ASGI entry in VeADK AgentKit/Harness apps, or direct VeADK Runner execution entry. |
-| `veadk.request.start_source` | `http` or `runner`; an inherited HTTP timestamp takes precedence. |
-| `veadk.model.start_time_unix_ns` | Start of one adapter SDK request, not provider inference start. |
-| `veadk.model.streaming` | Actual model SDK request mode, independent of HTTP SSE transport. |
-| `veadk.model.first_token_time_unix_ns` | Receipt of the first nonempty generated content delta. |
-| `veadk.model.first_token_type` | `text`, `reasoning`, or `tool_call`. |
-| `veadk.model.first_token_status` | `observed`, `non_streaming`, `no_output`, or `unsupported`. |
+| `gen_ai.span.kind` | `llm` on an SDK request span. |
+| `gen_ai.request.model` | Actual requested model. |
+| `gen_ai.request.stream` | Boolean actual SDK streaming mode, independent of HTTP SSE or Runner configuration. |
+| `gen_ai.chat_completions.streaming_time_to_first_token` | Floating-point seconds from SDK request start to its first generated delta. |
 
-First-token capture excludes role/id/signature metadata, empty deltas, usage, heartbeats, and completion-only aggregates. It does not require token usage or content tracing. One chunk may contain several tokens, so this is an SDK-observed first-output timestamp. Non-streaming calls have no first-token timestamp; completion time is never substituted.
+The first nonempty text, reasoning, or tool-call delta records TTFT once. Metadata, empty deltas, usage, heartbeats, and completion-only aggregates do not count. Non-streaming, no-output, or uninstrumented paths omit TTFT; unknown SDK mode is not inferred from Runner configuration. One chunk can contain multiple tokens, so this is an SDK-observed duration, not a provider-side per-token timestamp.
 
-Each SDK request creates a `model_request` child span; the owning model span also receives the latest attempt's fields. VeADK-issued retries and fallbacks create separate attempts. Internal LiteLLM/provider retries remain within the observed SDK request (`veadk.model.request_scope=sdk_request`). Unsupported external/custom engines are explicitly marked; invocation span start is not used as model start. Applications outside the VeADK HTTP factories must install the request timing middleware or use VeADK Runner to establish a request timestamp. Client-render timing and TTFT/TPOT histogram reporting are separate capabilities.
+The same value is recorded once in the `gen_ai.chat_completions.streaming_time_to_first_token` Histogram, unit `s`, using the existing global MeterProvider. Dimensions are `gen_ai.request.model` and `gen_ai.operation.name=chat`. Metrics do not depend on token usage or trace sampling; export requires a configured metrics pipeline. Negative wall-clock intervals are omitted with a diagnostic; genuine measured zero is valid.
+
+Failed model requests set native Span Status to `ERROR` and `error.type` to `llm_error`, `timeout`, or `cancelled`. Request spans use `request_error`, `timeout`, or `cancelled`; HTTP 5xx responses use `http_error`. Explicit generator closure is not an error. Already observed TTFT survives interruption, and exception text is not added by this instrumentation.
+
+The instrumentation does not export custom `veadk.request.*` or `veadk.model.*` attributes or a custom first-token event. Start and first-output values remain internal calculation state. This replaces the previous custom timing fields without compatibility aliases. Client-render timing and TPOT histogram reporting remain outside this feature.
