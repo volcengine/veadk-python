@@ -68,6 +68,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 _QUEUE_DONE = object()
+_TOOL_PENDING = object()
 
 
 class PiAgentRuntime(BaseRuntime):
@@ -88,6 +89,9 @@ class PiAgentRuntime(BaseRuntime):
         async def _emit_tool_event(event: "Event") -> None:
             await event_queue.put(event)
 
+        async def _on_tool_pending() -> None:
+            await event_queue.put(_TOOL_PENDING)
+
         # ADK's `call_llm` span is opened by its own LLM flow, which this
         # runtime replaces. Open it here so VeADK's telemetry chain (the
         # in-memory exporter's session index, the evaluator, portal metrics and
@@ -98,6 +102,7 @@ class PiAgentRuntime(BaseRuntime):
                 agent,
                 ctx,
                 event_sink=_emit_tool_event,
+                on_tool_pending=_on_tool_pending,
             )
             transfer_targets = get_transfer_targets(agent)
             if transfer_targets:
@@ -107,6 +112,7 @@ class PiAgentRuntime(BaseRuntime):
                     ctx,
                     seen={spec.name for spec in tool_bundle.specs},
                     event_sink=_emit_tool_event,
+                    on_tool_pending=_on_tool_pending,
                 )
 
             runtime_call = await build_runtime_llm_request(
@@ -137,6 +143,7 @@ class PiAgentRuntime(BaseRuntime):
                 runtime_call.llm_request.tools_dict,
                 ctx,
                 event_sink=_emit_tool_event,
+                on_tool_pending=_on_tool_pending,
             )
             if "transfer_to_agent" in runtime_call.llm_request.tools_dict:
                 append_transfer_instructions(
@@ -201,6 +208,11 @@ class PiAgentRuntime(BaseRuntime):
                             queued = await event_queue.get()
                             if queued is _QUEUE_DONE:
                                 break
+                            if queued is _TOOL_PENDING:
+                                final_text_events.clear()
+                                pump.cancel()
+                                await asyncio.gather(pump, return_exceptions=True)
+                                break
                             if isinstance(queued, BaseException):
                                 raise queued
                             event = queued  # type: ignore[assignment]
@@ -236,7 +248,8 @@ class PiAgentRuntime(BaseRuntime):
                                     )
                                 return
                             merge_target = event
-                        await pump
+                        if not pump.cancelled():
+                            await pump
                     except LlmCallsLimitExceededError as e:
                         # ADK raises this outside its on_model_error handling,
                         # so it must propagate rather than be turned into a

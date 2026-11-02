@@ -1156,12 +1156,16 @@ async def _direct_session(
     )
     runner = Runner(app_name="contract", agent=agent, session_service=session_service)
 
-    async def send(text: str) -> BaseException | None:
+    async def send(text: str | types.Content) -> BaseException | None:
         try:
             async for _ in runner.run_async(
                 user_id="user",
                 session_id=session_id,
-                new_message=types.Content(role="user", parts=[types.Part(text=text)]),
+                new_message=(
+                    text
+                    if isinstance(text, types.Content)
+                    else types.Content(role="user", parts=[types.Part(text=text)])
+                ),
             ):
                 pass
         except BaseException as e:  # noqa: BLE001 - the error is the observable
@@ -2133,20 +2137,17 @@ async def test_tool_setup_failure_releases_the_turn_slot(monkeypatch) -> None:
         raise RuntimeError("simulated tool setup failure")
 
     monkeypatch.setattr(runtime_module, "build_executable_tools", fail_tool_setup)
+    # This exercises permit cleanup, not setup speed on a loaded CI worker.
+    # Admission and setup deadlines have their own tests below.
     _events, _session, _backend, error = await _run_turn(
         monkeypatch,
         plan=(Round(text="never reached"),),
-        agent_kwargs={
-            "codex_runtime_config": {
-                "turn_timeout_seconds": 0.05,
-            }
-        },
     )
     assert isinstance(error, RuntimeError), error
     assert str(error) == "simulated tool setup failure"
 
     async def acquire_from_another_task() -> None:
-        async with slots.hold(timeout=0.05):
+        async with slots.hold(timeout=5):
             pass
 
     # Child tasks inherit ContextVars, so this also proves reentrancy is
@@ -2253,3 +2254,119 @@ async def test_turn_setup_uses_the_same_admission_deadline(monkeypatch) -> None:
             pass
 
     await asyncio.create_task(acquire_from_another_task())
+
+
+@pytest.mark.asyncio
+async def test_long_running_tool_pauses_after_async_initialization(monkeypatch):
+    from google.adk.tools.long_running_tool import LongRunningFunctionTool
+
+    initialized = []
+
+    async def external_job() -> None:
+        """Start a job completed outside the agent process."""
+        await asyncio.sleep(0.01)
+        initialized.append("started")
+
+    def after_model_callback(callback_context, llm_response):
+        callback_context.state["after_model"] = True
+
+    events, session, _backend, error = await _run_direct_turn(
+        monkeypatch,
+        plan=(
+            Round(tool_calls=(("external_job", {}),), usage=(2, 1)),
+            Round(text="premature answer", usage=(2, 1)),
+        ),
+        agent_kwargs={
+            "tools": [LongRunningFunctionTool(external_job)],
+            "after_model_callback": after_model_callback,
+        },
+    )
+    assert error is None, error
+    assert initialized == ["started"]
+    assert session.state["after_model"] is True
+    assert any(e.long_running_tool_ids for e in events)
+    assert not any(e.get_function_responses() for e in events)
+    assert not any(
+        e.is_final_response()
+        and e.content
+        and any(p.text for p in e.content.parts or [])
+        for e in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_warm_process_resumes_external_result_without_reexecuting_tool(
+    monkeypatch,
+):
+    from google.adk.tools.long_running_tool import LongRunningFunctionTool
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    executions = []
+
+    async def external_job() -> None:
+        """Start a job completed externally."""
+        await asyncio.sleep(0)
+        executions.append("started")
+
+    codex_class = _warm_capable_codex()
+    send, backend, _, _ = await _direct_session(
+        monkeypatch,
+        (
+            Round(tool_calls=(("external_job", {}),), usage=(2, 1)),
+            Round(text="received result", usage=(2, 1)),
+            Round(text="remembered result", usage=(2, 1)),
+        ),
+        tools=[LongRunningFunctionTool(external_job)],
+        codex_class=codex_class,
+    )
+    try:
+        assert await send("start the job") is None
+        assert len(backend.calls) == 1
+        response = types.Content(
+            role="user",
+            parts=[
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        id="call-0-0",
+                        name="external_job",
+                        response={"value": "external-result-value"},
+                    )
+                )
+            ],
+        )
+        assert await send(response) is None
+        assert "external-result-value" in json.dumps(
+            backend.raw_requests[-1], default=str
+        )
+        assert await send("what was the result?") is None
+        assert "external-result-value" in json.dumps(
+            backend.raw_requests[-1], default=str
+        )
+        assert executions == ["started"]
+        # Pending bridge calls retire the first process; the restored thread
+        # can then reuse its replacement for ordinary turns.
+        assert _starts_and_resumes(codex_class) == [(1, 0), (0, 1)]
+        assert codex_class.instances[0].closed
+        assert not codex_class.instances[1].closed
+    finally:
+        await _close_process_pool()
+        await shutdown_bridge()
+
+
+@pytest.mark.asyncio
+async def test_pending_tool_does_not_hide_a_broken_codex_stream(monkeypatch):
+    from google.adk.tools.long_running_tool import LongRunningFunctionTool
+
+    async def external_job() -> None:
+        """Wait for an external result."""
+        return None
+
+    events, _session, _backend, error = await _run_turn(
+        monkeypatch,
+        plan=(Round(tool_calls=(("external_job", {}),)), Round(text="discard")),
+        agent_kwargs={"tools": [LongRunningFunctionTool(external_job)]},
+        codex_class=_BrokenStreamCodex,
+    )
+    assert isinstance(error, RuntimeError)
+    assert str(error) == "codex stream dropped"
+    assert any(event.long_running_tool_ids for event in events)

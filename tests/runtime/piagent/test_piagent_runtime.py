@@ -2039,3 +2039,92 @@ async def test_piagent_runtime_loads_and_cleans_materialized_skills(
     assert "--no-skills" in argv
     assert skill_path.name == "demo-skill"
     assert not skill_path.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("returns_initial_result", [False, True])
+async def test_long_running_bridge_pauses_then_resumes_with_history(
+    tmp_path, monkeypatch, returns_initial_result
+):
+    from google.adk.tools.long_running_tool import LongRunningFunctionTool
+
+    initialized = []
+
+    async def external_job(city: str):
+        """Start an external job for a city."""
+        await asyncio.sleep(0.01)
+        initialized.append(city)
+        return {"job_id": "job-1"} if returns_initial_result else None
+
+    def after_model_callback(callback_context, llm_response):
+        callback_context.state["after_model"] = True
+
+    binary = _make_fake_pi_that_calls_bridge(
+        tmp_path, tool_name="external_job", text_after_tool="premature answer"
+    )
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(tmp_path / "agent-home"))
+    agent = Agent(
+        name="assistant",
+        instruction="Answer.",
+        model_name="model-a",
+        model_api_base="https://ark.example.com/api/v3/",
+        model_api_key="test-key",
+        model_api_key_name="",
+        runtime="piagent",
+        tools=[LongRunningFunctionTool(external_job)],
+        after_model_callback=after_model_callback,
+    )
+    ctx = _ctx(agent, _user_event("start the job"))
+    events = [e async for e in PiAgentRuntime().run_async(agent, ctx)]
+    assert initialized == ["Beijing"]
+    assert any(e.long_running_tool_ids for e in events)
+    assert any(e.actions.state_delta.get("after_model") for e in events)
+    assert (
+        bool(
+            [
+                e
+                for e in events
+                if e.is_final_response()
+                and e.content
+                and any(p.text for p in e.content.parts or [])
+            ]
+        )
+        is returns_initial_result
+    )
+    assert not any(
+        not returns_initial_result
+        and e.is_final_response()
+        and e.content
+        and any(p.text for p in e.content.parts or [])
+        for e in events
+    )
+    assert (
+        bool([e for e in events if e.get_function_responses()])
+        is returns_initial_result
+    )
+
+    binary, prompt_path = _make_fake_pi_with_prompt_capture(tmp_path)
+    response = Event(
+        author="user",
+        invocation_id=ctx.invocation_id,
+        content=types.Content(
+            role="user",
+            parts=[
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        id="call-weather",
+                        name="external_job",
+                        response={"value": "finished-value"},
+                    )
+                )
+            ],
+        ),
+    )
+    ctx.session.events.extend(events + [response])
+    resumed = [e async for e in PiAgentRuntime().run_async(agent, ctx)]
+    assert any(e.is_final_response() for e in resumed)
+    prompt = prompt_path.read_text()
+    assert "finished-value" in prompt and "call-weather" in prompt
+    assert prompt.count("start the job") == 1
+    assert initialized == ["Beijing"]

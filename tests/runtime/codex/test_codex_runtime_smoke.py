@@ -818,3 +818,118 @@ async def test_real_codex_shell_cannot_see_the_model_key() -> None:
 async def _drain(turn: Any) -> None:
     async for _ in turn.stream():
         pass
+
+
+@pytest.mark.codex_smoke
+@pytest.mark.asyncio
+async def test_real_codex_pauses_and_resumes_external_tool(monkeypatch) -> None:
+    """Exercise pending tool handoff over real Codex/shim processes."""
+    if os.getenv("CODEX_RUN_SMOKE") != "1":
+        pytest.skip("set CODEX_RUN_SMOKE=1 to spawn the real Codex binary")
+    reason = _skip_reason()
+    if reason is not None:
+        pytest.skip(reason)
+
+    from google.adk.tools.long_running_tool import LongRunningFunctionTool
+    from google.genai import types
+
+    from veadk import Agent, Runner
+    from veadk.runtime.codex import runtime as runtime_module
+    from veadk.runtime.codex.proxy import ResponsesShim
+
+    executed = []
+
+    async def veadk_smoke_record_marker(marker: str) -> None:
+        """Start a job whose result arrives from outside this process."""
+        await asyncio.sleep(0.01)
+        executed.append(marker)
+
+    backend = _StubResponsesBackend()
+    backend_url = await backend.start()
+    shim = ResponsesShim(api_base=f"{backend_url}/v1", api_key="veadk-smoke-key")
+    await shim.start()
+
+    async def lookup(*_args, **_kwargs):
+        return shim
+
+    monkeypatch.setattr(runtime_module, "get_shim", lookup)
+    agent = Agent(
+        name="external_tool_smoke",
+        instruction="Call the tool, then answer.",
+        runtime="codex",
+        model_name="veadk-codex-smoke-model",
+        model_api_base=f"{backend_url}/v1",
+        model_api_key="veadk-smoke-key",
+        model_api_key_name="",
+        tools=[LongRunningFunctionTool(veadk_smoke_record_marker)],
+        codex_runtime_config={
+            "model_transport": "shim",
+            "sandbox": "read_only",
+            "network_access": False,
+            "turn_timeout_seconds": 30,
+        },
+    )
+    runner = Runner(agent=agent, app_name="external_tool_smoke")
+    session_id = f"external-tool-{uuid.uuid4().hex[:8]}"
+    await runner.short_term_memory.create_session(
+        app_name="external_tool_smoke", user_id="user", session_id=session_id
+    )
+
+    async def send(content):
+        events = []
+        async with contextlib.aclosing(
+            runner.run_async(user_id="user", session_id=session_id, new_message=content)
+        ) as stream:
+            async for event in stream:
+                events.append(event)
+        return events
+
+    try:
+        first = await asyncio.wait_for(
+            send(
+                types.Content(
+                    role="user", parts=[types.Part(text="Start the external job.")]
+                )
+            ),
+            _RUN_TIMEOUT_SECONDS,
+        )
+        calls = [
+            call
+            for event in first
+            for call in event.get_function_calls()
+            if call.name == _ADK_TOOL_NAME
+        ]
+        assert len(calls) == 1 and executed == [_TOOL_MARKER]
+        assert not any(
+            event.is_final_response()
+            and event.content
+            and any(part.text for part in event.content.parts or [])
+            for event in first
+        )
+        result = types.Content(
+            role="user",
+            parts=[
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        id=calls[0].id,
+                        name=_ADK_TOOL_NAME,
+                        response={"value": "external-smoke-completed"},
+                    )
+                )
+            ],
+        )
+        second = await asyncio.wait_for(send(result), _RUN_TIMEOUT_SECONDS)
+        assert any(
+            event.is_final_response()
+            and event.content
+            and any(
+                _FINAL_ANSWER in (part.text or "") for part in event.content.parts or []
+            )
+            for event in second
+        )
+        assert "external-smoke-completed" in json.dumps(backend.requests[-1])
+        assert executed == [_TOOL_MARKER]
+    finally:
+        await shim.stop()
+        await backend.stop()
+    assert shim._turns == {}
