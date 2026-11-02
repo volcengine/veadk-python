@@ -215,6 +215,39 @@ def test_after_model_skips_partial_chunks():
     assert judge.calls == []
 
 
+def test_after_model_ignores_hidden_thought_parts():
+    plugin, judge = make_plugin(LOW)
+    response = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(text="hidden reasoning about instructions", thought=True),
+                types.Part(text="visible answer"),
+            ],
+        )
+    )
+    result = asyncio.run(
+        plugin.after_model_callback(callback_context=context(), llm_response=response)
+    )
+    assert result is None
+    assert "visible answer" in judge.calls[0]["state"]
+    assert "hidden reasoning" not in judge.calls[0]["state"]
+
+
+def test_after_model_skips_thought_only_response():
+    plugin, judge = make_plugin()
+    response = LlmResponse(
+        content=types.Content(
+            role="model", parts=[types.Part(text="hidden reasoning", thought=True)]
+        )
+    )
+    result = asyncio.run(
+        plugin.after_model_callback(callback_context=context(), llm_response=response)
+    )
+    assert result is None
+    assert judge.calls == []
+
+
 def test_after_model_skips_empty_response():
     plugin, judge = make_plugin()
     result = asyncio.run(
@@ -455,6 +488,22 @@ def test_on_event_empty_non_partial_without_buffer_is_passthrough():
     )
     assert result is None
     assert judge.calls == []
+
+
+def test_replace_event_text_preserves_hidden_thought_parts():
+    plugin, _ = make_plugin()
+    event = model_event("visible")
+    event.content = types.Content(
+        role="model",
+        parts=[
+            types.Part(text="hidden reasoning", thought=True),
+            types.Part(text="visible"),
+        ],
+    )
+    replaced = plugin._replace_event_text(event, "blocked")
+    assert replaced.content.parts[0].text == "hidden reasoning"
+    assert replaced.content.parts[0].thought is True
+    assert replaced.content.parts[1].text == "blocked"
 
 
 def test_replace_event_text_merges_multiple_text_parts():

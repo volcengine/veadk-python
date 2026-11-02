@@ -71,6 +71,8 @@ def _stringify(value: Any) -> str:
 
 
 def _part_text(part: Any) -> str:
+    if getattr(part, "thought", False):
+        return ""
     text = getattr(part, "text", None)
     return text if isinstance(text, str) else ""
 

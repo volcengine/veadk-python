@@ -36,13 +36,17 @@ logger = get_logger(__name__)
 _MAX_INVOCATIONS = 256
 
 
+def _is_visible_text_part(part: Any) -> bool:
+    return isinstance(getattr(part, "text", None), str) and not getattr(
+        part, "thought", False
+    )
+
+
 def _text_of_content(content: Any) -> str:
     if content is None:
         return ""
     parts = getattr(content, "parts", None) or []
-    return "".join(
-        part.text for part in parts if isinstance(getattr(part, "text", None), str)
-    )
+    return "".join(part.text for part in parts if _is_visible_text_part(part))
 
 
 class DecisionPlugin(BasePlugin):
@@ -328,7 +332,7 @@ class DecisionPlugin(BasePlugin):
         new_parts: list[Any] = []
         replaced = False
         for part in parts:
-            if isinstance(getattr(part, "text", None), str):
+            if _is_visible_text_part(part):
                 if not replaced:
                     if text:
                         new_parts.append(part.model_copy(update={"text": text}))

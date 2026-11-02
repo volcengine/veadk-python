@@ -77,6 +77,21 @@ def test_build_after_model_extracts_text():
     assert "output" in StateBuilder().build_after_model(response)
 
 
+def test_build_after_model_ignores_hidden_thought_parts():
+    response = SimpleNamespace(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(text="hidden reasoning", thought=True),
+                types.Part(text="visible answer"),
+            ],
+        )
+    )
+    state = StateBuilder().build_after_model(response)
+    assert "visible answer" in state
+    assert "hidden reasoning" not in state
+
+
 def test_build_after_model_handles_missing_content():
     assert StateBuilder().build_after_model(SimpleNamespace()) == ""
 
