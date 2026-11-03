@@ -1009,6 +1009,11 @@ async def test_real_codex_resumes_every_external_result(
             both_started.set()
         await asyncio.wait_for(both_started.wait(), 5)
 
+    def annotate_results(callback_context, llm_request):
+        for content in llm_request.contents:
+            if any(part.function_response for part in content.parts or []):
+                content.parts.append(types.Part(text="callback result annotation"))
+
     backend = BatchModel("external_job", {})
     api_base = await backend.start()
     agent = Agent(
@@ -1019,6 +1024,7 @@ async def test_real_codex_resumes_every_external_result(
         model_api_key="loopback-key",
         model_api_key_name="",
         tools=[LongRunningFunctionTool(external_job)],
+        before_model_callback=annotate_results,
         codex_runtime_config={
             "model_transport": "direct",
             "thread_mode": "resume",
@@ -1087,6 +1093,7 @@ async def test_real_codex_resumes_every_external_result(
         events = await send(result(last, False))
         assert len(backend.requests) == 2
         assert "<conversation_history>" not in json.dumps(backend.requests[-1])
+        assert "callback result annotation" in json.dumps(backend.requests[-1])
         assert sorted(executed) == ["first", "second"]
         assert not any(event.get_function_calls() for event in events)
         assert any(

@@ -141,7 +141,9 @@ def build_prompt_from_llm_request(
             if (
                 record["role"] != "user"
                 or not record["parts"]
-                or any(part["type"] != "function_response" for part in record["parts"])
+                or not any(
+                    part["type"] == "function_response" for part in record["parts"]
+                )
             ):
                 break
             current_record = record["parts"] + current_record

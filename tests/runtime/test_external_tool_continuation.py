@@ -125,21 +125,24 @@ def test_tool_result_survives_prompt_translation(runtime, include_history):
 
 
 @pytest.mark.parametrize("reverse", [False, True])
-@pytest.mark.parametrize("callback_text", [False, True])
+@pytest.mark.parametrize(
+    "callback_positions", [(), (0,), (1,), (2,), (0, 2), (0, 1, 2)]
+)
 def test_codex_resume_includes_every_result_from_the_current_batch(
-    reverse, callback_text
+    reverse, callback_positions
 ):
     from veadk.runtime.codex.translate import build_prompt_from_llm_request
 
-    first, second = _response(), _response()
+    first, second, third = _response(), _response(), _response()
     first.parts[0].function_response.id = "call-first"
     first.parts[0].function_response.response = {"value": "callback-updated"}
     second.parts[0].function_response.id = "call-second"
-    results = [first, second]
+    third.parts[0].function_response.id = "call-third"
+    results = [first, second, third]
     if reverse:
         results.reverse()
-    if callback_text:
-        results[-1].parts.append(types.Part(text="callback continuation note"))
+    for index in callback_positions:
+        results[index].parts.append(types.Part(text=f"callback note {index}"))
     request = LlmRequest(contents=[_content("start the job"), *results])
     before = request.model_dump()
 
@@ -149,13 +152,16 @@ def test_codex_resume_includes_every_result_from_the_current_batch(
     assert [
         record["id"] for record in records if record["type"] == "function_response"
     ] == [result.parts[0].function_response.id for result in results]
-    assert ("callback continuation note" in prompt) == callback_text
+    for index in range(len(results)):
+        assert (f"callback note {index}" in prompt) == (index in callback_positions)
     assert "callback-updated" in prompt
     assert "start the job" not in prompt
     assert request.model_dump() == before
 
 
-@pytest.mark.parametrize("boundary", ["text", "model_text", "reasoning", "call"])
+@pytest.mark.parametrize(
+    "boundary", ["text", "model_text", "reasoning", "call", "empty"]
+)
 def test_codex_resume_does_not_merge_results_across_a_turn_boundary(boundary):
     from veadk.runtime.codex.translate import build_prompt_from_llm_request
 
@@ -163,6 +169,8 @@ def test_codex_resume_does_not_merge_results_across_a_turn_boundary(boundary):
     earlier.parts[0].function_response.response = {"value": "previous-batch"}
     if boundary == "text":
         separator = _content("do it again")
+    elif boundary == "empty":
+        separator = types.Content(role="user", parts=[])
     elif boundary == "model_text":
         separator = types.Content(role="model", parts=[types.Part(text="done")])
     elif boundary == "reasoning":
