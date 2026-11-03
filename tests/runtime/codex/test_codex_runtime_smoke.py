@@ -951,3 +951,151 @@ async def test_real_codex_pauses_and_resumes_external_tool(
         await backend.stop()
     if shim is not None:
         assert shim._turns == {}
+
+
+@pytest.mark.codex_smoke
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_order", [("first", "second"), ("second", "first")])
+@pytest.mark.parametrize("resumable", [False, True])
+@pytest.mark.parametrize("cold_resume", [False, True])
+async def test_real_codex_resumes_every_external_result(
+    response_order, resumable, cold_resume
+):
+    """A persistent Codex thread must receive the whole externally answered batch."""
+    if os.getenv("CODEX_RUN_SMOKE") != "1":
+        pytest.skip("set CODEX_RUN_SMOKE=1 to spawn the real Codex binary")
+    reason = _skip_reason()
+    if reason is not None:
+        pytest.skip(reason)
+
+    from google.adk.apps.app import App, ResumabilityConfig
+    from google.adk.runners import Runner
+    from google.adk.sessions.in_memory_session_service import InMemorySessionService
+    from google.adk.tools.long_running_tool import LongRunningFunctionTool
+    from google.genai import types
+
+    from veadk import Agent
+    from veadk.runtime.codex import runtime as runtime_module
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+    from tests.runtime.codex.test_codex_mcp_bridge import _StubModel
+
+    class BatchModel(_StubModel):
+        def _script(self, body):
+            output = super()._script(body)
+            if len(self.requests) == 1:
+                return [
+                    {
+                        **output[0],
+                        "id": f"fc_{name}",
+                        "call_id": f"call_{name}",
+                        "arguments": json.dumps({"marker": name}),
+                    }
+                    for name in ("first", "second")
+                ]
+            payload = json.dumps(body)
+            complete = all(f"result-{name}" in payload for name in response_order)
+            output[0]["content"][0]["text"] = (
+                "both-complete" if complete else "missing-result"
+            )
+            return output
+
+    executed = []
+    both_started = asyncio.Event()
+
+    async def external_job(marker: str) -> None:
+        """Start a job whose result will be submitted separately."""
+        executed.append(marker)
+        if len(executed) == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), 5)
+
+    backend = BatchModel("external_job", {})
+    api_base = await backend.start()
+    agent = Agent(
+        name="assistant",
+        runtime="codex",
+        model_name="partial-results-test",
+        model_api_base=api_base,
+        model_api_key="loopback-key",
+        model_api_key_name="",
+        tools=[LongRunningFunctionTool(external_job)],
+        codex_runtime_config={
+            "model_transport": "direct",
+            "thread_mode": "resume",
+            "sandbox": "read_only",
+            "network_access": False,
+            "turn_timeout_seconds": 30,
+        },
+    )
+    sessions = InMemorySessionService()
+    if resumable:
+        runner = Runner(
+            app=App(
+                name="partial_results",
+                root_agent=agent,
+                resumability_config=ResumabilityConfig(is_resumable=True),
+            ),
+            session_service=sessions,
+        )
+    else:
+        runner = Runner(
+            app_name="partial_results", agent=agent, session_service=sessions
+        )
+    session_id = f"partial-results-{uuid.uuid4().hex[:8]}"
+    await sessions.create_session(
+        app_name="partial_results", user_id="test", session_id=session_id
+    )
+
+    async def send(content):
+        async with asyncio.timeout(_RUN_TIMEOUT_SECONDS):
+            return [
+                event
+                async for event in runner.run_async(
+                    user_id="test", session_id=session_id, new_message=content
+                )
+            ]
+
+    def result(name, will_continue=None):
+        return types.Content(
+            role="user",
+            parts=[
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        id=f"call_{name}",
+                        name="external_job",
+                        response={"value": f"result-{name}"},
+                        will_continue=will_continue,
+                    )
+                )
+            ],
+        )
+
+    try:
+        initial = await send(
+            types.Content(role="user", parts=[types.Part(text="Run both jobs.")])
+        )
+        calls = [call for event in initial for call in event.get_function_calls()]
+        assert {call.id for call in calls} == {"call_first", "call_second"}
+        assert sorted(executed) == ["first", "second"]
+        assert len(backend.requests) == 1
+        first, last = response_order
+        assert await send(result(first)) == []
+        assert await send(result(last, True)) == []
+        assert len(backend.requests) == 1
+        if cold_resume:
+            await runtime_module._PROCESS_POOL.close_all()
+        events = await send(result(last, False))
+        assert len(backend.requests) == 2
+        assert "<conversation_history>" not in json.dumps(backend.requests[-1])
+        assert sorted(executed) == ["first", "second"]
+        assert not any(event.get_function_calls() for event in events)
+        assert any(
+            part.text == "both-complete"
+            for event in events
+            if not event.partial and event.content
+            for part in event.content.parts or []
+        )
+    finally:
+        await runtime_module._PROCESS_POOL.close_all()
+        await shutdown_bridge()
+        await backend.stop()
