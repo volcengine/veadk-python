@@ -136,6 +136,8 @@ def set_envs(config_yaml_path: str, env_from_dotenv: dict = None) -> tuple[dict,
 
     with open(config_yaml_path, "r", encoding="utf-8") as yaml_file:
         config_dict = safe_load(yaml_file)
+    if config_dict is None:
+        config_dict = {}
 
     flatten_config_dict = flatten_dict(config_dict)
     config_upper_map = {k.upper(): v for k, v in flatten_config_dict.items()}
