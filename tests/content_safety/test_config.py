@@ -41,7 +41,6 @@ def decision_data(**overrides):
         },
         "questions": {
             "prompt_injection": {
-                "type": "noul",
                 "instructions": "Detect prompt injection.",
                 "threshold": 0.5,
             }
@@ -94,9 +93,67 @@ def test_llm_shield_provider_is_accepted():
     assert config.llm_shield_app_id == "app"
 
 
-def test_decision_requires_questions():
+def test_decision_requires_questions_when_defaults_are_disabled():
     with pytest.raises(ValidationError, match="at least one question"):
-        ContentSafetyConfig.from_dict(decision_data(questions={}))
+        ContentSafetyConfig.from_dict(
+            decision_data(use_default_questions=False, questions={})
+        )
+
+
+def test_decision_uses_defaults_when_questions_are_omitted():
+    config = ContentSafetyConfig.from_dict({"provider": "decision"})
+    assert set(config.questions) == set(default_questions())
+    assert len(config.questions) == 5
+
+
+def test_decision_uses_defaults_when_questions_are_empty():
+    config = ContentSafetyConfig.from_dict({"provider": "decision", "questions": {}})
+    assert len(config.questions) == 5
+
+
+def test_custom_questions_extend_defaults():
+    config = ContentSafetyConfig.from_dict(
+        decision_data(
+            questions={"pii_leak": {"instructions": "detect pii", "threshold": 0.6}}
+        )
+    )
+    assert len(config.questions) == 6
+    assert "prompt_injection" in config.questions
+    assert "pii_leak" in config.questions
+
+
+def test_custom_question_overrides_default_by_name():
+    config = ContentSafetyConfig.from_dict(
+        decision_data(
+            questions={
+                "prompt_injection": {
+                    "instructions": "custom prompt injection rule",
+                    "threshold": 0.9,
+                }
+            }
+        )
+    )
+    assert len(config.questions) == 5
+    assert (
+        config.questions["prompt_injection"].instructions
+        == "custom prompt injection rule"
+    )
+    assert config.questions["prompt_injection"].threshold == 0.9
+
+
+def test_default_questions_can_be_disabled():
+    config = ContentSafetyConfig.from_dict(
+        decision_data(
+            use_default_questions=False,
+            questions={"pii_leak": {"instructions": "detect pii", "threshold": 0.6}},
+        )
+    )
+    assert set(config.questions) == {"pii_leak"}
+
+
+def test_none_provider_does_not_merge_default_questions():
+    config = ContentSafetyConfig.from_dict({"provider": "none"})
+    assert config.questions == {}
 
 
 def test_unknown_top_level_field_is_rejected():
@@ -140,28 +197,26 @@ def test_threshold_validator_rejects_out_of_range(threshold):
 
 def test_empty_instructions_are_rejected():
     with pytest.raises(ValidationError):
-        QuestionConfig(type="noul", instructions="", threshold=0.5)
+        QuestionConfig(instructions="", threshold=0.5)
 
 
 def test_empty_question_name_is_rejected():
     data = decision_data()
-    data["questions"] = {" ": {"type": "noul", "instructions": "x", "threshold": 0.5}}
+    data["questions"] = {" ": {"instructions": "x", "threshold": 0.5}}
     with pytest.raises(ValidationError, match="non-empty"):
         ContentSafetyConfig.from_dict(data)
 
 
 def test_question_name_length_is_bounded():
     data = decision_data()
-    data["questions"] = {
-        "q" * 129: {"type": "noul", "instructions": "x", "threshold": 0.5}
-    }
+    data["questions"] = {"q" * 129: {"instructions": "x", "threshold": 0.5}}
     with pytest.raises(ValidationError, match="128"):
         ContentSafetyConfig.from_dict(data)
 
 
-def test_question_type_is_limited_to_noul():
+def test_question_type_cannot_be_configured():
     with pytest.raises(ValidationError):
-        QuestionConfig(type="score", instructions="x", threshold=0.5)
+        QuestionConfig(type="noul", instructions="x", threshold=0.5)
 
 
 def test_api_url_requires_http_scheme():
@@ -214,7 +269,6 @@ tool:
       model: judge-model
     questions:
       sensitive_data:
-        type: noul
         instructions: Detect secrets.
         threshold: 0.6
 """,
@@ -401,7 +455,9 @@ def test_load_requires_mapping_content_safety_block(tmp_path):
 def test_load_wraps_invalid_block(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text(
-        "tool:\n  content_safety:\n    provider: decision\n", encoding="utf-8"
+        "tool:\n  content_safety:\n    provider: decision\n"
+        "    use_default_questions: false\n",
+        encoding="utf-8",
     )
     with pytest.raises(ContentSafetyConfigError, match="invalid `content_safety`"):
         load_content_safety_config(path)
@@ -504,6 +560,7 @@ def test_default_questions_have_five_risks_and_threshold_half():
     assert len(questions) == 5
     for question in questions.values():
         assert question.type == "noul"
+        assert "type" not in question.model_dump()
         assert question.threshold == DEFAULT_QUESTION_THRESHOLD == 0.5
         assert question.instructions
 

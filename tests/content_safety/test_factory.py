@@ -67,9 +67,7 @@ def decision_config():
     return ContentSafetyConfig.from_dict(
         {
             "provider": "decision",
-            "questions": {
-                "q": {"type": "noul", "instructions": "detect", "threshold": 0.5}
-            },
+            "questions": {"q": {"instructions": "detect", "threshold": 0.5}},
             "decision": {
                 "api_url": "https://systemone.example/v1/judge",
                 "api_key": "key",

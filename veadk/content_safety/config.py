@@ -27,7 +27,7 @@ Canonical shape::
           api_url: https://ark.example/api/v1/systemone   # optional
           api_key: ...                                    # optional
           model: doubao-seed-2-1-lite-260915              # optional
-        questions:
+        questions:            # optional; overrides/extends the built-ins
           prompt_injection:
             instructions: ...
             threshold: 0.5
@@ -151,13 +151,21 @@ class DecisionConfig(BaseModel):
 
 
 class QuestionConfig(BaseModel):
-    """One question sent to System One."""
+    """One question sent to System One.
+
+    The decision API question type is fixed to ``noul``. It is not part of the
+    user-facing schema: setting ``type`` is rejected, and the SDK supplies it
+    when building the request.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    type: Literal["noul"] = "noul"
     instructions: str = Field(min_length=1)
     threshold: float = Field(ge=0.0, le=1.0)
+
+    @property
+    def type(self) -> Literal["noul"]:
+        return "noul"
 
     @field_validator("threshold")
     @classmethod
@@ -170,10 +178,11 @@ class QuestionConfig(BaseModel):
 
 
 def default_questions() -> dict[str, QuestionConfig]:
-    """The five default risk questions with threshold 0.5.
+    """The five built-in risk questions, all with threshold 0.5.
 
-    Exposed for opt-in CLI/template generation. Loading a config never fills
-    these in implicitly: a ``decision`` config must declare its questions.
+    They are merged into every ``provider="decision"`` configuration unless
+    ``use_default_questions`` is ``False``. User-provided questions override a
+    built-in question by name and append new names.
     """
     return {
         name: QuestionConfig(
@@ -188,7 +197,8 @@ class ContentSafetyConfig(BaseModel):
     """Top-level opt-in configuration.
 
     ``provider="none"`` is the default and disables the feature entirely.
-    ``provider="decision"`` requires at least one question.
+    ``provider="decision"`` starts from the five built-in questions; use
+    ``use_default_questions=False`` to declare a fully custom question set.
     ``provider="llm_shield"`` keeps the legacy LLM Shield backend available
     behind an adapter.
     """
@@ -199,6 +209,13 @@ class ContentSafetyConfig(BaseModel):
     on_error: Literal["allow", "block"] = "allow"
     block_message: str = Field(default=DEFAULT_BLOCK_MESSAGE, min_length=1)
     decision: DecisionConfig = Field(default_factory=DecisionConfig)
+    use_default_questions: bool = True
+    """Merge the five built-in questions under ``questions``.
+
+    The merge treats ``questions`` as overrides: a matching name replaces the
+    built-in question, and a new name adds one. Set to ``False`` to use only
+    the questions declared by the caller.
+    """
     questions: dict[str, QuestionConfig] = Field(default_factory=dict)
     llm_shield_app_id: str | None = None
 
@@ -214,10 +231,33 @@ class ContentSafetyConfig(BaseModel):
                 raise ValueError("question names must be at most 128 characters")
         return value
 
+    @model_validator(mode="before")
+    @classmethod
+    def _merge_default_questions(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        provider = data.get("provider", Provider.NONE)
+        if getattr(provider, "value", provider) != Provider.DECISION.value:
+            return data
+        if not data.get("use_default_questions", True):
+            return data
+        provided = data.get("questions") or {}
+        if not isinstance(provided, dict):
+            return data
+        merged = {
+            name: question.model_dump()
+            for name, question in default_questions().items()
+        }
+        merged.update(provided)
+        return {**data, "questions": merged}
+
     @model_validator(mode="after")
     def _validate_provider_requirements(self) -> "ContentSafetyConfig":
         if self.provider is Provider.DECISION and not self.questions:
-            raise ValueError("provider=decision requires at least one question")
+            raise ValueError(
+                "provider=decision requires at least one question when "
+                "use_default_questions is false"
+            )
         return self
 
     @classmethod

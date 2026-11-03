@@ -83,6 +83,23 @@ class TestOptionalLoader:
         assert config.provider is Provider.DECISION
         assert config.decision.api_url == "https://systemone.example/v1/judge"
 
+    def test_omitted_questions_use_defaults(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        write_config(
+            tmp_path,
+            """
+tool:
+  content_safety:
+    provider: decision
+    decision:
+      api_url: https://systemone.example/v1/judge
+      api_key: test-key
+""",
+        )
+        plugin = resolve_content_safety_plugin()
+        assert plugin is not None
+        assert len(plugin._config.questions) == 5
+
     def test_invalid_block_still_raises(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         write_config(
@@ -91,7 +108,7 @@ class TestOptionalLoader:
 tool:
   content_safety:
     provider: decision
-    questions: {}
+    use_default_questions: false
 """,
         )
         with pytest.raises(ContentSafetyConfigError, match="invalid `content_safety`"):

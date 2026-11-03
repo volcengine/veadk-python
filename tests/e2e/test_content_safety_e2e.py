@@ -152,9 +152,9 @@ def make_config(server, *, on_error="allow"):
             "provider": "decision",
             "on_error": on_error,
             "block_message": BLOCK_MESSAGE,
+            "use_default_questions": False,
             "questions": {
                 name: {
-                    "type": "noul",
                     "instructions": f"Detect {name}.",
                     "threshold": 0.5,
                 }
@@ -437,6 +437,7 @@ def test_e2e_config_yaml_auto_mounts_in_veadk_runner(tmp_path, monkeypatch):
 tool:
   content_safety:
     provider: decision
+    use_default_questions: false
     block_message: {BLOCK_MESSAGE!r}
     decision:
       api_url: http://127.0.0.1:{server.server_address[1]}/v1/judge

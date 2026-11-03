@@ -69,10 +69,10 @@ def config(*, on_error="allow", questions=None):
         {
             "provider": "decision",
             "on_error": on_error,
+            "use_default_questions": False,
             "questions": questions
             or {
                 "q": {
-                    "type": "noul",
                     "instructions": "detect",
                     "threshold": 0.5,
                 }
