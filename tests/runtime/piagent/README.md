@@ -11,8 +11,20 @@ PYTHONPYCACHEPREFIX=/private/tmp/veadk-pycache \
 
 ## Real local smoke test
 
-This test calls a real Pi binary and a real model. It is skipped unless
-`PIAGENT_RUN_SMOKE=1` is set.
+The native-history smoke runs a real Pi binary against a loopback model stub.
+It verifies that pending tools resume through native assistant/tool-result
+messages and that a new user request can call the same tool with the same
+arguments again. It needs no model credentials:
+
+```bash
+PIAGENT_RUN_SMOKE=1 \
+  .venv/bin/python -m pytest \
+  tests/runtime/piagent/test_piagent_runtime_smoke.py::test_real_piagent_resumes_native_tool_results \
+  -p no:xdist -rs
+```
+
+The greeting smoke below calls a real model. Both smoke tests are skipped
+unless `PIAGENT_RUN_SMOKE=1` is set; the greeting also requires credentials.
 
 ```bash
 export PIAGENT_BINARY=/private/tmp/veadk-piagent-binary/v0.80.6-darwin/extracted/pi/pi

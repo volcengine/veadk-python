@@ -1870,6 +1870,7 @@ async def test_piagent_runtime_syncs_tools_after_before_model_callback(
     agent_dir = tmp_path / "agent-home"
     monkeypatch.setenv("PIAGENT_BINARY", str(binary))
     monkeypatch.setenv("PIAGENT_AGENT_DIR", str(agent_dir))
+    monkeypatch.setenv("PIAGENT_DISABLE_TOOLS", "1")
 
     agent = Agent(
         name="assistant",
@@ -1887,7 +1888,12 @@ async def test_piagent_runtime_syncs_tools_after_before_model_callback(
     _events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
 
     argv = json.loads(argv_path.read_text(encoding="utf-8"))
-    assert "--extension" not in argv
+    extensions = [
+        argv[index + 1] for index, arg in enumerate(argv) if arg == "--extension"
+    ]
+    assert [Path(path).name for path in extensions] == ["veadk-context.ts"]
+    assert "--no-tools" in argv
+    assert not Path(extensions[0]).exists()
 
 
 @pytest.mark.asyncio
@@ -1921,7 +1927,11 @@ async def test_piagent_runtime_before_model_can_remove_transfer_tool(
     _events = [event async for event in PiAgentRuntime().run_async(agent, ctx)]
 
     argv = json.loads(argv_path.read_text(encoding="utf-8"))
-    assert "--extension" not in argv
+    extensions = [
+        argv[index + 1] for index, arg in enumerate(argv) if arg == "--extension"
+    ]
+    assert [Path(path).name for path in extensions] == ["veadk-context.ts"]
+    assert not Path(extensions[0]).exists()
 
 
 @pytest.mark.asyncio

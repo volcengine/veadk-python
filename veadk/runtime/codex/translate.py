@@ -122,22 +122,37 @@ def build_prompt_from_llm_request(
 ) -> str:
     """Render callback-mutated LlmRequest contents into Codex turn input.
 
-    ``include_history=False`` renders the current message only, for a resumed
-    Codex thread that already holds the earlier turns itself.
+    ``include_history=False`` renders the current message and its adjacent
+    external results; a resumed thread has not seen a partially answered batch.
     """
 
     records = [_content_event_record(content) for content in llm_request.contents]
-    records = [record for record in records if record["parts"]]
-    if not records:
+    visible = [index for index, record in enumerate(records) if record["parts"]]
+    if not visible:
         return NO_TEXT_PROMPT
 
-    current_record = records[-1]["parts"]
+    current_record = records[visible[-1]]["parts"]
+    if not include_history and any(
+        part.get("type") == "function_response" for part in current_record
+    ):
+        # Keep model/reasoning and ordinary user messages as batch boundaries,
+        # including records whose text is hidden from the serialized prompt.
+        for record in reversed(records[: visible[-1]]):
+            if (
+                record["role"] != "user"
+                or not record["parts"]
+                or not any(
+                    part["type"] == "function_response" for part in record["parts"]
+                )
+            ):
+                break
+            current_record = record["parts"] + current_record
     current_text = "\n".join(
         str(part["text"])
         for part in current_record
         if part.get("type") == "text" and part.get("text")
     ).strip()
-    history = records[:-1] if include_history else []
+    history = [records[index] for index in visible[:-1]] if include_history else []
     continuation = (
         "\nContinue the paused request using these tool results; "
         "this is not a new user request."

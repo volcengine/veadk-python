@@ -17,14 +17,25 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events.event import Event
 from google.adk.runners import Runner
 from google.adk.sessions.in_memory_session_service import InMemorySessionService
+from google.adk.sessions.session import Session
 from google.genai import types
 
 from veadk import Agent
 from veadk.agents.sequential_agent import SequentialAgent
 from veadk.runtime.output_state import maybe_save_output_to_state
+
+
+def _empty_context(agent: Agent) -> InvocationContext:
+    return InvocationContext(
+        agent=agent,
+        invocation_id="inv-1",
+        session_service=InMemorySessionService(),
+        session=Session(id="session", app_name="test", user_id="test"),
+    )
 
 
 def _text_event(
@@ -189,7 +200,7 @@ async def test_non_adk_runtime_saves_output_key(monkeypatch, runtime: str) -> No
         output_key="result",
     )
 
-    events = [event async for event in agent._run_async_impl(SimpleNamespace())]
+    events = [event async for event in agent._run_async_impl(_empty_context(agent))]
 
     assert events == turn
     written = [
@@ -228,7 +239,7 @@ async def test_multiple_final_text_events_write_output_key_once(monkeypatch) -> 
         output_key="result",
     )
 
-    events = [event async for event in agent._run_async_impl(SimpleNamespace())]
+    events = [event async for event in agent._run_async_impl(_empty_context(agent))]
 
     assert [e.actions.state_delta["result"] for e in events] == [
         "Let me check that.",

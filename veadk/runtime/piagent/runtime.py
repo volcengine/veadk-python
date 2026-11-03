@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from dataclasses import replace
 from typing import TYPE_CHECKING, AsyncGenerator
 
 from google.adk.agents.invocation_context import LlmCallsLimitExceededError
@@ -42,6 +44,7 @@ from veadk.runtime.model_callbacks import (
 )
 from veadk.runtime.piagent.client import PiAgentRpcClient
 from veadk.runtime.piagent.config import PiAgentConfig, prepare_piagent_home
+from veadk.runtime.piagent.context_bridge import pi_context_extension
 from veadk.runtime.piagent.installer import resolve_or_install_piagent_binary
 from veadk.runtime.piagent.skills import materialize_skills_for_pi
 from veadk.runtime.piagent.tool_runtime import PiToolRuntime
@@ -176,7 +179,18 @@ class PiAgentRuntime(BaseRuntime):
             # that bookkeeping somewhere real to land; see
             # `_merge_turn_bookkeeping`.
             merge_target: "Event | None" = None
-            async with PiToolRuntime(tool_bundle) as tools:
+            async with contextlib.AsyncExitStack() as resources:
+                context_extension = resources.enter_context(
+                    pi_context_extension(
+                        runtime_call.llm_request,
+                        config.model,
+                        prompt=prompt,
+                        tool_names={
+                            spec.original_name: spec.name for spec in tool_bundle.specs
+                        },
+                    )
+                )
+                tools = await resources.enter_async_context(PiToolRuntime(tool_bundle))
                 run_config = (
                     config.with_skills(skill_paths=list(skill_bundle.paths))
                     if skill_bundle.paths
@@ -186,6 +200,10 @@ class PiAgentRuntime(BaseRuntime):
                     run_config.with_tools(extensions=[tools.extension_path])
                     if tools.enabled
                     else run_config
+                )
+                run_config = replace(
+                    run_config,
+                    extensions=(*run_config.extensions, context_extension),
                 )
                 async with PiAgentRpcClient(run_config) as client:
                     pump: asyncio.Task[None] | None = None
