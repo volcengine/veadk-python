@@ -42,9 +42,17 @@ import math
 import os
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
 from .types import Provider
 
@@ -96,13 +104,14 @@ class DecisionConfig(BaseModel):
 
     ``api_url`` is a complete System One URL and is used verbatim. When it is
     absent, the factory derives ``/api/v1/systemone`` from the effective Ark
-    API base. ``api_key`` defaults to the existing Ark credential resolution.
+    API base. ``api_key`` defaults to the existing Ark credential resolution and
+    is stored as a ``SecretStr`` so repr and serialization do not expose it.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     api_url: str | None = None
-    api_key: str | None = None
+    api_key: SecretStr | None = None
     model: str = Field(default=DEFAULT_DECISION_MODEL, min_length=1)
 
     @field_validator("api_url")
@@ -112,14 +121,33 @@ class DecisionConfig(BaseModel):
             return None
         if not value.startswith(("http://", "https://")):
             raise ValueError("decision.api_url must start with http:// or https://")
+        try:
+            parsed = urlsplit(value)
+        except ValueError as exc:
+            raise ValueError("decision.api_url must be a valid URL") from exc
+        if not parsed.hostname:
+            raise ValueError("decision.api_url must include a host")
+        if parsed.scheme == "http" and parsed.hostname.lower() not in {
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        }:
+            raise ValueError(
+                "decision.api_url must use https unless it targets loopback"
+            )
         return value
 
     @field_validator("api_key")
     @classmethod
-    def _validate_api_key(cls, value: str | None) -> str | None:
-        if value is not None and not value:
+    def _validate_api_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and not value.get_secret_value():
             raise ValueError("decision.api_key must be non-empty when set")
         return value
+
+    @property
+    def api_key_value(self) -> str | None:
+        """Return the plaintext key for the HTTP layer, never for display."""
+        return self.api_key.get_secret_value() if self.api_key is not None else None
 
 
 class QuestionConfig(BaseModel):
@@ -289,9 +317,13 @@ def load_content_safety_config(
     through :meth:`ContentSafetyConfig.from_dict` are never overridden.
     """
 
-    if path is None:
-        from dotenv import find_dotenv
+    from dotenv import find_dotenv, load_dotenv
 
+    dotenv_path = find_dotenv(filename=".env", usecwd=True)
+    if dotenv_path:
+        load_dotenv(dotenv_path, override=False)
+
+    if path is None:
         found = find_dotenv(filename="config.yaml", usecwd=True)
         if not found:
             raise ContentSafetyConfigError(

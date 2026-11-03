@@ -596,3 +596,45 @@ def test_after_run_clears_buffers_and_bounds_audit_cache():
     assert "inv" not in plugin._audited_text_hashes
     assert len(plugin._audits) == 256
     assert "inv-0" not in plugin._audits
+
+
+def _mixed_event(text, *, partial):
+    return FakeEvent(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(text=text),
+                types.Part(function_call=types.FunctionCall(name="tool", args={})),
+            ],
+        ),
+        partial=partial,
+    )
+
+
+def test_on_event_withholds_partial_text_alongside_function_call():
+    plugin, judge = make_plugin(LOW)
+    result = asyncio.run(
+        plugin.on_event_callback(
+            invocation_context=context(),
+            event=_mixed_event("secret", partial=True),
+        )
+    )
+    assert result is not None
+    assert not any(getattr(part, "text", None) for part in result.content.parts)
+    assert result.content.parts[0].function_call.name == "tool"
+    assert judge.calls == []
+
+
+def test_on_event_blocks_final_text_alongside_function_call():
+    plugin, judge = make_plugin(HIGH)
+    result = asyncio.run(
+        plugin.on_event_callback(
+            invocation_context=context(),
+            event=_mixed_event("secret", partial=False),
+        )
+    )
+    assert result is not None
+    assert result.content.parts[0].text == plugin._config.block_message
+    assert result.content.parts[1].function_call.name == "tool"
+    assert len(judge.calls) == 1
+    assert "secret" in judge.calls[0]["state"]

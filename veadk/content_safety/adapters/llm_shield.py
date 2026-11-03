@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import threading
 from typing import Any
@@ -65,15 +66,19 @@ class LLMShieldPluginAdapter(BasePlugin):
     async def before_model_callback(
         self, *, callback_context: Any, llm_request: Any, **kwargs: Any
     ) -> Any:
-        return self._inner.before_model_callback(
-            callback_context=callback_context, llm_request=llm_request
+        return await asyncio.to_thread(
+            self._inner.before_model_callback,
+            callback_context=callback_context,
+            llm_request=llm_request,
         )
 
     async def after_model_callback(
         self, *, callback_context: Any, llm_response: Any, **kwargs: Any
     ) -> Any:
-        return self._inner.after_model_callback(
-            callback_context=callback_context, llm_response=llm_response
+        return await asyncio.to_thread(
+            self._inner.after_model_callback,
+            callback_context=callback_context,
+            llm_response=llm_response,
         )
 
     async def before_tool_callback(
@@ -84,8 +89,11 @@ class LLMShieldPluginAdapter(BasePlugin):
         tool_context: Any,
         **kwargs: Any,
     ) -> Any:
-        return self._inner.before_tool_callback(
-            tool=tool, args=tool_args, tool_context=tool_context
+        return await asyncio.to_thread(
+            self._inner.before_tool_callback,
+            tool=tool,
+            args=tool_args,
+            tool_context=tool_context,
         )
 
     async def after_tool_callback(
@@ -97,7 +105,8 @@ class LLMShieldPluginAdapter(BasePlugin):
         result: dict[str, Any],
         **kwargs: Any,
     ) -> Any:
-        return self._inner.after_tool_callback(
+        return await asyncio.to_thread(
+            self._inner.after_tool_callback,
             tool=tool,
             args=tool_args,
             tool_context=tool_context,

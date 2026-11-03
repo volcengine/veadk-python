@@ -328,12 +328,8 @@ class DecisionPlugin(BasePlugin):
             return None
         if getattr(content, "role", None) != "model":
             return None
-        parts = getattr(content, "parts", None) or []
-        for part in parts:
-            if getattr(part, "function_call", None) or getattr(
-                part, "function_response", None
-            ):
-                return None
+        # A model event can contain visible text alongside a function call.
+        # Audit the text while leaving function-call parts intact.
         return _text_of_content(content)
 
     def _replace_event_text(self, event: Any, text: str) -> Any:

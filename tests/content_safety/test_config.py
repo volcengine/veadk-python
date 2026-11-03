@@ -265,7 +265,7 @@ tool:
     monkeypatch.setenv("TOOL_CONTENT_SAFETY_DECISION_MODEL", "env-model")
     config = load_content_safety_config(path)
     assert config.decision.api_url == "https://env.example/v1/judge"
-    assert config.decision.api_key == "env-key"
+    assert config.decision.api_key_value == "env-key"
     assert config.decision.model == "env-model"
 
 
@@ -292,7 +292,7 @@ tool:
     monkeypatch.delenv("TOOL_CONTENT_SAFETY_DECISION_API_KEY", raising=False)
     config = load_content_safety_config(path)
     assert config.decision.api_url == "https://yaml.example/v1/judge"
-    assert config.decision.api_key == "yaml-key"
+    assert config.decision.api_key_value == "yaml-key"
     assert config.decision.model == "env-model"
 
 
@@ -320,7 +320,7 @@ tool:
     )
     monkeypatch.setenv("TOOL_CONTENT_SAFETY_DECISION_API_KEY", "env-key")
     config = load_content_safety_config(path)
-    assert config.decision.api_key == "env-key"
+    assert config.decision.api_key_value == "env-key"
     assert config.decision.api_url is None
 
 
@@ -517,4 +517,69 @@ def test_threshold_must_be_numeric_not_string():
     data = decision_data()
     data["questions"]["prompt_injection"]["threshold"] = "0.5"
     with pytest.raises(ValidationError):
+        ContentSafetyConfig.from_dict(data)
+
+
+def test_api_key_is_not_exposed_in_repr_or_dump():
+    config = ContentSafetyConfig.from_dict(decision_data())
+    assert config.decision.api_key_value == "test-key"
+    assert "test-key" not in repr(config)
+    assert "test-key" not in repr(config.decision)
+    assert "test-key" not in repr(config.model_dump())
+
+
+def test_http_api_url_is_rejected_outside_loopback():
+    data = decision_data()
+    data["decision"]["api_url"] = "http://systemone.example/v1/judge"
+    with pytest.raises(ValidationError, match="https"):
+        ContentSafetyConfig.from_dict(data)
+
+
+def test_http_api_url_is_allowed_for_loopback():
+    for url in (
+        "http://127.0.0.1:8080/v1/judge",
+        "http://localhost:8080/v1/judge",
+        "http://[::1]:8080/v1/judge",
+    ):
+        data = decision_data()
+        data["decision"]["api_url"] = url
+        assert ContentSafetyConfig.from_dict(data).decision.api_url == url
+
+
+def test_load_applies_dotenv_decision_fields(tmp_path, monkeypatch):
+    import os
+
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        """
+tool:
+  content_safety:
+    provider: decision
+    decision:
+      api_url: https://yaml.example/v1/judge
+      api_key: yaml-key
+    questions:
+      q:
+        instructions: detect
+        threshold: 0.5
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text(
+        "TOOL_CONTENT_SAFETY_DECISION_API_KEY=env-key\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("TOOL_CONTENT_SAFETY_DECISION_API_KEY", raising=False)
+    try:
+        config = load_content_safety_config(path)
+        assert config.decision.api_key_value == "env-key"
+    finally:
+        os.environ.pop("TOOL_CONTENT_SAFETY_DECISION_API_KEY", None)
+
+
+@pytest.mark.parametrize("url", ["https://[::1", "https://"])
+def test_api_url_must_be_parseable_with_host(url):
+    data = decision_data()
+    data["decision"]["api_url"] = url
+    with pytest.raises(ValidationError, match="decision.api_url"):
         ContentSafetyConfig.from_dict(data)

@@ -16,6 +16,7 @@ import asyncio
 import builtins
 import os
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -412,3 +413,37 @@ def test_decision_provider_rejects_custom_api_url_without_key(monkeypatch):
     )
     with pytest.raises(ContentSafetyConfigError, match="decision.api_key"):
         build_content_safety(config)
+
+
+def test_decision_provider_rejects_ark_url_with_non_ark_fallback():
+    config = ContentSafetyConfig.from_dict(
+        {
+            "provider": "decision",
+            "decision": {
+                "api_url": ("https://ark.cn-beijing.volces.com/api/v1/systemone")
+            },
+            "questions": {"q": {"instructions": "detect", "threshold": 0.5}},
+        }
+    )
+    with pytest.raises(ContentSafetyConfigError, match="non-Ark"):
+        build_content_safety(
+            config,
+            ark_api_base="https://api.openai.com/v1",
+            ark_api_key="openai-key",
+        )
+
+
+def test_adapter_runs_sync_inner_in_worker_thread():
+    seen = []
+
+    class RecordingInner(FakeInner):
+        def before_model_callback(self, **kwargs):
+            seen.append(threading.current_thread())
+            return super().before_model_callback(**kwargs)
+
+    adapter = LLMShieldPluginAdapter(RecordingInner())
+    asyncio.run(
+        adapter.before_model_callback(callback_context=object(), llm_request=object())
+    )
+    assert seen
+    assert seen[0] is not threading.main_thread()

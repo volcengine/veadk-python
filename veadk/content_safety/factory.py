@@ -89,7 +89,7 @@ def _resolve_decision_connection(
 ) -> tuple[str, str]:
     """Resolve the System One URL and key without an unsafe cross-provider mix."""
     api_url = config.decision.api_url
-    api_key = config.decision.api_key
+    api_key = config.decision.api_key_value
 
     if api_url:
         if api_key:
@@ -99,7 +99,13 @@ def _resolve_decision_connection(
                 "decision.api_key is required when decision.api_url is not an Ark "
                 "endpoint; refusing to reuse the Ark credential for a custom endpoint."
             )
-        _, fallback_key = _ark_defaults(ark_api_base, ark_api_key)
+        base, fallback_key = _ark_defaults(ark_api_base, ark_api_key)
+        if not _is_ark_api_base(base):
+            raise ContentSafetyConfigError(
+                "decision.api_key is required when decision.api_url is an Ark "
+                "endpoint but the fallback Ark API base is not an Ark endpoint; "
+                "refusing to reuse a non-Ark credential for Ark."
+            )
         return api_url, fallback_key
 
     base, fallback_key = _ark_defaults(ark_api_base, ark_api_key)
