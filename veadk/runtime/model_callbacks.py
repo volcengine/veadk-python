@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import copy
 import inspect
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -237,6 +238,9 @@ def llm_response_to_event(
         {
             **model_response_event.model_dump(exclude_none=True),
             **llm_response.model_dump(exclude_none=True),
+            # The callback shell predates streaming; persisted order must
+            # reflect when this response is finalized, not when the turn began.
+            "timestamp": time.time(),
         }
     )
 

@@ -174,6 +174,72 @@ async def test_before_model_short_circuit_preserves_callback_actions() -> None:
 
 
 @pytest.mark.asyncio
+async def test_finalized_event_keeps_emission_order_after_sqlite_reload(tmp_path):
+    from google.adk.sessions.database_session_service import DatabaseSessionService
+
+    service = DatabaseSessionService(
+        db_url=f"sqlite+aiosqlite:///{tmp_path / 'events.sqlite'}"
+    )
+    try:
+        session = await service.create_session(
+            app_name="order", user_id="user", session_id="session"
+        )
+        agent = LlmAgent(name="assistant", model="test-model")
+        ctx = InvocationContext(
+            agent=agent,
+            invocation_id="inv-order",
+            session_service=service,
+            session=session,
+        )
+        runtime_call = await build_runtime_llm_request(agent, ctx, model="test-model")
+        shell = runtime_call.model_response_event
+        shell.timestamp -= 1
+        shell.actions.state_delta["callback_value"] = "kept"
+        original_timestamp = shell.timestamp
+        reasoning = Event(
+            author=agent.name,
+            invocation_id=ctx.invocation_id,
+            content=types.Content(
+                role="model", parts=[types.Part(text="reasoning", thought=True)]
+            ),
+        )
+        final = llm_response_to_event(
+            runtime_call.llm_request,
+            LlmResponse(content=_content("final", role="model")),
+            shell,
+        )
+        for event in [reasoning, final]:
+            await service.append_event(session, event)
+        restored = await service.get_session(
+            app_name="order", user_id="user", session_id="session"
+        )
+        assert [event.id for event in restored.events] == [reasoning.id, final.id]
+        assert final.timestamp >= reasoning.timestamp
+        assert final.id == shell.id
+        assert final.actions.state_delta == {"callback_value": "kept"}
+        assert shell.timestamp == original_timestamp
+    finally:
+        await service.close()
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_finalizing_response_updates_time_without_changing_flags_or_shell(partial):
+    shell = Event(author="assistant", invocation_id="inv", branch="branch", timestamp=1)
+    shell.actions.state_delta["value"] = "kept"
+    finalized = llm_response_to_event(
+        SimpleNamespace(tools_dict={}),
+        LlmResponse(content=_content("response", role="model"), partial=partial),
+        shell,
+    )
+    assert finalized.timestamp > shell.timestamp
+    assert finalized.id == shell.id
+    assert finalized.branch == shell.branch
+    assert finalized.actions == shell.actions
+    assert finalized.partial is partial
+    assert shell.timestamp == 1
+
+
+@pytest.mark.asyncio
 async def test_plugin_before_model_short_circuits_agent_callbacks() -> None:
     calls: list[str] = []
 

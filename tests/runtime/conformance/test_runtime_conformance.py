@@ -244,6 +244,12 @@ async def test_streaming_partials_precede_one_final(
     assert all(i < finals[0] for i in partial_at), (
         f"partial events at {partial_at} arrived after the final at {finals[0]}"
     )
+    if harness.adapter.name != "adk":
+        # Database history sorts by timestamp, not the original yield order.
+        assert all(
+            turn.events[i].timestamp <= turn.events[finals[0]].timestamp
+            for i in partial_at
+        )
     partial_text = "".join(
         p.text or ""
         for i in partial_at
