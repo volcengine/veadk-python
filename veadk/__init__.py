@@ -18,6 +18,7 @@ from veadk.version import VERSION
 
 if TYPE_CHECKING:
     from veadk.agent import Agent, ModelFallbackEndpoint
+    from veadk.agents.skill_sandbox_agent import SkillSandboxAgent
     from veadk.runner import Runner
 
 
@@ -41,6 +42,10 @@ def __getattr__(name):
         )
 
         return AgentkitRemoteSandboxAgent
+    if name == "SkillSandboxAgent":
+        from veadk.agents.skill_sandbox_agent import SkillSandboxAgent
+
+        return SkillSandboxAgent
     raise AttributeError(f"module 'veadk' has no attribute '{name}'")
 
 
@@ -49,5 +54,6 @@ __all__ = [
     "ModelFallbackEndpoint",
     "Runner",
     "AgentkitRemoteSandboxAgent",
+    "SkillSandboxAgent",
     "VERSION",
 ]
