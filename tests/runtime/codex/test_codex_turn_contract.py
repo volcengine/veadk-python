@@ -2295,6 +2295,35 @@ async def test_long_running_tool_pauses_after_async_initialization(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_pending_direct_tool_interrupts_the_turn_only_once(monkeypatch):
+    from google.adk.tools.long_running_tool import LongRunningFunctionTool
+
+    interrupts = []
+    original_interrupt = fake_codex_sdk._DirectTurn.interrupt
+
+    async def counted_interrupt(turn):
+        interrupts.append(turn.id)
+        await original_interrupt(turn)
+
+    monkeypatch.setattr(fake_codex_sdk._DirectTurn, "interrupt", counted_interrupt)
+
+    async def external_job() -> None:
+        """Wait for an external result."""
+        await asyncio.sleep(0)
+
+    events, _session, _backend, error = await _run_direct_turn(
+        monkeypatch,
+        plan=(Round(tool_calls=(("external_job", {}),)), Round(text="discard")),
+        agent_kwargs={"tools": [LongRunningFunctionTool(external_job)]},
+    )
+    assert error is None, error
+    assert any(event.long_running_tool_ids for event in events)
+    # Completion notifications still drain after pending interrupts the turn.
+    # They must not trigger another RPC against an already completed turn.
+    assert len(interrupts) == 1
+
+
+@pytest.mark.asyncio
 async def test_warm_process_resumes_external_result_without_reexecuting_tool(
     monkeypatch,
 ):

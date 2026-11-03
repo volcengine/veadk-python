@@ -1242,6 +1242,7 @@ class CodexRuntime(BaseRuntime):
                     if queued is _TOOL_PENDING:
                         if not tool_pending:
                             tool_pending = True
+                            bridge_interrupted = True
                             final_text_events.clear()
                             await interrupt_turn(
                                 turn,

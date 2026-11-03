@@ -822,8 +822,11 @@ async def _drain(turn: Any) -> None:
 
 @pytest.mark.codex_smoke
 @pytest.mark.asyncio
-async def test_real_codex_pauses_and_resumes_external_tool(monkeypatch) -> None:
-    """Exercise pending tool handoff over real Codex/shim processes."""
+@pytest.mark.parametrize("transport", ["shim", "direct"])
+async def test_real_codex_pauses_and_resumes_external_tool(
+    monkeypatch, transport: str
+) -> None:
+    """Exercise pending tool handoff over both real Codex transports."""
     if os.getenv("CODEX_RUN_SMOKE") != "1":
         pytest.skip("set CODEX_RUN_SMOKE=1 to spawn the real Codex binary")
     reason = _skip_reason()
@@ -835,7 +838,10 @@ async def test_real_codex_pauses_and_resumes_external_tool(monkeypatch) -> None:
 
     from veadk import Agent, Runner
     from veadk.runtime.codex import runtime as runtime_module
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
     from veadk.runtime.codex.proxy import ResponsesShim
+
+    from tests.runtime.codex.test_codex_mcp_bridge import _StubModel
 
     executed = []
 
@@ -844,26 +850,34 @@ async def test_real_codex_pauses_and_resumes_external_tool(monkeypatch) -> None:
         await asyncio.sleep(0.01)
         executed.append(marker)
 
-    backend = _StubResponsesBackend()
-    backend_url = await backend.start()
-    shim = ResponsesShim(api_base=f"{backend_url}/v1", api_key="veadk-smoke-key")
-    await shim.start()
+    shim = None
+    if transport == "direct":
+        backend = _StubModel(_ADK_TOOL_NAME, {"marker": _TOOL_MARKER})
+        api_base = await backend.start()
+        final_answer = "done"
+    else:
+        backend = _StubResponsesBackend()
+        backend_url = await backend.start()
+        api_base = f"{backend_url}/v1"
+        final_answer = _FINAL_ANSWER
+        shim = ResponsesShim(api_base=api_base, api_key="veadk-smoke-key")
+        await shim.start()
 
-    async def lookup(*_args, **_kwargs):
-        return shim
+        async def lookup(*_args, **_kwargs):
+            return shim
 
-    monkeypatch.setattr(runtime_module, "get_shim", lookup)
+        monkeypatch.setattr(runtime_module, "get_shim", lookup)
     agent = Agent(
         name="external_tool_smoke",
         instruction="Call the tool, then answer.",
         runtime="codex",
         model_name="veadk-codex-smoke-model",
-        model_api_base=f"{backend_url}/v1",
+        model_api_base=api_base,
         model_api_key="veadk-smoke-key",
         model_api_key_name="",
         tools=[LongRunningFunctionTool(veadk_smoke_record_marker)],
         codex_runtime_config={
-            "model_transport": "shim",
+            "model_transport": transport,
             "sandbox": "read_only",
             "network_access": False,
             "turn_timeout_seconds": 30,
@@ -923,13 +937,17 @@ async def test_real_codex_pauses_and_resumes_external_tool(monkeypatch) -> None:
             event.is_final_response()
             and event.content
             and any(
-                _FINAL_ANSWER in (part.text or "") for part in event.content.parts or []
+                final_answer in (part.text or "") for part in event.content.parts or []
             )
             for event in second
         )
         assert "external-smoke-completed" in json.dumps(backend.requests[-1])
         assert executed == [_TOOL_MARKER]
     finally:
-        await shim.stop()
+        if shim is not None:
+            await shim.stop()
+        await runtime_module._PROCESS_POOL.close_all()
+        await shutdown_bridge()
         await backend.stop()
-    assert shim._turns == {}
+    if shim is not None:
+        assert shim._turns == {}
