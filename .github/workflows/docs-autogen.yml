@@ -1,0 +1,456 @@
+name: Docs Autogen
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+      - '[0-9]*.[0-9]*.[0-9]*'
+  workflow_dispatch:
+    inputs:
+      task_type:
+        description: Run Preview docs or Archive docs.
+        required: true
+        type: choice
+        default: preview
+        options:
+          - preview
+          - archive
+      head_ref:
+        description: Preview head commit/ref. Defaults to the workflow commit.
+        required: false
+        type: string
+      base_ref:
+        description: Preview base commit/ref. Defaults to the parent of head_ref for manual runs.
+        required: false
+        type: string
+      release_tag:
+        description: Archive release tag, for example v1.1.23 or 1.1.23.
+        required: false
+        type: string
+      previous_tag:
+        description: Previous release tag. Auto-detected when omitted.
+        required: false
+        type: string
+      output_mode:
+        description: Runtime output mode.
+        required: false
+        type: choice
+        default: commit_and_mr
+        options:
+          - commit_and_mr
+          - commit_only
+          - commit_mr_and_merge
+
+permissions:
+  contents: read
+
+concurrency:
+  group: veadk-docs-autogen-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOCS_RUNTIME_ENDPOINT: ${{ vars.DOCS_RUNTIME_ENDPOINT }}
+  DOCS_RUNTIME_API_KEY: ${{ secrets.DOCS_RUNTIME_API_KEY }}
+  DOCS_OUTPUT_MODE: ${{ vars.DOCS_OUTPUT_MODE || 'commit_and_mr' }}
+  DOCS_TASK_TIMEOUT_SECONDS: ${{ vars.DOCS_TASK_TIMEOUT_SECONDS || '7200' }}
+  DOCS_TASK_POLL_INTERVAL_SECONDS: ${{ vars.DOCS_TASK_POLL_INTERVAL_SECONDS || '30' }}
+  DOCS_PREVIEW_METADATA_WAIT_SECONDS: ${{ vars.DOCS_PREVIEW_METADATA_WAIT_SECONDS || '300' }}
+  DOCS_PREVIEW_METADATA_POLL_INTERVAL_SECONDS: ${{ vars.DOCS_PREVIEW_METADATA_POLL_INTERVAL_SECONDS || '30' }}
+  SOURCE_REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+
+jobs:
+  preview:
+    name: Generate Preview docs
+    if: >
+      (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'volcengine/veadk-python') ||
+      (github.event_name == 'workflow_dispatch' && inputs.task_type == 'preview')
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout source metadata
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.head_ref || github.sha }}
+
+      - name: Resolve preview refs
+        id: refs
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+          INPUT_HEAD_REF: ${{ inputs.head_ref }}
+          INPUT_BASE_REF: ${{ inputs.base_ref }}
+        run: |
+          set -euo pipefail
+
+          head_ref="${INPUT_HEAD_REF:-HEAD}"
+          head_sha="$(git rev-parse "${head_ref}^{commit}")"
+
+          base_ref="${INPUT_BASE_REF:-${EVENT_BEFORE:-}}"
+          if [[ -z "$base_ref" || "$base_ref" =~ ^0+$ ]]; then
+            base_ref="$(git rev-list --parents -n 1 "$head_sha" | awk '{print $2}')"
+          fi
+          if [[ -z "$base_ref" ]]; then
+            echo "Unable to resolve preview base ref for $head_sha" >&2
+            exit 1
+          fi
+          base_sha="$(git rev-parse "${base_ref}^{commit}")"
+
+          echo "head_ref=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "base_ref=$base_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Submit docs task
+        env:
+          DOCS_PROJECT: veadk
+          TASK_TYPE: autogen
+          BASE_REF: ${{ steps.refs.outputs.base_ref }}
+          HEAD_REF: ${{ steps.refs.outputs.head_ref }}
+          PREVIEW_BASE_REF: ${{ steps.refs.outputs.base_ref }}
+          REQUEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          INPUT_OUTPUT_MODE: ${{ inputs.output_mode }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${DOCS_RUNTIME_ENDPOINT:-}" ]]; then
+            echo "Repository variable DOCS_RUNTIME_ENDPOINT is required." >&2
+            exit 1
+          fi
+          if [[ -z "${DOCS_RUNTIME_API_KEY:-}" ]]; then
+            echo "Repository secret DOCS_RUNTIME_API_KEY is required." >&2
+            exit 1
+          fi
+
+          output_mode="${INPUT_OUTPUT_MODE:-$DOCS_OUTPUT_MODE}"
+          runtime_timeout=$((DOCS_TASK_TIMEOUT_SECONDS + 600))
+          runtime_endpoint="${DOCS_RUNTIME_ENDPOINT%/}"
+
+          command="$(cat <<SCRIPT
+          set -euo pipefail
+
+          export TASK_TYPE="$TASK_TYPE"
+          export DOCS_PROJECT="$DOCS_PROJECT"
+          export CODE_REPO_PATH="$SOURCE_REPO_URL"
+          export BASE_REF="$BASE_REF"
+          export HEAD_REF="$HEAD_REF"
+          export PREVIEW_BASE_REF="$PREVIEW_BASE_REF"
+          export OUTPUT_MODE="$output_mode"
+          export REQUEST_ID="$REQUEST_ID"
+          export SANDBOX_SESSION_ID="docs-$DOCS_PROJECT-$REQUEST_ID"
+          export PREVIEW_METADATA_WAIT_SECONDS="$DOCS_PREVIEW_METADATA_WAIT_SECONDS"
+          export PREVIEW_METADATA_POLL_INTERVAL_SECONDS="$DOCS_PREVIEW_METADATA_POLL_INTERVAL_SECONDS"
+
+          submit_log="\$(mktemp)"
+          bash /app/sandbox/scripts/run-docs-task.sh | tee "\$submit_log"
+
+          tool_id="\$(awk -F': ' '/^tool_id:/ {print \$2}' "\$submit_log" | tail -n 1)"
+          session_id="\$(awk -F': ' '/^session_id:/ {print \$2}' "\$submit_log" | tail -n 1)"
+          status_file="\$(awk -F': ' '/^status_file:/ {print \$2}' "\$submit_log" | tail -n 1)"
+          log_file="\$(awk -F': ' '/^log_file:/ {print \$2}' "\$submit_log" | tail -n 1)"
+
+          if [[ -z "\$tool_id" || -z "\$session_id" || -z "\$status_file" || -z "\$log_file" ]]; then
+            echo "Unable to parse sandbox task metadata from runtime output." >&2
+            cat "\$submit_log" >&2
+            exit 1
+          fi
+
+          deadline=\$((SECONDS + $DOCS_TASK_TIMEOUT_SECONDS))
+          last_output=""
+          while (( SECONDS < deadline )); do
+            poll_command="if test -f '\$status_file'; then cat '\$status_file'; else echo status=starting; fi; echo __LOG_TAIL__; tail -n 120 '\$log_file' 2>/dev/null || true"
+            last_output="\$(agentkit sandbox shell --tool-id "\$tool_id" -s "\$session_id" --command "\$poll_command" 2>&1 || true)"
+            sandbox_output="\$(printf '%s\n' "\$last_output" | python3 -c 'import json, sys
+          text = sys.stdin.read()
+          try:
+              payload = json.loads(text)
+              sys.stdout.write(payload.get("data", {}).get("output", ""))
+          except Exception:
+              sys.stdout.write(text)
+          ')"
+            status="\$(printf '%s\n' "\$sandbox_output" | awk -F= '\$1 == "status" {value=\$2} END {print value}')"
+            echo "sandbox status: \${status:-unknown}"
+
+            case "\$status" in
+              success)
+                printf '%s\n' "\$sandbox_output"
+                exit 0
+                ;;
+              failed)
+                printf '%s\n' "\$sandbox_output" >&2
+                exit 1
+                ;;
+            esac
+
+            sleep "$DOCS_TASK_POLL_INTERVAL_SECONDS"
+          done
+
+          echo "Timed out waiting for sandbox docs task." >&2
+          printf '%s\n' "\$last_output" >&2
+          exit 124
+          SCRIPT
+          )"
+
+          runtime_script="$command"
+          command="$(cat <<SCRIPT
+          cat > "/tmp/docs-runtime-task-${REQUEST_ID}.sh" <<'RUNTIME_SCRIPT'
+          $runtime_script
+          RUNTIME_SCRIPT
+          bash "/tmp/docs-runtime-task-${REQUEST_ID}.sh"
+          SCRIPT
+          )"
+
+          jq -n \
+            --arg command "$command" \
+            --argjson timeout_seconds "$runtime_timeout" \
+            '{command: $command, cwd: "/app", timeout_seconds: $timeout_seconds, async: true}' \
+            > runtime-shell-request.json
+
+          curl -fsS \
+            -X POST "$runtime_endpoint/shell" \
+            -H "Authorization: Bearer $DOCS_RUNTIME_API_KEY" \
+            -H "Content-Type: application/json" \
+            --data @runtime-shell-request.json \
+            > runtime-shell-submit.json
+
+          task_id="$(jq -r '.task_id // empty' runtime-shell-submit.json)"
+          if [[ -z "$task_id" ]]; then
+            echo "Runtime did not return task_id." >&2
+            cat runtime-shell-submit.json >&2
+            exit 1
+          fi
+
+          deadline=$((SECONDS + runtime_timeout))
+          while (( SECONDS < deadline )); do
+            curl -fsS \
+              -H "Authorization: Bearer $DOCS_RUNTIME_API_KEY" \
+              "$runtime_endpoint/shell/$task_id" \
+              > runtime-shell-status.json
+
+            status="$(jq -r '.status // "unknown"' runtime-shell-status.json)"
+            echo "runtime shell status: $status"
+            case "$status" in
+              completed|failed)
+                break
+                ;;
+            esac
+            sleep "$DOCS_TASK_POLL_INTERVAL_SECONDS"
+          done
+
+          jq -r '.result.stdout // ""' runtime-shell-status.json | tee runtime-stdout.log
+          jq -r '.result.stderr // ""' runtime-shell-status.json | tee runtime-stderr.log >&2
+
+          if [[ "$(jq -r '.status // empty' runtime-shell-status.json)" != "completed" ||
+                "$(jq -r '.result.ok // false' runtime-shell-status.json)" != "true" ]]; then
+            exit 1
+          fi
+
+      - name: Upload runtime logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: veadk-preview-docs-runtime-logs
+          path: |
+            runtime-shell-*.json
+            runtime-*.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  archive:
+    name: Generate Archive docs
+    if: >
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.event.deleted == false && github.repository == 'volcengine/veadk-python') ||
+      (github.event_name == 'workflow_dispatch' && inputs.task_type == 'archive')
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout source metadata
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+
+      - name: Resolve archive tags
+        id: tags
+        env:
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+          INPUT_PREVIOUS_TAG: ${{ inputs.previous_tag }}
+        run: |
+          set -euo pipefail
+
+          release_tag="${INPUT_RELEASE_TAG:-$GITHUB_REF_NAME}"
+          case "$release_tag" in
+            v*) tag_pattern='v[0-9]*' ;;
+            [0-9]*) tag_pattern='[0-9]*' ;;
+            *)
+              echo "veadk archive tag must start with v or a digit: $release_tag" >&2
+              exit 1
+              ;;
+          esac
+
+          git rev-parse "refs/tags/$release_tag^{commit}" >/dev/null
+
+          previous_tag="${INPUT_PREVIOUS_TAG:-}"
+          if [[ -z "$previous_tag" ]]; then
+            previous_tag="$(git tag --list "$tag_pattern" --sort=v:refname | awk -v current="$release_tag" '$0 == current {print last; exit} {last=$0}')"
+          fi
+          if [[ -z "$previous_tag" ]]; then
+            echo "No previous tag found for $release_tag; runtime will treat it as the first tag in this release line."
+          else
+            git rev-parse "refs/tags/$previous_tag^{commit}" >/dev/null
+          fi
+
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "previous_tag=$previous_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Submit docs task
+        env:
+          DOCS_PROJECT: veadk
+          TASK_TYPE: archive
+          RELEASE_TAG: ${{ steps.tags.outputs.release_tag }}
+          PREVIOUS_TAG: ${{ steps.tags.outputs.previous_tag }}
+          REQUEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          INPUT_OUTPUT_MODE: ${{ inputs.output_mode }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${DOCS_RUNTIME_ENDPOINT:-}" ]]; then
+            echo "Repository variable DOCS_RUNTIME_ENDPOINT is required." >&2
+            exit 1
+          fi
+          if [[ -z "${DOCS_RUNTIME_API_KEY:-}" ]]; then
+            echo "Repository secret DOCS_RUNTIME_API_KEY is required." >&2
+            exit 1
+          fi
+
+          output_mode="${INPUT_OUTPUT_MODE:-$DOCS_OUTPUT_MODE}"
+          runtime_timeout=$((DOCS_TASK_TIMEOUT_SECONDS + 600))
+          runtime_endpoint="${DOCS_RUNTIME_ENDPOINT%/}"
+
+          command="$(cat <<SCRIPT
+          set -euo pipefail
+
+          export TASK_TYPE="$TASK_TYPE"
+          export DOCS_PROJECT="$DOCS_PROJECT"
+          export CODE_REPO_PATH="$SOURCE_REPO_URL"
+          export PREVIOUS_TAG="$PREVIOUS_TAG"
+          export RELEASE_TAG="$RELEASE_TAG"
+          export OUTPUT_MODE="$output_mode"
+          export REQUEST_ID="$REQUEST_ID"
+          export SANDBOX_SESSION_ID="docs-$DOCS_PROJECT-$REQUEST_ID"
+          export PREVIEW_METADATA_WAIT_SECONDS="$DOCS_PREVIEW_METADATA_WAIT_SECONDS"
+          export PREVIEW_METADATA_POLL_INTERVAL_SECONDS="$DOCS_PREVIEW_METADATA_POLL_INTERVAL_SECONDS"
+
+          submit_log="\$(mktemp)"
+          bash /app/sandbox/scripts/run-docs-task.sh | tee "\$submit_log"
+
+          tool_id="\$(awk -F': ' '/^tool_id:/ {print \$2}' "\$submit_log" | tail -n 1)"
+          session_id="\$(awk -F': ' '/^session_id:/ {print \$2}' "\$submit_log" | tail -n 1)"
+          status_file="\$(awk -F': ' '/^status_file:/ {print \$2}' "\$submit_log" | tail -n 1)"
+          log_file="\$(awk -F': ' '/^log_file:/ {print \$2}' "\$submit_log" | tail -n 1)"
+
+          if [[ -z "\$tool_id" || -z "\$session_id" || -z "\$status_file" || -z "\$log_file" ]]; then
+            echo "Unable to parse sandbox task metadata from runtime output." >&2
+            cat "\$submit_log" >&2
+            exit 1
+          fi
+
+          deadline=\$((SECONDS + $DOCS_TASK_TIMEOUT_SECONDS))
+          last_output=""
+          while (( SECONDS < deadline )); do
+            poll_command="if test -f '\$status_file'; then cat '\$status_file'; else echo status=starting; fi; echo __LOG_TAIL__; tail -n 120 '\$log_file' 2>/dev/null || true"
+            last_output="\$(agentkit sandbox shell --tool-id "\$tool_id" -s "\$session_id" --command "\$poll_command" 2>&1 || true)"
+            sandbox_output="\$(printf '%s\n' "\$last_output" | python3 -c 'import json, sys
+          text = sys.stdin.read()
+          try:
+              payload = json.loads(text)
+              sys.stdout.write(payload.get("data", {}).get("output", ""))
+          except Exception:
+              sys.stdout.write(text)
+          ')"
+            status="\$(printf '%s\n' "\$sandbox_output" | awk -F= '\$1 == "status" {value=\$2} END {print value}')"
+            echo "sandbox status: \${status:-unknown}"
+
+            case "\$status" in
+              success)
+                printf '%s\n' "\$sandbox_output"
+                exit 0
+                ;;
+              failed)
+                printf '%s\n' "\$sandbox_output" >&2
+                exit 1
+                ;;
+            esac
+
+            sleep "$DOCS_TASK_POLL_INTERVAL_SECONDS"
+          done
+
+          echo "Timed out waiting for sandbox docs task." >&2
+          printf '%s\n' "\$last_output" >&2
+          exit 124
+          SCRIPT
+          )"
+
+          runtime_script="$command"
+          command="$(cat <<SCRIPT
+          cat > "/tmp/docs-runtime-task-${REQUEST_ID}.sh" <<'RUNTIME_SCRIPT'
+          $runtime_script
+          RUNTIME_SCRIPT
+          bash "/tmp/docs-runtime-task-${REQUEST_ID}.sh"
+          SCRIPT
+          )"
+
+          jq -n \
+            --arg command "$command" \
+            --argjson timeout_seconds "$runtime_timeout" \
+            '{command: $command, cwd: "/app", timeout_seconds: $timeout_seconds, async: true}' \
+            > runtime-shell-request.json
+
+          curl -fsS \
+            -X POST "$runtime_endpoint/shell" \
+            -H "Authorization: Bearer $DOCS_RUNTIME_API_KEY" \
+            -H "Content-Type: application/json" \
+            --data @runtime-shell-request.json \
+            > runtime-shell-submit.json
+
+          task_id="$(jq -r '.task_id // empty' runtime-shell-submit.json)"
+          if [[ -z "$task_id" ]]; then
+            echo "Runtime did not return task_id." >&2
+            cat runtime-shell-submit.json >&2
+            exit 1
+          fi
+
+          deadline=$((SECONDS + runtime_timeout))
+          while (( SECONDS < deadline )); do
+            curl -fsS \
+              -H "Authorization: Bearer $DOCS_RUNTIME_API_KEY" \
+              "$runtime_endpoint/shell/$task_id" \
+              > runtime-shell-status.json
+
+            status="$(jq -r '.status // "unknown"' runtime-shell-status.json)"
+            echo "runtime shell status: $status"
+            case "$status" in
+              completed|failed)
+                break
+                ;;
+            esac
+            sleep "$DOCS_TASK_POLL_INTERVAL_SECONDS"
+          done
+
+          jq -r '.result.stdout // ""' runtime-shell-status.json | tee runtime-stdout.log
+          jq -r '.result.stderr // ""' runtime-shell-status.json | tee runtime-stderr.log >&2
+
+          if [[ "$(jq -r '.status // empty' runtime-shell-status.json)" != "completed" ||
+                "$(jq -r '.result.ok // false' runtime-shell-status.json)" != "true" ]]; then
+            exit 1
+          fi
+
+      - name: Upload runtime logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: veadk-archive-docs-runtime-logs
+          path: |
+            runtime-shell-*.json
+            runtime-*.log
+          if-no-files-found: ignore
+          retention-days: 14
