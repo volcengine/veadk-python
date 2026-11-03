@@ -15,7 +15,6 @@
 import asyncio
 import gzip
 import json
-import os
 import struct
 import subprocess
 import uuid
@@ -115,12 +114,6 @@ class CommonUtils:
                 cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
 
-            # 尝试删除原始文件
-            try:
-                os.remove(audio_path)
-            except OSError as e:
-                logger.warning(f"Failed to remove original file: {e}")
-
             return result.stdout
         except subprocess.CalledProcessError as e:
             logger.error(f"FFmpeg conversion failed: {e.stderr.decode()}")
@@ -208,13 +201,13 @@ class AsrRequestHeader:
 
 class RequestBuilder:
     @staticmethod
-    def new_auth_headers() -> Dict[str, str]:
+    def new_auth_headers(auth_config: Config = config) -> Dict[str, str]:
         reqid = str(uuid.uuid4())
         return {
             "X-Api-Resource-Id": "volc.bigasr.sauc.duration",
             "X-Api-Request-Id": reqid,
-            "X-Api-Access-Key": config.access_key,
-            "X-Api-App-Key": config.app_key,
+            "X-Api-Access-Key": auth_config.access_key,
+            "X-Api-App-Key": auth_config.app_key,
         }
 
     @staticmethod
@@ -372,11 +365,13 @@ class AsrWsClient:
         self.conn = None
         self.session = None
 
-        global config
-        config.auth = {
+        self._auth_config = Config()
+        self._auth_config.auth = {
             "app_key": app_id,
             "access_key": access_token,
         }
+        # Preserve the default RequestBuilder credentials for existing callers.
+        config.auth = self._auth_config.auth
 
     async def __aenter__(self):
         self.session = aiohttp.ClientSession()
@@ -417,7 +412,7 @@ class AsrWsClient:
             raise
 
     async def create_connection(self) -> None:
-        headers = RequestBuilder.new_auth_headers()
+        headers = RequestBuilder.new_auth_headers(self._auth_config)
         try:
             self.conn = await self.session.ws_connect(  # 使用self.session
                 self.url, headers=headers
