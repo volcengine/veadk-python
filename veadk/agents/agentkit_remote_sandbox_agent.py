@@ -55,6 +55,7 @@ class AgentkitRemoteSandboxAgent(BaseAgent):
     """
 
     tool_id: str | None = None
+    tool_id_env: str | None = None
     tool_type: Literal["Skill", "CodeEnv"] | None = None
     request_timeout: float = Field(default=900, gt=0, lt=86000)
     expiry_buffer: float = Field(default=90, ge=0, lt=86400)
@@ -90,7 +91,11 @@ class AgentkitRemoteSandboxAgent(BaseAgent):
     async def _resolve(self, ctx, logical):
         if self.endpoint:
             return self.tool_type, self.endpoint, binding_key(self.endpoint), None
-        tool_id = self.tool_id or resolve_agentkit_tool_id()
+        tool_id = self.tool_id or (
+            resolve_agentkit_tool_id(self.tool_id_env)
+            if self.tool_id_env
+            else resolve_agentkit_tool_id()
+        )
         state = dict(ctx.session.state)
         kind = self.tool_type
         if kind is None:
@@ -154,6 +159,12 @@ class AgentkitRemoteSandboxAgent(BaseAgent):
                     headers["inbound_auth"] = token
         return headers
 
+    def _task_from_content(self, content):
+        return "\n".join(p.text for p in content.parts if p.text)
+
+    def _prepare_task(self, task):
+        return task
+
     async def _run_async_impl(self, ctx):
         from veadk.agents._remote_sandbox.code import code_events
         from veadk.agents._remote_sandbox.skill import skill_events
@@ -193,7 +204,7 @@ class AgentkitRemoteSandboxAgent(BaseAgent):
                 content = user_event.content if user_event else ctx.user_content
                 if not content or not content.parts:
                     raise SandboxAgentError("A user task is required")
-                task = "\n".join(p.text for p in content.parts if p.text)
+                task = self._prepare_task(self._task_from_content(content))
                 if not task.strip():
                     raise SandboxAgentError(
                         "This sandbox entry currently requires a text task"
