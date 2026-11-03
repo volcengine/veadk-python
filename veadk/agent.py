@@ -880,6 +880,11 @@ class Agent(LlmAgent):
         external agent harness (e.g. the Claude Code SDK) back into the ADK event
         stream, so the surrounding ``Runner`` is unaffected.
         """
+        from veadk.runtime.pending_tools import has_pending_tool_calls
+
+        if has_pending_tool_calls(ctx):
+            return
+
         if self.runtime == "adk":
             # A transfer can close this wrapper before the LLM stream ends.
             # Close it in the same task so tracing contexts do not leak into
@@ -891,6 +896,7 @@ class Agent(LlmAgent):
 
         from veadk.runtime import get_runtime
         from veadk.runtime.compat import check_agent_runtime_support
+        from veadk.runtime.model_callbacks import is_final_model_text_event
         from veadk.runtime.output_state import maybe_save_output_to_state
 
         # Authoritative support-matrix gate. It has to live here rather than in
@@ -904,9 +910,26 @@ class Agent(LlmAgent):
             run_config=getattr(ctx, "run_config", None),
         )
 
+        completed = False
         async for event in get_runtime(self.runtime).run_async(self, ctx):
             maybe_save_output_to_state(self, event)
+            if (
+                event.author == self.name
+                and not event.partial
+                and not event.long_running_tool_ids
+                and (
+                    is_final_model_text_event(event, self.name)
+                    or event.actions.skip_summarization
+                )
+            ):
+                completed = True
             yield event
+
+        if ctx.is_resumable and completed and not has_pending_tool_calls(ctx):
+            # Parallel/workflow parents use this persisted ADK state to avoid
+            # rerunning finished siblings when another branch's tools resume.
+            ctx.set_agent_state(self.name, end_of_agent=True)
+            yield self._create_agent_state_event(ctx)
 
     async def _run_live_impl(
         self, ctx: "InvocationContext"

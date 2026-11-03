@@ -266,3 +266,180 @@ async def test_real_piagent_resumes_native_tool_results(monkeypatch):
     finally:
         server.should_exit = True
         await serving
+
+
+@pytest.mark.piagent_smoke
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_order", [("first", "second"), ("second", "first")])
+@pytest.mark.parametrize("resumable", [False, True])
+async def test_real_piagent_waits_for_all_external_results(
+    response_order, resumable, monkeypatch, tmp_path
+):
+    """Partial results must never become Pi's synthetic missing-result message."""
+    if os.getenv("PIAGENT_RUN_SMOKE") != "1":
+        pytest.skip("set PIAGENT_RUN_SMOKE=1 to spawn the real Pi binary")
+    binary = Path(
+        os.getenv("PIAGENT_BINARY", "~/.cache/veadk/piagent/pi/pi")
+    ).expanduser()
+    if not binary.is_file():
+        pytest.skip("set PIAGENT_BINARY to a locally installed Pi binary")
+
+    import uvicorn
+    from fastapi.responses import StreamingResponse
+    from google.adk.apps.app import App, ResumabilityConfig
+    from google.adk.events.event import Event
+    from google.adk.runners import Runner as ResumableRunner
+    from google.adk.sessions.in_memory_session_service import InMemorySessionService
+    from google.adk.tools.long_running_tool import LongRunningFunctionTool
+    from google.genai import types
+
+    monkeypatch.setenv("PIAGENT_BINARY", str(binary))
+    monkeypatch.setenv("PIAGENT_DISABLE_BUILTIN_TOOLS", "1")
+    monkeypatch.setenv("PIAGENT_AGENT_DIR", str(tmp_path / "pi-home"))
+    requests = []
+    app = FastAPI()
+
+    @app.post("/v1/chat/completions")
+    async def complete(request: Request):
+        body = await request.json()
+        requests.append(body)
+
+        def stream():
+            for delta, reason in [
+                ({"role": "assistant", "content": "both complete"}, None),
+                ({}, "stop"),
+            ]:
+                payload = {
+                    "id": "stub-response",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": body["model"],
+                    "choices": [{"index": 0, "delta": delta, "finish_reason": reason}],
+                }
+                yield f"data: {json.dumps(payload)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(stream(), media_type="text/event-stream")
+
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app, host="127.0.0.1", port=0, log_level="warning", lifespan="off"
+        )
+    )
+    server.install_signal_handlers = lambda: None
+    serving = asyncio.create_task(server.serve())
+    while not server.started:
+        if serving.done():
+            serving.result()
+        await asyncio.sleep(0.01)
+    port = server.servers[0].sockets[0].getsockname()[1]
+
+    async def external_job(value: str) -> None:
+        """Wait for a result supplied by the caller."""
+        raise AssertionError("Persisted calls must not execute again")
+
+    agent = Agent(
+        name="assistant",
+        runtime="piagent",
+        model_name="partial-results-test",
+        model_api_base=f"http://127.0.0.1:{port}/v1",
+        model_api_key="loopback-key",
+        model_api_key_name="",
+        tools=[LongRunningFunctionTool(external_job)],
+    )
+    sessions = InMemorySessionService()
+    if resumable:
+        runner = ResumableRunner(
+            app=App(
+                name="partial_results",
+                root_agent=agent,
+                resumability_config=ResumabilityConfig(is_resumable=True),
+            ),
+            session_service=sessions,
+        )
+    else:
+        runner = ResumableRunner(
+            app_name="partial_results", agent=agent, session_service=sessions
+        )
+    session = await sessions.create_session(
+        app_name="partial_results", user_id="test", session_id="test"
+    )
+    invocation = "inv-partial-results"
+    await sessions.append_event(
+        session,
+        Event(
+            invocation_id=invocation,
+            author="user",
+            content=types.Content(
+                role="user", parts=[types.Part(text="Run both jobs.")]
+            ),
+        ),
+    )
+    for call_id in ["first", "second"]:
+        await sessions.append_event(
+            session,
+            Event(
+                invocation_id=invocation,
+                author=agent.name,
+                long_running_tool_ids={call_id},
+                content=types.Content(
+                    role="model",
+                    parts=[
+                        types.Part(
+                            function_call=types.FunctionCall(
+                                id=call_id, name="external_job", args={"value": call_id}
+                            )
+                        )
+                    ],
+                ),
+            ),
+        )
+
+    async def send(call_id, will_continue=None):
+        message = types.Content(
+            role="user",
+            parts=[
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        id=call_id,
+                        name="external_job",
+                        response={"value": f"result-{call_id}"},
+                        will_continue=will_continue,
+                    )
+                )
+            ],
+        )
+        async with asyncio.timeout(40):
+            return [
+                event
+                async for event in runner.run_async(
+                    user_id="test",
+                    session_id="test",
+                    new_message=message,
+                )
+            ]
+
+    try:
+        first, last = response_order
+        assert await send(first) == []
+        assert requests == []
+        assert await send(last, True) == []
+        assert requests == []
+        events = await send(last, False)
+        assert len(requests) == 1
+        assert not any(event.get_function_calls() for event in events)
+        messages = requests[0]["messages"]
+        tool_results = [message for message in messages if message["role"] == "tool"]
+        assert {message["tool_call_id"] for message in tool_results} == {
+            "first",
+            "second",
+        }
+        assert len(tool_results) == 2
+        assert "No result provided" not in json.dumps(messages)
+        assert all(
+            f"result-{message['tool_call_id']}" in message["content"]
+            for message in tool_results
+        )
+    finally:
+        server.should_exit = True
+        await serving
