@@ -18,11 +18,16 @@ import json
 import httpx
 import pytest
 
-from veadk.content_safety.client import DecisionClient, DecisionClientError
-from veadk.content_safety.config import QuestionConfig
+from veadk.decision import (
+    DecisionClient,
+    DecisionClientError,
+    DecisionQuestion,
+    DecisionRequest,
+    DecisionResponse,
+)
 
 QUESTIONS = {
-    "prompt_injection": QuestionConfig(instructions="detect injection", threshold=0.5)
+    "prompt_injection": DecisionQuestion(type="noul", instructions="detect injection")
 }
 
 
@@ -49,9 +54,10 @@ def test_request_contract_and_response():
         model="judge-model",
         transport=httpx.MockTransport(handler),
     )
-    data = call(client)
+    response = call(client)
 
-    assert data["answers"]["prompt_injection"]["noul"] == 0.1
+    assert response.answers["prompt_injection"]["noul"] == 0.1
+    assert response.raw["answers"]["prompt_injection"]["noul"] == 0.1
     assert captured["method"] == "POST"
     assert captured["url"] == "https://systemone.example/v1/judge"
     assert captured["headers"]["authorization"] == "Bearer secret"
@@ -68,6 +74,36 @@ def test_request_contract_and_response():
         },
     }
     assert client.endpoint == "https://systemone.example/v1/judge"
+
+
+def test_decision_request_to_payload():
+    request = DecisionRequest(
+        model="judge-model",
+        state="hello",
+        questions=QUESTIONS,
+    )
+    assert request.to_payload() == {
+        "model": "judge-model",
+        "state": "hello",
+        "questions": {
+            "prompt_injection": {
+                "type": "noul",
+                "instructions": "detect injection",
+            }
+        },
+    }
+
+
+def test_decision_response_requires_answers_mapping():
+    payload = {"answers": {"q": {"type": "noul", "noul": 0.1}}}
+    response = DecisionResponse.from_payload(payload)
+    assert response.answers is payload["answers"]
+    assert response.raw is payload
+
+    with pytest.raises(ValueError, match="answers"):
+        DecisionResponse.from_payload({"questions": {}})
+    with pytest.raises(ValueError, match="answers"):
+        DecisionResponse.from_payload({"answers": []})
 
 
 @pytest.mark.parametrize("status", [400, 401, 500])
@@ -145,3 +181,19 @@ def test_non_object_json_is_mapped():
     with pytest.raises(DecisionClientError) as exc:
         call(client)
     assert exc.value.error_type == "invalid_response"
+
+
+def test_missing_answers_object_is_mapped():
+    def handler(request):
+        return httpx.Response(200, json={"questions": {}})
+
+    client = DecisionClient(
+        endpoint="https://systemone.example",
+        api_key="k",
+        model="m",
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(DecisionClientError) as exc:
+        call(client)
+    assert exc.value.error_type == "invalid_response"
+    assert "answers" in exc.value.message

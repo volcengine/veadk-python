@@ -31,7 +31,7 @@ from veadk.content_safety.factory import (
     _systemone_url,
 )
 from veadk.content_safety.adapters.llm_shield import LLMShieldPluginAdapter
-from veadk.content_safety.client import DecisionClient
+from veadk.decision import DecisionClient
 from veadk.content_safety.plugin import DecisionPlugin
 
 

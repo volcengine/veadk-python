@@ -11,21 +11,21 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""HTTP client for the System One decision API."""
+"""HTTP client for the Decision API."""
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Protocol
+from typing import Mapping, Protocol
 
 import httpx
 
-from .config import QuestionConfig
+from .types import DecisionQuestion, DecisionRequest, DecisionResponse
 
 DEFAULT_TIMEOUT_SECONDS = 10.0
 
 
 class DecisionClientError(Exception):
-    """A transport or response-shape failure from the decision API."""
+    """A transport or response-shape failure from the Decision API."""
 
     def __init__(self, error_type: str, message: str):
         super().__init__(message)
@@ -34,15 +34,15 @@ class DecisionClientError(Exception):
 
 
 class DecisionJudge(Protocol):
-    """Minimal interface the plugin needs from a decision client."""
+    """Minimal interface the content-safety plugin needs from a client."""
 
     async def judge(
-        self, *, state: str, questions: Mapping[str, QuestionConfig]
-    ) -> dict[str, Any]: ...
+        self, *, state: str, questions: Mapping[str, DecisionQuestion]
+    ) -> DecisionResponse: ...
 
 
 class DecisionClient:
-    """Call one batched System One request per checkpoint."""
+    """Call one batched Decision API request per checkpoint."""
 
     def __init__(
         self,
@@ -64,16 +64,13 @@ class DecisionClient:
         return self._endpoint
 
     async def judge(
-        self, *, state: str, questions: Mapping[str, QuestionConfig]
-    ) -> dict[str, Any]:
-        payload = {
-            "model": self._model,
-            "state": state,
-            "questions": {
-                name: {"type": question.type, "instructions": question.instructions}
-                for name, question in questions.items()
-            },
-        }
+        self, *, state: str, questions: Mapping[str, DecisionQuestion]
+    ) -> DecisionResponse:
+        request = DecisionRequest(
+            model=self._model,
+            state=state,
+            questions=questions,
+        )
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "ark-beta-systemone-api": "true",
@@ -85,7 +82,7 @@ class DecisionClient:
                 timeout=self._timeout, transport=self._transport
             ) as client:
                 response = await client.post(
-                    self._endpoint, headers=headers, json=payload
+                    self._endpoint, headers=headers, json=request.to_payload()
                 )
         except httpx.TimeoutException as exc:
             raise DecisionClientError("timeout", str(exc)) from exc
@@ -107,4 +104,8 @@ class DecisionClient:
             raise DecisionClientError(
                 "invalid_response", "decision API response must be an object"
             )
-        return data
+
+        try:
+            return DecisionResponse.from_payload(data)
+        except ValueError as exc:
+            raise DecisionClientError("invalid_response", str(exc)) from exc

@@ -18,13 +18,19 @@ from types import SimpleNamespace
 from google.adk.models import LlmResponse
 from google.genai import types
 
-from veadk.content_safety.client import DecisionClientError
+from veadk.decision import DecisionClientError, DecisionResponse
 from veadk.content_safety.config import ContentSafetyConfig
 from veadk.content_safety.plugin import DecisionPlugin
 from veadk.content_safety.types import AuditAction, AuditStatus, Checkpoint
 
-LOW = {"answers": {"q": {"type": "noul", "noul": 0.1}}}
-HIGH = {"answers": {"q": {"type": "noul", "noul": 0.9}}}
+
+def decision_response(noul):
+    answers = {"q": {"type": "noul", "noul": noul}}
+    return DecisionResponse(answers=answers, raw={"answers": answers})
+
+
+LOW = decision_response(0.1)
+HIGH = decision_response(0.9)
 
 
 class FakeJudge:

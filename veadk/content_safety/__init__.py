@@ -25,7 +25,6 @@ plugin explicitly and mount it on an ADK ``App``::
     app = App(name="my_app", root_agent=agent, plugins=[plugin] if plugin else [])
 """
 
-from .client import DecisionClient, DecisionClientError, DecisionJudge
 from .config import (
     DEFAULT_BLOCK_MESSAGE,
     DEFAULT_DECISION_MODEL,
@@ -59,10 +58,7 @@ __all__ = [
     "ContentSafetyConfig",
     "ContentSafetyConfigError",
     "DecisionPlugin",
-    "DecisionClient",
-    "DecisionClientError",
     "DecisionConfig",
-    "DecisionJudge",
     "Provider",
     "QuestionConfig",
     "QuestionResult",

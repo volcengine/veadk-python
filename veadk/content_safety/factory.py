@@ -20,7 +20,8 @@ from urllib.parse import urlsplit
 
 from google.adk.plugins import BasePlugin
 
-from .client import DecisionClient, DecisionJudge
+from veadk.decision import DecisionClient, DecisionJudge
+
 from .config import ContentSafetyConfig, ContentSafetyConfigError
 from .decider import ThresholdDecider
 from .plugin import DecisionPlugin

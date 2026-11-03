@@ -23,9 +23,9 @@ from google.adk.models import LlmRequest, LlmResponse
 from google.adk.plugins import BasePlugin
 from google.genai import types
 
+from veadk.decision import DecisionClientError, DecisionJudge, DecisionQuestion
 from veadk.utils.logger import get_logger
 
-from .client import DecisionClientError, DecisionJudge
 from .config import ContentSafetyConfig, QuestionConfig
 from .decider import ThresholdDecider
 from .state import StateBuilder
@@ -253,10 +253,11 @@ class DecisionPlugin(BasePlugin):
             self._record(invocation_id, result)
             return result
 
+        questions = self._questions()
         try:
-            raw = await self._client.judge(
+            response = await self._client.judge(
                 state=f"检查点：{checkpoint.value}。\n{state}",
-                questions=self._questions(),
+                questions=self._decision_questions(),
             )
         except DecisionClientError as exc:
             result = AuditResult.error(
@@ -279,8 +280,8 @@ class DecisionPlugin(BasePlugin):
             result = self._decider.decide(
                 provider=Provider.DECISION,
                 checkpoint=checkpoint,
-                raw=raw,
-                questions=self._questions(),
+                raw=response.raw,
+                questions=questions,
                 on_error=self._config.on_error,
             )
 
@@ -289,6 +290,15 @@ class DecisionPlugin(BasePlugin):
 
     def _questions(self) -> Mapping[str, QuestionConfig]:
         return self._config.questions
+
+    def _decision_questions(self) -> Mapping[str, DecisionQuestion]:
+        return {
+            name: DecisionQuestion(
+                type=question.type,
+                instructions=question.instructions,
+            )
+            for name, question in self._config.questions.items()
+        }
 
     def _record(self, invocation_id: str, result: AuditResult) -> None:
         self._audits.setdefault(invocation_id, {})[result.checkpoint] = result
