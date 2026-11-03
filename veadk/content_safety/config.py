@@ -270,7 +270,7 @@ _UniqueKeyLoader.add_constructor(
 )
 
 
-def _content_safety_block(document: dict[str, Any]) -> dict[str, Any]:
+def _find_content_safety_block(document: dict[str, Any]) -> dict[str, Any] | None:
     tool = document.get("tool")
     if isinstance(tool, dict):
         block = tool.get("content_safety")
@@ -279,9 +279,67 @@ def _content_safety_block(document: dict[str, Any]) -> dict[str, Any]:
     block = document.get("content_safety")
     if isinstance(block, dict):
         return block
-    raise ContentSafetyConfigError(
-        "config must contain `tool.content_safety` (or a root `content_safety`) mapping"
-    )
+    return None
+
+
+def _content_safety_block(document: dict[str, Any]) -> dict[str, Any]:
+    block = _find_content_safety_block(document)
+    if block is None:
+        raise ContentSafetyConfigError(
+            "config must contain `tool.content_safety` (or a root `content_safety`) mapping"
+        )
+    return block
+
+
+def _read_config_document(config_path: Path) -> dict[str, Any]:
+    try:
+        text = config_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ContentSafetyConfigError(
+            f"cannot read content-safety config: {config_path}"
+        ) from exc
+
+    try:
+        document = yaml.load(text, Loader=_UniqueKeyLoader)
+    except ContentSafetyConfigError:
+        raise
+    except yaml.YAMLError as exc:
+        raise ContentSafetyConfigError(f"invalid YAML in {config_path}: {exc}") from exc
+
+    if not isinstance(document, dict):
+        raise ContentSafetyConfigError("config root must be a mapping")
+    return document
+
+
+def _build_config(block: dict[str, Any], config_path: Path) -> ContentSafetyConfig:
+    block = _apply_decision_env(block)
+    try:
+        return ContentSafetyConfig.model_validate(block)
+    except Exception as exc:
+        raise ContentSafetyConfigError(
+            f"invalid `content_safety` block in {config_path}: {exc}"
+        ) from exc
+
+
+def _load_dotenv() -> None:
+    from dotenv import find_dotenv, load_dotenv
+
+    dotenv_path = find_dotenv(filename=".env", usecwd=True)
+    if dotenv_path:
+        load_dotenv(dotenv_path, override=False)
+
+
+def _resolve_config_path(path: str | Path | None, *, optional: bool) -> Path | None:
+    from dotenv import find_dotenv
+
+    if path is not None:
+        return Path(path)
+    found = find_dotenv(filename="config.yaml", usecwd=True)
+    if not found:
+        if optional:
+            return None
+        raise ContentSafetyConfigError("no config.yaml found; pass an explicit path")
+    return Path(found)
 
 
 def _apply_decision_env(block: dict[str, Any]) -> dict[str, Any]:
@@ -317,41 +375,31 @@ def load_content_safety_config(
     through :meth:`ContentSafetyConfig.from_dict` are never overridden.
     """
 
-    from dotenv import find_dotenv, load_dotenv
+    _load_dotenv()
+    config_path = _resolve_config_path(path, optional=False)
+    assert config_path is not None
+    document = _read_config_document(config_path)
+    return _build_config(_content_safety_block(document), config_path)
 
-    dotenv_path = find_dotenv(filename=".env", usecwd=True)
-    if dotenv_path:
-        load_dotenv(dotenv_path, override=False)
 
-    if path is None:
-        found = find_dotenv(filename="config.yaml", usecwd=True)
-        if not found:
-            raise ContentSafetyConfigError(
-                "no config.yaml found; pass an explicit path"
-            )
-        config_path = Path(found)
-    else:
-        config_path = Path(path)
-    try:
-        text = config_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise ContentSafetyConfigError(
-            f"cannot read content-safety config: {config_path}"
-        ) from exc
+def load_content_safety_config_if_present(
+    path: str | Path | None = None,
+) -> ContentSafetyConfig | None:
+    """Load ``tool.content_safety`` when it is configured, otherwise ``None``.
 
-    try:
-        document = yaml.load(text, Loader=_UniqueKeyLoader)
-    except ContentSafetyConfigError:
-        raise
-    except yaml.YAMLError as exc:
-        raise ContentSafetyConfigError(f"invalid YAML in {config_path}: {exc}") from exc
+    This is the auto-detection entry point used by :class:`veadk.Runner` and the
+    AgentKit deployment path. Missing files and missing ``content_safety``
+    blocks mean "not configured" and keep the feature disabled. A block that
+    exists but is invalid still raises, so misconfiguration fails at startup
+    instead of silently disabling auditing.
+    """
 
-    if not isinstance(document, dict):
-        raise ContentSafetyConfigError("config root must be a mapping")
-    block = _apply_decision_env(_content_safety_block(document))
-    try:
-        return ContentSafetyConfig.model_validate(block)
-    except Exception as exc:
-        raise ContentSafetyConfigError(
-            f"invalid `content_safety` block: {exc}"
-        ) from exc
+    _load_dotenv()
+    config_path = _resolve_config_path(path, optional=True)
+    if config_path is None:
+        return None
+    document = _read_config_document(config_path)
+    block = _find_content_safety_block(document)
+    if block is None:
+        return None
+    return _build_config(block, config_path)

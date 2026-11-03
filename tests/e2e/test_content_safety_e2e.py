@@ -34,6 +34,8 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from pydantic import Field
 
+from veadk import Agent as VeADKAgent
+from veadk import Runner as VeADKRunner
 from veadk.content_safety import (
     Checkpoint,
     ContentSafetyConfig,
@@ -425,3 +427,53 @@ def test_e2e_none_provider_is_opt_in_and_makes_no_calls():
         assert llm.calls == 1
         assert event_text(events[-1]) == "plain answer"
         assert server.requests == []
+
+
+def test_e2e_config_yaml_auto_mounts_in_veadk_runner(tmp_path, monkeypatch):
+    TOOL_CALLS.clear()
+    with systemone_server() as server:
+        (tmp_path / "config.yaml").write_text(
+            f"""
+tool:
+  content_safety:
+    provider: decision
+    block_message: {BLOCK_MESSAGE!r}
+    decision:
+      api_url: http://127.0.0.1:{server.server_address[1]}/v1/judge
+      api_key: e2e-key
+      model: e2e-judge
+    questions:
+      prompt_injection:
+        instructions: Detect prompt_injection.
+        threshold: 0.5
+      sensitive_data:
+        instructions: Detect sensitive_data.
+        threshold: 0.5
+      high_risk_operation:
+        instructions: Detect high_risk_operation.
+        threshold: 0.5
+""",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+
+        llm = ScriptedLlm(turns=[[text_response("hello from veadk")]])
+        agent = VeADKAgent(
+            name="e2e_veadk_agent",
+            model=llm,
+            instruction="Answer the user.",
+            model_api_key="e2e-model-key",
+        )
+        runner = VeADKRunner(agent=agent, app_name="e2e_veadk_app")
+
+        assert [p.name for p in runner.plugin_manager.plugins] == [
+            "content_safety_decision"
+        ]
+
+        result = asyncio.run(runner.run(messages="hello"))
+
+        assert result == "hello from veadk"
+        assert llm.calls == 1
+        assert len(server.requests) == 2
+        assert "before_model" in server.requests[0]["body"]["state"]
+        assert "after_model" in server.requests[1]["body"]["state"]

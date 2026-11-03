@@ -1062,6 +1062,12 @@ def create_agentkit_app(
         raise TypeError("Either 'root_agent' or 'app' must be provided")
     names = dict(display_names or {})
     app_plugins = list(getattr(adk_app, "plugins", None) or [])
+    # Deployed agents get the same config.yaml-driven content safety as local
+    # Runner usage. The A2A runner built by AgentkitAgentServerApp also goes
+    # through veadk.Runner, which resolves the plugin itself.
+    from veadk.content_safety import resolve_content_safety_plugins
+
+    app_plugins = resolve_content_safety_plugins(root_agent, app_plugins)
     short_term_memory = getattr(root_agent, "short_term_memory", None)
     if short_term_memory is None:
         short_term_memory = ShortTermMemory(backend="local")

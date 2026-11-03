@@ -13,8 +13,16 @@
 # limitations under the License.
 """Opt-in content safety for VeADK agents.
 
-This package does not change any existing default. To enable it, build a
-plugin explicitly and mount it on an ADK ``App``::
+The simplest setup is a ``tool.content_safety`` block in ``config.yaml``::
+
+    agent = Agent(...)
+    runner = Runner(agent=agent)   # plugin mounted automatically
+
+``Agent(content_safety=...)`` supplies the configuration in code, and
+``agent.content_safety_plugins`` covers a manually constructed ADK ``App``.
+Nothing is mounted when the block is absent or ``provider`` is ``none``.
+
+The explicit API remains available::
 
     from veadk.content_safety import (
         ContentSafetyConfig, build_content_safety,
@@ -36,9 +44,14 @@ from .config import (
     QuestionConfig,
     default_questions,
     load_content_safety_config,
+    load_content_safety_config_if_present,
 )
 from .decider import ThresholdDecider
 from .factory import build_content_safety
+from .integration import (
+    resolve_content_safety_plugin,
+    resolve_content_safety_plugins,
+)
 from .plugin import DecisionPlugin
 from .state import StateBuilder
 from .types import (
@@ -71,4 +84,7 @@ __all__ = [
     "ThresholdDecider",
     "build_content_safety",
     "load_content_safety_config",
+    "load_content_safety_config_if_present",
+    "resolve_content_safety_plugin",
+    "resolve_content_safety_plugins",
 ]

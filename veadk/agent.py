@@ -222,6 +222,9 @@ class Agent(LlmAgent):
         example_store (Optional[BaseExampleProvider]): Example store for providing example Q/A.
         enable_shadowchar (bool): Whether to enable shadow character for the agent.
         enable_dynamic_load_skills (bool): Whether to enable dynamic loading of skills.
+        content_safety (Any): Optional content-safety configuration. When unset,
+            a ``tool.content_safety`` block in ``config.yaml`` is used; when
+            enabled, :class:`veadk.Runner` mounts the plugin automatically.
         enable_responses_cache (bool): Whether Ark Responses API should reuse
             `previous_response_id` and caching for multi-turn continuation.
     """
@@ -360,6 +363,19 @@ class Agent(LlmAgent):
     resource servers (e.g. MCP servers) connected through `veadk.tunnel` show up
     as tools for this agent. The cloud app must also mount the tunnel routes via
     `veadk.tunnel.mount_tunnel`/`mount_tunnel_if_enabled`."""
+
+    content_safety: Any = Field(default=None, exclude=True)
+    """Opt-in content-safety configuration.
+
+    ``None`` (default) uses a ``tool.content_safety`` block from ``config.yaml``
+    when one exists. ``False`` disables it explicitly. ``True`` requires the
+    YAML block. A mapping or :class:`veadk.content_safety.ContentSafetyConfig`
+    supplies the configuration directly.
+
+    :class:`veadk.Runner` mounts the resolved plugin automatically. When
+    constructing ``google.adk.apps.App`` manually, pass
+    ``plugins=agent.content_safety_plugins``.
+    """
 
     def model_post_init(self, __context: Any) -> None:
         # Snapshot before anything below assigns fields on ``self``: pydantic
@@ -844,6 +860,21 @@ class Agent(LlmAgent):
         logger.debug(
             f"Opentelemetry Tracer init {len(self.tracers[0].exporters)} exporters"  # type: ignore
         )
+
+    @property
+    def content_safety_plugins(self) -> list[Any]:
+        """Content-safety plugins resolved for this agent.
+
+        Empty when the feature is disabled, not configured, or already supplied.
+        Pass the result to a manually constructed ADK ``App``::
+
+            app = App(name="my_app", root_agent=agent,
+                      plugins=agent.content_safety_plugins)
+        """
+
+        from veadk.content_safety import resolve_content_safety_plugins
+
+        return resolve_content_safety_plugins(self)
 
     @property
     def _llm_flow(self) -> BaseLlmFlow:
