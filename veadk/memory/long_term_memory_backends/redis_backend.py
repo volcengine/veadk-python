@@ -30,6 +30,7 @@ from veadk.utils.logger import get_logger
 try:
     from llama_index.vector_stores.redis import RedisVectorStore
     from redis import Redis
+    from redis.exceptions import ResponseError
     from redisvl.schema import IndexSchema
 
 except ImportError:
@@ -76,11 +77,18 @@ class RedisLTMBackend(BaseLongTermMemoryBackend):
             password=self.redis_config.password,
         )
 
+        prefix = f"{index}_"
+        self._drop_index_with_stale_prefix(redis_client, index, prefix)
+
         # Create an index for each user
         # Should be Optimized in the future
         schema = IndexSchema.from_dict(
             {
-                "index": {"name": index, "prefix": index, "key_separator": "_"},
+                # RediSearch indexes every key that starts with the prefix, so
+                # the prefix must end with the separator. Otherwise the index of
+                # user `u1` also picks up the keys of user `u10`. Keys keep the
+                # `{index}_{id}` format, so existing memories are still found.
+                "index": {"name": index, "prefix": prefix, "key_separator": ""},
                 "fields": [
                     {"name": "id", "type": "tag", "attrs": {"sortable": False}},
                     {"name": "doc_id", "type": "tag", "attrs": {"sortable": False}},
@@ -106,6 +114,34 @@ class RedisLTMBackend(BaseLongTermMemoryBackend):
         return VectorStoreIndex.from_vector_store(
             vector_store=vector_store, embed_model=self._embed_model
         )
+
+    @staticmethod
+    def _drop_index_with_stale_prefix(
+        redis_client: Redis, index: str, prefix: str
+    ) -> None:
+        """Drop the definition (not the data) of an index created with an old prefix.
+
+        Indexes created before the prefix fix still match other users' keys.
+        Dropping only the definition keeps the stored memories, and the index
+        is recreated with the correct prefix right after.
+        """
+        try:
+            info = redis_client.ft(index).info()
+        except ResponseError:
+            return  # index does not exist yet
+
+        definition = info.get("index_definition") or []
+        if isinstance(definition, list):
+            definition = dict(zip(definition[::2], definition[1::2]))
+        prefixes = [
+            p.decode() if isinstance(p, bytes) else p
+            for p in definition.get("prefixes", definition.get(b"prefixes", []))
+        ]
+        if prefixes and prefixes != [prefix]:
+            logger.info(
+                f"Recreate Redis index {index} with prefix {prefix} (was {prefixes})"
+            )
+            redis_client.ft(index).dropindex(delete_documents=False)
 
     @override
     def save_memory(self, user_id: str, event_strings: list[str], **kwargs) -> bool:
