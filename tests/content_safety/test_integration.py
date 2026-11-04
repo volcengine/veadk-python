@@ -20,6 +20,7 @@ from google.adk.plugins import BasePlugin
 
 from veadk import Agent, Runner
 from veadk.content_safety import (
+    DEFAULT_QUESTION_INSTRUCTIONS,
     ContentSafetyConfig,
     ContentSafetyConfigError,
     load_content_safety_config_if_present,
@@ -98,7 +99,7 @@ tool:
         )
         plugin = resolve_content_safety_plugin()
         assert plugin is not None
-        assert len(plugin._config.questions) == 5
+        assert len(plugin._config.questions) == len(DEFAULT_QUESTION_INSTRUCTIONS)
 
     def test_invalid_block_still_raises(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

@@ -103,12 +103,12 @@ def test_decision_requires_questions_when_defaults_are_disabled():
 def test_decision_uses_defaults_when_questions_are_omitted():
     config = ContentSafetyConfig.from_dict({"provider": "decision"})
     assert set(config.questions) == set(default_questions())
-    assert len(config.questions) == 5
+    assert len(config.questions) == len(DEFAULT_QUESTION_INSTRUCTIONS)
 
 
 def test_decision_uses_defaults_when_questions_are_empty():
     config = ContentSafetyConfig.from_dict({"provider": "decision", "questions": {}})
-    assert len(config.questions) == 5
+    assert len(config.questions) == len(DEFAULT_QUESTION_INSTRUCTIONS)
 
 
 def test_custom_questions_extend_defaults():
@@ -117,7 +117,7 @@ def test_custom_questions_extend_defaults():
             questions={"pii_leak": {"instructions": "detect pii", "threshold": 0.6}}
         )
     )
-    assert len(config.questions) == 6
+    assert len(config.questions) == len(DEFAULT_QUESTION_INSTRUCTIONS) + 1
     assert "prompt_injection" in config.questions
     assert "pii_leak" in config.questions
 
@@ -133,7 +133,7 @@ def test_custom_question_overrides_default_by_name():
             }
         )
     )
-    assert len(config.questions) == 5
+    assert len(config.questions) == len(DEFAULT_QUESTION_INSTRUCTIONS)
     assert (
         config.questions["prompt_injection"].instructions
         == "custom prompt injection rule"
@@ -554,10 +554,11 @@ content_safety:
         assert "CONTENT_SAFETY_PROVIDER" not in environments
 
 
-def test_default_questions_have_five_risks_and_threshold_half():
+def test_default_questions_cover_risks_and_threshold_half():
     questions = default_questions()
     assert set(questions) == set(DEFAULT_QUESTION_INSTRUCTIONS)
-    assert len(questions) == 5
+    assert len(questions) == len(DEFAULT_QUESTION_INSTRUCTIONS)
+    assert len(questions) >= 15
     for question in questions.values():
         assert question.type == "noul"
         assert "type" not in question.model_dump()
