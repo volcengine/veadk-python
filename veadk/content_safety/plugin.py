@@ -28,7 +28,7 @@ from veadk.utils.logger import get_logger
 
 from .config import ContentSafetyConfig, QuestionConfig
 from .decider import ThresholdDecider
-from .state import StateBuilder
+from .state import STATE_POLICY_PREFIX, StateBuilder
 from .types import AuditAction, AuditResult, Checkpoint, Provider
 
 logger = get_logger(__name__)
@@ -256,7 +256,9 @@ class DecisionPlugin(BasePlugin):
         questions = self._questions()
         try:
             response = await self._client.judge(
-                state=f"检查点：{checkpoint.value}。\n{state}",
+                # Keep the stable policy prefix first so repeated requests can
+                # reuse it, and keep the dynamic audit payload at the end.
+                state=(f"{STATE_POLICY_PREFIX}\n检查点：{checkpoint.value}。\n{state}"),
                 questions=self._decision_questions(),
             )
         except DecisionClientError as exc:

@@ -21,6 +21,7 @@ from google.genai import types
 from veadk.decision import DecisionClientError, DecisionResponse
 from veadk.content_safety.config import ContentSafetyConfig
 from veadk.content_safety.plugin import DecisionPlugin
+from veadk.content_safety.state import STATE_POLICY_PREFIX, StateBuilder
 from veadk.content_safety.types import AuditAction, AuditStatus, Checkpoint
 
 
@@ -638,3 +639,34 @@ def test_on_event_blocks_final_text_alongside_function_call():
     assert result.content.parts[1].function_call.name == "tool"
     assert len(judge.calls) == 1
     assert "secret" in judge.calls[0]["state"]
+
+
+def test_state_starts_with_fixed_policy_and_keeps_it_outside_untrusted():
+    plugin, judge = make_plugin(LOW)
+    asyncio.run(
+        plugin.before_model_callback(
+            callback_context=context(), llm_request=user_request("hello")
+        )
+    )
+    state = judge.calls[0]["state"]
+    assert state.startswith(STATE_POLICY_PREFIX)
+    assert "检查点：before_model。" in state
+    assert state.index(STATE_POLICY_PREFIX) < state.index("检查点：")
+    assert state.index("检查点：") < state.index("<untrusted>")
+    assert "hello" in state
+
+
+def test_long_dynamic_state_is_truncated_but_policy_is_kept():
+    judge = FakeJudge(LOW)
+    plugin = DecisionPlugin(
+        config=config(), client=judge, state_builder=StateBuilder(max_chars=10)
+    )
+    asyncio.run(
+        plugin.before_model_callback(
+            callback_context=context(), llm_request=user_request("abcdefgh")
+        )
+    )
+    state = judge.calls[0]["state"]
+    assert state.startswith(STATE_POLICY_PREFIX)
+    assert "abc" in state
+    assert "abcdefgh" not in state

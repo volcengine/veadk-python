@@ -53,7 +53,7 @@ from .integration import (
     resolve_content_safety_plugins,
 )
 from .plugin import DecisionPlugin
-from .state import StateBuilder
+from .state import STATE_POLICY_PREFIX, StateBuilder
 from .types import (
     AuditAction,
     AuditResult,
@@ -76,6 +76,7 @@ __all__ = [
     "QuestionConfig",
     "QuestionResult",
     "StateBuilder",
+    "STATE_POLICY_PREFIX",
     "DEFAULT_BLOCK_MESSAGE",
     "DEFAULT_DECISION_MODEL",
     "DEFAULT_QUESTION_INSTRUCTIONS",
