@@ -90,6 +90,30 @@ class ADKEvaluator(BaseEvaluator):
         """
         super().__init__(agent=agent, name=name)
 
+    @staticmethod
+    def _to_actual_invocation(inv) -> Invocation:
+        """Packs BaseEvaluator's actual data of one invocation into an ADK Invocation."""
+        user_content = genai_types.Content(
+            role="user",
+            parts=[genai_types.Part(text=inv.input or "")],
+        )
+        actual_final = genai_types.Content(
+            role=None,
+            parts=[genai_types.Part(text=inv.actual_output or "")],
+        )
+        # Collect the tool calls observed during actual execution
+        actual_tool_calls = [
+            SimpleNamespace(name=t.get("name"), args=t.get("args", {}))
+            for t in (inv.actual_tool or [])
+        ]
+        # Pack a full actual Invocation for ADK metrics
+        return Invocation(
+            invocation_id=inv.invocation_id,
+            user_content=user_content,
+            final_response=actual_final,
+            intermediate_data=IntermediateData(tool_uses=actual_tool_calls),
+        )
+
     @override
     async def evaluate(
         self,
@@ -171,7 +195,28 @@ class ADKEvaluator(BaseEvaluator):
 
             evaluation_result_list = []
 
-            # For each eval case, generate actual outputs num_runs times using BaseEvaluator
+            # Run the agent num_runs times. generate_actual_outputs() already runs EVERY eval
+            # case, so it must be called once per run, not once per case and run (that would
+            # multiply the model calls by the number of cases). Each pass overwrites the actual
+            # values in place, so convert them to ADK Invocations right after it.
+            actual_invocations_by_run: list[list[list[Invocation]]] = []
+            for _ in range(num_runs):
+                for agent_information in self.agent_information_list:
+                    agent_information["session_id"] = str(uuid.uuid4())
+
+                await self.generate_actual_outputs()
+
+                actual_invocations_by_run.append(
+                    [
+                        [
+                            self._to_actual_invocation(inv)
+                            for inv in eval_case_data.invocations
+                        ]
+                        for eval_case_data in self.invocation_list
+                    ]
+                )
+
+            # For each eval case, score the actual invocations of all runs per metric
             for case_idx, eval_case_data in enumerate(self.invocation_list):
                 # Convert BaseEvaluator's expected data into ADK Invocation list
                 expected_invocations: list[Invocation] = []
@@ -200,41 +245,12 @@ class ADKEvaluator(BaseEvaluator):
                         )
                     )
 
-                # Collect actual invocations across runs
-                actual_invocations_all_runs: list[Invocation] = []
-                for _ in range(num_runs):
-                    for agent_information in self.agent_information_list:
-                        agent_information["session_id"] = str(uuid.uuid4())
-
-                    # Generate actual outputs for all cases in this run via BaseEvaluator
-                    await self.generate_actual_outputs()
-
-                    # Convert BaseEvaluator's actual data into ADK Invocation list
-                    for inv in eval_case_data.invocations:
-                        user_content = genai_types.Content(
-                            role="user",
-                            parts=[genai_types.Part(text=inv.input or "")],
-                        )
-                        actual_final = genai_types.Content(
-                            role=None,
-                            parts=[genai_types.Part(text=inv.actual_output or "")],
-                        )
-                        # Collect the tool calls observed during actual execution
-                        actual_tool_calls = [
-                            SimpleNamespace(name=t.get("name"), args=t.get("args", {}))
-                            for t in (inv.actual_tool or [])
-                        ]
-                        # Pack a full actual Invocation for ADK metrics
-                        actual_invocations_all_runs.append(
-                            Invocation(
-                                invocation_id=inv.invocation_id,
-                                user_content=user_content,
-                                final_response=actual_final,
-                                intermediate_data=IntermediateData(
-                                    tool_uses=actual_tool_calls
-                                ),
-                            )
-                        )
+                # This case's actual invocations from every run, in run order
+                actual_invocations_all_runs: list[Invocation] = [
+                    invocation
+                    for run_invocations in actual_invocations_by_run
+                    for invocation in run_invocations[case_idx]
+                ]
 
                 # Repeat expected invocations to align with num_runs
                 expected_invocations_repeated = expected_invocations * num_runs
