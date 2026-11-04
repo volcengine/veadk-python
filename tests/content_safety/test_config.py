@@ -21,6 +21,7 @@ from veadk.content_safety.config import (
     DEFAULT_DECISION_MODEL,
     DEFAULT_QUESTION_INSTRUCTIONS,
     DEFAULT_QUESTION_THRESHOLD,
+    DEFAULT_QUESTION_THRESHOLDS,
     ContentSafetyConfig,
     ContentSafetyConfigError,
     DecisionConfig,
@@ -554,16 +555,24 @@ content_safety:
         assert "CONTENT_SAFETY_PROVIDER" not in environments
 
 
-def test_default_questions_cover_risks_and_threshold_half():
+def test_default_questions_cover_risks_with_tiered_thresholds():
     questions = default_questions()
     assert set(questions) == set(DEFAULT_QUESTION_INSTRUCTIONS)
+    assert set(DEFAULT_QUESTION_THRESHOLDS) == set(DEFAULT_QUESTION_INSTRUCTIONS)
     assert len(questions) == len(DEFAULT_QUESTION_INSTRUCTIONS)
     assert len(questions) >= 15
-    for question in questions.values():
+    assert DEFAULT_QUESTION_THRESHOLD == 0.5
+    for name, question in questions.items():
         assert question.type == "noul"
         assert "type" not in question.model_dump()
-        assert question.threshold == DEFAULT_QUESTION_THRESHOLD == 0.5
+        assert question.threshold == DEFAULT_QUESTION_THRESHOLDS[name]
         assert question.instructions
+    assert questions["child_safety"].threshold == 0.45
+    assert questions["self_harm"].threshold == 0.45
+    assert questions["prompt_injection"].threshold == 0.5
+    assert questions["sensitive_data"].threshold == 0.55
+    assert questions["compute_abuse"].threshold == 0.6
+    assert questions["public_order_morals"].threshold == 0.6
 
 
 def test_threshold_is_required():

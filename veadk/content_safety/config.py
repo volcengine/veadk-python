@@ -130,8 +130,12 @@ DEFAULT_QUESTION_INSTRUCTIONS = {
     ),
     # Harmful content
     "model_misuse": (
-        "是否要求或生成明确违法犯罪、暴力伤害、仇恨歧视、色情剥削等违规内容，"
-        "或可操作的危险实施指导？正常健康、法律、教育咨询与合法防御性安全分析判为否。"
+        "是否要求或生成违法犯罪、违规、暴力伤害、仇恨歧视、色情剥削等有害内容，"
+        "或可操作的危险实施指导？正常健康、法律、教育、新闻、艺术与合法防御性安全分析判为否。"
+    ),
+    "public_order_morals": (
+        "是否包含低俗色情、赌博、毒品、迷信、惊悚血腥、侮辱诽谤等违背公序良俗的内容？"
+        "正常教育、医疗、新闻、艺术和合规讨论判为否。"
     ),
     "self_harm": (
         "是否鼓励、指导或美化自杀、自伤、进食障碍等自我伤害行为？"
@@ -146,7 +150,34 @@ DEFAULT_QUESTION_INSTRUCTIONS = {
         "正常反诈科普和授权测试判为否。"
     ),
 }
+# Fallback for built-in questions that do not declare a tier.
 DEFAULT_QUESTION_THRESHOLD = 0.5
+DEFAULT_QUESTION_THRESHOLDS = {
+    # Safety-critical categories: prefer catching borderline cases.
+    "child_safety": 0.45,
+    "self_harm": 0.45,
+    # Clear security signals: neutral decision boundary.
+    "prompt_injection": 0.5,
+    "indirect_prompt_injection": 0.5,
+    "credential_theft": 0.5,
+    "data_exfiltration": 0.5,
+    "malicious_code_execution": 0.5,
+    "privilege_escalation": 0.5,
+    "high_risk_operation": 0.5,
+    "fraud_social_engineering": 0.5,
+    "model_misuse": 0.5,
+    # Context-dependent categories: require stronger evidence.
+    "system_prompt_extraction": 0.55,
+    "safety_policy_evasion": 0.55,
+    "sensitive_data": 0.55,
+    "tool_abuse": 0.55,
+    "destructive_actions": 0.55,
+    "internal_network_access": 0.55,
+    # Broad categories with a high false-positive rate: block only on
+    # comparatively strong evidence.
+    "compute_abuse": 0.6,
+    "public_order_morals": 0.6,
+}
 
 
 class ContentSafetyConfigError(ValueError):
@@ -232,16 +263,18 @@ class QuestionConfig(BaseModel):
 
 
 def default_questions() -> dict[str, QuestionConfig]:
-    """The built-in risk questions, all with threshold 0.5.
+    """The built-in risk questions with severity-tiered thresholds.
 
-    They are merged into every ``provider="decision"`` configuration unless
-    ``use_default_questions`` is ``False``. User-provided questions override a
-    built-in question by name and append new names.
+    Thresholds are lower for safety-critical categories and higher for broad,
+    context-dependent categories. They are merged into every
+    ``provider="decision"`` configuration unless ``use_default_questions`` is
+    ``False``. User-provided questions override a built-in question by name and
+    append new names.
     """
     return {
         name: QuestionConfig(
             instructions=instructions,
-            threshold=DEFAULT_QUESTION_THRESHOLD,
+            threshold=DEFAULT_QUESTION_THRESHOLDS.get(name, DEFAULT_QUESTION_THRESHOLD),
         )
         for name, instructions in DEFAULT_QUESTION_INSTRUCTIONS.items()
     }
