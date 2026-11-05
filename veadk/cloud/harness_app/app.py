@@ -44,8 +44,8 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from google.adk.agents import RunConfig
+from google.adk.agents._streaming_mode import StreamingMode
 from google.adk.agents.base_agent import BaseAgent
-from google.adk.agents.run_config import StreamingMode
 from google.adk.artifacts.in_memory_artifact_service import InMemoryArtifactService
 from google.adk.auth.credential_service.in_memory_credential_service import (
     InMemoryCredentialService,
@@ -99,6 +99,7 @@ from veadk.integrations.agentkit.app import (
     _ADK_SERVER_STATE_KEY,
     _add_introspection_routes,
     _configure_studio_tool_routes,
+    _SsePayloadEventIdRewriter,
 )
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.runner import Runner
@@ -564,7 +565,7 @@ class HarnessApp:
             if getattr(r, "path", None) == "/run_sse" and "POST" in getattr(
                 r, "methods", set()
             ):
-                adk_run_sse = r.endpoint
+                adk_run_sse = getattr(r, "endpoint", None)
                 break
 
         @self.app.post("/run_sse")
@@ -612,6 +613,9 @@ class HarnessApp:
         plugins: list[BasePlugin] | None = None,
     ):
         """Yield SSE ``data:`` lines for a run, spawning the agent on override."""
+        event_id_rewriter = _SsePayloadEventIdRewriter()
+        app_name = req.app_name or self.harness_name
+        req.app_name = app_name
         run_config_kwargs: dict[str, Any] = {
             "streaming_mode": StreamingMode.SSE if req.streaming else StreamingMode.NONE
         }
@@ -639,7 +643,7 @@ class HarnessApp:
                         prompt,
                         req.harness,
                         download_dir=Path(work_dir_ctx.name),
-                        app_name=req.app_name,
+                        app_name=app_name,
                         registry_tip_token=tip_token,
                         registry_authorization=auth_header,
                     )
@@ -651,7 +655,7 @@ class HarnessApp:
                 agent = spawn_harness_run_agent(
                     self.agent,
                     prompt,
-                    app_name=req.app_name,
+                    app_name=app_name,
                     registry_tip_token=tip_token,
                     registry_authorization=auth_header,
                 )
@@ -661,17 +665,17 @@ class HarnessApp:
             runner = Runner(
                 agent=agent,
                 short_term_memory=self.short_term_memory,
-                app_name=req.app_name,
+                app_name=app_name,
                 plugins=plugins or None,
             )
             # Be self-sufficient: create the session if the caller did not.
             if not await runner.session_service.get_session(
-                app_name=req.app_name,
+                app_name=app_name,
                 user_id=req.user_id,
                 session_id=req.session_id,
             ):
                 await runner.session_service.create_session(
-                    app_name=req.app_name,
+                    app_name=app_name,
                     user_id=req.user_id,
                     session_id=req.session_id,
                 )
@@ -701,6 +705,7 @@ class HarnessApp:
                         events_to_stream = [content_event, artifact_event]
 
                     for event_to_stream in events_to_stream:
+                        event_to_stream = event_id_rewriter.prepare(event_to_stream)
                         yield (
                             "data: "
                             + event_to_stream.model_dump_json(

@@ -15,6 +15,7 @@
 import importlib
 import types
 import uuid
+from pathlib import Path
 
 import pytest
 from fastapi.responses import PlainTextResponse
@@ -36,6 +37,13 @@ def _closure_cell(function, name):
     if name not in freevars:
         raise AssertionError(f"{function.__name__} has no closure cell {name}")
     return closure[freevars.index(name)]
+
+
+def test_harness_run_sse_rewrites_stream_payload_event_ids() -> None:
+    source = Path("veadk/cloud/harness_app/app.py").read_text()
+
+    assert "_SsePayloadEventIdRewriter" in source
+    assert "event_id_rewriter.prepare(event_to_stream)" in source
 
 
 def test_harness_app_exposes_agent_info(monkeypatch):
