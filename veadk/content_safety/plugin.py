@@ -1,0 +1,388 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""ADK plugin that audits content at the four lifecycle checkpoints."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from typing import Any, Mapping
+
+from google.adk.models import LlmRequest, LlmResponse
+from google.adk.plugins import BasePlugin
+from google.genai import types
+
+from veadk.decision import DecisionClientError, DecisionJudge, DecisionQuestion
+from veadk.utils.logger import get_logger
+
+from .config import ContentSafetyConfig, QuestionConfig
+from .decider import ThresholdDecider
+from .state import STATE_POLICY_PREFIX, StateBuilder
+from .types import AuditAction, AuditResult, Checkpoint, Provider
+
+logger = get_logger(__name__)
+
+_MAX_INVOCATIONS = 256
+
+
+def _is_visible_text_part(part: Any) -> bool:
+    return isinstance(getattr(part, "text", None), str) and not getattr(
+        part, "thought", False
+    )
+
+
+def _text_of_content(content: Any) -> str:
+    if content is None:
+        return ""
+    parts = getattr(content, "parts", None) or []
+    return "".join(part.text for part in parts if _is_visible_text_part(part))
+
+
+class DecisionPlugin(BasePlugin):
+    """Audit model and tool content with the System One decision API.
+
+    Mount it explicitly::
+
+        plugin = build_content_safety(config)
+        app = App(name="my_app", root_agent=agent, plugins=[plugin])
+
+    The plugin never changes VeADK defaults: if the caller does not build and
+    mount it, no network call is made.
+    """
+
+    def __init__(
+        self,
+        *,
+        config: ContentSafetyConfig,
+        client: DecisionJudge,
+        decider: ThresholdDecider | None = None,
+        state_builder: StateBuilder | None = None,
+    ):
+        if config.provider is not Provider.DECISION:
+            raise ValueError("DecisionPlugin requires provider=decision")
+        super().__init__(name="content_safety_decision")
+        # Deep-copy through model validation so later mutation of the caller's
+        # dict cannot change behavior mid-invocation.
+        self._config = ContentSafetyConfig.model_validate(config.model_dump())
+        self._client = client
+        self._decider = decider or ThresholdDecider()
+        self._state = state_builder or StateBuilder()
+        self._audits: dict[str, dict[Checkpoint, AuditResult]] = {}
+        self._stream_buffers: dict[str, str] = {}
+        self._audited_text_hashes: dict[str, set[str]] = {}
+
+    # ------------------------------------------------------------------
+    # Public inspection helpers
+    # ------------------------------------------------------------------
+    @property
+    def block_message(self) -> str:
+        return self._config.block_message
+
+    def last_result(
+        self, invocation_id: str, checkpoint: Checkpoint | None = None
+    ) -> AuditResult | dict[Checkpoint, AuditResult] | None:
+        if checkpoint is not None:
+            return self._audits.get(invocation_id, {}).get(checkpoint)
+        results = self._audits.get(invocation_id)
+        return dict(results) if results else None
+
+    # ------------------------------------------------------------------
+    # ADK callbacks
+    # ------------------------------------------------------------------
+    async def before_model_callback(
+        self,
+        *,
+        callback_context: Any,
+        llm_request: LlmRequest,
+        **kwargs: Any,
+    ) -> LlmResponse | None:
+        invocation_id = callback_context.invocation_id
+        state = self._state.build_before_model(llm_request)
+        result = await self._audit(
+            invocation_id=invocation_id,
+            checkpoint=Checkpoint.BEFORE_MODEL,
+            state=state,
+        )
+        if result.action is AuditAction.BLOCK:
+            # The block response is synthetic: never send it back through the
+            # decision API as if it were model output.
+            self._remember_audited_text(invocation_id, self._config.block_message)
+            return self._block_response()
+        return None
+
+    async def after_model_callback(
+        self,
+        *,
+        callback_context: Any,
+        llm_response: LlmResponse,
+        **kwargs: Any,
+    ) -> LlmResponse | None:
+        # Streaming chunks are handled by on_event_callback so that no
+        # unaudited partial text reaches the caller.
+        if getattr(llm_response, "partial", False):
+            return None
+
+        invocation_id = callback_context.invocation_id
+        raw_text = _text_of_content(getattr(llm_response, "content", None))
+        if not raw_text:
+            return None
+
+        result = await self._audit(
+            invocation_id=invocation_id,
+            checkpoint=Checkpoint.AFTER_MODEL,
+            state=self._state.build_after_model(llm_response),
+        )
+        self._remember_audited_text(invocation_id, raw_text)
+        if result.action is AuditAction.BLOCK:
+            replacement = self._config.block_message
+            self._remember_audited_text(invocation_id, replacement)
+            return llm_response.model_copy(
+                update={
+                    "content": types.Content(
+                        role="model", parts=[types.Part(text=replacement)]
+                    ),
+                    "partial": False,
+                }
+            )
+        return None
+
+    async def before_tool_callback(
+        self,
+        *,
+        tool: Any,
+        tool_args: dict[str, Any],
+        tool_context: Any,
+        **kwargs: Any,
+    ) -> dict[str, Any] | None:
+        state = self._state.build_before_tool(tool, tool_args)
+        result = await self._audit(
+            invocation_id=tool_context.invocation_id,
+            checkpoint=Checkpoint.BEFORE_TOOL,
+            state=state,
+        )
+        if result.action is AuditAction.BLOCK:
+            return self._blocked_tool_result(result)
+        return None
+
+    async def after_tool_callback(
+        self,
+        *,
+        tool: Any,
+        tool_args: dict[str, Any],
+        tool_context: Any,
+        result: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any] | None:
+        state = self._state.build_after_tool(tool, tool_args, result)
+        audit = await self._audit(
+            invocation_id=tool_context.invocation_id,
+            checkpoint=Checkpoint.AFTER_TOOL,
+            state=state,
+        )
+        if audit.action is AuditAction.BLOCK:
+            return self._blocked_tool_result(audit)
+        return None
+
+    async def on_event_callback(
+        self,
+        *,
+        invocation_context: Any,
+        event: Any,
+        **kwargs: Any,
+    ) -> Any | None:
+        text = self._event_text(event)
+        if text is None:
+            return None
+
+        invocation_id = invocation_context.invocation_id
+        partial = bool(getattr(event, "partial", False))
+        if partial:
+            if text:
+                self._stream_buffers[invocation_id] = (
+                    self._stream_buffers.get(invocation_id, "") + text
+                )
+            if getattr(event, "turn_complete", False):
+                buffered = self._stream_buffers.pop(invocation_id, "")
+                if buffered:
+                    return await self._finalize_stream(invocation_id, event, buffered)
+            if text:
+                return self._replace_event_text(event, "")
+            return None
+
+        buffered = self._stream_buffers.pop(invocation_id, "")
+        candidate = text or buffered
+        if not candidate:
+            return None
+        if self._consume_audited_text(invocation_id, candidate):
+            return None
+        return await self._finalize_stream(invocation_id, event, candidate)
+
+    async def after_run_callback(
+        self, *, invocation_context: Any, **kwargs: Any
+    ) -> None:
+        invocation_id = invocation_context.invocation_id
+        self._stream_buffers.pop(invocation_id, None)
+        self._audited_text_hashes.pop(invocation_id, None)
+        if len(self._audits) > _MAX_INVOCATIONS:
+            oldest = next(iter(self._audits))
+            self._audits.pop(oldest, None)
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+    async def _audit(
+        self, *, invocation_id: str, checkpoint: Checkpoint, state: str
+    ) -> AuditResult:
+        if not state.strip():
+            result = AuditResult.skipped(
+                provider=Provider.DECISION,
+                checkpoint=checkpoint,
+                reason="no content to audit",
+            )
+            self._record(invocation_id, result)
+            return result
+
+        questions = self._questions()
+        try:
+            response = await self._client.judge(
+                # Keep the stable policy prefix first so repeated requests can
+                # reuse it, and keep the dynamic audit payload at the end.
+                state=(f"{STATE_POLICY_PREFIX}\n检查点：{checkpoint.value}。\n{state}"),
+                questions=self._decision_questions(),
+            )
+        except DecisionClientError as exc:
+            result = AuditResult.error(
+                provider=Provider.DECISION,
+                checkpoint=checkpoint,
+                on_error=self._config.on_error,
+                error_type=exc.error_type,
+                reason=exc.message,
+            )
+        except Exception as exc:  # never let a safety call crash the agent
+            logger.exception("unexpected content-safety client failure")
+            result = AuditResult.error(
+                provider=Provider.DECISION,
+                checkpoint=checkpoint,
+                on_error=self._config.on_error,
+                error_type="unexpected_error",
+                reason=str(exc),
+            )
+        else:
+            result = self._decider.decide(
+                provider=Provider.DECISION,
+                checkpoint=checkpoint,
+                raw=response.raw,
+                questions=questions,
+                on_error=self._config.on_error,
+            )
+
+        self._record(invocation_id, result)
+        return result
+
+    def _questions(self) -> Mapping[str, QuestionConfig]:
+        return self._config.questions
+
+    def _decision_questions(self) -> Mapping[str, DecisionQuestion]:
+        return {
+            name: DecisionQuestion(
+                type=question.type,
+                instructions=question.instructions,
+            )
+            for name, question in self._config.questions.items()
+        }
+
+    def _record(self, invocation_id: str, result: AuditResult) -> None:
+        self._audits.setdefault(invocation_id, {})[result.checkpoint] = result
+        logger.info(
+            "content_safety_audit %s",
+            json.dumps(result.to_dict(), ensure_ascii=False),
+        )
+
+    def _block_response(self) -> LlmResponse:
+        return LlmResponse(
+            content=types.Content(
+                role="model", parts=[types.Part(text=self._config.block_message)]
+            ),
+            turn_complete=True,
+        )
+
+    def _blocked_tool_result(self, result: AuditResult) -> dict[str, Any]:
+        return {
+            "error": self._config.block_message,
+            "blocked": True,
+            "content_safety": result.to_dict(),
+        }
+
+    def _event_text(self, event: Any) -> str | None:
+        content = getattr(event, "content", None)
+        if content is None:
+            return None
+        if getattr(content, "role", None) != "model":
+            return None
+        # A model event can contain visible text alongside a function call.
+        # Audit the text while leaving function-call parts intact.
+        return _text_of_content(content)
+
+    def _replace_event_text(self, event: Any, text: str) -> Any:
+        content = event.content
+        parts = list(getattr(content, "parts", None) or [])
+        new_parts: list[Any] = []
+        replaced = False
+        for part in parts:
+            if _is_visible_text_part(part):
+                if not replaced:
+                    if text:
+                        new_parts.append(part.model_copy(update={"text": text}))
+                    replaced = True
+                continue
+            new_parts.append(part)
+        if not replaced and text:
+            new_parts.append(types.Part(text=text))
+        elif replaced and not text:
+            # Keep the event shape stable while withholding partial text.
+            new_parts.append(types.Part(text=""))
+
+        old_text = _text_of_content(content)
+        updates: dict[str, Any] = {
+            "content": types.Content(role=content.role, parts=new_parts)
+        }
+        if getattr(event, "output", None) == old_text:
+            updates["output"] = text
+        return event.model_copy(update=updates)
+
+    async def _finalize_stream(self, invocation_id: str, event: Any, text: str) -> Any:
+        state = self._state.prepare(f"[model_output]\n{text}")
+        result = await self._audit(
+            invocation_id=invocation_id,
+            checkpoint=Checkpoint.AFTER_MODEL,
+            state=state,
+        )
+        if result.action is AuditAction.BLOCK:
+            return self._replace_event_text(event, self._config.block_message)
+        return self._replace_event_text(event, text)
+
+    def _remember_audited_text(self, invocation_id: str, text: str) -> None:
+        self._audited_text_hashes.setdefault(invocation_id, set()).add(
+            hashlib.sha256(text.encode("utf-8")).hexdigest()
+        )
+
+    def _consume_audited_text(self, invocation_id: str, text: str) -> bool:
+        hashes = self._audited_text_hashes.get(invocation_id)
+        if not hashes:
+            return False
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        if digest in hashes:
+            hashes.discard(digest)
+            return True
+        return False

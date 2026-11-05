@@ -410,7 +410,12 @@ class Runner(ADKRunner):
         session_service = kwargs.pop("session_service", None)
         memory_service = kwargs.pop("memory_service", None)
         if not short_term_memory:
-            short_term_memory = agent.short_term_memory
+            memory_agent = (
+                agent
+                if agent is not None
+                else getattr(kwargs.get("app"), "root_agent", None)
+            )
+            short_term_memory = getattr(memory_agent, "short_term_memory", None)
         self.short_term_memory = short_term_memory
 
         # Handle run_processor: priority is runner arg > agent.run_processor > NoOpRunProcessor
@@ -456,6 +461,38 @@ class Runner(ADKRunner):
                 memory_service = agent.long_term_memory  # type: ignore
             else:
                 logger.info("No long term memory provided.")
+
+        # Content safety stays opt-in: it is mounted only when the agent or
+        # config.yaml configures it. ADK rejects `plugins` together with `app`,
+        # so an existing App is extended in place instead.
+        from veadk.content_safety import resolve_content_safety_plugins
+
+        app_arg = kwargs.get("app")
+        if app_arg is not None:
+            existing_plugins = list(getattr(app_arg, "plugins", None) or [])
+            resolved_plugins = resolve_content_safety_plugins(
+                agent if agent is not None else getattr(app_arg, "root_agent", None),
+                existing_plugins,
+            )
+            if len(resolved_plugins) != len(existing_plugins):
+                app_arg.plugins = resolved_plugins
+        else:
+            existing_plugins = list(kwargs.pop("plugins", None) or [])
+            resolved_plugins = resolve_content_safety_plugins(agent, existing_plugins)
+            if resolved_plugins and agent is not None:
+                from google.adk.apps import App
+
+                # ADK deprecates the `plugins` argument. Build the same App ADK
+                # would build internally, with model_construct preserving the
+                # legacy path's validation behavior.
+                kwargs["app"] = App.model_construct(
+                    name=app_name or "veadk_default_app",
+                    root_agent=agent,
+                    plugins=resolved_plugins,
+                )
+                agent = None
+            elif resolved_plugins:
+                kwargs["plugins"] = resolved_plugins
 
         # For forward compatibility, we pass app_name to ADKRunner.
         if not kwargs.get("app") and not app_name:
