@@ -110,6 +110,28 @@ def test_decision_response_requires_answers_mapping():
         DecisionResponse.from_payload({"answers": []})
 
 
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        (413, {"error": "too large"}),
+        (400, {"error": "request exceeds maximum size"}),
+    ],
+)
+def test_oversized_request_is_mapped(status, body):
+    def handler(request):
+        return httpx.Response(status, json=body)
+
+    client = DecisionClient(
+        endpoint="https://systemone.example",
+        api_key="k",
+        model="m",
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(DecisionClientError) as exc:
+        call(client)
+    assert exc.value.error_type == "request_too_large"
+
+
 @pytest.mark.parametrize("status", [400, 401, 500])
 def test_non_200_response_is_http_status_error(status):
     def handler(request):

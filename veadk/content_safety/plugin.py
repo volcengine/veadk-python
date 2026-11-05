@@ -125,6 +125,7 @@ class DecisionPlugin(BasePlugin):
         self._audits: dict[str, dict[Checkpoint, AuditResult]] = {}
         self._stream_buffers: dict[str, list[Any]] = {}
         self._audited_text_hashes: dict[str, set[str]] = {}
+        self._audited_state_hashes: dict[str, set[str]] = {}
 
     # ------------------------------------------------------------------
     # Public inspection helpers
@@ -141,13 +142,17 @@ class DecisionPlugin(BasePlugin):
         results = self._audits.get(invocation_id)
         return dict(results) if results else None
 
-    async def aclose(self) -> None:
-        """Close the underlying decision client when it owns a connection."""
+    async def close(self) -> None:
+        """ADK plugin lifecycle hook: close the pooled HTTP client."""
         close = getattr(self._client, "aclose", None)
         if callable(close):
             result = close()
             if inspect.isawaitable(result):
                 await result
+
+    async def aclose(self) -> None:
+        """Backward-compatible alias for the ADK plugin close hook."""
+        await self.close()
 
     # ------------------------------------------------------------------
     # ADK callbacks
@@ -193,14 +198,21 @@ class DecisionPlugin(BasePlugin):
         if not visible_parts:
             return None
         raw_text = _text_of_content(content)
+        state = self._state.build_after_model(llm_response)
 
         result = await self._audit(
             invocation_id=invocation_id,
             checkpoint=Checkpoint.AFTER_MODEL,
-            state=self._state.build_after_model(llm_response),
+            state=state,
         )
         if raw_text:
+            # Text-bearing responses are deduped by the visible text, which
+            # also covers mixed text+media responses.
             self._remember_audited_text(invocation_id, raw_text)
+        elif any(_is_media_part(part) for part in visible_parts):
+            # Media-only responses have no text hash to consume, so remember
+            # the audited state and let on_event_callback reuse that audit.
+            self._remember_audited_state(invocation_id, state)
         if result.action is AuditAction.BLOCK:
             replacement = self._config.block_message
             self._remember_audited_text(invocation_id, replacement)
@@ -293,6 +305,7 @@ class DecisionPlugin(BasePlugin):
         invocation_id = invocation_context.invocation_id
         self._stream_buffers.pop(invocation_id, None)
         self._audited_text_hashes.pop(invocation_id, None)
+        self._audited_state_hashes.pop(invocation_id, None)
         self._prune_caches()
 
     # ------------------------------------------------------------------
@@ -319,10 +332,18 @@ class DecisionPlugin(BasePlugin):
                 questions=self._decision_questions(),
             )
         except DecisionClientError as exc:
+            # An unauditable oversized request must not fail open when the
+            # configured failure policy is allow: the content never reached
+            # the decision service.
+            on_error = (
+                "block"
+                if exc.error_type == "request_too_large"
+                else self._config.on_error
+            )
             result = AuditResult.error(
                 provider=Provider.DECISION,
                 checkpoint=checkpoint,
-                on_error=self._config.on_error,
+                on_error=on_error,
                 error_type=exc.error_type,
                 reason=exc.message,
             )
@@ -381,6 +402,7 @@ class DecisionPlugin(BasePlugin):
             self._audits,
             self._stream_buffers,
             self._audited_text_hashes,
+            self._audited_state_hashes,
         ):
             while len(cache) > _MAX_INVOCATIONS:
                 cache.pop(next(iter(cache)), None)
@@ -469,6 +491,8 @@ class DecisionPlugin(BasePlugin):
         self, invocation_id: str, event: Any, parts: list[Any]
     ) -> Any:
         state = self._state.build_parts(parts, label="model_output")
+        if self._consume_audited_state(invocation_id, state):
+            return None
         result = await self._audit(
             invocation_id=invocation_id,
             checkpoint=Checkpoint.AFTER_MODEL,
@@ -481,6 +505,29 @@ class DecisionPlugin(BasePlugin):
         if all(_is_visible_text_part(part) for part in parts):
             return self._replace_event_text(event, _text_of_parts(parts))
         return self._replace_event_parts(event, _coalesce_text_parts(parts))
+
+    @staticmethod
+    def _state_hash(state: StatePayload) -> str:
+        encoded = json.dumps(
+            state, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _remember_audited_state(self, invocation_id: str, state: StatePayload) -> None:
+        self._audited_state_hashes.setdefault(invocation_id, set()).add(
+            self._state_hash(state)
+        )
+        self._prune_caches()
+
+    def _consume_audited_state(self, invocation_id: str, state: StatePayload) -> bool:
+        hashes = self._audited_state_hashes.get(invocation_id)
+        if not hashes:
+            return False
+        digest = self._state_hash(state)
+        if digest in hashes:
+            hashes.discard(digest)
+            return True
+        return False
 
     def _remember_audited_text(self, invocation_id: str, text: str) -> None:
         self._audited_text_hashes.setdefault(invocation_id, set()).add(

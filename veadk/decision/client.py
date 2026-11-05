@@ -130,6 +130,28 @@ class DecisionClient:
         except httpx.HTTPError as exc:
             raise DecisionClientError("network", str(exc)) from exc
 
+        if response.status_code in {413, 431}:
+            raise DecisionClientError(
+                "request_too_large",
+                f"decision API rejected an oversized request (HTTP {response.status_code})",
+            )
+        if response.status_code == 400:
+            body = response.text.lower()
+            if any(
+                marker in body
+                for marker in (
+                    "too large",
+                    "exceed",
+                    "size limit",
+                    "maximum size",
+                    "request entity",
+                )
+            ):
+                raise DecisionClientError(
+                    "request_too_large",
+                    "decision API rejected an oversized request (HTTP 400)",
+                )
+
         if response.status_code != 200:
             raise DecisionClientError(
                 "http_status",

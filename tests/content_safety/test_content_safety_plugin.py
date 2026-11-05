@@ -16,6 +16,7 @@ import asyncio
 from types import SimpleNamespace
 
 from google.adk.models import LlmResponse
+from google.adk.plugins import PluginManager
 from google.genai import types
 
 from veadk.decision import DecisionClientError, DecisionResponse
@@ -188,6 +189,21 @@ def test_before_model_error_allows_by_default():
     assert audit.action is AuditAction.ALLOW
     assert audit.degraded is True
     assert audit.error_type == "timeout"
+
+
+def test_request_too_large_blocks_even_when_on_error_allows():
+    plugin, _ = make_plugin(
+        DecisionClientError("request_too_large", "oversized"), on_error="allow"
+    )
+    result = asyncio.run(
+        plugin.before_model_callback(
+            callback_context=context(), llm_request=user_request("hello")
+        )
+    )
+    assert isinstance(result, LlmResponse)
+    audit = plugin.last_result("inv", Checkpoint.BEFORE_MODEL)
+    assert audit.action is AuditAction.BLOCK
+    assert audit.error_type == "request_too_large"
 
 
 def test_before_model_error_blocks_when_configured():
@@ -748,6 +764,32 @@ def test_after_model_allows_media_only_without_text():
     assert isinstance(judge.calls[0]["state"], list)
 
 
+def test_media_only_event_reuses_after_model_audit():
+    plugin, judge = make_plugin(LOW)
+    parts = [inline_part()]
+    response = LlmResponse(content=types.Content(role="model", parts=parts))
+    assert (
+        asyncio.run(
+            plugin.after_model_callback(
+                callback_context=context(), llm_response=response
+            )
+        )
+        is None
+    )
+    assert len(judge.calls) == 1
+
+    result = asyncio.run(
+        plugin.on_event_callback(
+            invocation_context=context(),
+            event=FakeEvent(
+                content=types.Content(role="model", parts=parts), partial=False
+            ),
+        )
+    )
+    assert result is None
+    assert len(judge.calls) == 1
+
+
 def test_on_event_withholds_partial_media_and_audits_final():
     plugin, judge = make_plugin(LOW)
     partial = asyncio.run(
@@ -785,6 +827,24 @@ def test_on_event_blocks_final_media_and_strips_it():
     assert len(result.content.parts) == 1
     assert result.content.parts[0].text == plugin.block_message
     assert result.content.parts[0].inline_data is None
+
+
+def test_replace_event_text_updates_matching_output():
+    plugin, _ = make_plugin()
+    event = FakeEvent(
+        content=types.Content(role="model", parts=[types.Part(text="old")]),
+        output="old",
+    )
+    replaced = plugin._replace_event_text(event, "new")
+    assert replaced.output == "new"
+
+
+def test_consume_audited_state_returns_false_for_unknown_state():
+    plugin, _ = make_plugin()
+    plugin._remember_audited_state("inv", [{"type": "text", "text": "a"}])
+    assert (
+        plugin._consume_audited_state("inv", [{"type": "text", "text": "b"}]) is False
+    )
 
 
 def test_replace_event_parts_preserves_function_call():
@@ -830,7 +890,37 @@ def test_replace_event_parts_inserts_placeholder_for_empty_replacement():
     assert replaced.content.parts[0].text == ""
 
 
-def test_plugin_aclose_delegates_to_client():
+def test_plugin_close_delegates_to_client():
+    class CloseableJudge(FakeJudge):
+        def __init__(self):
+            super().__init__()
+            self.closed = False
+
+        async def aclose(self):
+            self.closed = True
+
+    judge = CloseableJudge()
+    plugin = DecisionPlugin(config=config(), client=judge)
+    asyncio.run(plugin.close())
+    assert judge.closed is True
+
+
+def test_plugin_manager_close_invokes_plugin_close():
+    class CloseableJudge(FakeJudge):
+        def __init__(self):
+            super().__init__()
+            self.closed = False
+
+        async def aclose(self):
+            self.closed = True
+
+    judge = CloseableJudge()
+    plugin = DecisionPlugin(config=config(), client=judge)
+    asyncio.run(PluginManager(plugins=[plugin]).close())
+    assert judge.closed is True
+
+
+def test_plugin_aclose_is_an_alias_for_close():
     class CloseableJudge(FakeJudge):
         def __init__(self):
             super().__init__()
@@ -845,9 +935,9 @@ def test_plugin_aclose_delegates_to_client():
     assert judge.closed is True
 
 
-def test_plugin_aclose_without_client_method_is_noop():
+def test_plugin_close_without_client_method_is_noop():
     plugin, _ = make_plugin()
-    asyncio.run(plugin.aclose())
+    asyncio.run(plugin.close())
 
 
 def test_prune_caches_bounds_all_invocation_maps():
@@ -856,10 +946,13 @@ def test_prune_caches_bounds_all_invocation_maps():
         plugin._audits[f"inv-{index}"] = {}
         plugin._stream_buffers[f"inv-{index}"] = []
         plugin._audited_text_hashes[f"inv-{index}"] = set()
+        plugin._audited_state_hashes[f"inv-{index}"] = set()
     plugin._prune_caches()
     assert len(plugin._audits) == 256
     assert len(plugin._stream_buffers) == 256
     assert len(plugin._audited_text_hashes) == 256
+    assert len(plugin._audited_state_hashes) == 256
     assert "inv-0" not in plugin._audits
     assert "inv-0" not in plugin._stream_buffers
     assert "inv-0" not in plugin._audited_text_hashes
+    assert "inv-0" not in plugin._audited_state_hashes

@@ -149,6 +149,8 @@ On a risk hit, `before_model` returns the fixed block message with `turn_complet
 
 If the decision service times out, fails on the network, or returns an unparseable response, `on_error` controls the outcome: `allow` (the default) passes the request and marks the audit result with `degraded=True`; `block` fails closed. A question is considered hit when its risk probability is `>= threshold`.
 
+When the decision service rejects an oversized request (HTTP 413/431, or HTTP 400 with an explicit size/too-large message), the content was not actually audited. The SDK ignores `on_error=allow` for this case and blocks instead.
+
 ### State structure
 
 `state` is always a System One content array; text-only and multimodal requests use the same shape. Text-only example:
@@ -182,7 +184,9 @@ Media mapping rules:
 | `file_data` | Same as above | Only `http://` / `https://` are accepted; schemes such as `gs://` are skipped with a warning |
 | Video | `video_url` + `fps` | Always `fps: 1` |
 
-Unrecognized or unsupported MIME types are skipped with a warning instead of failing the whole audit. The 32,000-character `state` limit applies to text segments; media URLs and data URLs are not truncated by that character limit. Redaction is best-effort defense in depth and does not replace a dedicated DLP capability.
+Unrecognized or unsupported MIME types are skipped with a warning instead of failing the whole audit. Inline media larger than 20 MiB per part is skipped with a warning; for large assets that need auditing, upload them to TOS and use an HTTP(S) URL. If no auditable content remains after skipping media, `last_result` returns an audit result with status `skipped`, alongside the warning log.
+
+The 32,000-character `state` limit applies to text segments; media URLs and data URLs are not truncated by that character limit. `<untrusted>` / `</untrusted>` tags inside audited text are escaped to `&lt;...&gt;` so content cannot close or forge the wrapper early. Redaction is best-effort defense in depth and does not replace a dedicated DLP capability.
 
 <Callout type="warning" title="Request size">
 Inline media is base64-encoded into the request body. Large files significantly increase request size and decision latency; in production, prefer uploading to TOS and using an HTTP(S) URL.
