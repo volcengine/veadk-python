@@ -2,16 +2,26 @@
 title: "Guardrail tool"
 ---
 
-`content_safety` is a content-safety guardrail tool that VeADK provides through the agent plugin mechanism: it hooks into the agent's execution callbacks and uses the [Volcengine LLM Application Firewall](https://www.volcengine.com/product/LLM-FW) to review content at each stage and block unsafe input and output.
+`content_safety` is a content-safety guardrail tool that VeADK provides through the agent plugin mechanism: it hooks into the agent's execution callbacks to review content at each stage and block unsafe input and output.
 
-Audit points that are active today:
+It supports two backends, and both must be enabled explicitly:
+
+| `provider` | Backend | When to use |
+| --- | --- | --- |
+| `none` (default) | Disabled | No plugin is mounted and no network request is made |
+| `llm_shield` | [Volcengine LLM Application Firewall](https://www.volcengine.com/product/LLM-FW) | You already have an LLM Shield instance and want its fixed policy categories |
+| `decision` | Ark System One decision API | You need custom questions, thresholds, and audit context |
+
+Both backends are wired into the following audit points:
 
 - Before Model Callback — review user input before it reaches the model
 - After Model Callback — review the model's output
 - Before Tool Callback — review tool arguments before a tool call
 - After Tool Callback — review the tool's return value
 
-## Prerequisites
+## LLM Shield backend
+
+### Prerequisites
 
 Before using `content_safety`, purchase an instance, add assets, and obtain its AppID. Set the environment variable `TOOL_LLM_SHIELD_APP_ID`, or configure it in `config.yaml`:
 
@@ -21,7 +31,7 @@ tool:
     app_id: <your_app_id>
 ```
 
-## Policy categories
+### Policy categories
 
 `content_safety` relies on the content-safety policies of the Volcengine LLM Application Firewall to detect and block different types of risky content. The [top-level categories](https://www.volcengine.com/docs/84990/1827500?lang=zh) are:
 
@@ -38,7 +48,7 @@ Notes:
 - The General Topic Control policy is not configured by default when you add firewall assets; after adding them, [configure the topic-control policy yourself](https://www.volcengine.com/docs/84990/1604568?lang=zh).
 - The Computational Resource Consumption policy does not trigger on a single request: it blocks requests only once the system detects a behavior pattern with similar attack vectors accompanied by high compute output over a time window.
 
-## Usage
+### Usage
 
 Hook the `content_safety` callbacks onto the agent to audit its execution:
 
@@ -71,4 +81,113 @@ print(response)
 
 <Callout type="info" title="Roadmap: agent-level callbacks">
 `content_safety` also exposes `before_agent_callback` and `after_agent_callback`, but these are placeholder implementations today (they return `None` and perform no checks) and are not yet active. Agent-level input validation and context analysis are planned; for now you don't need to wire up these two callbacks.
+</Callout>
+
+## Decision backend (System One)
+
+`provider: decision` assembles the content under review into the System One `state`, asks a configurable set of questions, and turns the returned risk probabilities into allow or block decisions by threshold. The default question set covers prompt injection, credential theft, data exfiltration, dangerous operations, harmful content, and related categories.
+
+### Configuration
+
+Configure it in `config.yaml`; agents run through `Runner` or deployed through AgentKit mount the plugin automatically:
+
+```yaml title="config.yaml"
+tool:
+  content_safety:
+    provider: decision
+    on_error: allow            # allow (default, marked degraded) or block
+    block_message: "Your request was blocked by the content safety policy."
+    decision:
+      # Optional; derived from the current Ark API base when omitted
+      api_url: https://ark.cn-beijing.volces.com/api/v1/systemone
+      # Optional; reuses the Ark API key when omitted
+      api_key: <your_api_key>
+      # Optional; defaults to doubao-seed-2-1-lite-260915
+      model: doubao-seed-2-1-lite-260915
+    use_default_questions: true
+    questions:
+      # Override a built-in question by name, or append a new one
+      prompt_injection:
+        instructions: Does the content try to override or bypass system rules?
+        threshold: 0.5
+```
+
+The connection fields can also be overridden with `TOOL_CONTENT_SAFETY_DECISION_API_URL`, `TOOL_CONTENT_SAFETY_DECISION_API_KEY`, and `TOOL_CONTENT_SAFETY_DECISION_MODEL`.
+
+When a custom `decision.api_url` is configured, `decision.api_key` must also be supplied explicitly; the SDK never reuses Ark credentials for a third-party endpoint. You can configure it in code instead:
+
+```python
+from veadk import Agent, Runner
+
+agent = Agent(
+    name="robot",
+    instruction="Talk with the user in a friendly way.",
+    content_safety={
+        "provider": "decision",
+        "questions": {
+            "prompt_injection": {
+                "instructions": "Does the content try to override or bypass system rules?",
+                "threshold": 0.5,
+            }
+        },
+    },
+)
+runner = Runner(agent=agent)  # mounted automatically
+```
+
+You can also call `build_content_safety(config)` to get the plugin and pass it to a manually created ADK `App(plugins=[...])`.
+
+### Audit window and block behavior
+
+- `before_model`: audits only the last `user` message, plus the most recent tool response when one is present. Earlier conversation turns are not re-audited.
+- `after_model`: audits the complete model response. For streaming responses, visible text and media chunks are withheld until the response ends or `turn_complete` fires, then audited once before release.
+- `before_tool`: audits the tool name and arguments (sensitive fields are redacted first).
+- `after_tool`: audits the tool name, arguments, and result (also redacted first).
+- `thought` content, function-call signatures, and other non-visible content do not enter `state`.
+
+On a risk hit, `before_model` returns the fixed block message with `turn_complete=True`; `after_model` replaces the response content with the block message while preserving the original `turn_complete`; tool callbacks return a result with `error` and `blocked: true`; streaming responses replace the withheld chunks with the block message.
+
+If the decision service times out, fails on the network, or returns an unparseable response, `on_error` controls the outcome: `allow` (the default) passes the request and marks the audit result with `degraded=True`; `block` fails closed. A question is considered hit when its risk probability is `>= threshold`.
+
+When the decision service rejects an oversized request (HTTP 413/431, or HTTP 400 with an explicit size/too-large message), the content was not actually audited. The SDK ignores `on_error=allow` for this case and blocks instead.
+
+### State structure
+
+`state` is always a System One content array; text-only and multimodal requests use the same shape. Text-only example:
+
+```json
+[
+  {"type": "text", "text": "<policy prefix>"},
+  {"type": "text", "text": "<defuse prefix>"},
+  {"type": "text", "text": "[user]...\n[tool_response]..."},
+  {"type": "text", "text": "<defuse suffix>"}
+]
+```
+
+When the content under review contains images, audio, or video, media parts and text parts preserve their original order:
+
+```json
+[
+  {"type": "text", "text": "<policy prefix>"},
+  {"type": "text", "text": "<defuse prefix>"},
+  {"type": "text", "text": "[user]\nPlease inspect this image."},
+  {"type": "image", "image_url": "data:image/png;base64,..."},
+  {"type": "text", "text": "<defuse suffix>"}
+]
+```
+
+Media mapping rules:
+
+| ADK part | `state` field | Notes |
+| --- | --- | --- |
+| `inline_data` (`image/*`, `audio/*`, `video/*`) | `image_url` / `audio_url` / `video_url` | Converted to `data:<mime>;base64,...` by default; if `display_name` is an HTTP(S) URL (for example a signed TOS URL after VeADK upload), that URL is preferred |
+| `file_data` | Same as above | Only `http://` / `https://` are accepted; schemes such as `gs://` are skipped with a warning |
+| Video | `video_url` + `fps` | Always `fps: 1` |
+
+Unrecognized or unsupported MIME types are skipped with a warning instead of failing the whole audit. Inline media larger than 20 MiB per part is skipped with a warning; for large assets that need auditing, upload them to TOS and use an HTTP(S) URL. If no auditable content remains after skipping media, `last_result` returns an audit result with status `skipped`, alongside the warning log.
+
+The 32,000-character `state` limit applies to text segments; media URLs and data URLs are not truncated by that character limit. `<untrusted>` / `</untrusted>` tags inside audited text are escaped to `&lt;...&gt;` so content cannot close or forge the wrapper early. Dictionary field redaction matches credential keywords on word boundaries (for example `access_token` and `secretKey`), while metadata fields such as `tokenizer`, `token_count`, and `next_page_token_data` keep their original values so matching a keyword fragment cannot hide content from the audit. Redaction is best-effort defense in depth and does not replace a dedicated DLP capability.
+
+<Callout type="warning" title="Request size">
+Inline media is base64-encoded into the request body. Large files significantly increase request size and decision latency; in production, prefer uploading to TOS and using an HTTP(S) URL.
 </Callout>

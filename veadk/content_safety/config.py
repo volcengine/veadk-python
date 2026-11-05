@@ -54,7 +54,11 @@ from pydantic import (
     model_validator,
 )
 
+from veadk.utils.logger import get_logger
+
 from .types import Provider
+
+logger = get_logger(__name__)
 
 DEFAULT_DECISION_MODEL = "doubao-seed-2-1-lite-260915"
 DEFAULT_BLOCK_MESSAGE = (
@@ -344,6 +348,11 @@ class ContentSafetyConfig(BaseModel):
             raise ValueError(
                 "provider=decision requires at least one question when "
                 "use_default_questions is false"
+            )
+        if self.provider is not Provider.LLM_SHIELD and self.llm_shield_app_id:
+            logger.warning(
+                "llm_shield_app_id is ignored when provider=%s",
+                self.provider.value,
             )
         return self
 

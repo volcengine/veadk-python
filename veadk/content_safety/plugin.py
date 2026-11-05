@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from typing import Any, Mapping
 
@@ -28,7 +29,7 @@ from veadk.utils.logger import get_logger
 
 from .config import ContentSafetyConfig, QuestionConfig
 from .decider import ThresholdDecider
-from .state import STATE_POLICY_PREFIX, StateBuilder
+from .state import STATE_POLICY_PREFIX, StateBuilder, StatePayload
 from .types import AuditAction, AuditResult, Checkpoint, Provider
 
 logger = get_logger(__name__)
@@ -42,11 +43,54 @@ def _is_visible_text_part(part: Any) -> bool:
     )
 
 
+def _is_media_part(part: Any) -> bool:
+    if getattr(part, "thought", False):
+        return False
+    return (
+        getattr(part, "inline_data", None) is not None
+        or getattr(part, "file_data", None) is not None
+    )
+
+
 def _text_of_content(content: Any) -> str:
     if content is None:
         return ""
     parts = getattr(content, "parts", None) or []
     return "".join(part.text for part in parts if _is_visible_text_part(part))
+
+
+def _text_of_parts(parts: list[Any]) -> str:
+    return "".join(part.text for part in parts if _is_visible_text_part(part))
+
+
+def _visible_parts_of_content(content: Any) -> list[Any]:
+    if content is None:
+        return []
+    return [
+        part
+        for part in (getattr(content, "parts", None) or [])
+        if _is_visible_text_part(part) or _is_media_part(part)
+    ]
+
+
+def _coalesce_text_parts(parts: list[Any]) -> list[Any]:
+    """Merge consecutive visible text parts so streamed chunks stay one part."""
+    merged: list[Any] = []
+    text_buffer: list[str] = []
+
+    def flush() -> None:
+        if text_buffer:
+            merged.append(types.Part(text="".join(text_buffer)))
+            text_buffer.clear()
+
+    for part in parts:
+        if _is_visible_text_part(part):
+            text_buffer.append(part.text)
+        else:
+            flush()
+            merged.append(part)
+    flush()
+    return merged
 
 
 class DecisionPlugin(BasePlugin):
@@ -79,8 +123,9 @@ class DecisionPlugin(BasePlugin):
         self._decider = decider or ThresholdDecider()
         self._state = state_builder or StateBuilder()
         self._audits: dict[str, dict[Checkpoint, AuditResult]] = {}
-        self._stream_buffers: dict[str, str] = {}
+        self._stream_buffers: dict[str, list[Any]] = {}
         self._audited_text_hashes: dict[str, set[str]] = {}
+        self._audited_state_hashes: dict[str, set[str]] = {}
 
     # ------------------------------------------------------------------
     # Public inspection helpers
@@ -96,6 +141,18 @@ class DecisionPlugin(BasePlugin):
             return self._audits.get(invocation_id, {}).get(checkpoint)
         results = self._audits.get(invocation_id)
         return dict(results) if results else None
+
+    async def close(self) -> None:
+        """ADK plugin lifecycle hook: close the pooled HTTP client."""
+        close = getattr(self._client, "aclose", None)
+        if callable(close):
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+
+    async def aclose(self) -> None:
+        """Backward-compatible alias for the ADK plugin close hook."""
+        await self.close()
 
     # ------------------------------------------------------------------
     # ADK callbacks
@@ -116,7 +173,9 @@ class DecisionPlugin(BasePlugin):
         )
         if result.action is AuditAction.BLOCK:
             # The block response is synthetic: never send it back through the
-            # decision API as if it were model output.
+            # decision API as if it were model output. It short-circuits this
+            # invocation before any model call, so it must also be marked
+            # turn_complete to terminate the turn.
             self._remember_audited_text(invocation_id, self._config.block_message)
             return self._block_response()
         return None
@@ -129,24 +188,37 @@ class DecisionPlugin(BasePlugin):
         **kwargs: Any,
     ) -> LlmResponse | None:
         # Streaming chunks are handled by on_event_callback so that no
-        # unaudited partial text reaches the caller.
+        # unaudited partial text or media reaches the caller.
         if getattr(llm_response, "partial", False):
             return None
 
         invocation_id = callback_context.invocation_id
-        raw_text = _text_of_content(getattr(llm_response, "content", None))
-        if not raw_text:
+        content = getattr(llm_response, "content", None)
+        visible_parts = _visible_parts_of_content(content)
+        if not visible_parts:
             return None
+        raw_text = _text_of_content(content)
+        state = self._state.build_after_model(llm_response)
 
         result = await self._audit(
             invocation_id=invocation_id,
             checkpoint=Checkpoint.AFTER_MODEL,
-            state=self._state.build_after_model(llm_response),
+            state=state,
         )
-        self._remember_audited_text(invocation_id, raw_text)
+        if raw_text:
+            # Text-bearing responses are deduped by the visible text, which
+            # also covers mixed text+media responses.
+            self._remember_audited_text(invocation_id, raw_text)
+        elif any(_is_media_part(part) for part in visible_parts):
+            # Media-only responses have no text hash to consume, so remember
+            # the audited state and let on_event_callback reuse that audit.
+            self._remember_audited_state(invocation_id, state)
         if result.action is AuditAction.BLOCK:
             replacement = self._config.block_message
             self._remember_audited_text(invocation_id, replacement)
+            # Preserve the original response's turn_complete: this callback
+            # only replaces content, it must not change whether ADK considers
+            # the turn finished.
             return llm_response.model_copy(
                 update={
                     "content": types.Content(
@@ -201,32 +273,31 @@ class DecisionPlugin(BasePlugin):
         event: Any,
         **kwargs: Any,
     ) -> Any | None:
-        text = self._event_text(event)
-        if text is None:
+        visible_parts = self._event_parts(event)
+        if visible_parts is None:
             return None
 
         invocation_id = invocation_context.invocation_id
-        partial = bool(getattr(event, "partial", False))
-        if partial:
-            if text:
-                self._stream_buffers[invocation_id] = (
-                    self._stream_buffers.get(invocation_id, "") + text
-                )
+        if getattr(event, "partial", False):
+            if visible_parts:
+                self._stream_buffers.setdefault(invocation_id, []).extend(visible_parts)
+                self._prune_caches()
             if getattr(event, "turn_complete", False):
-                buffered = self._stream_buffers.pop(invocation_id, "")
+                buffered = self._stream_buffers.pop(invocation_id, [])
                 if buffered:
                     return await self._finalize_stream(invocation_id, event, buffered)
-            if text:
-                return self._replace_event_text(event, "")
+            if visible_parts:
+                return self._suppress_visible_parts(event)
             return None
 
-        buffered = self._stream_buffers.pop(invocation_id, "")
-        candidate = text or buffered
-        if not candidate:
+        buffered = self._stream_buffers.pop(invocation_id, [])
+        candidate_parts = visible_parts or buffered
+        if not candidate_parts:
             return None
-        if self._consume_audited_text(invocation_id, candidate):
+        candidate_text = _text_of_parts(candidate_parts)
+        if candidate_text and self._consume_audited_text(invocation_id, candidate_text):
             return None
-        return await self._finalize_stream(invocation_id, event, candidate)
+        return await self._finalize_stream(invocation_id, event, candidate_parts)
 
     async def after_run_callback(
         self, *, invocation_context: Any, **kwargs: Any
@@ -234,17 +305,16 @@ class DecisionPlugin(BasePlugin):
         invocation_id = invocation_context.invocation_id
         self._stream_buffers.pop(invocation_id, None)
         self._audited_text_hashes.pop(invocation_id, None)
-        if len(self._audits) > _MAX_INVOCATIONS:
-            oldest = next(iter(self._audits))
-            self._audits.pop(oldest, None)
+        self._audited_state_hashes.pop(invocation_id, None)
+        self._prune_caches()
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
     async def _audit(
-        self, *, invocation_id: str, checkpoint: Checkpoint, state: str
+        self, *, invocation_id: str, checkpoint: Checkpoint, state: StatePayload
     ) -> AuditResult:
-        if not state.strip():
+        if not self._state_has_content(state):
             result = AuditResult.skipped(
                 provider=Provider.DECISION,
                 checkpoint=checkpoint,
@@ -258,14 +328,22 @@ class DecisionPlugin(BasePlugin):
             response = await self._client.judge(
                 # Keep the stable policy prefix first so repeated requests can
                 # reuse it, and keep the dynamic audit payload at the end.
-                state=(f"{STATE_POLICY_PREFIX}\n检查点：{checkpoint.value}。\n{state}"),
+                state=self._api_state(checkpoint, state),
                 questions=self._decision_questions(),
             )
         except DecisionClientError as exc:
+            # An unauditable oversized request must not fail open when the
+            # configured failure policy is allow: the content never reached
+            # the decision service.
+            on_error = (
+                "block"
+                if exc.error_type == "request_too_large"
+                else self._config.on_error
+            )
             result = AuditResult.error(
                 provider=Provider.DECISION,
                 checkpoint=checkpoint,
-                on_error=self._config.on_error,
+                on_error=on_error,
                 error_type=exc.error_type,
                 reason=exc.message,
             )
@@ -290,6 +368,15 @@ class DecisionPlugin(BasePlugin):
         self._record(invocation_id, result)
         return result
 
+    @staticmethod
+    def _state_has_content(state: StatePayload) -> bool:
+        return bool(state)
+
+    @staticmethod
+    def _api_state(checkpoint: Checkpoint, state: StatePayload) -> StatePayload:
+        prefix = f"{STATE_POLICY_PREFIX}\n检查点：{checkpoint.value}。"
+        return [{"type": "text", "text": prefix}, *state]
+
     def _questions(self) -> Mapping[str, QuestionConfig]:
         return self._config.questions
 
@@ -304,10 +391,21 @@ class DecisionPlugin(BasePlugin):
 
     def _record(self, invocation_id: str, result: AuditResult) -> None:
         self._audits.setdefault(invocation_id, {})[result.checkpoint] = result
+        self._prune_caches()
         logger.info(
             "content_safety_audit %s",
             json.dumps(result.to_dict(), ensure_ascii=False),
         )
+
+    def _prune_caches(self) -> None:
+        for cache in (
+            self._audits,
+            self._stream_buffers,
+            self._audited_text_hashes,
+            self._audited_state_hashes,
+        ):
+            while len(cache) > _MAX_INVOCATIONS:
+                cache.pop(next(iter(cache)), None)
 
     def _block_response(self) -> LlmResponse:
         return LlmResponse(
@@ -324,15 +422,43 @@ class DecisionPlugin(BasePlugin):
             "content_safety": result.to_dict(),
         }
 
-    def _event_text(self, event: Any) -> str | None:
+    def _event_parts(self, event: Any) -> list[Any] | None:
         content = getattr(event, "content", None)
         if content is None:
             return None
         if getattr(content, "role", None) != "model":
             return None
-        # A model event can contain visible text alongside a function call.
-        # Audit the text while leaving function-call parts intact.
-        return _text_of_content(content)
+        return _visible_parts_of_content(content)
+
+    def _suppress_visible_parts(self, event: Any) -> Any:
+        if any(_is_media_part(part) for part in event.content.parts or []):
+            return self._replace_event_parts(event, [types.Part(text="")])
+        return self._replace_event_text(event, "")
+
+    def _replace_event_parts(self, event: Any, parts: list[Any]) -> Any:
+        content = event.content
+        original_parts = list(getattr(content, "parts", None) or [])
+        new_parts: list[Any] = []
+        replaced = False
+        for part in original_parts:
+            if _is_visible_text_part(part) or _is_media_part(part):
+                if not replaced:
+                    new_parts.extend(parts)
+                    replaced = True
+                continue
+            new_parts.append(part)
+        if not replaced:
+            new_parts.extend(parts)
+        if not new_parts:
+            # Keep the event shape stable while withholding all visible parts.
+            new_parts.append(types.Part(text=""))
+
+        old_text = _text_of_content(content)
+        new_content = types.Content(role=content.role, parts=new_parts)
+        updates: dict[str, Any] = {"content": new_content}
+        if getattr(event, "output", None) == old_text:
+            updates["output"] = _text_of_content(new_content)
+        return event.model_copy(update=updates)
 
     def _replace_event_text(self, event: Any, text: str) -> Any:
         content = event.content
@@ -361,21 +487,53 @@ class DecisionPlugin(BasePlugin):
             updates["output"] = text
         return event.model_copy(update=updates)
 
-    async def _finalize_stream(self, invocation_id: str, event: Any, text: str) -> Any:
-        state = self._state.prepare(f"[model_output]\n{text}")
+    async def _finalize_stream(
+        self, invocation_id: str, event: Any, parts: list[Any]
+    ) -> Any:
+        state = self._state.build_parts(parts, label="model_output")
+        if self._consume_audited_state(invocation_id, state):
+            return None
         result = await self._audit(
             invocation_id=invocation_id,
             checkpoint=Checkpoint.AFTER_MODEL,
             state=state,
         )
         if result.action is AuditAction.BLOCK:
-            return self._replace_event_text(event, self._config.block_message)
-        return self._replace_event_text(event, text)
+            return self._replace_event_parts(
+                event, [types.Part(text=self._config.block_message)]
+            )
+        if all(_is_visible_text_part(part) for part in parts):
+            return self._replace_event_text(event, _text_of_parts(parts))
+        return self._replace_event_parts(event, _coalesce_text_parts(parts))
+
+    @staticmethod
+    def _state_hash(state: StatePayload) -> str:
+        encoded = json.dumps(
+            state, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _remember_audited_state(self, invocation_id: str, state: StatePayload) -> None:
+        self._audited_state_hashes.setdefault(invocation_id, set()).add(
+            self._state_hash(state)
+        )
+        self._prune_caches()
+
+    def _consume_audited_state(self, invocation_id: str, state: StatePayload) -> bool:
+        hashes = self._audited_state_hashes.get(invocation_id)
+        if not hashes:
+            return False
+        digest = self._state_hash(state)
+        if digest in hashes:
+            hashes.discard(digest)
+            return True
+        return False
 
     def _remember_audited_text(self, invocation_id: str, text: str) -> None:
         self._audited_text_hashes.setdefault(invocation_id, set()).add(
             hashlib.sha256(text.encode("utf-8")).hexdigest()
         )
+        self._prune_caches()
 
     def _consume_audited_text(self, invocation_id: str, text: str) -> bool:
         hashes = self._audited_text_hashes.get(invocation_id)

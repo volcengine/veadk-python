@@ -650,3 +650,14 @@ def test_api_url_must_be_parseable_with_host(url):
     data["decision"]["api_url"] = url
     with pytest.raises(ValidationError, match="decision.api_url"):
         ContentSafetyConfig.from_dict(data)
+
+
+def test_llm_shield_app_id_warns_for_non_llm_shield_provider(caplog):
+    import logging
+
+    data = decision_data()
+    data["llm_shield_app_id"] = "legacy-app"
+    with caplog.at_level(logging.WARNING):
+        ContentSafetyConfig.from_dict(data)
+    assert "llm_shield_app_id" in caplog.text
+    assert "ignored" in caplog.text

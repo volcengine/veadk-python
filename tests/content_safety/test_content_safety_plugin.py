@@ -16,6 +16,7 @@ import asyncio
 from types import SimpleNamespace
 
 from google.adk.models import LlmResponse
+from google.adk.plugins import PluginManager
 from google.genai import types
 
 from veadk.decision import DecisionClientError, DecisionResponse
@@ -23,6 +24,10 @@ from veadk.content_safety.config import ContentSafetyConfig
 from veadk.content_safety.plugin import DecisionPlugin
 from veadk.content_safety.state import STATE_POLICY_PREFIX, StateBuilder
 from veadk.content_safety.types import AuditAction, AuditStatus, Checkpoint
+
+
+def state_text(state):
+    return "\n".join(part["text"] for part in state if part.get("type") == "text")
 
 
 def decision_response(noul):
@@ -135,7 +140,7 @@ def test_before_model_allows_safe_content():
     )
     assert result is None
     assert len(judge.calls) == 1
-    assert "hello" in judge.calls[0]["state"]
+    assert "hello" in state_text(judge.calls[0]["state"])
     audit = plugin.last_result("inv", Checkpoint.BEFORE_MODEL)
     assert audit.status is AuditStatus.PASSED
     assert audit.action is AuditAction.ALLOW
@@ -184,6 +189,21 @@ def test_before_model_error_allows_by_default():
     assert audit.action is AuditAction.ALLOW
     assert audit.degraded is True
     assert audit.error_type == "timeout"
+
+
+def test_request_too_large_blocks_even_when_on_error_allows():
+    plugin, _ = make_plugin(
+        DecisionClientError("request_too_large", "oversized"), on_error="allow"
+    )
+    result = asyncio.run(
+        plugin.before_model_callback(
+            callback_context=context(), llm_request=user_request("hello")
+        )
+    )
+    assert isinstance(result, LlmResponse)
+    audit = plugin.last_result("inv", Checkpoint.BEFORE_MODEL)
+    assert audit.action is AuditAction.BLOCK
+    assert audit.error_type == "request_too_large"
 
 
 def test_before_model_error_blocks_when_configured():
@@ -237,8 +257,9 @@ def test_after_model_ignores_hidden_thought_parts():
         plugin.after_model_callback(callback_context=context(), llm_response=response)
     )
     assert result is None
-    assert "visible answer" in judge.calls[0]["state"]
-    assert "hidden reasoning" not in judge.calls[0]["state"]
+    state = state_text(judge.calls[0]["state"])
+    assert "visible answer" in state
+    assert "hidden reasoning" not in state
 
 
 def test_after_model_skips_thought_only_response():
@@ -400,7 +421,7 @@ def test_on_event_buffers_partial_text_and_audits_final_text():
     assert second.content.parts[0].text == ""
     assert final.content.parts[0].text == "Hello"
     assert len(judge.calls) == 1
-    assert "Hello" in judge.calls[0]["state"]
+    assert "Hello" in state_text(judge.calls[0]["state"])
 
 
 def test_on_event_flushes_on_turn_complete_partial():
@@ -638,7 +659,7 @@ def test_on_event_blocks_final_text_alongside_function_call():
     assert result.content.parts[0].text == plugin._config.block_message
     assert result.content.parts[1].function_call.name == "tool"
     assert len(judge.calls) == 1
-    assert "secret" in judge.calls[0]["state"]
+    assert "secret" in state_text(judge.calls[0]["state"])
 
 
 def test_state_starts_with_fixed_policy_and_keeps_it_outside_untrusted():
@@ -649,11 +670,13 @@ def test_state_starts_with_fixed_policy_and_keeps_it_outside_untrusted():
         )
     )
     state = judge.calls[0]["state"]
-    assert state.startswith(STATE_POLICY_PREFIX)
-    assert "检查点：before_model。" in state
-    assert state.index(STATE_POLICY_PREFIX) < state.index("检查点：")
-    assert state.index("检查点：") < state.index("<untrusted>")
-    assert "hello" in state
+    text = state_text(state)
+    assert isinstance(state, list)
+    assert text.startswith(STATE_POLICY_PREFIX)
+    assert "检查点：before_model。" in text
+    assert text.index(STATE_POLICY_PREFIX) < text.index("检查点：")
+    assert text.index("检查点：") < text.index("<untrusted>")
+    assert "hello" in text
 
 
 def test_long_dynamic_state_is_truncated_but_policy_is_kept():
@@ -666,7 +689,270 @@ def test_long_dynamic_state_is_truncated_but_policy_is_kept():
             callback_context=context(), llm_request=user_request("abcdefgh")
         )
     )
+    text = state_text(judge.calls[0]["state"])
+    assert text.startswith(STATE_POLICY_PREFIX)
+    assert "abc" in text
+    assert "abcdefgh" not in text
+
+
+def inline_part(mime_type="image/png", data=b"x"):
+    return types.Part(inline_data=types.Blob(mime_type=mime_type, data=data))
+
+
+def image_request(text="what is this?"):
+    return SimpleNamespace(
+        contents=[
+            types.Content(
+                role="user",
+                parts=[types.Part(text=text), inline_part()],
+            )
+        ]
+    )
+
+
+def image_event(*, partial, with_text=True):
+    parts = [inline_part()]
+    if with_text:
+        parts.insert(0, types.Part(text="look"))
+    return FakeEvent(
+        content=types.Content(role="model", parts=parts),
+        partial=partial,
+    )
+
+
+def test_before_model_sends_image_as_state_part():
+    plugin, judge = make_plugin(LOW)
+    result = asyncio.run(
+        plugin.before_model_callback(
+            callback_context=context(), llm_request=image_request()
+        )
+    )
+    assert result is None
     state = judge.calls[0]["state"]
-    assert state.startswith(STATE_POLICY_PREFIX)
-    assert "abc" in state
-    assert "abcdefgh" not in state
+    assert isinstance(state, list)
+    assert STATE_POLICY_PREFIX in state[0]["text"]
+    assert any(part.get("type") == "image" for part in state)
+    assert (
+        plugin.last_result("inv", Checkpoint.BEFORE_MODEL).status is AuditStatus.PASSED
+    )
+
+
+def test_after_model_audits_media_only_and_blocks_media():
+    plugin, judge = make_plugin(HIGH)
+    response = LlmResponse(content=types.Content(role="model", parts=[inline_part()]))
+    result = asyncio.run(
+        plugin.after_model_callback(callback_context=context(), llm_response=response)
+    )
+    assert result is not None
+    assert len(result.content.parts) == 1
+    assert result.content.parts[0].text == plugin.block_message
+    assert result.content.parts[0].inline_data is None
+    assert isinstance(judge.calls[0]["state"], list)
+    assert (
+        plugin.last_result("inv", Checkpoint.AFTER_MODEL).status is AuditStatus.RISK_HIT
+    )
+
+
+def test_after_model_allows_media_only_without_text():
+    plugin, judge = make_plugin(LOW)
+    response = LlmResponse(content=types.Content(role="model", parts=[inline_part()]))
+    result = asyncio.run(
+        plugin.after_model_callback(callback_context=context(), llm_response=response)
+    )
+    assert result is None
+    assert len(judge.calls) == 1
+    assert isinstance(judge.calls[0]["state"], list)
+
+
+def test_media_only_event_reuses_after_model_audit():
+    plugin, judge = make_plugin(LOW)
+    parts = [inline_part()]
+    response = LlmResponse(content=types.Content(role="model", parts=parts))
+    assert (
+        asyncio.run(
+            plugin.after_model_callback(
+                callback_context=context(), llm_response=response
+            )
+        )
+        is None
+    )
+    assert len(judge.calls) == 1
+
+    result = asyncio.run(
+        plugin.on_event_callback(
+            invocation_context=context(),
+            event=FakeEvent(
+                content=types.Content(role="model", parts=parts), partial=False
+            ),
+        )
+    )
+    assert result is None
+    assert len(judge.calls) == 1
+
+
+def test_on_event_withholds_partial_media_and_audits_final():
+    plugin, judge = make_plugin(LOW)
+    partial = asyncio.run(
+        plugin.on_event_callback(
+            invocation_context=context(), event=image_event(partial=True)
+        )
+    )
+    assert partial is not None
+    assert all(
+        getattr(part, "inline_data", None) is None for part in partial.content.parts
+    )
+    assert all(not getattr(part, "text", None) for part in partial.content.parts)
+
+    final = asyncio.run(
+        plugin.on_event_callback(
+            invocation_context=context(), event=image_event(partial=False)
+        )
+    )
+    assert final is not None
+    assert any(
+        getattr(part, "inline_data", None) is not None for part in final.content.parts
+    )
+    assert len(judge.calls) == 1
+    assert isinstance(judge.calls[0]["state"], list)
+
+
+def test_on_event_blocks_final_media_and_strips_it():
+    plugin, _ = make_plugin(HIGH)
+    result = asyncio.run(
+        plugin.on_event_callback(
+            invocation_context=context(), event=image_event(partial=False)
+        )
+    )
+    assert result is not None
+    assert len(result.content.parts) == 1
+    assert result.content.parts[0].text == plugin.block_message
+    assert result.content.parts[0].inline_data is None
+
+
+def test_replace_event_text_updates_matching_output():
+    plugin, _ = make_plugin()
+    event = FakeEvent(
+        content=types.Content(role="model", parts=[types.Part(text="old")]),
+        output="old",
+    )
+    replaced = plugin._replace_event_text(event, "new")
+    assert replaced.output == "new"
+
+
+def test_consume_audited_state_returns_false_for_unknown_state():
+    plugin, _ = make_plugin()
+    plugin._remember_audited_state("inv", [{"type": "text", "text": "a"}])
+    assert (
+        plugin._consume_audited_state("inv", [{"type": "text", "text": "b"}]) is False
+    )
+
+
+def test_replace_event_parts_preserves_function_call():
+    plugin, _ = make_plugin()
+    event = FakeEvent(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(text="old"),
+                types.Part(function_call=types.FunctionCall(name="tool", args={})),
+                inline_part(),
+            ],
+        )
+    )
+    replaced = plugin._replace_event_parts(event, [types.Part(text="new")])
+    assert replaced.content.parts[0].text == "new"
+    assert replaced.content.parts[1].function_call.name == "tool"
+    assert all(
+        getattr(part, "inline_data", None) is None for part in replaced.content.parts
+    )
+
+
+def test_replace_event_parts_appends_when_no_visible_parts():
+    plugin, _ = make_plugin()
+    event = FakeEvent(
+        content=types.Content(
+            role="model",
+            parts=[types.Part(function_call=types.FunctionCall(name="tool", args={}))],
+        )
+    )
+    replaced = plugin._replace_event_parts(event, [types.Part(text="new")])
+    assert replaced.content.parts[0].function_call.name == "tool"
+    assert replaced.content.parts[1].text == "new"
+
+
+def test_replace_event_parts_inserts_placeholder_for_empty_replacement():
+    plugin, _ = make_plugin()
+    event = FakeEvent(
+        content=types.Content(role="model", parts=[types.Part(text="old")])
+    )
+    replaced = plugin._replace_event_parts(event, [])
+    assert len(replaced.content.parts) == 1
+    assert replaced.content.parts[0].text == ""
+
+
+def test_plugin_close_delegates_to_client():
+    class CloseableJudge(FakeJudge):
+        def __init__(self):
+            super().__init__()
+            self.closed = False
+
+        async def aclose(self):
+            self.closed = True
+
+    judge = CloseableJudge()
+    plugin = DecisionPlugin(config=config(), client=judge)
+    asyncio.run(plugin.close())
+    assert judge.closed is True
+
+
+def test_plugin_manager_close_invokes_plugin_close():
+    class CloseableJudge(FakeJudge):
+        def __init__(self):
+            super().__init__()
+            self.closed = False
+
+        async def aclose(self):
+            self.closed = True
+
+    judge = CloseableJudge()
+    plugin = DecisionPlugin(config=config(), client=judge)
+    asyncio.run(PluginManager(plugins=[plugin]).close())
+    assert judge.closed is True
+
+
+def test_plugin_aclose_is_an_alias_for_close():
+    class CloseableJudge(FakeJudge):
+        def __init__(self):
+            super().__init__()
+            self.closed = False
+
+        async def aclose(self):
+            self.closed = True
+
+    judge = CloseableJudge()
+    plugin = DecisionPlugin(config=config(), client=judge)
+    asyncio.run(plugin.aclose())
+    assert judge.closed is True
+
+
+def test_plugin_close_without_client_method_is_noop():
+    plugin, _ = make_plugin()
+    asyncio.run(plugin.close())
+
+
+def test_prune_caches_bounds_all_invocation_maps():
+    plugin, _ = make_plugin()
+    for index in range(257):
+        plugin._audits[f"inv-{index}"] = {}
+        plugin._stream_buffers[f"inv-{index}"] = []
+        plugin._audited_text_hashes[f"inv-{index}"] = set()
+        plugin._audited_state_hashes[f"inv-{index}"] = set()
+    plugin._prune_caches()
+    assert len(plugin._audits) == 256
+    assert len(plugin._stream_buffers) == 256
+    assert len(plugin._audited_text_hashes) == 256
+    assert len(plugin._audited_state_hashes) == 256
+    assert "inv-0" not in plugin._audits
+    assert "inv-0" not in plugin._stream_buffers
+    assert "inv-0" not in plugin._audited_text_hashes
+    assert "inv-0" not in plugin._audited_state_hashes

@@ -19,6 +19,7 @@ System One-shaped HTTP service, session persistence, and event streaming.
 """
 
 import asyncio
+import base64
 import json
 import threading
 from contextlib import contextmanager
@@ -45,6 +46,14 @@ from veadk.content_safety import (
 ALL_QUESTIONS = ("prompt_injection", "sensitive_data", "high_risk_operation")
 BLOCK_MESSAGE = "blocked by e2e policy"
 TOOL_CALLS: list[str] = []
+RED_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAK0lEQVR4nO3NQQEAAATAQGTQ"
+    "P5kwSvC7BdjldMdn9XoHAAAAAAAAAAAAhy3gIwFE6inHLwAAAABJRU5ErkJggg=="
+)
+
+
+def _state_text(state):
+    return "\n".join(part.get("text", "") for part in state if isinstance(part, dict))
 
 
 def _answers(low=0.01, **overrides):
@@ -57,7 +66,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802 - stdlib naming
         length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(length))
-        state = body.get("state", "")
+        state = _state_text(body.get("state", []))
         self.server.requests.append(
             {"state": state, "body": body, "headers": dict(self.headers)}
         )
@@ -169,7 +178,9 @@ def make_config(server, *, on_error="allow"):
     )
 
 
-async def run_agent(*, turns, message, plugin, streaming=False, tools=None):
+async def run_agent(
+    *, turns, message, plugin, streaming=False, tools=None, message_parts=None
+):
     llm = ScriptedLlm(turns=turns)
     agent = LlmAgent(
         name="e2e_agent",
@@ -192,7 +203,9 @@ async def run_agent(*, turns, message, plugin, streaming=False, tools=None):
     async for event in runner.run_async(
         user_id="user",
         session_id="session",
-        new_message=types.Content(role="user", parts=[types.Part(text=message)]),
+        new_message=types.Content(
+            role="user", parts=message_parts or [types.Part(text=message)]
+        ),
         run_config=run_config,
     ):
         events.append(event)
@@ -223,8 +236,8 @@ def test_e2e_allow_full_adk_turn():
         assert event_text(events[-1]) == "hello from the model"
         assert len(server.requests) == 2  # before_model + after_model
         assert server.requests[0]["body"]["model"] == "e2e-judge"
-        assert "before_model" in server.requests[0]["body"]["state"]
-        assert "after_model" in server.requests[1]["body"]["state"]
+        assert "before_model" in _state_text(server.requests[0]["body"]["state"])
+        assert "after_model" in _state_text(server.requests[1]["body"]["state"])
         assert server.requests[0]["headers"]["Authorization"] == "Bearer e2e-key"
         assert server.requests[0]["headers"]["ark-beta-systemone-api"] == "true"
 
@@ -374,6 +387,34 @@ def test_e2e_tool_runs_when_content_is_allowed():
         )
 
 
+def test_e2e_tool_argument_metadata_key_is_audited():
+    TOOL_CALLS.clear()
+    with systemone_server() as server:
+        plugin = build_content_safety(make_config(server))
+        llm, events = asyncio.run(
+            run_agent(
+                turns=[
+                    [
+                        tool_call_response(
+                            "dangerous_tool",
+                            {"next_page_token_data": "TOOL_RISK"},
+                        )
+                    ],
+                    [text_response("done")],
+                ],
+                message="call the tool",
+                plugin=plugin,
+                tools=[dangerous_tool],
+            )
+        )
+
+        assert TOOL_CALLS == []
+        invocation_id = events[-1].invocation_id
+        before_tool = plugin.last_result(invocation_id, Checkpoint.BEFORE_TOOL)
+        assert before_tool is not None
+        assert before_tool.status.value == "risk_hit"
+
+
 def test_e2e_on_error_allow_degrades_open():
     TOOL_CALLS.clear()
     with systemone_server() as server:
@@ -476,5 +517,36 @@ tool:
         assert result == "hello from veadk"
         assert llm.calls == 1
         assert len(server.requests) == 2
-        assert "before_model" in server.requests[0]["body"]["state"]
-        assert "after_model" in server.requests[1]["body"]["state"]
+        assert "before_model" in _state_text(server.requests[0]["body"]["state"])
+        assert "after_model" in _state_text(server.requests[1]["body"]["state"])
+
+
+def test_e2e_multimodal_image_reaches_decision_api():
+    TOOL_CALLS.clear()
+    with systemone_server() as server:
+        plugin = build_content_safety(make_config(server))
+        llm, events = asyncio.run(
+            run_agent(
+                turns=[[text_response("image noted")]],
+                message="",
+                message_parts=[
+                    types.Part(text="what is this?"),
+                    types.Part(
+                        inline_data=types.Blob(mime_type="image/png", data=RED_PNG)
+                    ),
+                ],
+                plugin=plugin,
+            )
+        )
+
+        assert llm.calls == 1
+        state = server.requests[0]["body"]["state"]
+        assert isinstance(state, list)
+        assert any(part.get("type") == "image" for part in state)
+        image = next(part for part in state if part.get("type") == "image")
+        assert image["image_url"].startswith("data:image/png;base64,")
+        invocation_id = events[-1].invocation_id
+        assert (
+            plugin.last_result(invocation_id, Checkpoint.BEFORE_MODEL).status.value
+            == "passed"
+        )

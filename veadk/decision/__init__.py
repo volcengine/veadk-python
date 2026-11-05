@@ -19,7 +19,12 @@ from .client import (
     DecisionClientError,
     DecisionJudge,
 )
-from .types import DecisionQuestion, DecisionRequest, DecisionResponse
+from .types import (
+    DecisionQuestion,
+    DecisionRequest,
+    DecisionResponse,
+    DecisionState,
+)
 
 __all__ = [
     "DEFAULT_TIMEOUT_SECONDS",
@@ -29,4 +34,5 @@ __all__ = [
     "DecisionQuestion",
     "DecisionRequest",
     "DecisionResponse",
+    "DecisionState",
 ]

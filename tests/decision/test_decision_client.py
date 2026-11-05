@@ -31,8 +31,12 @@ QUESTIONS = {
 }
 
 
+def text_state(text):
+    return [{"type": "text", "text": text}]
+
+
 def call(client):
-    return asyncio.run(client.judge(state="hello", questions=QUESTIONS))
+    return asyncio.run(client.judge(state=text_state("hello"), questions=QUESTIONS))
 
 
 def test_request_contract_and_response():
@@ -65,7 +69,7 @@ def test_request_contract_and_response():
     assert captured["headers"]["content-type"] == "application/json"
     assert captured["body"] == {
         "model": "judge-model",
-        "state": "hello",
+        "state": [{"type": "text", "text": "hello"}],
         "questions": {
             "prompt_injection": {
                 "type": "noul",
@@ -79,12 +83,12 @@ def test_request_contract_and_response():
 def test_decision_request_to_payload():
     request = DecisionRequest(
         model="judge-model",
-        state="hello",
+        state=text_state("hello"),
         questions=QUESTIONS,
     )
     assert request.to_payload() == {
         "model": "judge-model",
-        "state": "hello",
+        "state": [{"type": "text", "text": "hello"}],
         "questions": {
             "prompt_injection": {
                 "type": "noul",
@@ -104,6 +108,28 @@ def test_decision_response_requires_answers_mapping():
         DecisionResponse.from_payload({"questions": {}})
     with pytest.raises(ValueError, match="answers"):
         DecisionResponse.from_payload({"answers": []})
+
+
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        (413, {"error": "too large"}),
+        (400, {"error": "request exceeds maximum size"}),
+    ],
+)
+def test_oversized_request_is_mapped(status, body):
+    def handler(request):
+        return httpx.Response(status, json=body)
+
+    client = DecisionClient(
+        endpoint="https://systemone.example",
+        api_key="k",
+        model="m",
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(DecisionClientError) as exc:
+        call(client)
+    assert exc.value.error_type == "request_too_large"
 
 
 @pytest.mark.parametrize("status", [400, 401, 500])
@@ -197,3 +223,76 @@ def test_missing_answers_object_is_mapped():
         call(client)
     assert exc.value.error_type == "invalid_response"
     assert "answers" in exc.value.message
+
+
+def test_state_list_is_sent_unchanged():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"answers": {"prompt_injection": {"type": "noul", "noul": 0.1}}},
+        )
+
+    state = [
+        {"type": "text", "text": "what is this?"},
+        {"type": "image", "image_url": "data:image/png;base64,YWJj"},
+    ]
+    client = DecisionClient(
+        endpoint="https://systemone.example/v1/judge",
+        api_key="secret",
+        model="judge-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    asyncio.run(client.judge(state=state, questions=QUESTIONS))
+
+    assert captured["body"]["state"] == state
+
+
+def test_client_is_reused_within_one_event_loop_and_closed():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"answers": {"prompt_injection": {"type": "noul", "noul": 0.1}}},
+        )
+
+    async def scenario():
+        client = DecisionClient(
+            endpoint="https://systemone.example/v1/judge",
+            api_key="secret",
+            model="judge-model",
+            transport=httpx.MockTransport(handler),
+        )
+        await client.judge(state=text_state("one"), questions=QUESTIONS)
+        first = client._client
+        await client.judge(state=text_state("two"), questions=QUESTIONS)
+        assert client._client is first
+        await client.aclose()
+        assert client._client is None
+        await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_client_context_manager_closes():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"answers": {"prompt_injection": {"type": "noul", "noul": 0.1}}},
+        )
+
+    async def scenario():
+        client = DecisionClient(
+            endpoint="https://systemone.example/v1/judge",
+            api_key="secret",
+            model="judge-model",
+            transport=httpx.MockTransport(handler),
+        )
+        async with client as entered:
+            assert entered is client
+            await client.judge(state=text_state("one"), questions=QUESTIONS)
+        assert client._client is None
+
+    asyncio.run(scenario())
