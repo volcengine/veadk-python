@@ -186,7 +186,7 @@ Media mapping rules:
 
 Unrecognized or unsupported MIME types are skipped with a warning instead of failing the whole audit. Inline media larger than 20 MiB per part is skipped with a warning; for large assets that need auditing, upload them to TOS and use an HTTP(S) URL. If no auditable content remains after skipping media, `last_result` returns an audit result with status `skipped`, alongside the warning log.
 
-The 32,000-character `state` limit applies to text segments; media URLs and data URLs are not truncated by that character limit. `<untrusted>` / `</untrusted>` tags inside audited text are escaped to `&lt;...&gt;` so content cannot close or forge the wrapper early. Redaction is best-effort defense in depth and does not replace a dedicated DLP capability.
+The 32,000-character `state` limit applies to text segments; media URLs and data URLs are not truncated by that character limit. `<untrusted>` / `</untrusted>` tags inside audited text are escaped to `&lt;...&gt;` so content cannot close or forge the wrapper early. Dictionary field redaction matches credential keywords on word boundaries (for example `access_token` and `secretKey`), while metadata fields such as `tokenizer`, `token_count`, and `next_page_token_data` keep their original values so matching a keyword fragment cannot hide content from the audit. Redaction is best-effort defense in depth and does not replace a dedicated DLP capability.
 
 <Callout type="warning" title="Request size">
 Inline media is base64-encoded into the request body. Large files significantly increase request size and decision latency; in production, prefer uploading to TOS and using an HTTP(S) URL.

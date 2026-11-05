@@ -186,7 +186,7 @@ runner = Runner(agent=agent)  # 自动挂载
 
 无法识别或不受支持的 MIME 类型会跳过并记录告警，不会让整个审计失败。单个内联媒体超过 20 MiB 时会跳过并告警；需要审计的大文件建议先上传到 TOS 并使用 HTTP(S) URL。如果跳过媒体后没有任何可审计内容，`last_result` 会返回状态为 `skipped` 的审计结果，同时保留告警日志。
 
-`state` 的 32,000 字符上限作用于文本片段；媒体 URL 或 data URL 不参与该字符截断。审计文本中的 `<untrusted>` / `</untrusted>` 标签会被转义为 `&lt;...&gt;`，防止内容提前闭合或伪造包裹。脱敏是 best-effort，仅作为纵深防御，不替代专门的 DLP 能力。
+`state` 的 32,000 字符上限作用于文本片段；媒体 URL 或 data URL 不参与该字符截断。审计文本中的 `<untrusted>` / `</untrusted>` 标签会被转义为 `&lt;...&gt;`，防止内容提前闭合或伪造包裹。字段名脱敏按词边界匹配凭证关键词（如 `access_token`、`secretKey`），`tokenizer`、`token_count`、`next_page_token_data` 等元数据字段保留原文，避免字段名误伤造成审计盲区。脱敏是 best-effort，仅作为纵深防御，不替代专门的 DLP 能力。
 
 <Callout type="warning" title="请求体大小">
 内联媒体会以 base64 放进请求体。大文件会显著增加请求大小和判定时延，生产环境建议先上传到 TOS 并使用 HTTP(S) URL。

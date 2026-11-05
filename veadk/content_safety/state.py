@@ -52,16 +52,49 @@ StatePayload = list[dict[str, Any]]
 
 _REDACTED = "[REDACTED]"
 _REDACT_KEY_MARKERS = (
-    "password",
-    "passwd",
-    "secret",
-    "token",
-    "api_key",
-    "apikey",
-    "authorization",
-    "cookie",
-    "credential",
-    "private_key",
+    ("password",),
+    ("passwd",),
+    ("secret",),
+    ("token",),
+    ("api", "key"),
+    ("apikey",),
+    ("authorization",),
+    ("cookie",),
+    ("credential",),
+    ("credentials",),
+    ("private", "key"),
+)
+# Tokens that turn a credential marker into metadata, such as ``token_count``
+# or ``next_page_token_data``. Any other following token keeps the field
+# sensitive, which covers ``secretKey`` and ``token_value``.
+_REDACT_METADATA_TOKENS = frozenset(
+    {
+        "count",
+        "type",
+        "size",
+        "length",
+        "limit",
+        "name",
+        "id",
+        "url",
+        "uri",
+        "path",
+        "data",
+        "info",
+        "status",
+        "enabled",
+        "expiry",
+        "expires",
+        "expiration",
+        "prefix",
+        "suffix",
+        "label",
+        "format",
+        "endpoint",
+    }
+)
+_KEY_TOKEN_RE = re.compile(
+    r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])"
 )
 _MAX_REDACT_DEPTH = 8
 _MEDIA_FIELDS = {
@@ -113,14 +146,37 @@ def _escape_untrusted_tags(text: str) -> str:
     return _UNTRUSTED_TAG_RE.sub(r"&lt;\1&gt;", text)
 
 
+def _key_tokens(key: str) -> list[str]:
+    """Split a field name into lower-case words at separators and case edges."""
+    return [token.lower() for token in _KEY_TOKEN_RE.split(key) if token]
+
+
+def _is_secret_key(key: str) -> bool:
+    """Return whether a field name denotes a credential value.
+
+    Matching is word-boundary based instead of substring based: ``tokenizer``
+    and ``token_count`` are metadata, while ``access_token`` and ``secretKey``
+    hold credentials.
+    """
+    tokens = _key_tokens(key)
+    for marker in _REDACT_KEY_MARKERS:
+        size = len(marker)
+        for index in range(len(tokens) - size + 1):
+            if tuple(tokens[index : index + size]) != marker:
+                continue
+            following = tokens[index + size :]
+            if not following or following[0] not in _REDACT_METADATA_TOKENS:
+                return True
+    return False
+
+
 def _redact(value: Any, *, depth: int = 0) -> Any:
     if depth >= _MAX_REDACT_DEPTH:
         return "[TRUNCATED]"
     if isinstance(value, dict):
         redacted: dict[Any, Any] = {}
         for key, item in value.items():
-            key_text = str(key)
-            if any(marker in key_text.lower() for marker in _REDACT_KEY_MARKERS):
+            if _is_secret_key(str(key)):
                 redacted[key] = _REDACTED
             else:
                 redacted[key] = _redact(item, depth=depth + 1)

@@ -387,6 +387,34 @@ def test_e2e_tool_runs_when_content_is_allowed():
         )
 
 
+def test_e2e_tool_argument_metadata_key_is_audited():
+    TOOL_CALLS.clear()
+    with systemone_server() as server:
+        plugin = build_content_safety(make_config(server))
+        llm, events = asyncio.run(
+            run_agent(
+                turns=[
+                    [
+                        tool_call_response(
+                            "dangerous_tool",
+                            {"next_page_token_data": "TOOL_RISK"},
+                        )
+                    ],
+                    [text_response("done")],
+                ],
+                message="call the tool",
+                plugin=plugin,
+                tools=[dangerous_tool],
+            )
+        )
+
+        assert TOOL_CALLS == []
+        invocation_id = events[-1].invocation_id
+        before_tool = plugin.last_result(invocation_id, Checkpoint.BEFORE_TOOL)
+        assert before_tool is not None
+        assert before_tool.status.value == "risk_hit"
+
+
 def test_e2e_on_error_allow_degrades_open():
     TOOL_CALLS.clear()
     with systemone_server() as server:
