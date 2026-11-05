@@ -304,6 +304,80 @@ async def test_runtime_passes_isolated_config_and_safe_sdk_controls(
 
 
 @pytest.mark.asyncio
+async def test_runtime_replaces_base_instructions_only_when_configured(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from veadk.runtime.codex import runtime as runtime_module
+
+    shim = _FakeShim()
+
+    async def fake_get_shim(api_base, api_key):
+        return shim
+
+    monkeypatch.setattr(runtime_module, "get_shim", fake_get_shim)
+    monkeypatch.setattr(runtime_module, "AsyncCodex", _FakeAsyncCodex)
+    monkeypatch.setattr(
+        runtime_module, "sync_skills_to_codex_home", lambda *_, **__: None
+    )
+    _FakeAsyncCodex.calls = {}
+    runtime_logger = logging.getLogger("veadk.runtime.codex.runtime")
+    runtime_logger.addHandler(caplog.handler)
+    runtime_logger.setLevel(logging.DEBUG)
+
+    agent = _Agent()
+    agent.codex_runtime_config = CodexRuntimeConfig(
+        base_instructions="You answer product questions only."
+    )
+    ctx = _Context(
+        invocation_id="inv-base",
+        agent=agent,
+        branch=None,
+        isolation_scope=None,
+        user_content=types.Content(role="user", parts=[types.Part(text="hello")]),
+        session=Session(
+            id="session-base",
+            appName="app",
+            userId="user",
+            state={},
+            events=[],
+        ),
+    )
+
+    try:
+        [event async for event in CodexRuntime().run_async(agent, ctx)]
+    finally:
+        runtime_logger.removeHandler(caplog.handler)
+
+    thread_start = _FakeAsyncCodex.calls["thread_start"]
+    # The configured text replaces Codex's built-in system prompt; the agent
+    # identity and instruction still ride the additive developer channel.
+    assert thread_start["base_instructions"] == "You answer product questions only."
+    assert thread_start["developer_instructions"] == (
+        "Your name is agent.\n\nSDK contract agent\n\nFollow the contract.\n\n"
+        + _TOOL_AVAILABILITY_NOTE
+    )
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "codex_base_instructions_replaced invocation_id=inv-base" in messages
+    assert "codex_base_instructions_preserved" not in messages
+
+
+def test_thread_instruction_hash_changes_with_base_instructions_only_when_set():
+    from veadk.runtime.codex.runtime import _thread_instruction_hash
+    from veadk.runtime.codex.thread_store import instruction_hash
+
+    # Unset keeps the hash threads were stored with, so upgrading does not
+    # restart every persistent thread.
+    assert _thread_instruction_hash("dev", None) == instruction_hash("dev")
+    # A thread keeps the base instructions it was started with, so changing
+    # them has to start a new thread.
+    assert _thread_instruction_hash("dev", "base") != instruction_hash("dev")
+    assert _thread_instruction_hash("dev", "base") != _thread_instruction_hash(
+        "dev", "other base"
+    )
+
+
+@pytest.mark.asyncio
 async def test_runtime_unregisters_turn_when_sdk_start_fails(monkeypatch) -> None:
     from veadk.runtime.codex import runtime as runtime_module
 
