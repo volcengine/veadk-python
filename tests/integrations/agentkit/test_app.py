@@ -62,6 +62,15 @@ class _FakeShortTermMemory:
         self.backend = backend
 
 
+class _FakeSseEvent:
+    def __init__(self, event_id: str, *, partial: bool = False) -> None:
+        self.id = event_id
+        self.partial = partial
+
+    def model_copy(self, *, deep: bool = False) -> _FakeSseEvent:
+        return _FakeSseEvent(self.id, partial=self.partial)
+
+
 @pytest.fixture(autouse=True)
 def fake_agentkit_server(monkeypatch: pytest.MonkeyPatch) -> None:
     _FakeAgentServer.instances.clear()
@@ -85,6 +94,21 @@ def _root_agent() -> BaseAgent:
         sub_agents=[child],
     )
     return cast(BaseAgent, root)
+
+
+def test_sse_payload_event_id_rewriter_keeps_stream_payload_ids_unique() -> None:
+    rewriter = agentkit_app._SsePayloadEventIdRewriter()
+
+    first_partial = _FakeSseEvent("event-1", partial=True)
+    second_partial = _FakeSseEvent("event-1", partial=True)
+    final = _FakeSseEvent("event-1")
+    duplicate_final = _FakeSseEvent("event-1")
+
+    assert rewriter.prepare(first_partial).id == "event-1:veid:0"
+    assert first_partial.id == "event-1"
+    assert rewriter.prepare(second_partial).id == "event-1:veid:1"
+    assert rewriter.prepare(final).id == "event-1"
+    assert rewriter.prepare(duplicate_final).id == "event-1:veid:2"
 
 
 def test_create_agentkit_app_preserves_platform_route_contract() -> None:

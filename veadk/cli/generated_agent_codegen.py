@@ -1751,8 +1751,8 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from google.adk.agents import RunConfig
+from google.adk.agents._streaming_mode import StreamingMode
 from google.adk.agents.base_agent import BaseAgent
-from google.adk.agents.run_config import StreamingMode
 from google.adk.apps.app import App
 from google.adk.cli.adk_web_server import RunAgentRequest
 from google.adk.runners import Runner as AdkRunner
@@ -1780,6 +1780,34 @@ def _content_text(content: object) -> str:
         if text:
             texts.append(str(text))
     return "\n".join(texts)
+
+
+class _SsePayloadEventIdRewriter:
+    def __init__(self) -> None:
+        self._emitted_ids: set[str] = set()
+        self._next_id = 0
+
+    def prepare(self, event: Any) -> Any:
+        event_id = str(getattr(event, "id", "") or "")
+        should_rewrite = (
+            bool(getattr(event, "partial", False))
+            or not event_id
+            or event_id in self._emitted_ids
+        )
+        if should_rewrite:
+            event = event.model_copy(deep=True)
+            unique_id = (
+                f"{event_id}:veid:{self._next_id}"
+                if event_id
+                else f"veid:{self._next_id}"
+            )
+            self._next_id += 1
+            event.id = unique_id
+
+        emitted_id = str(getattr(event, "id", "") or "")
+        if emitted_id:
+            self._emitted_ids.add(emitted_id)
+        return event
 
 
 def _has_a2a_registry_config(agent: object) -> bool:
@@ -2038,6 +2066,7 @@ def enable_dynamic_a2a_tools(app: FastAPI, root_agent: BaseAgent) -> None:
                 )
 
         async def event_generator():
+            event_id_rewriter = _SsePayloadEventIdRewriter()
             try:
                 async with Aclosing(
                     runner.run_async(
@@ -2067,6 +2096,9 @@ def enable_dynamic_a2a_tools(app: FastAPI, root_agent: BaseAgent) -> None:
                             events_to_stream = [content_event, artifact_event]
 
                         for event_to_stream in events_to_stream:
+                            event_to_stream = event_id_rewriter.prepare(
+                                event_to_stream
+                            )
                             yield (
                                 "data: "
                                 + event_to_stream.model_dump_json(
@@ -2108,6 +2140,7 @@ def enable_dynamic_a2a_tools(app: FastAPI, root_agent: BaseAgent) -> None:
         )
 
         async def event_generator():
+            event_id_rewriter = _SsePayloadEventIdRewriter()
             try:
                 async with Aclosing(
                     runner.run_async(
@@ -2118,6 +2151,7 @@ def enable_dynamic_a2a_tools(app: FastAPI, root_agent: BaseAgent) -> None:
                     )
                 ) as agen:
                     async for event in agen:
+                        event = event_id_rewriter.prepare(event)
                         yield (
                             "data: "
                             + event.model_dump_json(

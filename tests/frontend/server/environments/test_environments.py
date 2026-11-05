@@ -454,14 +454,45 @@ def test_aio_environment_preserves_the_shell_runtime_contract():
     assert config.language == "python-3.12"
     assert (
         "ARG AIO_BASE_IMAGE="
-        "agentkit-cli-2107625663-cn-beijing.cr.volces.com/agentkit/"
-        "agent-native-requirements-aio:0.2.1-20260831"
+        "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/"
+        "agentkit-sandbox:all-in-one-1.0.2"
     ) in dockerfile
     assert "FROM --platform=${AIO_BASE_PLATFORM} ${AIO_BASE_IMAGE}" in dockerfile
     assert "BASH_VENV_PATH=/opt/veadk-environment/.venv" in dockerfile
     assert "EXPOSE 8080" in dockerfile
     assert "CMD " not in dockerfile
     assert "ENTRYPOINT " not in dockerfile
+
+
+@pytest.mark.parametrize(
+    "provider,region,expected",
+    [
+        (
+            "volcengine",
+            "cn-beijing",
+            "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/agentkit-sandbox:all-in-one-1.0.2",
+        ),
+        (
+            "volcengine",
+            "cn-shanghai",
+            "enterprise-cn-shanghai-cn-shanghai.cr.volces.com/vefaas-public/agentkit-sandbox:all-in-one-1.0.2",
+        ),
+        (
+            "byteplus",
+            "ap-southeast-1",
+            "enterprise-public-ap-southeast-1.cr.volces.com/vefaas-public/agentkit-sandbox:all-in-one-1.0.2",
+        ),
+    ],
+)
+def test_aio_environment_base_image_matches_provider_region(provider, region, expected):
+    from frontend.server.environments.dockerfile import resolve_aio_base_image
+
+    config = EnvironmentInput.model_validate(_payload(baseEnvironment="aio-sandbox"))
+
+    assert resolve_aio_base_image(provider, region) == expected
+    assert f"ARG AIO_BASE_IMAGE={expected}" in build_dockerfile(
+        config, provider=provider, region=region
+    )
 
 
 @pytest.mark.parametrize("operating_system", ["ubuntu-22.04", "ubuntu-24.04"])

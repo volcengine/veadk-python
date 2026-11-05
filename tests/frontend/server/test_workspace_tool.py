@@ -64,7 +64,7 @@ def test_workspace_image_matches_deployment_region(
 
     monkeypatch.delenv("STUDIO_WORKSPACE_IMAGE", raising=False)
     assert resolve_workspace_image(provider, region) == (
-        f"{registry}.cr.volces.com/vefaas-public/agentkit-sandbox:studio-sandbox-1.0.1"
+        f"{registry}.cr.volces.com/vefaas-public/agentkit-sandbox:all-in-one-1.0.2"
     )
 
 

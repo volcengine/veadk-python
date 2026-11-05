@@ -35,10 +35,21 @@ _OPERATING_SYSTEMS = {
     "ubuntu-24.04": ("Ubuntu 24.04", "ubuntu:24.04"),
 }
 
-AIO_BASE_IMAGE = (
-    "agentkit-cli-2107625663-cn-beijing.cr.volces.com/agentkit/"
-    "agent-native-requirements-aio:0.2.1-20260831"
-)
+AIO_BASE_IMAGES = {
+    (
+        "volcengine",
+        "cn-beijing",
+    ): "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/agentkit-sandbox:all-in-one-1.0.2",
+    (
+        "volcengine",
+        "cn-shanghai",
+    ): "enterprise-cn-shanghai-cn-shanghai.cr.volces.com/vefaas-public/agentkit-sandbox:all-in-one-1.0.2",
+    (
+        "byteplus",
+        "ap-southeast-1",
+    ): "enterprise-public-ap-southeast-1.cr.volces.com/vefaas-public/agentkit-sandbox:all-in-one-1.0.2",
+}
+AIO_BASE_IMAGE = AIO_BASE_IMAGES[("volcengine", "cn-beijing")]
 
 _PYTHON_PATCH_VERSIONS = {
     "3.10": "3.10.18",
@@ -198,7 +209,24 @@ def _apt_packages(
     return packages
 
 
-def build_dockerfile(config: EnvironmentInput) -> str:
+def resolve_aio_base_image(provider: str = "volcengine", region: str = "") -> str:
+    provider = provider.strip() or "volcengine"
+    region = region.strip()
+    if region:
+        image = AIO_BASE_IMAGES.get((provider, region))
+        if image is not None:
+            return image
+    if provider == "byteplus":
+        return AIO_BASE_IMAGES[("byteplus", "ap-southeast-1")]
+    return AIO_BASE_IMAGES[("volcengine", "cn-beijing")]
+
+
+def build_dockerfile(
+    config: EnvironmentInput,
+    *,
+    provider: str = "volcengine",
+    region: str = "",
+) -> str:
     """Build the canonical Dockerfile when the user did not provide one."""
     if config.dockerfile:
         return validate_dockerfile(config.dockerfile)
@@ -221,7 +249,7 @@ def build_dockerfile(config: EnvironmentInput) -> str:
     )
     lines = (
         [
-            f"ARG AIO_BASE_IMAGE={AIO_BASE_IMAGE}",
+            f"ARG AIO_BASE_IMAGE={resolve_aio_base_image(provider, region)}",
             "ARG AIO_BASE_PLATFORM=linux/amd64",
             "",
             f"# Base environment: AIO Sandbox ({os_label})",
@@ -350,9 +378,14 @@ def build_dockerfile(config: EnvironmentInput) -> str:
     return "\n".join(lines)
 
 
-def environment_base_image(config: EnvironmentInput) -> str:
+def environment_base_image(
+    config: EnvironmentInput,
+    *,
+    provider: str = "volcengine",
+    region: str = "",
+) -> str:
     if config.base_environment == "aio-sandbox":
-        return AIO_BASE_IMAGE
+        return resolve_aio_base_image(provider, region)
     if config.base_environment == "codex-sandbox":
         match = re.search(
             r"^\s*FROM(?:\s+--platform=\S+)?\s+(\S+)",
@@ -384,8 +417,10 @@ def validate_dockerfile(value: str) -> str:
 
 __all__ = [
     "AIO_BASE_IMAGE",
+    "AIO_BASE_IMAGES",
     "build_dockerfile",
     "environment_base_image",
     "environment_capabilities",
+    "resolve_aio_base_image",
     "validate_dockerfile",
 ]

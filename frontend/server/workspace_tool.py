@@ -30,15 +30,15 @@ DEFAULT_WORKSPACE_IMAGES = {
     (
         "volcengine",
         "cn-beijing",
-    ): "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/agentkit-sandbox:studio-sandbox-1.0.1",
+    ): "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/agentkit-sandbox:all-in-one-1.0.2",
     (
         "volcengine",
         "cn-shanghai",
-    ): "enterprise-cn-shanghai-cn-shanghai.cr.volces.com/vefaas-public/agentkit-sandbox:studio-sandbox-1.0.1",
+    ): "enterprise-cn-shanghai-cn-shanghai.cr.volces.com/vefaas-public/agentkit-sandbox:all-in-one-1.0.2",
     (
         "byteplus",
         "ap-southeast-1",
-    ): "enterprise-public-ap-southeast-1.cr.volces.com/vefaas-public/agentkit-sandbox:studio-sandbox-1.0.1",
+    ): "enterprise-public-ap-southeast-1.cr.volces.com/vefaas-public/agentkit-sandbox:all-in-one-1.0.2",
 }
 
 

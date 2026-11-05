@@ -303,7 +303,14 @@ class EnvironmentService:
         elif body.git_source is not None:
             body = body.model_copy(update={"dockerfile": ""})
         else:
-            body = body.model_copy(update={"dockerfile": build_dockerfile(body)})
+            provider, region = self._cloud_location()
+            body = body.model_copy(
+                update={
+                    "dockerfile": build_dockerfile(
+                        body, provider=provider, region=region
+                    )
+                }
+            )
         environment_id = uuid4().hex
         selected_skills = await self._persist_local_skill_assets(
             owner_id, environment_id, body.selected_skills
@@ -386,11 +393,16 @@ class EnvironmentService:
                 )
             }
         )
+        provider, region = self._cloud_location()
         values["dockerfile"] = (
             ""
             if merged_input.git_source is not None
             or merged_input.image_source is not None
-            else build_dockerfile(merged_input)
+            else build_dockerfile(
+                merged_input,
+                provider=provider,
+                region=region,
+            )
         )
         external_binding: tuple[EnvironmentResources, str] | None = None
         if (
@@ -653,6 +665,11 @@ class EnvironmentService:
         skills = await repository.get_skill_manifest(
             owner_id, environment_id, version_id
         )
+        base_provider, base_region = (
+            (build.resources.provider, build.resources.region)
+            if isinstance(build.resources, EnvironmentResources)
+            else self._cloud_location()
+        )
         return EnvironmentManifest(
             apiVersion="agentkit.studio/v3",
             metadata=EnvironmentManifestMetadata(
@@ -664,7 +681,11 @@ class EnvironmentService:
             spec=EnvironmentManifestSpec(
                 image=build.image,
                 baseEnvironment=environment.base_environment,
-                baseImage=environment_base_image(environment),
+                baseImage=environment_base_image(
+                    environment,
+                    provider=base_provider,
+                    region=base_region,
+                ),
                 operatingSystem=environment.operating_system,
                 language=environment.language,
                 executionRuntime=environment.execution_runtime,
@@ -1300,6 +1321,12 @@ class EnvironmentService:
                 "管理员未配置环境镜像构建所需的云资源或凭据。"
             )
         return self._cloud
+
+    def _cloud_location(self) -> tuple[str, str]:
+        if self._cloud is None:
+            return "volcengine", "cn-beijing"
+        info = self._cloud.describe()
+        return info.provider, info.region
 
 
 async def _to_thread_start(
