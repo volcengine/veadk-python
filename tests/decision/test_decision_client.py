@@ -197,3 +197,76 @@ def test_missing_answers_object_is_mapped():
         call(client)
     assert exc.value.error_type == "invalid_response"
     assert "answers" in exc.value.message
+
+
+def test_state_list_is_sent_unchanged():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"answers": {"prompt_injection": {"type": "noul", "noul": 0.1}}},
+        )
+
+    state = [
+        {"type": "text", "text": "what is this?"},
+        {"type": "image", "image_url": "data:image/png;base64,YWJj"},
+    ]
+    client = DecisionClient(
+        endpoint="https://systemone.example/v1/judge",
+        api_key="secret",
+        model="judge-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+    asyncio.run(client.judge(state=state, questions=QUESTIONS))
+
+    assert captured["body"]["state"] == state
+
+
+def test_client_is_reused_within_one_event_loop_and_closed():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"answers": {"prompt_injection": {"type": "noul", "noul": 0.1}}},
+        )
+
+    async def scenario():
+        client = DecisionClient(
+            endpoint="https://systemone.example/v1/judge",
+            api_key="secret",
+            model="judge-model",
+            transport=httpx.MockTransport(handler),
+        )
+        await client.judge(state="one", questions=QUESTIONS)
+        first = client._client
+        await client.judge(state="two", questions=QUESTIONS)
+        assert client._client is first
+        await client.aclose()
+        assert client._client is None
+        await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_client_context_manager_closes():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"answers": {"prompt_injection": {"type": "noul", "noul": 0.1}}},
+        )
+
+    async def scenario():
+        client = DecisionClient(
+            endpoint="https://systemone.example/v1/judge",
+            api_key="secret",
+            model="judge-model",
+            transport=httpx.MockTransport(handler),
+        )
+        async with client as entered:
+            assert entered is client
+            await client.judge(state="one", questions=QUESTIONS)
+        assert client._client is None
+
+    asyncio.run(scenario())

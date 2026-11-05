@@ -19,6 +19,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+DecisionState = str | list[dict[str, Any]]
+
 
 @dataclass(frozen=True)
 class DecisionQuestion:
@@ -33,7 +35,7 @@ class DecisionRequest:
     """A batched Decision API request."""
 
     model: str
-    state: str
+    state: DecisionState
     questions: Mapping[str, DecisionQuestion]
 
     def to_payload(self) -> dict[str, Any]:
