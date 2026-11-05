@@ -1132,16 +1132,20 @@ export function createAssistantEventProjector(
           ignored: true,
         };
       }
-      if (ev.id && seenEventIds.has(ev.id)) {
+      // ADK streams content chunks under the id of their consolidated event, so
+      // only complete events and content-free partials (e.g. A2A status) dedupe.
+      const streamedChunk = ev.partial === true && Boolean(ev.content?.parts?.length);
+      const dedupeId = streamedChunk ? undefined : ev.id;
+      if (dedupeId && seenEventIds.has(dedupeId)) {
         return {
           turn: { role: "assistant", blocks: [] },
           completed: false,
           ignored: true,
         };
       }
-      if (ev.id) {
-        seenEventIds.add(ev.id);
-        eventIdOrder.push(ev.id);
+      if (dedupeId) {
+        seenEventIds.add(dedupeId);
+        eventIdOrder.push(dedupeId);
         if (eventIdOrder.length > MAX_SEEN_EVENT_IDS) {
           seenEventIds.delete(eventIdOrder.shift()!);
         }

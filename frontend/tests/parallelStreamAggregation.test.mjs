@@ -537,3 +537,32 @@ test("closes the live sandbox task from its finalAlreadyEmitted wrapper response
   assert.equal(transportFinished.meta.localId, turns[0].meta.localId);
   assert.equal(transportFinished.meta.streaming, false);
 });
+
+test("keeps ADK streaming chunks that share the final event id", () => {
+  // ADK 2 gives every partial chunk of one model response the same id as its
+  // consolidated final event; only a replayed final event is a duplicate.
+  const projector = createAssistantEventProjector("adk-shared-id");
+  let turns = [];
+  for (const text of ["用户", "问", "你好"]) {
+    const result = projector.project(event("agent", text, { id: "shared-1" }));
+    assert.notEqual(result.ignored, true);
+    turns = upsertProjectedAssistantTurn(turns, result.turn);
+  }
+  assert.equal(blockText(turns[0], "text"), "用户问你好");
+
+  const final = projector.project(event("agent", "完整答案", {
+    partial: false,
+    id: "shared-1",
+  }));
+  assert.notEqual(final.ignored, true);
+  turns = upsertProjectedAssistantTurn(turns, final.turn);
+  assert.equal(turns.length, 1);
+  assert.equal(blockText(turns[0], "text"), "完整答案");
+  assert.equal(turns[0].meta.streaming, false);
+
+  const replayed = projector.project(event("agent", "完整答案", {
+    partial: false,
+    id: "shared-1",
+  }));
+  assert.equal(replayed.ignored, true);
+});
