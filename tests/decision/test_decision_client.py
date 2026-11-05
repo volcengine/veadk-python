@@ -31,8 +31,12 @@ QUESTIONS = {
 }
 
 
+def text_state(text):
+    return [{"type": "text", "text": text}]
+
+
 def call(client):
-    return asyncio.run(client.judge(state="hello", questions=QUESTIONS))
+    return asyncio.run(client.judge(state=text_state("hello"), questions=QUESTIONS))
 
 
 def test_request_contract_and_response():
@@ -65,7 +69,7 @@ def test_request_contract_and_response():
     assert captured["headers"]["content-type"] == "application/json"
     assert captured["body"] == {
         "model": "judge-model",
-        "state": "hello",
+        "state": [{"type": "text", "text": "hello"}],
         "questions": {
             "prompt_injection": {
                 "type": "noul",
@@ -79,12 +83,12 @@ def test_request_contract_and_response():
 def test_decision_request_to_payload():
     request = DecisionRequest(
         model="judge-model",
-        state="hello",
+        state=text_state("hello"),
         questions=QUESTIONS,
     )
     assert request.to_payload() == {
         "model": "judge-model",
-        "state": "hello",
+        "state": [{"type": "text", "text": "hello"}],
         "questions": {
             "prompt_injection": {
                 "type": "noul",
@@ -239,9 +243,9 @@ def test_client_is_reused_within_one_event_loop_and_closed():
             model="judge-model",
             transport=httpx.MockTransport(handler),
         )
-        await client.judge(state="one", questions=QUESTIONS)
+        await client.judge(state=text_state("one"), questions=QUESTIONS)
         first = client._client
-        await client.judge(state="two", questions=QUESTIONS)
+        await client.judge(state=text_state("two"), questions=QUESTIONS)
         assert client._client is first
         await client.aclose()
         assert client._client is None
@@ -266,7 +270,7 @@ def test_client_context_manager_closes():
         )
         async with client as entered:
             assert entered is client
-            await client.judge(state="one", questions=QUESTIONS)
+            await client.judge(state=text_state("one"), questions=QUESTIONS)
         assert client._client is None
 
     asyncio.run(scenario())

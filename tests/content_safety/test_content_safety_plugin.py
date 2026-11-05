@@ -25,6 +25,10 @@ from veadk.content_safety.state import STATE_POLICY_PREFIX, StateBuilder
 from veadk.content_safety.types import AuditAction, AuditStatus, Checkpoint
 
 
+def state_text(state):
+    return "\n".join(part["text"] for part in state if part.get("type") == "text")
+
+
 def decision_response(noul):
     answers = {"q": {"type": "noul", "noul": noul}}
     return DecisionResponse(answers=answers, raw={"answers": answers})
@@ -135,7 +139,7 @@ def test_before_model_allows_safe_content():
     )
     assert result is None
     assert len(judge.calls) == 1
-    assert "hello" in judge.calls[0]["state"]
+    assert "hello" in state_text(judge.calls[0]["state"])
     audit = plugin.last_result("inv", Checkpoint.BEFORE_MODEL)
     assert audit.status is AuditStatus.PASSED
     assert audit.action is AuditAction.ALLOW
@@ -237,8 +241,9 @@ def test_after_model_ignores_hidden_thought_parts():
         plugin.after_model_callback(callback_context=context(), llm_response=response)
     )
     assert result is None
-    assert "visible answer" in judge.calls[0]["state"]
-    assert "hidden reasoning" not in judge.calls[0]["state"]
+    state = state_text(judge.calls[0]["state"])
+    assert "visible answer" in state
+    assert "hidden reasoning" not in state
 
 
 def test_after_model_skips_thought_only_response():
@@ -400,7 +405,7 @@ def test_on_event_buffers_partial_text_and_audits_final_text():
     assert second.content.parts[0].text == ""
     assert final.content.parts[0].text == "Hello"
     assert len(judge.calls) == 1
-    assert "Hello" in judge.calls[0]["state"]
+    assert "Hello" in state_text(judge.calls[0]["state"])
 
 
 def test_on_event_flushes_on_turn_complete_partial():
@@ -638,7 +643,7 @@ def test_on_event_blocks_final_text_alongside_function_call():
     assert result.content.parts[0].text == plugin._config.block_message
     assert result.content.parts[1].function_call.name == "tool"
     assert len(judge.calls) == 1
-    assert "secret" in judge.calls[0]["state"]
+    assert "secret" in state_text(judge.calls[0]["state"])
 
 
 def test_state_starts_with_fixed_policy_and_keeps_it_outside_untrusted():
@@ -649,11 +654,13 @@ def test_state_starts_with_fixed_policy_and_keeps_it_outside_untrusted():
         )
     )
     state = judge.calls[0]["state"]
-    assert state.startswith(STATE_POLICY_PREFIX)
-    assert "检查点：before_model。" in state
-    assert state.index(STATE_POLICY_PREFIX) < state.index("检查点：")
-    assert state.index("检查点：") < state.index("<untrusted>")
-    assert "hello" in state
+    text = state_text(state)
+    assert isinstance(state, list)
+    assert text.startswith(STATE_POLICY_PREFIX)
+    assert "检查点：before_model。" in text
+    assert text.index(STATE_POLICY_PREFIX) < text.index("检查点：")
+    assert text.index("检查点：") < text.index("<untrusted>")
+    assert "hello" in text
 
 
 def test_long_dynamic_state_is_truncated_but_policy_is_kept():
@@ -666,10 +673,10 @@ def test_long_dynamic_state_is_truncated_but_policy_is_kept():
             callback_context=context(), llm_request=user_request("abcdefgh")
         )
     )
-    state = judge.calls[0]["state"]
-    assert state.startswith(STATE_POLICY_PREFIX)
-    assert "abc" in state
-    assert "abcdefgh" not in state
+    text = state_text(judge.calls[0]["state"])
+    assert text.startswith(STATE_POLICY_PREFIX)
+    assert "abc" in text
+    assert "abcdefgh" not in text
 
 
 def inline_part(mime_type="image/png", data=b"x"):

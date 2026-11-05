@@ -149,17 +149,28 @@ On a risk hit, `before_model` returns the fixed block message with `turn_complet
 
 If the decision service times out, fails on the network, or returns an unparseable response, `on_error` controls the outcome: `allow` (the default) passes the request and marks the audit result with `degraded=True`; `block` fails closed. A question is considered hit when its risk probability is `>= threshold`.
 
-### Multimodal audits
+### State structure
 
-Text-only content is still sent as a string `state` for compatibility. When the content under review contains images, audio, or video, `state` becomes a System One content array that preserves the original text/media order:
+`state` is always a System One content array; text-only and multimodal requests use the same shape. Text-only example:
 
 ```json
 [
-  {"type": "text", "text": "<defuse policy and context>"},
-  {"type": "text", "text": "[user]"},
-  {"type": "text", "text": "Please inspect this image."},
+  {"type": "text", "text": "<policy prefix>"},
+  {"type": "text", "text": "<defuse prefix>"},
+  {"type": "text", "text": "[user]...\n[tool_response]..."},
+  {"type": "text", "text": "<defuse suffix>"}
+]
+```
+
+When the content under review contains images, audio, or video, media parts and text parts preserve their original order:
+
+```json
+[
+  {"type": "text", "text": "<policy prefix>"},
+  {"type": "text", "text": "<defuse prefix>"},
+  {"type": "text", "text": "[user]\nPlease inspect this image."},
   {"type": "image", "image_url": "data:image/png;base64,..."},
-  {"type": "text", "text": "<untrusted>...</untrusted>"}
+  {"type": "text", "text": "<defuse suffix>"}
 ]
 ```
 

@@ -349,15 +349,11 @@ class DecisionPlugin(BasePlugin):
 
     @staticmethod
     def _state_has_content(state: StatePayload) -> bool:
-        if isinstance(state, str):
-            return bool(state.strip())
         return bool(state)
 
     @staticmethod
     def _api_state(checkpoint: Checkpoint, state: StatePayload) -> StatePayload:
         prefix = f"{STATE_POLICY_PREFIX}\n检查点：{checkpoint.value}。"
-        if isinstance(state, str):
-            return f"{prefix}\n{state}"
         return [{"type": "text", "text": prefix}, *state]
 
     def _questions(self) -> Mapping[str, QuestionConfig]:

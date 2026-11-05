@@ -52,6 +52,10 @@ RED_PNG = base64.b64decode(
 )
 
 
+def _state_text(state):
+    return "\n".join(part.get("text", "") for part in state if isinstance(part, dict))
+
+
 def _answers(low=0.01, **overrides):
     values = {name: low for name in ALL_QUESTIONS}
     values.update(overrides)
@@ -62,7 +66,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802 - stdlib naming
         length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(length))
-        state = body.get("state", "")
+        state = _state_text(body.get("state", []))
         self.server.requests.append(
             {"state": state, "body": body, "headers": dict(self.headers)}
         )
@@ -232,8 +236,8 @@ def test_e2e_allow_full_adk_turn():
         assert event_text(events[-1]) == "hello from the model"
         assert len(server.requests) == 2  # before_model + after_model
         assert server.requests[0]["body"]["model"] == "e2e-judge"
-        assert "before_model" in server.requests[0]["body"]["state"]
-        assert "after_model" in server.requests[1]["body"]["state"]
+        assert "before_model" in _state_text(server.requests[0]["body"]["state"])
+        assert "after_model" in _state_text(server.requests[1]["body"]["state"])
         assert server.requests[0]["headers"]["Authorization"] == "Bearer e2e-key"
         assert server.requests[0]["headers"]["ark-beta-systemone-api"] == "true"
 
@@ -485,8 +489,8 @@ tool:
         assert result == "hello from veadk"
         assert llm.calls == 1
         assert len(server.requests) == 2
-        assert "before_model" in server.requests[0]["body"]["state"]
-        assert "after_model" in server.requests[1]["body"]["state"]
+        assert "before_model" in _state_text(server.requests[0]["body"]["state"])
+        assert "after_model" in _state_text(server.requests[1]["body"]["state"])
 
 
 def test_e2e_multimodal_image_reaches_decision_api():

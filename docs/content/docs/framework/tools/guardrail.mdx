@@ -149,17 +149,28 @@ runner = Runner(agent=agent)  # 自动挂载
 
 判定服务超时、网络错误或响应无法解析时，按 `on_error` 处理：`allow`（默认）放行并在审计结果中标记 `degraded=True`，`block` 则失败关闭。每个问题的命中条件是风险概率 `>= threshold`。
 
-### 多模态审计
+### state 结构
 
-文本内容仍以字符串 `state` 发送，保持兼容。当待审计内容包含图片、音频或视频时，`state` 会变成 System One 的内容数组，并保留文本与媒体的原始顺序：
+`state` 始终是 System One 的内容数组，纯文本和媒体使用同一套结构。纯文本示例：
 
 ```json
 [
-  {"type": "text", "text": "<defuse policy and context>"},
-  {"type": "text", "text": "[user]"},
-  {"type": "text", "text": "请判断这张图片。"},
+  {"type": "text", "text": "<policy prefix>"},
+  {"type": "text", "text": "<defuse prefix>"},
+  {"type": "text", "text": "[user]...\n[tool_response]..."},
+  {"type": "text", "text": "<defuse suffix>"}
+]
+```
+
+包含图片、音频或视频时，媒体 part 与文本 part 按原始顺序排列：
+
+```json
+[
+  {"type": "text", "text": "<policy prefix>"},
+  {"type": "text", "text": "<defuse prefix>"},
+  {"type": "text", "text": "[user]\n请判断这张图片。"},
   {"type": "image", "image_url": "data:image/png;base64,..."},
-  {"type": "text", "text": "<untrusted>...</untrusted>"}
+  {"type": "text", "text": "<defuse suffix>"}
 ]
 ```
 

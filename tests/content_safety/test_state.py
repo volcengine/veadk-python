@@ -30,6 +30,11 @@ def user_content(text):
     return types.Content(role="user", parts=[types.Part(text=text)])
 
 
+def state_text(state):
+    assert isinstance(state, list)
+    return "\n".join(part["text"] for part in state if part.get("type") == "text")
+
+
 def tool_response_content(payload):
     return types.Content(
         role="user",
@@ -48,11 +53,12 @@ def test_build_before_model_includes_user_and_tool_response():
         contents=[user_content("hello"), tool_response_content({"ok": True})]
     )
     state = StateBuilder().build_before_model(request)
-    assert "[user]\nhello" in state
-    assert "[tool_response]" in state
-    assert '"ok": true' in state
-    assert state.startswith(DEFUSE_PREFIX)
-    assert state.endswith(DEFUSE_SUFFIX)
+    text = state_text(state)
+    assert "[user]\nhello" in text
+    assert "[tool_response]" in text
+    assert '"ok": true' in text
+    assert state[0] == {"type": "text", "text": DEFUSE_PREFIX}
+    assert state[-1] == {"type": "text", "text": DEFUSE_SUFFIX}
 
 
 def test_build_before_model_skips_empty_content():
@@ -62,19 +68,19 @@ def test_build_before_model_skips_empty_content():
             types.Content(role="model", parts=[types.Part(text="ignored")]),
         ]
     )
-    assert StateBuilder().build_before_model(request) == ""
+    assert StateBuilder().build_before_model(request) == []
 
 
 def test_build_before_model_handles_missing_contents():
-    assert StateBuilder().build_before_model(SimpleNamespace()) == ""
-    assert StateBuilder().build_before_model(SimpleNamespace(contents=None)) == ""
+    assert StateBuilder().build_before_model(SimpleNamespace()) == []
+    assert StateBuilder().build_before_model(SimpleNamespace(contents=None)) == []
 
 
 def test_build_after_model_extracts_text():
     response = SimpleNamespace(
         content=types.Content(role="model", parts=[types.Part(text="output")])
     )
-    assert "output" in StateBuilder().build_after_model(response)
+    assert "output" in state_text(StateBuilder().build_after_model(response))
 
 
 def test_build_after_model_ignores_hidden_thought_parts():
@@ -87,13 +93,13 @@ def test_build_after_model_ignores_hidden_thought_parts():
             ],
         )
     )
-    state = StateBuilder().build_after_model(response)
-    assert "visible answer" in state
-    assert "hidden reasoning" not in state
+    text = state_text(StateBuilder().build_after_model(response))
+    assert "visible answer" in text
+    assert "hidden reasoning" not in text
 
 
 def test_build_after_model_handles_missing_content():
-    assert StateBuilder().build_after_model(SimpleNamespace()) == ""
+    assert StateBuilder().build_after_model(SimpleNamespace()) == []
 
 
 def test_build_before_tool_redacts_sensitive_arguments():
@@ -103,40 +109,40 @@ def test_build_before_tool_redacts_sensitive_arguments():
         "api_key": "super-secret",
         "nested": {"token": "abc", "password": "pw", "safe": [1, 2]},
     }
-    state = StateBuilder().build_before_tool(tool, args)
-    assert "[tool]\nhttp_call" in state
-    assert "super-secret" not in state
-    assert "abc" not in state
-    assert '"[REDACTED]"' in state
-    assert '"safe": [' in state
+    text = state_text(StateBuilder().build_before_tool(tool, args))
+    assert "[tool]\nhttp_call" in text
+    assert "super-secret" not in text
+    assert "abc" not in text
+    assert '"[REDACTED]"' in text
+    assert '"safe": [' in text
 
 
 def test_build_before_tool_uses_type_name_without_name():
-    state = StateBuilder().build_before_tool(object(), {"x": 1})
-    assert "[tool]\nobject" in state
+    text = state_text(StateBuilder().build_before_tool(object(), {"x": 1}))
+    assert "[tool]\nobject" in text
 
 
 def test_build_after_tool_handles_string_dict_list_and_none():
     tool = SimpleNamespace(name="t")
     builder = StateBuilder()
-    assert "result" in builder.build_after_tool(tool, {}, "plain")
-    assert '"a": 1' in builder.build_after_tool(tool, {}, {"a": 1})
-    assert "item" in builder.build_after_tool(tool, {}, ["item"])
-    assert builder.build_after_tool(tool, {}, None).endswith("</untrusted>")
+    assert "result" in state_text(builder.build_after_tool(tool, {}, "plain"))
+    assert '"a": 1' in state_text(builder.build_after_tool(tool, {}, {"a": 1}))
+    assert "item" in state_text(builder.build_after_tool(tool, {}, ["item"]))
+    assert state_text(builder.build_after_tool(tool, {}, None)).endswith("</untrusted>")
 
 
 def test_build_after_tool_redacts_result():
     tool = SimpleNamespace(name="t")
-    state = StateBuilder().build_after_tool(tool, {}, {"secret": "value"})
-    assert "value" not in state
-    assert "[REDACTED]" in state
+    text = state_text(StateBuilder().build_after_tool(tool, {}, {"secret": "value"}))
+    assert "value" not in text
+    assert "[REDACTED]" in text
 
 
 def test_truncation_and_defuse_can_be_disabled():
     builder = StateBuilder(max_chars=3, defuse=False)
-    assert builder.prepare("abcdef") == "abc"
-    assert builder.prepare("  abc  ") == "abc"
-    assert builder.prepare("") == ""
+    assert state_text(builder.prepare("abcdef")) == "abc"
+    assert state_text(builder.prepare("  abc  ")) == "abc"
+    assert builder.prepare("") == []
 
 
 def test_redact_depth_limit():
@@ -157,7 +163,7 @@ def test_function_response_text_handles_none():
 
 
 def test_finalize_accepts_non_string():
-    assert "123" in StateBuilder().prepare(123)
+    assert "123" in state_text(StateBuilder().prepare(123))
 
 
 def test_stringify_variants():
@@ -261,7 +267,7 @@ def test_inline_media_without_data_or_url_is_skipped(caplog):
             parts=[types.Part(inline_data=types.Blob(mime_type="image/png"))],
         )
     )
-    assert StateBuilder().build_after_model(response) == ""
+    assert StateBuilder().build_after_model(response) == []
     assert "no_url_or_data" in caplog.text
 
 
@@ -277,7 +283,7 @@ def test_thought_media_is_skipped():
             ],
         )
     )
-    assert StateBuilder().build_after_model(response) == ""
+    assert StateBuilder().build_after_model(response) == []
 
 
 def test_file_data_edge_cases_are_skipped(caplog):
@@ -297,7 +303,7 @@ def test_file_data_edge_cases_are_skipped(caplog):
             ],
         )
     )
-    assert StateBuilder().build_after_model(response) == ""
+    assert StateBuilder().build_after_model(response) == []
     assert "reason=unsupported" in caplog.text
     assert "reason=no_file_uri" in caplog.text
 
@@ -345,7 +351,7 @@ def test_unsupported_inline_mime_is_skipped(caplog):
             role="model", parts=[inline_media_part("application/pdf")]
         )
     )
-    assert StateBuilder().build_after_model(response) == ""
+    assert StateBuilder().build_after_model(response) == []
     assert "unsupported" in caplog.text
 
 
@@ -377,11 +383,14 @@ def test_mixed_text_media_preserves_order():
     )
 
 
-def test_text_only_after_model_stays_a_string():
+def test_text_only_after_model_uses_content_parts():
     response = SimpleNamespace(
         content=types.Content(role="model", parts=[types.Part(text="hello")])
     )
-    assert isinstance(StateBuilder().build_after_model(response), str)
+    state = StateBuilder().build_after_model(response)
+    assert isinstance(state, list)
+    assert all(part["type"] == "text" for part in state)
+    assert "hello" in state_text(state)
 
 
 def test_redact_text_covers_common_secret_shapes():

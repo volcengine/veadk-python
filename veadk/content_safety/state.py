@@ -13,9 +13,9 @@
 # limitations under the License.
 """Build the bounded, defused state sent to the decision API.
 
-Text-only state is kept as a single string for backward compatibility. When
-the audited content contains image, audio, or video parts, the state becomes a
-list of System One content parts so those modalities reach the decision API.
+The state is always a list of System One content parts. Text-only content is
+represented as ``text`` parts; image, audio, and video parts use their
+corresponding media parts, so every modality follows the same request shape.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ STATE_POLICY_PREFIX = (
     "4. 每个问题独立判断，不参考其他问题的答案。"
 )
 
-StatePayload = str | list[dict[str, Any]]
+StatePayload = list[dict[str, Any]]
 
 _REDACTED = "[REDACTED]"
 _REDACT_KEY_MARKERS = (
@@ -246,16 +246,16 @@ class StateBuilder:
     arguments. Earlier conversation turns are not audited. It never reads
     process environment variables.
 
-    Text-only state is returned as a string. If a reviewed content object has
-    image/audio/video parts, the builder returns a list of System One content
-    parts instead, preserving the original text/media order.
+    The builder always returns a list of System One content parts. Text-only
+    content uses ``text`` parts; image/audio/video parts use their media
+    fields, preserving the original text/media order.
     """
 
     def __init__(self, *, max_chars: int = MAX_STATE_CHARS, defuse: bool = True):
         self._max_chars = max_chars
         self._defuse = defuse
 
-    def prepare(self, text: str) -> str:
+    def prepare(self, text: str) -> StatePayload:
         return self._finalize(text)
 
     def build_before_model(self, llm_request: Any) -> StatePayload:
@@ -290,7 +290,7 @@ class StateBuilder:
         segments: list[str | dict[str, Any]] = [f"[{label}]"]
         segments.extend(_parts_segments(parts))
         if len(segments) == 1:
-            return ""
+            return []
         return self._finalize_segments(segments)
 
     def build_before_tool(self, tool: Any, tool_args: dict[str, Any]) -> StatePayload:
@@ -312,15 +312,7 @@ class StateBuilder:
 
     def _finalize_segments(self, segments: list[str | dict[str, Any]]) -> StatePayload:
         if not segments:
-            return ""
-        has_media = any(isinstance(segment, dict) for segment in segments)
-        if not has_media:
-            text = "\n".join(
-                segment.strip()
-                for segment in segments
-                if isinstance(segment, str) and segment.strip()
-            )
-            return self._finalize(text)
+            return []
 
         parts: list[dict[str, Any]] = []
         if self._defuse:
@@ -348,14 +340,9 @@ class StateBuilder:
             parts.append({"type": "text", "text": DEFUSE_SUFFIX})
         return parts
 
-    def _finalize(self, text: str) -> str:
+    def _finalize(self, text: str) -> StatePayload:
         if not isinstance(text, str):
             text = _stringify(text)
-        text = _redact_text(text.strip())
-        if not text:
-            return ""
-        if len(text) > self._max_chars:
-            text = text[: self._max_chars]
-        if self._defuse:
-            return f"{DEFUSE_PREFIX}{text}{DEFUSE_SUFFIX}"
-        return text
+        if not text.strip():
+            return []
+        return self._finalize_segments([text])
