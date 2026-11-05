@@ -75,7 +75,7 @@ import {
 } from "../adk/client";
 import {
   buildEnvironmentDockerfile,
-  AIO_BASE_IMAGE,
+  AIO_BASE_IMAGES,
   CODEX_SANDBOX_BASE_IMAGES,
   EMPTY_ENVIRONMENT_DRAFT,
   ENVIRONMENT_BASE_ENVIRONMENTS,
@@ -147,7 +147,7 @@ function dockerfilePresetEnvironmentOptions(t: TFunction): Option[] {
 
 function dockerfilePresetEnvironmentFromContent(content: string): DockerfilePresetEnvironment {
   const baseImage = dockerfileBaseImage(content, "");
-  if (baseImage === AIO_BASE_IMAGE) return "aio-sandbox";
+  if (Object.values(AIO_BASE_IMAGES).includes(baseImage)) return "aio-sandbox";
   if (baseImage.includes("/codexenv:")) return "codex-sandbox";
   return "none";
 }
@@ -1566,7 +1566,7 @@ function EnvironmentEditor({
   const customDockerfile = draft.dockerfile ?? generatedDockerfile;
   const hasDockerfilePresetEnvironment = dockerfilePresetEnvironment !== "none";
   const selectedBaseImage = dockerfilePresetEnvironment === "aio-sandbox"
-    ? AIO_BASE_IMAGE
+    ? AIO_BASE_IMAGES[cloudProvider]
     : dockerfilePresetEnvironment === "codex-sandbox"
       ? CODEX_SANDBOX_BASE_IMAGES[cloudProvider]
       : "";

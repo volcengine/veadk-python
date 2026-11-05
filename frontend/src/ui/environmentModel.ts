@@ -84,7 +84,12 @@ export const ENVIRONMENT_BASE_ENVIRONMENTS: ReadonlyArray<{
   },
 ];
 
-export const AIO_BASE_IMAGE = "agentkit-cli-2107625663-cn-beijing.cr.volces.com/agentkit/agent-native-requirements-aio:0.2.1-20260831";
+export const AIO_BASE_IMAGES: Record<CloudProvider, string> = {
+  volcengine: "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/agentkit-sandbox:all-in-one-1.0.2",
+  byteplus: "enterprise-public-ap-southeast-1.cr.volces.com/vefaas-public/agentkit-sandbox:all-in-one-1.0.2",
+};
+
+export const AIO_BASE_IMAGE = AIO_BASE_IMAGES.volcengine;
 
 export const CODEX_SANDBOX_BASE_IMAGES: Record<CloudProvider, string> = {
   volcengine: "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/codexenv:1.1.0",
@@ -335,7 +340,7 @@ export function buildEnvironmentDockerfile(
   );
   const lines = usesAioPython
     ? [
-        `ARG AIO_BASE_IMAGE=${AIO_BASE_IMAGE}`,
+        `ARG AIO_BASE_IMAGE=${AIO_BASE_IMAGES[cloudProvider]}`,
         "ARG AIO_BASE_PLATFORM=linux/amd64",
         "",
         `# Base environment: AIO Sandbox (${operatingSystem.label})`,

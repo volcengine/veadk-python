@@ -544,7 +544,11 @@ test("uses AIO Sandbox as the default base environment and preserves its runtime
     const model = await server.ssrLoadModule("/src/ui/environmentModel.ts");
     assert.equal(model.EMPTY_ENVIRONMENT_DRAFT.baseEnvironment, "aio-sandbox");
     const dockerfile = model.buildEnvironmentDockerfile(model.EMPTY_ENVIRONMENT_DRAFT);
-    assert.match(dockerfile, /^ARG AIO_BASE_IMAGE=agentkit-cli-2107625663-cn-beijing\.cr\.volces\.com\/agentkit\/agent-native-requirements-aio:0\.2\.1-20260831$/m);
+    assert.match(dockerfile, /^ARG AIO_BASE_IMAGE=enterprise-public-cn-beijing\.cr\.volces\.com\/vefaas-public\/agentkit-sandbox:all-in-one-1\.0\.2$/m);
+    assert.match(
+      model.buildEnvironmentDockerfile(model.EMPTY_ENVIRONMENT_DRAFT, "byteplus"),
+      /^ARG AIO_BASE_IMAGE=enterprise-public-ap-southeast-1\.cr\.volces\.com\/vefaas-public\/agentkit-sandbox:all-in-one-1\.0\.2$/m,
+    );
     assert.match(dockerfile, /^FROM --platform=\$\{AIO_BASE_PLATFORM\} \$\{AIO_BASE_IMAGE\}$/m);
     assert.match(dockerfile, /BASH_VENV_PATH=\/opt\/veadk-environment\/\.venv/);
     assert.match(dockerfile, /^EXPOSE 8080$/m);

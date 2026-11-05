@@ -1538,13 +1538,13 @@ agent terminology rather than exposing these control-plane resource types.
 `StudioEnv`，火山引擎继续使用 `Private`。创建时获取模型凭据并配置模型名称、
 地址、API Key、鉴权和快照；已有工作区绑定保持不变。
 
-按云环境和地域选择 `studio-sandbox-1.0.1` 镜像：
+按云环境和地域选择 `all-in-one-1.0.2` 镜像：
 
 | 云环境 | 地域 | 镜像 |
 | --- | --- | --- |
-| 火山引擎 | cn-beijing | `enterprise-public-cn-beijing.cr.volces.com/vefaas-public/agentkit-sandbox:studio-sandbox-1.0.1` |
-| 火山引擎 | cn-shanghai | `enterprise-cn-shanghai-cn-shanghai.cr.volces.com/vefaas-public/agentkit-sandbox:studio-sandbox-1.0.1` |
-| BytePlus | ap-southeast-1 | `enterprise-public-ap-southeast-1.cr.volces.com/vefaas-public/agentkit-sandbox:studio-sandbox-1.0.1` |
+| 火山引擎 | cn-beijing | `enterprise-public-cn-beijing.cr.volces.com/vefaas-public/agentkit-sandbox:all-in-one-1.0.2` |
+| 火山引擎 | cn-shanghai | `enterprise-cn-shanghai-cn-shanghai.cr.volces.com/vefaas-public/agentkit-sandbox:all-in-one-1.0.2` |
+| BytePlus | ap-southeast-1 | `enterprise-public-ap-southeast-1.cr.volces.com/vefaas-public/agentkit-sandbox:all-in-one-1.0.2` |
 
 可通过 `STUDIO_WORKSPACE_IMAGE` 指定区域可访问的其他镜像。启动命令使用镜像内的
 `/opt/gem/run.sh`，不再注入编辑器补丁。火山引擎默认中文，BytePlus 默认英文，
