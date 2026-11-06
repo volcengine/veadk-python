@@ -37,6 +37,7 @@ from veadk.skills.utils import (
     _get_agentkit_endpoint,
     _get_cloud_credentials,
     download_skillhub_skill,
+    ve_request,
 )
 from veadk.utils.logger import get_logger
 
@@ -248,6 +249,10 @@ def _download_remote_skill(
         _download_public_tos_zip(skill, zip_path)
         return
 
+    if skill.source_type == "tos-signed-url":
+        _download_signed_tos_zip(skill, zip_path)
+        return
+
     legacy_options: dict[str, Any] = {}
     if credentials is not None:
         legacy_options["credentials"] = credentials
@@ -286,13 +291,36 @@ def _download_findskill_skill(skill: Skill, zip_path: Path) -> None:
 
 
 def _download_public_tos_zip(skill: Skill, zip_path: Path) -> None:
-    public_url = _validate_public_tos_zip_url(skill.public_url or skill.path)
+    _download_tos_zip_url(
+        _validate_public_tos_zip_url(skill.public_url or skill.path),
+        zip_path,
+        allow_signed_query=False,
+    )
+
+
+def _download_signed_tos_zip(skill: Skill, zip_path: Path) -> None:
+    _download_tos_zip_url(
+        _validate_signed_tos_zip_url(skill.public_url or skill.path),
+        zip_path,
+        allow_signed_query=True,
+    )
+
+
+def _download_tos_zip_url(
+    url: str,
+    zip_path: Path,
+    *,
+    allow_signed_query: bool,
+) -> None:
     try:
         final_response = None
         with httpx.Client(timeout=60, follow_redirects=False) as client:
-            next_url = public_url
+            next_url = url
             for _ in range(_MAX_TOS_PUBLIC_REDIRECTS + 1):
-                _validate_public_tos_zip_url(next_url)
+                _validate_tos_zip_url(
+                    next_url,
+                    allow_signed_query=allow_signed_query,
+                )
                 response = client.build_request("GET", next_url)
                 streamed_response = client.send(response, stream=True)
                 if streamed_response.is_redirect:
@@ -302,7 +330,10 @@ def _download_public_tos_zip(skill: Skill, zip_path: Path) -> None:
                         raise SkillMaterializeError(
                             "Public TOS skill redirect has no Location header."
                         )
-                    next_url = _validate_public_tos_zip_url(urljoin(next_url, location))
+                    next_url = _validate_tos_zip_url(
+                        urljoin(next_url, location),
+                        allow_signed_query=allow_signed_query,
+                    )
                     continue
                 final_response = streamed_response
                 break
@@ -389,7 +420,7 @@ def _validate_relative_object_path(value: str) -> None:
 def _cache_source_type(skill: Skill) -> str:
     if skill.source_type in {"skillhub", "findskill"}:
         return "skillhub"
-    if skill.source_type in {"tos", "tos-public"}:
+    if skill.source_type in {"tos", "tos-public", "tos-signed-url"}:
         return "tos"
     return "skillspace"
 
@@ -399,6 +430,14 @@ def _skill_name_from_prefix(prefix: str) -> str:
 
 
 def _validate_public_tos_zip_url(url: str) -> str:
+    return _validate_tos_zip_url(url, allow_signed_query=False)
+
+
+def _validate_signed_tos_zip_url(url: str) -> str:
+    return _validate_tos_zip_url(url, allow_signed_query=True)
+
+
+def _validate_tos_zip_url(url: str, *, allow_signed_query: bool) -> str:
     parsed = urlparse(url.strip())
     host = (parsed.hostname or "").lower()
     if parsed.scheme != "https" or not host:
@@ -410,7 +449,7 @@ def _validate_public_tos_zip_url(url: str) -> str:
     if not _is_tos_public_host(host):
         raise SkillMaterializeError("Public TOS skill URL host is not a TOS endpoint.")
     query_keys = {key.lower() for key, _value in parse_qsl(parsed.query)}
-    if query_keys & _TOS_PUBLIC_CREDENTIAL_QUERY_KEYS:
+    if not allow_signed_query and query_keys & _TOS_PUBLIC_CREDENTIAL_QUERY_KEYS:
         raise SkillMaterializeError(
             "Public TOS skill URL must not include credentials."
         )
@@ -468,11 +507,110 @@ def _download_legacy_skill_space_skill(
         bucket_name=skill.bucket_name,
         region=resolved_region,
     )
-    return tos_client.download(
-        bucket_name=skill.bucket_name,
-        object_key=skill.path,
-        save_path=str(zip_path),
-        raise_on_error=raise_on_error,
+    try:
+        downloaded = tos_client.download(
+            bucket_name=skill.bucket_name,
+            object_key=skill.path,
+            save_path=str(zip_path),
+            raise_on_error=raise_on_error,
+        )
+    except Exception as exc:
+        logger.warning(
+            f"Direct TOS download failed for skill-space skill '{skill.name}': "
+            f"{type(exc).__name__}. Trying sharing signed URL."
+        )
+        downloaded = False
+
+    if downloaded:
+        return True
+
+    return _download_legacy_skill_via_sharing_signed_url(
+        skill=skill,
+        access_key=access_key,
+        secret_key=secret_key,
+        session_token=session_token,
+        service=service,
+        region=resolved_region,
+        host=host,
+        scheme=scheme,
+        zip_path=zip_path,
+    )
+
+
+def _download_legacy_skill_via_sharing_signed_url(
+    *,
+    skill: Skill,
+    access_key: str,
+    secret_key: str,
+    session_token: str,
+    service: str,
+    region: str,
+    host: str,
+    scheme: str,
+    zip_path: Path,
+) -> bool:
+    skill_id, skill_version = _legacy_skill_id_and_version(skill)
+    if not skill_id or not skill_version:
+        logger.error(
+            f"Cannot request sharing signed URL for skill '{skill.name}': "
+            "missing skill id or version."
+        )
+        return False
+
+    try:
+        response = ve_request(
+            request_body={
+                "SkillId": skill_id,
+                "SkillVersion": skill_version,
+            },
+            action="GenTempTosObjectDownloadUrlSharing",
+            ak=access_key,
+            sk=secret_key,
+            service=service,
+            version="2025-10-30",
+            region=region,
+            host=host,
+            header={"X-Security-Token": session_token},
+            scheme=scheme,  # type: ignore[arg-type]
+        )
+        if isinstance(response, str):
+            response = json.loads(response)
+        if _top_response_has_error(response):
+            logger.error(f"Failed to get sharing signed URL for skill '{skill.name}'.")
+            return False
+        signed_url = (
+            response.get("Result", {}).get("SignedUrl")
+            if isinstance(response, dict)
+            else None
+        )
+        if not signed_url:
+            logger.error(
+                f"Sharing signed URL response missing SignedUrl for '{skill.name}'."
+            )
+            return False
+
+        _download_tos_zip_url(signed_url, zip_path, allow_signed_query=True)
+        return True
+    except Exception as exc:
+        logger.error(
+            f"Failed to download skill '{skill.name}' via sharing signed URL: "
+            f"{type(exc).__name__}"
+        )
+        return False
+
+
+def _legacy_skill_id_and_version(skill: Skill) -> tuple[str | None, str | None]:
+    path_parts = (skill.path or "").split("/")
+    skill_id = skill.id or (path_parts[1] if len(path_parts) > 1 else None)
+    skill_version = skill.version_id or (path_parts[2] if len(path_parts) > 2 else None)
+    return skill_id, skill_version
+
+
+def _top_response_has_error(response: Any) -> bool:
+    return bool(
+        isinstance(response, dict)
+        and isinstance(response.get("ResponseMetadata"), dict)
+        and "Error" in response["ResponseMetadata"]
     )
 
 

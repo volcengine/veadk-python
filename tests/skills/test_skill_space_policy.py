@@ -81,6 +81,31 @@ def test_space_policy_json_is_compact_and_deduplicated():
     )
 
 
+def test_space_item_signed_tos_path_is_classified_as_signed_url_source():
+    signed_url = (
+        "https://bucket.tos-cn-beijing.volces.com/skills/s-123/v1/"
+        "reporting.zip?X-Tos-Signature=synthetic"
+    )
+
+    skill = utils._build_skill_from_space_item(
+        {
+            "Name": "reporting",
+            "Description": "Reporting skill.",
+            "BucketName": "bucket",
+            "TosPath": signed_url,
+            "SkillId": "s-123",
+            "Version": "v1",
+        },
+        "ss-test",
+    )
+
+    assert skill is not None
+    assert skill.path == signed_url
+    assert skill.public_url == signed_url
+    assert skill.source_type == "tos-signed-url"
+    assert skill.bucket_name == "bucket"
+
+
 @pytest.mark.parametrize(
     ("mode", "ids", "expected"),
     [
