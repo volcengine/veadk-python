@@ -566,6 +566,53 @@ def test_legacy_skillspace_skill_uses_tos_path_version(
     )
 
 
+def test_legacy_skillspace_signed_tos_url_downloads_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    signed_url = (
+        "https://bucket.tos-cn-beijing.volces.com/skills/s-123/v1/"
+        "signed-skill.zip?X-Tos-Algorithm=TOS4-HMAC-SHA256&"
+        "X-Tos-Signature=synthetic"
+    )
+    remote_skill = VeADKSkill(
+        name="signed-skill",
+        description="Signed skill.",
+        path=signed_url,
+        skill_space_id="space-1",
+        bucket_name="bucket",
+        id="s-123",
+        source_type="tos-signed-url",
+        version_id="v1",
+    )
+    fake_client = _FakeHttpClient(
+        [
+            _FakeStreamResponse(
+                signed_url,
+                _zip_bytes(
+                    {
+                        "signed-skill/SKILL.md": (
+                            "---\nname: signed-skill\ndescription: Signed skill.\n---\n"
+                            "Signed body.\n"
+                        )
+                    }
+                ),
+            )
+        ]
+    )
+    monkeypatch.setattr(materializer.httpx, "Client", lambda **kwargs: fake_client)
+
+    skill_dir = materialize_remote_skill(remote_skill, cache_dir=tmp_path)
+
+    assert fake_client.requested == [signed_url]
+    skill = load_skill_from_dir(skill_dir)
+    assert skill.name == "signed-skill"
+    assert skill.instructions == "Signed body."
+    assert skill_dir == (
+        tmp_path / "tos" / "space-1" / "signed-skill" / "v1" / "signed-skill"
+    )
+
+
 def test_legacy_skillspace_download_uses_explicit_region(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

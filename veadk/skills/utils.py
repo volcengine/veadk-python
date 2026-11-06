@@ -17,6 +17,7 @@ from pathlib import Path
 import os
 import frontmatter
 from typing import Literal
+from urllib.parse import urlparse
 
 from google.adk.tools import BaseTool, ToolContext
 from typing import Any, Dict, Optional, Callable
@@ -284,15 +285,28 @@ def _build_skill_from_space_item(
     skill_name = item.get("Name")
     if not skill_name:
         return None
+    tos_path = item.get("TosPath") or ""
+    source_type = "tos-signed-url" if _is_https_zip_url(tos_path) else None
 
     return Skill(
         name=skill_name,
         description=item.get("Description") or "",
-        path=item.get("TosPath") or "",
+        path=tos_path,
         skill_space_id=skill_space_id,
         bucket_name=item.get("BucketName"),
         id=item.get("SkillId"),
         version_id=item.get("Version") or item.get("SkillVersion"),
+        source_type=source_type,
+        public_url=tos_path if source_type == "tos-signed-url" else None,
+    )
+
+
+def _is_https_zip_url(value: str) -> bool:
+    parsed = urlparse(value.strip())
+    return (
+        parsed.scheme == "https"
+        and bool(parsed.netloc)
+        and parsed.path.endswith(".zip")
     )
 
 

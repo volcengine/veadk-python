@@ -248,6 +248,10 @@ def _download_remote_skill(
         _download_public_tos_zip(skill, zip_path)
         return
 
+    if skill.source_type == "tos-signed-url":
+        _download_signed_tos_zip(skill, zip_path)
+        return
+
     legacy_options: dict[str, Any] = {}
     if credentials is not None:
         legacy_options["credentials"] = credentials
@@ -286,13 +290,36 @@ def _download_findskill_skill(skill: Skill, zip_path: Path) -> None:
 
 
 def _download_public_tos_zip(skill: Skill, zip_path: Path) -> None:
-    public_url = _validate_public_tos_zip_url(skill.public_url or skill.path)
+    _download_tos_zip_url(
+        _validate_public_tos_zip_url(skill.public_url or skill.path),
+        zip_path,
+        allow_signed_query=False,
+    )
+
+
+def _download_signed_tos_zip(skill: Skill, zip_path: Path) -> None:
+    _download_tos_zip_url(
+        _validate_signed_tos_zip_url(skill.public_url or skill.path),
+        zip_path,
+        allow_signed_query=True,
+    )
+
+
+def _download_tos_zip_url(
+    url: str,
+    zip_path: Path,
+    *,
+    allow_signed_query: bool,
+) -> None:
     try:
         final_response = None
         with httpx.Client(timeout=60, follow_redirects=False) as client:
-            next_url = public_url
+            next_url = url
             for _ in range(_MAX_TOS_PUBLIC_REDIRECTS + 1):
-                _validate_public_tos_zip_url(next_url)
+                _validate_tos_zip_url(
+                    next_url,
+                    allow_signed_query=allow_signed_query,
+                )
                 response = client.build_request("GET", next_url)
                 streamed_response = client.send(response, stream=True)
                 if streamed_response.is_redirect:
@@ -302,7 +329,10 @@ def _download_public_tos_zip(skill: Skill, zip_path: Path) -> None:
                         raise SkillMaterializeError(
                             "Public TOS skill redirect has no Location header."
                         )
-                    next_url = _validate_public_tos_zip_url(urljoin(next_url, location))
+                    next_url = _validate_tos_zip_url(
+                        urljoin(next_url, location),
+                        allow_signed_query=allow_signed_query,
+                    )
                     continue
                 final_response = streamed_response
                 break
@@ -389,7 +419,7 @@ def _validate_relative_object_path(value: str) -> None:
 def _cache_source_type(skill: Skill) -> str:
     if skill.source_type in {"skillhub", "findskill"}:
         return "skillhub"
-    if skill.source_type in {"tos", "tos-public"}:
+    if skill.source_type in {"tos", "tos-public", "tos-signed-url"}:
         return "tos"
     return "skillspace"
 
@@ -399,6 +429,14 @@ def _skill_name_from_prefix(prefix: str) -> str:
 
 
 def _validate_public_tos_zip_url(url: str) -> str:
+    return _validate_tos_zip_url(url, allow_signed_query=False)
+
+
+def _validate_signed_tos_zip_url(url: str) -> str:
+    return _validate_tos_zip_url(url, allow_signed_query=True)
+
+
+def _validate_tos_zip_url(url: str, *, allow_signed_query: bool) -> str:
     parsed = urlparse(url.strip())
     host = (parsed.hostname or "").lower()
     if parsed.scheme != "https" or not host:
@@ -410,7 +448,7 @@ def _validate_public_tos_zip_url(url: str) -> str:
     if not _is_tos_public_host(host):
         raise SkillMaterializeError("Public TOS skill URL host is not a TOS endpoint.")
     query_keys = {key.lower() for key, _value in parse_qsl(parsed.query)}
-    if query_keys & _TOS_PUBLIC_CREDENTIAL_QUERY_KEYS:
+    if not allow_signed_query and query_keys & _TOS_PUBLIC_CREDENTIAL_QUERY_KEYS:
         raise SkillMaterializeError(
             "Public TOS skill URL must not include credentials."
         )
