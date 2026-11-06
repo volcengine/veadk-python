@@ -43,17 +43,26 @@ def client(mod):
 
 
 @pytest.mark.parametrize(
-    "result,blocked",
+    "result,expected",
     [
-        ({"Degraded": False, "Decision": {"DecisionType": 1}}, False),
-        ({"Degraded": False, "Decision": {"DecisionType": 2}}, True),
-        ({"Degraded": True, "Decision": {"DecisionType": 1}}, True),
-        ({"Decision": {"DecisionType": 1}}, True),
-        ({"Degraded": False, "Decision": {"DecisionType": 4}}, True),
-        ({"Degraded": False, "Decision": {"DecisionType": True}}, True),
+        ({"Degraded": False, "Decision": {"DecisionType": 1}}, None),
+        ({"Degraded": False, "Decision": {"DecisionType": 2}}, "BLOCK"),
+        ({"Decision": {"DecisionType": 1}}, None),
+        ({"Degraded": "false", "Decision": {"DecisionType": 1}}, None),
+        ({"Degraded": False, "Decision": {"DecisionType": 4}}, None),
+        ({"Degraded": False, "Decision": {"DecisionType": True}}, None),
+        ({"Degraded": True}, None),
+        ({"Decision": {"DecisionType": 2}}, "BLOCK"),
+        ({"Decision": {"DecisionType": 0}}, None),
+        ({"Decision": {"DecisionType": 3}}, None),
+        ({"Decision": {"DecisionType": 99}}, None),
+        ({"Decision": {"DecisionType": None}}, None),
+        ({"Decision": {"DecisionType": "unknown"}}, None),
+        ({"Decision": {"DecisionType": "2"}}, "BLOCK"),
+        ({"Decision": {"DecisionType": 2.0}}, "BLOCK"),
     ],
 )
-def test_decisions(mod, result, blocked):
+def test_decisions(mod, result, expected):
     response = SimpleNamespace(status_code=200, json=lambda: {"Result": result})
     with patch.object(mod.requests, "post", return_value=response) as post:
         value = client(mod).moderate(
@@ -63,7 +72,7 @@ def test_decisions(mod, result, blocked):
             session_info={"SessionID": "session", "RunID": "run"},
             tool_calls=[{"ID": "call"}],
         )
-        assert bool(value) == blocked
+        assert value == (getattr(mod, expected) if expected else None)
         request = post.call_args
         body = json.loads(request.kwargs["data"])
         assert body["SessionID"] == "session"
@@ -73,6 +82,33 @@ def test_decisions(mod, result, blocked):
         assert "Version=2025-01-01" in request.args[0]
         assert "clawsentry/request" in request.kwargs["headers"]["Authorization"]
         assert request.kwargs["allow_redirects"] is False
+
+
+@pytest.mark.parametrize(
+    "action,decision,expected",
+    [
+        ("pass_and_writeback", 1, None),
+        ("pass_and_writeback", 2, "BLOCK"),
+        ("block_and_writeback", 1, None),
+        ("block_and_writeback", 2, "BLOCK"),
+        (None, 1, None),
+        ("unknown", 1, None),
+        ("pass_and_writeback", 4, None),
+    ],
+)
+def test_decision_takes_precedence_over_degraded_action(
+    mod, action, decision, expected
+):
+    result = {
+        "Decision": {"DecisionType": decision},
+        "Degraded": True,
+    }
+    if action is not None:
+        result["DegradeAction"] = action
+    response = SimpleNamespace(status_code=200, json=lambda: {"Result": result})
+    with patch.object(mod.requests, "post", return_value=response):
+        value = client(mod).moderate("hello", role="user", hook_name="before_dispatch")
+    assert value == (getattr(mod, expected) if expected else None)
 
 
 def test_missing_plan_and_wrong_hook(mod):
@@ -88,7 +124,28 @@ def test_missing_plan_and_wrong_hook(mod):
 
 def test_timeout(mod):
     with patch.object(mod.requests, "post", side_effect=mod.requests.Timeout):
-        assert client(mod).moderate("hello", role="user", hook_name="before_dispatch")
+        assert (
+            client(mod).moderate("hello", role="user", hook_name="before_dispatch")
+            == mod.UNAVAILABLE
+        )
+
+
+@pytest.mark.parametrize("status,api_error", [(503, False), (200, True)])
+def test_service_errors_do_not_become_allow(mod, status, api_error):
+    response = SimpleNamespace(
+        status_code=status,
+        json=lambda: {
+            "ResponseMetadata": {"Error": {"Code": "ServiceUnavailable"}}
+            if api_error
+            else {},
+            "Result": {"Decision": {"DecisionType": 1}},
+        },
+    )
+    with patch.object(mod.requests, "post", return_value=response):
+        assert (
+            client(mod).moderate("hello", role="user", hook_name="before_dispatch")
+            == mod.UNAVAILABLE
+        )
 
 
 @pytest.mark.parametrize(

@@ -152,24 +152,27 @@ class AgentSentryV3:
                 return UNAVAILABLE
             data = response.json()
             result = data.get("Result") or {}
+            metadata = data.get("ResponseMetadata") or {}
+            request_id = metadata.get("RequestId")
+            if metadata.get("Error"):
+                logger.warning("AgentSentry V3 API error request_id=%s", request_id)
+                return UNAVAILABLE
+            decision = (result.get("Decision") or {}).get("DecisionType")
             logger.info(
                 "AgentSentry V3 hook=%s request_id=%s decision=%s degraded=%s",
                 hook_name,
-                (data.get("ResponseMetadata") or {}).get("RequestId"),
-                (result.get("Decision") or {}).get("DecisionType"),
+                request_id,
+                decision,
                 result.get("Degraded"),
             )
-            if (data.get("ResponseMetadata") or {}).get("Error"):
-                return UNAVAILABLE
-            if result.get("Degraded") is not False:
-                return UNAVAILABLE
-            decision = (result.get("Decision") or {}).get("DecisionType")
-            if type(decision) is int and decision == 1:
+            try:
+                decision = int(decision)
+            except (ValueError, TypeError, OverflowError):
                 return None
-            if type(decision) is int and decision == 2:
+            if decision == 2:
                 return BLOCK
-            # REPLACE/unknown decisions are stopped rather than executing unreviewed args.
-            return UNAVAILABLE
+            # Only an explicit BLOCK decision stops a successful moderation response.
+            return None
         except (requests.RequestException, ValueError, TypeError, AttributeError):
             logger.warning("AgentSentry V3 transport or response error")
             return UNAVAILABLE
