@@ -136,6 +136,8 @@ def set_envs(config_yaml_path: str, env_from_dotenv: dict = None) -> tuple[dict,
 
     with open(config_yaml_path, "r", encoding="utf-8") as yaml_file:
         config_dict = safe_load(yaml_file)
+    if config_dict is None:
+        config_dict = {}
 
     # The content-safety subtree is structured runtime configuration, not a
     # source of environment variables. Keep its questions/decision values out
