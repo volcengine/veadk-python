@@ -613,6 +613,82 @@ def test_legacy_skillspace_signed_tos_url_downloads_archive(
     )
 
 
+def test_legacy_skillspace_object_key_falls_back_to_sharing_signed_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    remote_skill = VeADKSkill(
+        name="pdf",
+        description="PDF skill.",
+        path="skills/s-123/v1/pdf.zip",
+        skill_space_id="space-1",
+        bucket_name="sharing-bucket",
+        id="s-123",
+        version_id="v1",
+    )
+    signed_url = (
+        "https://sharing-bucket.tos-cn-beijing.volces.com/skills/s-123/v1/"
+        "pdf.zip?X-Tos-Algorithm=TOS4-HMAC-SHA256&X-Tos-Signature=synthetic"
+    )
+    tos_calls: list[dict[str, object]] = []
+    top_calls: list[dict[str, object]] = []
+
+    class FakeVeTOS:
+        def __init__(self, **kwargs: object) -> None:
+            tos_calls.append(kwargs)
+
+        def download(self, **kwargs: object) -> bool:
+            tos_calls.append(kwargs)
+            return False
+
+    def fake_ve_request(**kwargs: object) -> dict[str, object]:
+        top_calls.append(kwargs)
+        return {"Result": {"SignedUrl": signed_url}}
+
+    fake_client = _FakeHttpClient(
+        [
+            _FakeStreamResponse(
+                signed_url,
+                _zip_bytes(
+                    {
+                        "pdf/SKILL.md": (
+                            "---\nname: pdf\ndescription: PDF skill.\n---\nPDF body.\n"
+                        )
+                    }
+                ),
+            )
+        ]
+    )
+
+    monkeypatch.setattr(
+        materializer,
+        "_get_cloud_credentials",
+        lambda: ("ak", "sk", "sts"),
+    )
+    monkeypatch.setattr(
+        materializer,
+        "_get_agentkit_endpoint",
+        lambda region=None: (
+            "agentkit",
+            "cn-beijing",
+            "agentkit.cn-beijing.volcengineapi.com",
+        ),
+    )
+    monkeypatch.setattr("veadk.integrations.ve_tos.ve_tos.VeTOS", FakeVeTOS)
+    monkeypatch.setattr(materializer, "ve_request", fake_ve_request, raising=False)
+    monkeypatch.setattr(materializer.httpx, "Client", lambda **kwargs: fake_client)
+
+    skill_dir = materialize_remote_skill(remote_skill, cache_dir=tmp_path)
+    skill = load_skill_from_dir(skill_dir)
+
+    assert skill.name == "pdf"
+    assert skill.instructions == "PDF body."
+    assert fake_client.requested == [signed_url]
+    assert top_calls[0]["action"] == "GenTempTosObjectDownloadUrlSharing"
+    assert top_calls[0]["request_body"] == {"SkillId": "s-123", "SkillVersion": "v1"}
+    assert tos_calls[1]["raise_on_error"] is False
+
+
 def test_legacy_skillspace_download_uses_explicit_region(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

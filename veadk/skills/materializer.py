@@ -37,6 +37,7 @@ from veadk.skills.utils import (
     _get_agentkit_endpoint,
     _get_cloud_credentials,
     download_skillhub_skill,
+    ve_request,
 )
 from veadk.utils.logger import get_logger
 
@@ -506,11 +507,110 @@ def _download_legacy_skill_space_skill(
         bucket_name=skill.bucket_name,
         region=resolved_region,
     )
-    return tos_client.download(
-        bucket_name=skill.bucket_name,
-        object_key=skill.path,
-        save_path=str(zip_path),
-        raise_on_error=raise_on_error,
+    try:
+        downloaded = tos_client.download(
+            bucket_name=skill.bucket_name,
+            object_key=skill.path,
+            save_path=str(zip_path),
+            raise_on_error=raise_on_error,
+        )
+    except Exception as exc:
+        logger.warning(
+            f"Direct TOS download failed for skill-space skill '{skill.name}': "
+            f"{type(exc).__name__}. Trying sharing signed URL."
+        )
+        downloaded = False
+
+    if downloaded:
+        return True
+
+    return _download_legacy_skill_via_sharing_signed_url(
+        skill=skill,
+        access_key=access_key,
+        secret_key=secret_key,
+        session_token=session_token,
+        service=service,
+        region=resolved_region,
+        host=host,
+        scheme=scheme,
+        zip_path=zip_path,
+    )
+
+
+def _download_legacy_skill_via_sharing_signed_url(
+    *,
+    skill: Skill,
+    access_key: str,
+    secret_key: str,
+    session_token: str,
+    service: str,
+    region: str,
+    host: str,
+    scheme: str,
+    zip_path: Path,
+) -> bool:
+    skill_id, skill_version = _legacy_skill_id_and_version(skill)
+    if not skill_id or not skill_version:
+        logger.error(
+            f"Cannot request sharing signed URL for skill '{skill.name}': "
+            "missing skill id or version."
+        )
+        return False
+
+    try:
+        response = ve_request(
+            request_body={
+                "SkillId": skill_id,
+                "SkillVersion": skill_version,
+            },
+            action="GenTempTosObjectDownloadUrlSharing",
+            ak=access_key,
+            sk=secret_key,
+            service=service,
+            version="2025-10-30",
+            region=region,
+            host=host,
+            header={"X-Security-Token": session_token},
+            scheme=scheme,  # type: ignore[arg-type]
+        )
+        if isinstance(response, str):
+            response = json.loads(response)
+        if _top_response_has_error(response):
+            logger.error(f"Failed to get sharing signed URL for skill '{skill.name}'.")
+            return False
+        signed_url = (
+            response.get("Result", {}).get("SignedUrl")
+            if isinstance(response, dict)
+            else None
+        )
+        if not signed_url:
+            logger.error(
+                f"Sharing signed URL response missing SignedUrl for '{skill.name}'."
+            )
+            return False
+
+        _download_tos_zip_url(signed_url, zip_path, allow_signed_query=True)
+        return True
+    except Exception as exc:
+        logger.error(
+            f"Failed to download skill '{skill.name}' via sharing signed URL: "
+            f"{type(exc).__name__}"
+        )
+        return False
+
+
+def _legacy_skill_id_and_version(skill: Skill) -> tuple[str | None, str | None]:
+    path_parts = (skill.path or "").split("/")
+    skill_id = skill.id or (path_parts[1] if len(path_parts) > 1 else None)
+    skill_version = skill.version_id or (path_parts[2] if len(path_parts) > 2 else None)
+    return skill_id, skill_version
+
+
+def _top_response_has_error(response: Any) -> bool:
+    return bool(
+        isinstance(response, dict)
+        and isinstance(response.get("ResponseMetadata"), dict)
+        and "Error" in response["ResponseMetadata"]
     )
 
 
