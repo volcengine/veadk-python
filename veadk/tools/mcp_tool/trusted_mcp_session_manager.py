@@ -41,12 +41,16 @@ class TrustedMcpSessionManager(MCPSessionManager):
     session pooling based on authentication headers.
     """
 
-    def _create_client(self, merged_headers: Optional[Dict[str, str]] = None):
+    def _create_client(
+        self, merged_headers: Optional[Dict[str, str]] = None, *args, **kwargs
+    ):
         """Creates an MCP client based on the connection parameters.
 
         Args:
             merged_headers: Optional headers to include in the connection.
                            Only applicable for SSE and StreamableHTTP connections.
+            *args: Additional positional arguments for the parent client factory.
+            **kwargs: Additional keyword arguments for the parent client factory.
 
         Returns:
             The appropriate MCP client instance.
@@ -74,7 +78,7 @@ class TrustedMcpSessionManager(MCPSessionManager):
             )
         else:
             logger.info("Creating MCP client")
-            client = super()._create_client(merged_headers)
+            client = super()._create_client(merged_headers, *args, **kwargs)
         return client
 
     async def create_session(
@@ -94,8 +98,16 @@ class TrustedMcpSessionManager(MCPSessionManager):
         Returns:
             ClientSession: The initialized MCP client session.
         """
-        # Merge headers once at the beginning
+        # Inspect routing without mutating the caller's headers.
         merged_headers = self._merge_headers(headers)
+        if not (
+            isinstance(self._connection_params, StreamableHTTPConnectionParams)
+            and merged_headers
+            and merged_headers.get("x-trusted-mcp") == "true"
+        ):
+            # The parent owns standard session locking and pooling.
+            logger.info("Initialize MCP session")
+            return await super().create_session(headers)
 
         # Generate session key using merged headers
         session_key = self._generate_session_key(merged_headers)
@@ -127,32 +139,24 @@ class TrustedMcpSessionManager(MCPSessionManager):
 
             try:
                 # FIXME: reuse the normal procedure to create a session after updated trusted_mcp_client_context
-                if (
-                    isinstance(self._connection_params, StreamableHTTPConnectionParams)
-                    and merged_headers
-                    and merged_headers.pop("x-trusted-mcp", None) == "true"
-                ):
-                    logger.info("Initialize TrustedMCP session via trusted_mcp_client")
-                    session = await exit_stack.enter_async_context(
-                        trusted_mcp_client(
-                            url=self._connection_params.url,
-                            headers=merged_headers,
-                            timeout=timedelta(seconds=self._connection_params.timeout),
-                            sse_read_timeout=timedelta(
-                                seconds=self._connection_params.sse_read_timeout
-                            ),
-                            terminate_on_close=self._connection_params.terminate_on_close,
-                        )
+                merged_headers.pop("x-trusted-mcp", None)
+                logger.info("Initialize TrustedMCP session via trusted_mcp_client")
+                session = await exit_stack.enter_async_context(
+                    trusted_mcp_client(
+                        url=self._connection_params.url,
+                        headers=merged_headers,
+                        timeout=timedelta(seconds=self._connection_params.timeout),
+                        sse_read_timeout=timedelta(
+                            seconds=self._connection_params.sse_read_timeout
+                        ),
+                        terminate_on_close=self._connection_params.terminate_on_close,
                     )
+                )
 
-                    # Store session and exit stack in the pool
-                    self._sessions[session_key] = (session, exit_stack)
-                    logger.debug("Created new session: %s", session_key)
-                    return session
-                else:
-                    # Create a new session
-                    logger.info("Initialize MCP session")
-                    return await super().create_session(headers)
+                # Store session and exit stack in the pool
+                self._sessions[session_key] = (session, exit_stack)
+                logger.debug("Created new session: %s", session_key)
+                return session
             except Exception:
                 # If session creation fails, clean up the exit stack
                 if exit_stack:
