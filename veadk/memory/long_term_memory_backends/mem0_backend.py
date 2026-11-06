@@ -76,17 +76,12 @@ class Mem0LTMBackend(BaseLongTermMemoryBackend):
         pass
 
     @override
-    def save_memory(
-        self, event_strings: list[str], user_id: str = "default_user", **kwargs
-    ) -> bool:
-        """Save memory to Mem0
+    def save_memory(self, user_id: str, event_strings: list[str], **kwargs) -> bool:
+        """Save memory to Mem0.
 
-        Args:
-            event_strings: List of event strings to save
-            **kwargs: Additional parameters, including 'user_id' for Mem0
-
-        Returns:
-            bool: True if saved successfully, False otherwise
+        ``self.index`` (LongTermMemory app_name) is passed as Mem0 ``agent_id``
+        so distinct apps that share one Mem0 project stay isolated, matching
+        how VikingDB/Redis/OpenSearch backends use ``index``.
         """
         try:
             logger.info(
@@ -98,6 +93,7 @@ class Mem0LTMBackend(BaseLongTermMemoryBackend):
                 result = self._mem0_client.add(
                     [{"role": "user", "content": event_string}],
                     user_id=user_id,
+                    agent_id=self.index,
                     output_format="v1.1",
                     async_mode=True,
                 )
@@ -111,17 +107,12 @@ class Mem0LTMBackend(BaseLongTermMemoryBackend):
 
     @override
     def search_memory(
-        self, query: str, top_k: int, user_id: str = "default_user", **kwargs
+        self, user_id: str, query: str, top_k: int, **kwargs
     ) -> list[str]:
-        """Search memory from Mem0
+        """Search memory from Mem0.
 
-        Args:
-            query: Search query
-            top_k: Number of results to return
-            **kwargs: Additional parameters, including 'user_id' for Mem0
-
-        Returns:
-            list[str]: List of memory strings
+        Filters by the same ``agent_id=self.index`` used on save so results
+        stay scoped to this LongTermMemory instance.
         """
 
         try:
@@ -130,7 +121,11 @@ class Mem0LTMBackend(BaseLongTermMemoryBackend):
             )
 
             memories = self._mem0_client.search(
-                query, user_id=user_id, output_format="v1.1", top_k=top_k
+                query,
+                user_id=user_id,
+                agent_id=self.index,
+                output_format="v1.1",
+                top_k=top_k,
             )
 
             logger.debug(f"return relevant memories: {memories}")
