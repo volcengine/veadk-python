@@ -4657,6 +4657,304 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
     )
 
 
+def test_runtime_proxy_reports_incomplete_a2a_stream_after_partial_eof(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    endpoint = "https://runtime.example"
+    rpc_url = endpoint + "/a2a/jsonrpc"
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                runtime_id="runtime-1",
+                name="a2a-agent",
+                project_name="default",
+                network_configurations=[
+                    SimpleNamespace(endpoint=endpoint, network_type="public")
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                    custom_jwt_authorizer=None,
+                ),
+                tags=[],
+            )
+
+    class _FakeUpstreamResponse:
+        def __init__(
+            self,
+            *,
+            status_code: int,
+            body: bytes,
+            content_type: str = "application/json",
+        ) -> None:
+            self.status_code = status_code
+            self._body = body
+            self.headers = {"content-type": content_type}
+
+        async def aiter_raw(self):
+            yield self._body
+
+        async def aclose(self) -> None:
+            pass
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def build_request(
+            self,
+            method: str,
+            url: str,
+            *,
+            params: dict[str, str],
+            headers: dict[str, str],
+            content: bytes,
+        ) -> dict[str, Any]:
+            return {
+                "method": method,
+                "url": url,
+                "params": params,
+                "headers": headers,
+                "content": content,
+            }
+
+        async def send(self, request: dict[str, Any], *, stream: bool):
+            del stream
+            url = request["url"]
+            if url == endpoint + "/.well-known/agent-card.json":
+                return _FakeUpstreamResponse(
+                    status_code=200,
+                    body=json.dumps(
+                        {
+                            "name": "default",
+                            "description": "a2a-agent",
+                            "url": rpc_url,
+                            "version": "0.0.1",
+                            "capabilities": {"streaming": True},
+                        }
+                    ).encode(),
+                )
+            if url == endpoint + "/list-apps":
+                return _FakeUpstreamResponse(
+                    status_code=404,
+                    body=b'{"detail":"Not Found"}',
+                )
+            if url == rpc_url:
+                payload = json.loads(request["content"])
+                assert payload["method"] == "message/stream"
+                frame = {
+                    "jsonrpc": "2.0",
+                    "id": payload["id"],
+                    "result": {
+                        "kind": "status-update",
+                        "taskId": "task-1",
+                        "status": {
+                            "state": "working",
+                            "message": {
+                                "role": "agent",
+                                "parts": [{"kind": "text", "text": "partial"}],
+                            },
+                        },
+                    },
+                }
+                return _FakeUpstreamResponse(
+                    status_code=200,
+                    body=b"data: " + json.dumps(frame).encode() + b"\n\n",
+                    content_type="text/event-stream",
+                )
+            raise AssertionError(f"unexpected upstream URL: {url}")
+
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/runtime-proxy/runtime-1/run_sse?_runtime_region=cn-beijing",
+            json={
+                "app_name": "a2a-default",
+                "user_id": "user",
+                "session_id": "sid",
+                "new_message": {"role": "user", "parts": [{"text": "hello"}]},
+            },
+        )
+
+    assert response.status_code == 200
+    assert '"text": "partial"' in response.text
+    assert (
+        '"error": "A2A stream ended before a terminal task status '
+        '(last state: working)."' in response.text
+    )
+
+
+def test_runtime_proxy_reuses_a2a_stream_http_client(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    endpoint = "https://runtime.example"
+    rpc_url = endpoint + "/a2a/jsonrpc"
+    stream_client_ids: list[int] = []
+    closed_stream_clients: list[int] = []
+    rpc_requests = 0
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            del request
+            return SimpleNamespace(
+                runtime_id="runtime-1",
+                name="a2a-agent",
+                project_name="default",
+                network_configurations=[
+                    SimpleNamespace(endpoint=endpoint, network_type="public")
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                    custom_jwt_authorizer=None,
+                ),
+                tags=[],
+            )
+
+    class _FakeUpstreamResponse:
+        def __init__(
+            self,
+            *,
+            status_code: int,
+            body: bytes,
+            content_type: str = "application/json",
+        ) -> None:
+            self.status_code = status_code
+            self._body = body
+            self.headers = {"content-type": content_type}
+
+        async def aiter_raw(self):
+            yield self._body
+
+        async def aclose(self) -> None:
+            pass
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.is_stream_client = kwargs.get("limits") is not None
+            if self.is_stream_client:
+                stream_client_ids.append(id(self))
+
+        @property
+        def is_closed(self) -> bool:
+            return id(self) in closed_stream_clients
+
+        def build_request(
+            self,
+            method: str,
+            url: str,
+            *,
+            params: dict[str, str],
+            headers: dict[str, str],
+            content: bytes,
+        ) -> dict[str, Any]:
+            return {
+                "method": method,
+                "url": url,
+                "params": params,
+                "headers": headers,
+                "content": content,
+            }
+
+        async def send(self, request: dict[str, Any], *, stream: bool):
+            nonlocal rpc_requests
+            del stream
+            url = request["url"]
+            if url == endpoint + "/.well-known/agent-card.json":
+                return _FakeUpstreamResponse(
+                    status_code=200,
+                    body=json.dumps(
+                        {
+                            "name": "default",
+                            "description": "a2a-agent",
+                            "url": rpc_url,
+                            "version": "0.0.1",
+                            "capabilities": {"streaming": True},
+                        }
+                    ).encode(),
+                )
+            if url == endpoint + "/list-apps":
+                return _FakeUpstreamResponse(
+                    status_code=404,
+                    body=b'{"detail":"Not Found"}',
+                )
+            if url == rpc_url:
+                assert self.is_stream_client
+                rpc_requests += 1
+                payload = json.loads(request["content"])
+                frame = {
+                    "jsonrpc": "2.0",
+                    "id": payload["id"],
+                    "result": {
+                        "kind": "status-update",
+                        "taskId": "task-1",
+                        "final": True,
+                        "status": {
+                            "state": "completed",
+                            "message": {
+                                "role": "agent",
+                                "parts": [{"kind": "text", "text": "done"}],
+                            },
+                        },
+                    },
+                }
+                return _FakeUpstreamResponse(
+                    status_code=200,
+                    body=b"data: " + json.dumps(frame).encode() + b"\n\n",
+                    content_type="text/event-stream",
+                )
+            raise AssertionError(f"unexpected upstream URL: {url}")
+
+        async def aclose(self) -> None:
+            if self.is_stream_client:
+                closed_stream_clients.append(id(self))
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    with TestClient(app) as client:
+        for _ in range(2):
+            response = client.post(
+                "/web/runtime-proxy/runtime-1/run_sse?_runtime_region=cn-beijing",
+                json={
+                    "app_name": "a2a-default",
+                    "user_id": "user",
+                    "session_id": "sid",
+                    "new_message": {
+                        "role": "user",
+                        "parts": [{"text": "hello"}],
+                    },
+                },
+            )
+            assert response.status_code == 200
+            assert '"text": "done"' in response.text
+
+    assert rpc_requests == 2
+    assert len(stream_client_ids) == 1
+    assert closed_stream_clients == stream_client_ids
+
+
 def test_runtime_proxy_resolves_studio_media_before_forwarding(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
