@@ -154,6 +154,15 @@ def test_threshold_must_be_within_unit_interval(threshold):
         )
 
 
+@pytest.mark.parametrize("threshold", [0.0, 1.0])
+def test_threshold_accepts_unit_interval_boundaries(threshold):
+    config = QueryRoutingConfig(
+        simple_models=["cheap"],
+        questions=[{"question": "q", "threshold": threshold}],
+    )
+    assert config.questions[-1].threshold == threshold
+
+
 def test_duplicate_simple_models_are_rejected():
     with pytest.raises(ValidationError, match="duplicate"):
         QueryRoutingConfig(simple_models=["cheap", "cheap"])

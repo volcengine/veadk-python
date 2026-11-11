@@ -109,6 +109,15 @@ def test_context_limit_uses_request_characters():
     assert check.reason == "context_too_large"
 
 
+def test_context_limit_is_inclusive():
+    model = SimpleModelConfig(name="cheap", max_context_chars=100)
+    exact = CapabilityGuard().check(text_request("x" * 100), model)
+    over = CapabilityGuard().check(text_request("x" * 101), model)
+    assert exact.allowed is True
+    assert over.allowed is False
+    assert over.reason == "context_too_large"
+
+
 def test_media_counts_towards_context_budget():
     request = request_with(
         [types.Part(inline_data=types.Blob(mime_type="image/png", data=PNG_BYTES))]

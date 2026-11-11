@@ -16,7 +16,7 @@ import math
 
 import pytest
 
-from veadk.configs.routing_configs import QueryRoutingConfig
+from veadk.configs.routing_configs import QueryRoutingConfig, RoutingQuestion
 from veadk.routing.policy import ConservativePolicy
 
 
@@ -76,6 +76,31 @@ def test_any_question_above_threshold_routes_strong(question, value):
 def test_threshold_is_inclusive():
     decision = policy().evaluate(all_low(is_complex=0.15))
     assert decision.route == "simple"
+
+
+@pytest.mark.parametrize(
+    ("threshold", "value", "route"),
+    [
+        (0.0, 0.0, "simple"),
+        (0.0, 0.000001, "strong"),
+        (1.0, 1.0, "simple"),
+        (0.5, 0.5, "simple"),
+    ],
+)
+def test_threshold_extremes(threshold, value, route):
+    gate = ConservativePolicy(
+        [RoutingQuestion(id="gate", instructions="是否复杂？", threshold=threshold)]
+    )
+    decision = gate.evaluate({"gate": {"type": "noul", "noul": value}})
+    assert decision.route == route
+    if route == "strong":
+        assert decision.reason == "gate_above_threshold"
+
+
+def test_empty_answers_fail_closed():
+    decision = policy().evaluate({})
+    assert decision.route == "strong"
+    assert decision.reason == "invalid_answer:is_complex"
 
 
 def test_missing_answer_fails_closed():
