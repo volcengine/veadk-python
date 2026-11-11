@@ -376,3 +376,20 @@ def conversations():
             }
         )
     return result
+
+
+def final_answer(events):
+    """Extract the complete user-facing answer from an ADK event sequence."""
+    from google.adk.events.event import Event
+
+    for value in reversed(events):
+        event = Event.model_validate(value)
+        if event.is_final_response() and event.content:
+            text = "".join(
+                part.text
+                for part in event.content.parts or []
+                if part.text and not part.thought
+            ).strip()
+            if text:
+                return text
+    return ""

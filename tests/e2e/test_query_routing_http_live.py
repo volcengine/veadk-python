@@ -24,7 +24,12 @@ from pathlib import Path
 
 import httpx
 import pytest
-from query_routing_http_cases import answer_matches, conversations, single_turn_cases
+from query_routing_http_cases import (
+    answer_matches,
+    conversations,
+    final_answer,
+    single_turn_cases,
+)
 
 pytestmark = [
     pytest.mark.query_routing_live,
@@ -114,6 +119,10 @@ def server(tmp_path_factory):
             Path(env["VEADK_ROUTING_EXPERIMENT_MANIFEST"]).read_text()
         )
         env["VEADK_ROUTING_EXPERIMENT_TEMPERATURE"] = str(manifest["temperature"])
+        if "context_budget_chars" in manifest:
+            env["VEADK_ROUTING_EXPERIMENT_CONTEXT_CHARS"] = str(
+                manifest["context_budget_chars"]
+            )
         if manifest.get("capability_description"):
             env["VEADK_ROUTING_EXPERIMENT_CAPABILITY_DESCRIPTION"] = manifest[
                 "capability_description"
@@ -248,13 +257,7 @@ async def turn(client, identity, text, *, stream=False, parts=None, metadata=Non
         response.raise_for_status()
         events = response.json()
     assert events, "Agent API returned no events"
-    answer = "".join(
-        p["text"]
-        for e in events
-        if not e.get("partial")
-        for p in (e.get("content") or {}).get("parts", [])
-        if p.get("text") and not p.get("thought")
-    )
+    answer = final_answer(events)
     routes = [e.get("customMetadata", {}).get("veadk_query_routing") for e in events]
     routes = [r for r in routes if r]
     result = {

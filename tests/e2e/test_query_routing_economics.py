@@ -3,13 +3,72 @@
 import gzip
 import hashlib
 import json
+import os
+import subprocess
+import sys
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
 from query_routing_economics import answer_ok, price, summarize
 from query_routing_usage import install_usage_audit
+
+
+@pytest.mark.parametrize("budget", [None, "32000", "100000"])
+def test_experiment_context_budget_controls_both_gates_in_isolated_process(budget):
+    # The live-agent module installs process-wide observers; isolate this test
+    # from the parent suite and never call a real provider.
+    env = {
+        **os.environ,
+        "MODEL_AGENT_API_KEY": "test-placeholder",
+        "MODEL_AGENT_API_BASE": "https://ark.cn-beijing.volces.com/api/v3",
+        "PYTHONPATH": os.pathsep.join([str(Path(__file__).parent), str(Path.cwd())]),
+    }
+    env.pop("VEADK_ROUTING_EXPERIMENT_CONTEXT_CHARS", None)
+    if budget is not None:
+        env["VEADK_ROUTING_EXPERIMENT_CONTEXT_CHARS"] = budget
+    script = """
+import socket
+def deny_network(*args, **kwargs):
+    raise AssertionError('offline budget test attempted a network connection')
+socket.socket.connect = deny_network
+from google.adk.models.llm_request import LlmRequest
+from google.genai import types
+from query_routing_http_agent import build_agent
+from veadk.routing.state import IncompleteRoutingState
+from veadk.routing.llm import RoutingLlm
+import os
+
+budget = int(os.getenv('VEADK_ROUTING_EXPERIMENT_CONTEXT_CHARS', '32000'))
+agent = build_agent('economy_pro_chat')
+router = agent.model.classifier
+text = 'BEGIN ' + 'x' * 70000 + ' END'
+request = LlmRequest(contents=[types.Content(role='user', parts=[types.Part(text=text)])])
+assert router.registry.runtimes[0].config.max_context_chars == budget
+if budget == 32000:
+    assert router.registry.first_available(request) is None
+    try:
+        router._state_builder.build_for_routing(request)
+    except IncompleteRoutingState:
+        pass
+    else:
+        raise AssertionError('decision input gate must retain its default')
+else:
+    assert router.registry.first_available(request) is not None
+    state = router._state_builder.build_for_routing(request)
+    assert text in '\\n'.join(part.get('text', '') for part in state)
+assert not isinstance(build_agent('baseline_economy_pro_chat').model, RoutingLlm)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def usage_record(**overrides):

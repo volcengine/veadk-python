@@ -72,6 +72,14 @@ factory.DecisionClient = ObservedDecisionClient
 
 
 class ObservedClassifier(QueryClassifier):
+    def __init__(self, *args, **kwargs):
+        from veadk.routing.state import QueryStateBuilder
+
+        budget = os.getenv("VEADK_ROUTING_EXPERIMENT_CONTEXT_CHARS")
+        if budget is not None:
+            kwargs["state_builder"] = QueryStateBuilder(max_chars=int(budget))
+        super().__init__(*args, **kwargs)
+
     async def classify(self, *args, **kwargs):
         token = _AUDIT_TURN.set(kwargs["invocation_id"])
         try:
@@ -186,6 +194,9 @@ def build_agent(kind: str) -> Agent:
             }
         ],
     }
+    context_budget = os.getenv("VEADK_ROUTING_EXPERIMENT_CONTEXT_CHARS")
+    if context_budget is not None:
+        routing["simple_models"][0]["max_context_chars"] = int(context_budget)
     if kind == "shadow":
         routing.pop("mode")
     elif kind == "timeout":

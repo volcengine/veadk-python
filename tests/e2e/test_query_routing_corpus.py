@@ -6,6 +6,51 @@ import pytest
 from query_routing_http_cases import answer_matches, conversations, single_turn_cases
 
 
+@pytest.mark.parametrize("terminal", [False, True])
+def test_final_answer_ignores_intermediate_tool_text_and_partial_events(terminal):
+    from query_routing_http_cases import final_answer
+
+    events = [
+        {
+            "author": "root",
+            "content": {
+                "role": "model",
+                "parts": [
+                    {"text": "I will calculate; the final format is #### 1."},
+                    {"functionCall": {"name": "calculate", "args": {}}},
+                ],
+            },
+        }
+    ]
+    events.append(
+        {
+            "author": "root",
+            "partial": True,
+            "content": {"role": "model", "parts": [{"text": "partial"}]},
+        }
+    )
+    if terminal:
+        events.extend(
+            [
+                {
+                    "author": "child",
+                    "content": {"role": "model", "parts": [{"text": "child answer"}]},
+                },
+                {
+                    "author": "root",
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {"text": "hidden", "thought": True},
+                            {"text": "#### 2"},
+                        ],
+                    },
+                },
+            ]
+        )
+    assert final_answer(events) == ("#### 2" if terminal else "")
+
+
 def test_frozen_corpus_is_balanced_and_has_unique_case_ids():
     cases = single_turn_cases()
     assert len({case["id"] for case in cases}) == 132
