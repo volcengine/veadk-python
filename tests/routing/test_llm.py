@@ -110,37 +110,30 @@ async def test_simple_selection_uses_configured_model():
 
 
 @pytest.mark.asyncio
-async def test_unknown_selected_model_falls_back_to_strong():
-    router, strong, simple, _ = build()
+async def test_unknown_target_is_rejected_without_switching():
+    router, strong, _, _ = build()
     set_route_selection(
         RouteSelection(
-            route="simple",
-            reason="ok",
-            invocation_id="inv",
-            model_name="missing",
+            route="simple", reason="ok", invocation_id="inv", model_name="missing"
         )
     )
-    responses = await collect(router, request())
-    assert responses[0].content.parts[0].text == "strong"
-    assert strong.calls == 1
+    with pytest.raises(ValueError, match="no longer configured"):
+        await collect(router, request())
+    assert strong.calls == 0
 
 
 @pytest.mark.asyncio
-async def test_pre_chunk_failure_falls_back_and_upgrades_session():
-    router, strong, simple, store = build(fail_before=True)
+async def test_pre_chunk_failure_propagates_without_switching():
+    router, strong, simple, _ = build(fail_before=True)
     set_route_selection(
         RouteSelection(
-            route="simple",
-            reason="ok",
-            invocation_id="inv",
-            session_id="s1",
-            model_name="simple",
+            route="simple", reason="ok", invocation_id="inv", model_name="simple"
         )
     )
-    responses = await collect(router, request())
-    assert responses[0].content.parts[0].text == "strong"
-    assert strong.calls == 1
-    assert store.session_upgraded("s1") is True
+    with pytest.raises(RuntimeError, match="before"):
+        await collect(router, request())
+    assert strong.calls == 0
+    assert simple.calls == 1
 
 
 @pytest.mark.asyncio
@@ -157,24 +150,6 @@ async def test_post_chunk_failure_is_not_retried():
     with pytest.raises(RuntimeError, match="after"):
         await collect(router, request())
     assert strong.calls == 0
-
-
-@pytest.mark.asyncio
-async def test_capability_error_marks_model_unhealthy():
-    error = RuntimeError("bad request")
-    error.status_code = 400
-    router, strong, simple, _ = build(error=error)
-    set_route_selection(
-        RouteSelection(
-            route="simple",
-            reason="ok",
-            invocation_id="inv",
-            model_name="simple",
-        )
-    )
-    responses = await collect(router, request())
-    assert responses[0].content.parts[0].text == "strong"
-    assert router.registry.first_available(request()) is None
 
 
 @pytest.mark.asyncio

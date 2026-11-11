@@ -12,11 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
+
 from google.adk.models.llm_request import LlmRequest
 from google.genai import types
 
 from veadk.content_safety.state import DEFUSE_PREFIX, DEFUSE_SUFFIX
-from veadk.routing.state import QueryStateBuilder, request_has_media
+from veadk.routing.state import (
+    QueryStateBuilder,
+    IncompleteRoutingState,
+    request_has_media,
+)
 
 PNG_BYTES = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
@@ -42,18 +48,15 @@ def test_recent_turns_are_labelled_and_included():
     assert text_of(state) == "[user]\nfirst\n[model]\nanswer\n[user]\nsecond"
 
 
-def test_turn_window_drops_oldest_messages():
+def test_turn_window_reports_incomplete_history():
     request = make_request(
         ("user", "one"),
         ("model", "two"),
         ("user", "three"),
         ("model", "four"),
     )
-    state = QueryStateBuilder(defuse=False, max_turns=2).build_for_routing(request)
-    assert "one" not in text_of(state)
-    assert "two" not in text_of(state)
-    assert "three" in text_of(state)
-    assert "four" in text_of(state)
+    with pytest.raises(IncompleteRoutingState, match="history"):
+        QueryStateBuilder(defuse=False, max_turns=2).build_for_routing(request)
 
 
 def test_empty_request_returns_empty_state():
@@ -94,13 +97,10 @@ def test_defuse_wrapper_is_added_by_default():
     assert state[-1]["text"] == DEFUSE_SUFFIX
 
 
-def test_text_is_truncated_to_budget():
+def test_text_budget_reports_incomplete_state():
     request = make_request(("user", "x" * 500))
-    state = QueryStateBuilder(max_chars=100, defuse=False).build_for_routing(request)
-    assert len(text_of(state)) <= 101
-    assert text_of(state).startswith("[user]\n")
-    assert text_of(state).endswith("x")
-    assert "x" * 500 not in text_of(state)
+    with pytest.raises(IncompleteRoutingState, match="character budget"):
+        QueryStateBuilder(max_chars=100, defuse=False).build_for_routing(request)
 
 
 def test_media_part_is_converted_to_image_url():

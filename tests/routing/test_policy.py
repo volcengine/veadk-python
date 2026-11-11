@@ -54,7 +54,6 @@ def test_all_questions_below_threshold_routes_simple():
     assert decision.route == "simple"
     assert decision.reason == "all_thresholds_passed"
     assert decision.probabilities["is_complex"] == 0.01
-    assert decision.upgrade_session is False
 
 
 @pytest.mark.parametrize(
@@ -70,7 +69,6 @@ def test_any_question_above_threshold_routes_strong(question, value):
     decision = policy().evaluate(all_low(**{question: value}))
     assert decision.route == "strong"
     assert decision.reason == f"{question}_above_threshold"
-    assert decision.upgrade_session is True
 
 
 def test_threshold_is_inclusive():
@@ -109,7 +107,6 @@ def test_missing_answer_fails_closed():
     decision = policy().evaluate(values)
     assert decision.route == "strong"
     assert decision.reason == "invalid_answer:needs_tools"
-    assert decision.upgrade_session is False
 
 
 def test_non_noul_type_fails_closed():

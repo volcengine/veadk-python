@@ -67,23 +67,16 @@ def build_query_routing(
     store: RouteStore | None = None,
     judge: Any | None = None,
 ) -> tuple[RoutingLlm, Any]:
-    """Build the routing proxy and its ``before_model_callback``.
+    """Build the model pool and final request binder.
 
     ``judge`` is injectable for tests; production uses a ``DecisionClient``
     whose Ark endpoint is derived from the Agent's effective model connection.
     """
 
-    if getattr(agent, "enable_responses", False) and getattr(
-        agent, "enable_responses_cache", True
-    ):
-        raise QueryRoutingConfigError(
-            "query routing is incompatible with Responses cache continuation; "
-            "set enable_responses_cache=False or disable query_routing"
-        )
-
     strong_model = _strong_model(config, agent)
+    _validate_model_contract(strong_model)
     runtimes = [
-        SimpleModelRuntime(config=model, llm=_build_model(agent, model.name))
+        SimpleModelRuntime(config=model, llm=_build_model(agent, model))
         for model in config.simple_models
     ]
     registry = ModelRegistry(runtimes=runtimes)
@@ -105,6 +98,8 @@ def build_query_routing(
         runtimes=runtimes,
         registry=registry,
         store=route_store,
+        classifier=classifier,
+        config=config,
     )
     callback = build_before_model_callback(classifier, route_store, config)
     return router, callback
@@ -125,32 +120,71 @@ def _primary_model_name(agent: Any) -> str | None:
     return model_name
 
 
-def _build_model(agent: Any, model_name: str) -> BaseLlm:
-    provider = getattr(agent, "model_provider", "") or ""
-    full_name = model_name if "/" in model_name else f"{provider}/{model_name}"
-    extra = dict(getattr(agent, "model_extra_config", {}) or {})
+def _validate_model_contract(model: BaseLlm) -> None:
+    from veadk.configs.routing_configs import _REQUEST_OVERRIDE_FIELDS
 
-    if getattr(agent, "enable_responses", False):
-        from veadk.models.ark_llm import ArkLlm
-
-        return ArkLlm(
-            model=full_name,
-            api_key=getattr(agent, "model_api_key", ""),
-            api_base=getattr(agent, "model_api_base", ""),
-            fallbacks=None,
-            enable_responses_cache=False,
-            **extra,
+    extra = getattr(model, "_additional_args", {}) or {}
+    body = extra.get("extra_body") or {}
+    if _REQUEST_OVERRIDE_FIELDS.intersection(extra) or (
+        _REQUEST_OVERRIDE_FIELDS | {"model"}
+    ).intersection(body):
+        raise QueryRoutingConfigError(
+            "model transport options must not override routed requests"
+        )
+    if getattr(model, "fallbacks", None) or extra.get("fallbacks"):
+        raise QueryRoutingConfigError(
+            "query routing fixes the model for the entire turn; remove model_fallbacks"
         )
 
+
+def _build_model(agent: Any, specification: Any) -> BaseLlm:
+    from veadk.configs.routing_configs import SimpleModelConfig
+    from veadk.models.ark_llm import ArkLlm
     from veadk.models.retrying_lite_llm import RetryingLiteLlm
 
-    return RetryingLiteLlm(
-        model=full_name,
-        api_key=getattr(agent, "model_api_key", ""),
-        api_base=getattr(agent, "model_api_base", ""),
-        fallbacks=None,
-        **extra,
+    spec = (
+        SimpleModelConfig(name=specification)
+        if isinstance(specification, str)
+        else specification
     )
+    provider = spec.provider or getattr(agent, "model_provider", "openai")
+    full_name = spec.name if "/" in spec.name else f"{provider}/{spec.name}"
+    api_base = spec.api_base or getattr(agent, "model_api_base", "")
+    explicit_key = spec.api_key_value
+    if (
+        spec.api_base
+        and spec.api_base.rstrip("/")
+        != getattr(agent, "model_api_base", "").rstrip("/")
+        and not explicit_key
+    ):
+        raise QueryRoutingConfigError(
+            "an independent api_base requires api_key or api_key_env"
+        )
+    api_key = explicit_key or getattr(agent, "model_api_key", "")
+    # Endpoint-specific defaults must not cross provider boundaries.
+    extra = (
+        dict(getattr(agent, "model_extra_config", {}) or {})
+        if not spec.api_base
+        else {}
+    )
+    extra.update(spec.extra_config)
+    responses = (
+        spec.api == "responses"
+        if spec.api
+        else getattr(agent, "enable_responses", False)
+    )
+    kwargs = dict(
+        model=full_name, api_key=api_key, api_base=api_base, fallbacks=None, **extra
+    )
+    if responses:
+        model = ArkLlm(
+            enable_responses_cache=getattr(agent, "enable_responses_cache", True),
+            **kwargs,
+        )
+    else:
+        model = RetryingLiteLlm(**kwargs)
+    _validate_model_contract(model)
+    return model
 
 
 def _resolve_decision_connection(

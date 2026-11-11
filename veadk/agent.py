@@ -699,16 +699,34 @@ class Agent(LlmAgent):
                 f"got runtime={self.runtime}"
             )
 
-        router, callback = build_query_routing(config, self)
+        router, _ = build_query_routing(config, self)
         self.query_routing = config
         self.model = router
+        from veadk.routing.agent_tool import bind_sub_agents
 
-        if self.before_model_callback is None:
-            self.before_model_callback = callback
-        elif isinstance(self.before_model_callback, list):
-            self.before_model_callback = [*self.before_model_callback, callback]
-        else:
-            self.before_model_callback = [self.before_model_callback, callback]
+        bind_sub_agents(self)
+
+    @property
+    def canonical_model(self):
+        from veadk.routing.context import get_turn_context
+        from veadk.routing.llm import RoutingLlm
+
+        turn = get_turn_context()
+        if turn is not None:
+            return turn.model
+        if isinstance(self.model, RoutingLlm):
+            return self.model.strong_model
+        return super().canonical_model
+
+    @property
+    def canonical_before_model_callbacks(self):
+        from veadk.routing.context import get_turn_context
+        from veadk.routing.execution import bind_request
+
+        callbacks = super().canonical_before_model_callbacks
+        return (
+            [*callbacks, bind_request] if get_turn_context() is not None else callbacks
+        )
 
     def update_model(self, model_name: str):
         """Point the agent at a different model.
@@ -934,6 +952,7 @@ class Agent(LlmAgent):
 
     @property
     def _llm_flow(self) -> BaseLlmFlow:
+        from veadk.routing.execution import prepare_flow
         from google.adk.flows.llm_flows.auto_flow import AutoFlow
         from google.adk.flows.llm_flows.single_flow import SingleFlow
 
@@ -946,16 +965,16 @@ class Agent(LlmAgent):
 
             if self.enable_supervisor:
                 logger.debug(f"Enable supervisor flow for agent: {self.name}")
-                return SupervisorSingleFlow(supervised_agent=self)
+                return prepare_flow(SupervisorSingleFlow(supervised_agent=self))
             else:
-                return SingleFlow()
+                return prepare_flow(SingleFlow())
         else:
             from veadk.flows.supervise_auto_flow import SupervisorAutoFlow
 
             if self.enable_supervisor:
                 logger.debug(f"Enable supervisor flow for agent: {self.name}")
-                return SupervisorAutoFlow(supervised_agent=self)
-            return AutoFlow()
+                return prepare_flow(SupervisorAutoFlow(supervised_agent=self))
+            return prepare_flow(AutoFlow())
 
     async def _run_async_impl(
         self, ctx: "InvocationContext"
@@ -973,6 +992,16 @@ class Agent(LlmAgent):
             return
 
         if self.runtime == "adk":
+            from veadk.routing.context import get_turn_context
+            from veadk.routing.execution import run_routed, routing_owner
+
+            if routing_owner(self) is not None or get_turn_context() is not None:
+                async with aclosing(
+                    run_routed(self, ctx, super()._run_async_impl)
+                ) as events:
+                    async for event in events:
+                        yield event
+                return
             # A transfer can close this wrapper before the LLM stream ends.
             # Close it in the same task so tracing contexts do not leak into
             # async-generator finalization or the receiving sub-agent.

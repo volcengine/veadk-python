@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Per-call route selection passed from the callback to the routing model.
+"""Root-turn model selection propagated through nested execution.
 
 ADK's ``BaseLlm.generate_content_async`` only receives an ``LlmRequest``, so
 the invocation-scoped decision is carried in a context variable. Each ADK
@@ -23,12 +23,12 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
 class RouteSelection:
-    """The route chosen for one model call."""
+    """The route chosen for one root user turn."""
 
     route: Literal["simple", "strong"]
     reason: str
@@ -36,7 +36,25 @@ class RouteSelection:
     session_id: str = ""
     model_name: str | None = None
     shadow: bool = False
-    upgrade_session: bool = False
+    latency_ms: float = 0.0
+    input_tokens: int | None = None
+
+
+@dataclass(frozen=True)
+class TurnContext:
+    """One immutable model binding inherited by nested execution tasks."""
+
+    selection: RouteSelection
+    model: Any
+    router: Any
+    target: str
+
+
+_TURN: ContextVar[TurnContext | None] = ContextVar("veadk_query_turn", default=None)
+
+
+def get_turn_context() -> TurnContext | None:
+    return _TURN.get()
 
 
 _ROUTE_SELECTION: ContextVar[RouteSelection | None] = ContextVar(

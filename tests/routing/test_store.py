@@ -108,32 +108,16 @@ async def test_factory_failure_propagates_and_clears_inflight():
     assert await store.get_or_create("k", ok) == selection()
 
 
-def test_session_upgrade_expires():
-    clock = Clock()
-    store = RouteStore(session_ttl=10, clock=clock)
-    store.upgrade_session("s1")
-    assert store.session_upgraded("s1") is True
-    clock.now += 11
-    assert store.session_upgraded("s1") is False
-
-
-def test_empty_session_never_upgrades():
-    store = RouteStore()
-    store.upgrade_session("")
-    assert store.session_upgraded("") is False
-
-
 def test_clear_drops_all_state():
     store = RouteStore()
-    store.upgrade_session("s1")
     store.clear()
-    assert store.session_upgraded("s1") is False
+    assert not store._decisions
 
 
 @pytest.mark.asyncio
 async def test_many_entries_are_pruned_when_expired():
     clock = Clock()
-    store = RouteStore(decision_ttl=10, session_ttl=10, clock=clock)
+    store = RouteStore(decision_ttl=10, clock=clock)
 
     async def factory():
         return selection()

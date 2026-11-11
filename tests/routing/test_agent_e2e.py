@@ -198,7 +198,7 @@ async def test_simple_query_uses_cheap_model_and_one_decision_call(
 
 
 @pytest.mark.asyncio
-async def test_complex_query_uses_strong_model_and_pins_session(tmp_path, monkeypatch):
+async def test_next_invocation_is_classified_independently(tmp_path, monkeypatch):
     with decision_server() as server:
         write_config(tmp_path, server)
         monkeypatch.chdir(tmp_path)
@@ -212,11 +212,11 @@ async def test_complex_query_uses_strong_model_and_pins_session(tmp_path, monkey
         second = await run_turn(agent, session_id="complex", message="再解释一下")
 
         assert first == "STRONG"
-        assert second == "STRONG"
-        assert cheap.calls == 0
-        assert strong.calls == 2
-        # The second turn is pinned by the session upgrade, not reclassified.
-        assert len(server.requests) == 1
+        assert second == "CHEAP"
+        assert cheap.calls == 1
+        assert strong.calls == 1
+        # A new user invocation is classified again.
+        assert len(server.requests) == 2
 
 
 @pytest.mark.asyncio
@@ -281,8 +281,7 @@ async def noop_callback(callback_context, llm_request):
 def test_existing_callable_callback_is_preserved():
     agent = make_router_agent("callback_agent", before_model_callback=noop_callback)
     assert isinstance(agent.model, RoutingLlm)
-    assert agent.before_model_callback[0] is noop_callback
-    assert len(agent.before_model_callback) == 2
+    assert agent.before_model_callback is noop_callback
 
 
 def test_existing_callback_list_is_extended():
@@ -290,7 +289,7 @@ def test_existing_callback_list_is_extended():
         "callback_list_agent", before_model_callback=[noop_callback]
     )
     assert agent.before_model_callback[0] is noop_callback
-    assert len(agent.before_model_callback) == 2
+    assert len(agent.before_model_callback) == 1
 
 
 def test_routing_on_a_non_adk_runtime_is_rejected():

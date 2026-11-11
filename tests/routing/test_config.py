@@ -288,3 +288,55 @@ def test_decision_block_defaults(tmp_path):
     config = load_query_routing_config(path)
     assert config.decision.model == "doubao-seed-2-1-lite-260915"
     assert config.decision_timeout == 2.0
+
+
+def test_independent_credentials_use_environment_and_remain_redacted(monkeypatch):
+    from veadk.configs.routing_configs import SimpleModelConfig, QueryRoutingConfigError
+
+    monkeypatch.setenv("ROUTING_TEST_KEY", "test-only-value")
+    profile = SimpleModelConfig(name="cheap", api_key_env="ROUTING_TEST_KEY")
+    assert profile.api_key_value == "test-only-value"
+    monkeypatch.delenv("ROUTING_TEST_KEY")
+    with pytest.raises(QueryRoutingConfigError, match="missing credential"):
+        profile.api_key_value
+    with pytest.raises(ValueError, match="only one"):
+        SimpleModelConfig(
+            name="cheap", api_key="test-only", api_key_env="ROUTING_TEST_KEY"
+        )
+    hidden = SimpleModelConfig(name="cheap", api_key="test-only")
+    assert (
+        "test-only" not in repr(hidden) and "test-only" not in hidden.model_dump_json()
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "model",
+        "api_key",
+        "api_base",
+        "fallbacks",
+        "previous_response_id",
+        "input",
+        "instructions",
+    ],
+)
+def test_profile_cannot_override_routing_contract_through_extra_config(field):
+    from veadk.configs.routing_configs import SimpleModelConfig
+
+    with pytest.raises(ValueError, match="not allowed"):
+        SimpleModelConfig(name="cheap", extra_config={field: "override"})
+
+
+def test_builtin_threshold_calibration_validates_ids_and_bounds():
+    cfg = QueryRoutingConfig(
+        simple_models=["cheap"], builtin_thresholds={"needs_tools": 0.4}
+    )
+    assert next(q.threshold for q in cfg.questions if q.id == "needs_tools") == 0.4
+    with pytest.raises(ValueError, match="unknown"):
+        QueryRoutingConfig(simple_models=["cheap"], builtin_thresholds={"unknown": 0.4})
+    for threshold in (-0.1, 1.1, float("nan")):
+        with pytest.raises(ValueError):
+            QueryRoutingConfig(
+                simple_models=["cheap"], builtin_thresholds={"needs_tools": threshold}
+            )

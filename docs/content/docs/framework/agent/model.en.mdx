@@ -39,7 +39,7 @@ agent = Agent(model_name=["doubao-seed-1-8-251228", "deepseek-r1-250528"])
 
 ## Query routing
 
-When enabled, the Agent classifies each request before the model call: simple requests go to a low-cost model from `simple_models`, while complex or high-risk requests stay on the strong model. The feature is off by default — it only activates when `query_routing` is configured, so an unconfigured project behaves exactly as before.
+SystemOne selects a model once at the start of each user turn, using the effective history, instructions, tool declarations and candidate capabilities. The selection remains fixed through tool loops, nested AgentTool calls and sub-agent transfers. The next user turn is classified again. Routing is disabled unless explicitly configured; an unconfigured project retains its original execution behavior.
 
 Add the block to `config.yaml` in the project root:
 
@@ -48,7 +48,7 @@ query_routing:
   simple_models:
     - doubao-seed-2-1-lite-260915
   # strong_model: kimi-k3-1-pro-261024  # optional; defaults to the Agent's model_name
-  mode: enforce
+  mode: shadow  # observe first; set enforce to execute routing
   decision:
     model: doubao-seed-2-1-lite-260915
   decision_timeout: 2.0
@@ -69,9 +69,10 @@ You can also pass a mapping directly with `Agent(query_routing={...})`, or disab
 | :--- | :--- | :--- | :--- |
 | `simple_models` | `list[str \| dict]` | required | Low-cost models, at least one. The first model that supports the current request is selected in list order. A string is shorthand for a mapping with only `name`. |
 | `strong_model` | `str` | Agent's `model_name` | Strong model name. When it differs from the Agent's primary model, it is built separately with the same connection settings. |
-| `mode` | `"enforce" \| "shadow"` | `"enforce"` | `shadow` only records routing decisions and always uses the strong model, so you can observe results before switching. |
+| `mode` | `"enforce" \| "shadow"` | `"shadow"` | `shadow` only records routing decisions and always uses the strong model, so you can observe results before switching. |
 | `decision` | `dict` | derived from the Agent's Ark connection | Decision service connection with optional `api_url`, `api_key`, and `model`. A custom non-Ark `api_url` requires an explicit `api_key`. |
 | `decision_timeout` | `float` | `2.0` | Per-classification timeout in seconds, in `(0, 30]`. A timeout routes to the strong model. |
+| `builtin_thresholds` | `dict[str, float]` | `{}` | Optional overrides for built-in question thresholds, each in `[0, 1]`. Calibrate against representative queries before enforcing. |
 | `questions` | `list[str \| dict]` | `[]` | Custom questions appended to the four built-in questions. A string is shorthand for `{question: ...}`. |
 
 Each `simple_models` entry can declare capabilities; anything not declared is treated as unsupported:
@@ -79,25 +80,52 @@ Each `simple_models` entry can declare capabilities; anything not declared is tr
 | Capability field | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `name` | `str` | required | Model name; `model` and `model_name` are accepted aliases. |
+| `provider` | `str` | Agent provider | LiteLLM provider prefix for unqualified names. |
+| `api` | `str` | Agent protocol | `chat_completions` or `responses` (Ark Responses adapter). |
+| `api_base` | `str` | Agent endpoint | Independent endpoint. A different endpoint requires an explicit credential. |
+| `api_key_env` / `api_key` | `str` | Agent credential | Environment variable name or secret value; mutually exclusive. Prefer `api_key_env`. |
+| `extra_config` | `dict` | `{}` | Provider options. Cannot override routing, history or connection fields. Independent endpoints do not inherit the Agent’s provider options. |
 | `supports_tools` | `bool` | `False` | Whether the model supports tool calls. |
 | `supports_media` | `bool` | `False` | Whether the model supports image, audio, video, or file input. |
 | `supports_structured_output` | `bool` | `False` | Whether the model supports structured output. |
-| `max_context_chars` | `int` | `32000` | Maximum request text length; media is estimated at a fixed character cost. |
+| `max_context_chars` | `int` | `32000` | Character budget including instructions, tools, schemas and history; media uses an estimate. This is not a tokenizer-based context-window guarantee. |
 
 Control questions always use the `noul` type. Four questions are built in:
 
 | Question ID | Default threshold | What it checks |
 | :--- | :--- | :--- |
-| `is_complex` | `0.15` | Whether the request needs multi-step reasoning, planning, code or math derivation, or long-chain analysis. |
-| `needs_tools` | `0.15` | Whether it must call external tools, functions, retrieval, or code execution. |
+| `is_complex` | `0.15` | Whether reasoning, planning, code or math exceeds the candidate’s declared capabilities. |
+| `needs_tools` | `0.15` | Whether tool orchestration or recovery exceeds the candidate’s declared capabilities. Supported simple tool calls are not automatically escalated. |
 | `needs_long_context` | `0.15` | Whether it needs global understanding across a long history or multiple documents. |
 | `is_high_stakes` | `0.05` | Whether it involves high-risk medical, legal, financial, or safety conclusions, or irreversible actions. |
 
-A custom question only needs `question` and `threshold`; its ID is generated as `custom_1`, `custom_2`, and so on. Built-in IDs are reserved and cannot be overridden. Every question returns a probability from `0` to `1`; **the simple model is used only when all probabilities are at or below their thresholds**. Any probability above its threshold, a missing or invalid answer, a Decision timeout, or a Decision error routes the request to the strong model. A strong-model decision pins the session, so later turns are not classified again.
+A custom question only needs `question` and `threshold`; its ID is generated as `custom_1`, `custom_2`, and so on. Built-in IDs are reserved and cannot be overridden. Every question returns a probability from `0` to `1`; **the simple model is used only when all probabilities are at or below their thresholds**. Any probability above its threshold, a missing or invalid answer, a Decision timeout, or a Decision error routes the request to the strong model. Incomplete decision input, unsupported media or unavailable dynamic tool declarations also select the strong model. Effective history is never silently truncated to enable a downgrade. After selection, a provider failure propagates; it never triggers a model switch. Late capability growth fails explicitly. Underlying cross-model fallbacks must be removed when routing is enabled.
 
-<Callout type="warn">
-  Query routing currently supports only `runtime="adk"` and is incompatible with Responses cache continuation when `enable_responses=True`. Session pinning and same-turn deduplication are process-local; multi-process deployments maintain them independently per process.
-</Callout>
+Responses continuation is reused only when the target, endpoint, identity, request configuration and effective history match. Model changes, including A → B → A, rebuild the chain from full business history; expired IDs retry with that history on the same model. Provider-specific reasoning and signatures are not replayed to a different target. `enable_responses_cache=False` always sends full history. Server-side caching still requires the provider’s cache-service entitlement; Responses continuation can also use `store=True` with `extra_body={"caching": {"type": "disabled"}}`.
+
+Nested AgentTool calls retain separate sessions and inherit one root decision. Native ADK LlmAgent and standard sub-agent workflows are adapted on owned copies; custom native LlmAgent subclasses must implement turn binding explicitly. Resume uses the persisted session decision and requires unchanged routing configuration. Live bidirectional execution and external runtimes are outside this ADK text-turn contract. Concurrent execution of the same session still requires application-level serialization; cross-process simultaneous classification is not a distributed lock.
+
+Model events expose `veadk_query_routing` metadata with root turn ID, route, model and target digest. The decision event also includes reason, latency and reported input tokens. Credentials and raw query text are excluded.
+
+```python title="agent.py"
+agent = Agent(
+    model_name="strong-model",
+    query_routing={
+        "mode": "enforce",
+        "simple_models": [{
+            "name": "small-model",
+            "provider": "openai",
+            "api": "chat_completions",
+            "api_base": "https://models.example.com/v1",
+            "api_key_env": "SMALL_MODEL_API_KEY",
+            "supports_tools": True,
+        }],
+    },
+)
+```
+
+Real protocol tests are opt-in: set `VEADK_QUERY_ROUTING_LIVE=1`, `MODEL_AGENT_API_KEY` and `MODEL_AGENT_API_BASE`, then run `uv run --extra dev pytest tests/e2e/test_query_routing_live.py`. Model names can be set with `VEADK_QUERY_ROUTING_SIMPLE_MODEL` and `VEADK_QUERY_ROUTING_STRONG_MODEL`. These tests validate transport and turn contracts; production routing quality and cost savings require a representative task benchmark.
+
 
 ## Customize the model client
 

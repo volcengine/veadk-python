@@ -39,7 +39,7 @@ agent = Agent(model_name=["doubao-seed-1-8-251228", "deepseek-r1-250528"])
 
 ## 查询分级与模型路由
 
-开启后，Agent 会在每次模型调用前判断当前问题是否足够简单：简单问题交给 `simple_models` 中的低成本模型，复杂或高风险问题仍由强模型处理。该能力默认关闭，只有配置了 `query_routing` 才生效；不配置时行为与升级前完全一致。
+SystemOne 在每个用户 turn 开始时，根据有效历史、指令、工具声明及候选模型能力选择一次模型。工具循环、嵌套 AgentTool 和子 Agent 转交全程保持该选择；下一个用户 turn 重新判断。该能力默认关闭，只有显式配置才生效；不配置时保留原有执行行为。
 
 在项目根目录的 `config.yaml` 中新增配置块：
 
@@ -48,7 +48,7 @@ query_routing:
   simple_models:
     - doubao-seed-2-1-lite-260915
   # strong_model: kimi-k3-1-pro-261024  # 可选；默认使用 Agent 的 model_name
-  mode: enforce
+  mode: shadow  # 先观察；设为 enforce 才实际执行路由
   decision:
     model: doubao-seed-2-1-lite-260915
   decision_timeout: 2.0
@@ -69,9 +69,10 @@ agent = Agent(model_name="kimi-k3-1-pro-261024")
 | :--- | :--- | :--- | :--- |
 | `simple_models` | `list[str \| dict]` | 必填 | 低成本模型列表，至少一个。按列出顺序选择第一个满足当前请求能力要求的模型。字符串等价于只声明 `name` 的字典。 |
 | `strong_model` | `str` | Agent 的 `model_name` | 强模型名称。与 Agent 的主模型不同时，用同一套连接信息单独构建。 |
-| `mode` | `"enforce" \| "shadow"` | `"enforce"` | `shadow` 只记录分级结果，所有请求仍走强模型，便于观察效果后再切换。 |
+| `mode` | `"enforce" \| "shadow"` | `"shadow"` | `shadow` 只记录分级结果，所有请求仍走强模型，便于观察效果后再切换。 |
 | `decision` | `dict` | 从 Agent 的方舟连接推导 | Decision 服务连接，可配置 `api_url`、`api_key`、`model`。自定义非方舟 `api_url` 时必须同时提供 `api_key`。 |
 | `decision_timeout` | `float` | `2.0` | 单次分级超时（秒），范围 `(0, 30]`。超时按强模型处理。 |
+| `builtin_thresholds` | `dict[str, float]` | `{}` | 可覆盖内置问题阈值，范围 `[0, 1]`；正式执行前应使用代表性查询校准。 |
 | `questions` | `list[str \| dict]` | `[]` | 追加到四个内置问题之后的自定义问题。字符串等价于 `{question: ...}`。 |
 
 每个 `simple_models` 条目可声明能力；未声明的能力一律视为不支持：
@@ -79,25 +80,52 @@ agent = Agent(model_name="kimi-k3-1-pro-261024")
 | 能力字段 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
 | `name` | `str` | 必填 | 模型名称，也可写成 `model` 或 `model_name`。 |
+| `provider` | `str` | Agent provider | 无前缀名称使用的 LiteLLM provider。 |
+| `api` | `str` | Agent 协议 | `chat_completions` 或 `responses`（方舟 Responses 适配器）。 |
+| `api_base` | `str` | Agent endpoint | 独立 endpoint；不同 endpoint 必须显式配置凭据。 |
+| `api_key_env` / `api_key` | `str` | Agent 凭据 | 环境变量名或密钥值，二者互斥；推荐 `api_key_env`。 |
+| `extra_config` | `dict` | `{}` | Provider 选项，不得覆盖路由、历史及连接字段。独立 endpoint 不继承 Agent 的 provider 选项。 |
 | `supports_tools` | `bool` | `False` | 是否支持工具调用。 |
 | `supports_media` | `bool` | `False` | 是否支持图片、音频、视频或文件输入。 |
 | `supports_structured_output` | `bool` | `False` | 是否支持结构化输出。 |
-| `max_context_chars` | `int` | `32000` | 允许的最大请求文本长度；媒体按固定字符成本估算。 |
+| `max_context_chars` | `int` | `32000` | 包含指令、工具、schema 和历史的字符预算；媒体按固定成本估算，不等同于 tokenizer 精确的上下文窗口保证。 |
 
 内部控制问题固定为 `noul` 类型，内置四个：
 
 | 问题 ID | 默认阈值 | 判断内容 |
 | :--- | :--- | :--- |
-| `is_complex` | `0.15` | 是否需要多步推理、规划、代码或数学推导、长链分析。 |
-| `needs_tools` | `0.15` | 是否必须调用外部工具、函数、检索或执行代码。 |
+| `is_complex` | `0.15` | 推理、规划、代码或数学是否超出候选模型已声明的能力。 |
+| `needs_tools` | `0.15` | 工具编排或恢复是否超出候选模型已声明的能力；已支持的简单工具调用不会因此自动升级。 |
 | `needs_long_context` | `0.15` | 是否需要跨较长历史或多份材料做全局理解。 |
 | `is_high_stakes` | `0.05` | 是否涉及医疗、法律、金融、安全等高风险结论或不可撤销操作。 |
 
-自定义问题只需提供 `question` 与 `threshold`，ID 自动生成为 `custom_1`、`custom_2`……；内置 ID 保留，不能覆盖。所有问题都返回 `0` 到 `1` 的概率，**只有全部不超过各自阈值时才走简单模型**；任一问题超过阈值、返回值缺失或非法、Decision 超时或报错时，都走强模型。强模型决策会固定该会话，后续轮次不再重新分级。
+自定义问题只需提供 `question` 与 `threshold`，ID 自动生成为 `custom_1`、`custom_2`……；内置 ID 保留，不能覆盖。所有问题都返回 `0` 到 `1` 的概率，**只有全部不超过各自阈值时才走简单模型**；任一问题超过阈值、返回值缺失或非法、Decision 超时或报错时，都走强模型。决策输入不完整、媒体无法表示或动态工具声明不可用时也选择强模型，不会静默截断有效历史以促成降级。选择确定后，provider 失败直接传播，不切换模型；后续请求超出候选能力时显式报错。开启路由时必须移除底层跨模型 fallback。
 
-<Callout type="warn">
-  查询路由目前只支持 `runtime="adk"`，且与 `enable_responses=True` 下的 Responses 缓存续接不兼容。会话固定与同轮去重保存在进程内，多进程部署时每个进程独立维护。
-</Callout>
+只有目标、endpoint、身份、请求配置及有效历史一致时才复用 Responses 续链。切换模型（包括 A → B → A）会使用完整业务历史重建；ID 过期时在同一模型上携带完整历史重试。不同目标间不重放 provider 专属的推理内容及签名。`enable_responses_cache=False` 始终发送完整历史。服务端缓存仍需对应模型的缓存服务权限；Responses 续接也可使用 `store=True` 与 `extra_body={"caching": {"type": "disabled"}}`。
+
+嵌套 AgentTool 保持独立 session，并继承同一个根决策。原生 ADK LlmAgent 及标准子 Agent 工作流通过独立副本适配；自定义原生 LlmAgent 子类需显式实现 turn 绑定。恢复执行使用 session 中持久化的决策，要求路由配置不变。双向 Live 执行及外部 runtime 不在此 ADK 文本 turn 契约内。同一 session 的并发执行仍需应用侧串行化；跨进程同时分级不提供分布式锁。
+
+模型事件提供 `veadk_query_routing` 元数据，包含根 turn ID、路由、模型及目标摘要。决策事件还包含原因、耗时及服务上报的输入 token 数，不包含凭据或原始 query。
+
+```python title="agent.py"
+agent = Agent(
+    model_name="strong-model",
+    query_routing={
+        "mode": "enforce",
+        "simple_models": [{
+            "name": "small-model",
+            "provider": "openai",
+            "api": "chat_completions",
+            "api_base": "https://models.example.com/v1",
+            "api_key_env": "SMALL_MODEL_API_KEY",
+            "supports_tools": True,
+        }],
+    },
+)
+```
+
+真实协议测试需显式开启：设置 `VEADK_QUERY_ROUTING_LIVE=1`、`MODEL_AGENT_API_KEY` 和 `MODEL_AGENT_API_BASE`，执行 `uv run --extra dev pytest tests/e2e/test_query_routing_live.py`。可通过 `VEADK_QUERY_ROUTING_SIMPLE_MODEL` 和 `VEADK_QUERY_ROUTING_STRONG_MODEL` 指定模型。测试验证协议与 turn 契约；生产路由质量及成本收益仍需代表性任务集评测。
+
 
 ## 自定义模型客户端
 

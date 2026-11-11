@@ -11,125 +11,43 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""A per-call ``BaseLlm`` proxy over prebuilt strong and cheap models.
-
-The proxy exists because ``thinking`` and ``caching`` are model-level
-parameters: one model instance per tier is built once, and each call is
-delegated to the instance chosen by the routing callback. No shared Agent
-field is mutated, so concurrent sessions cannot race.
-"""
+"""Configured model pool; execution resolves a concrete adapter before preprocessing."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 from typing import Any
 
 from google.adk.models.base_llm import BaseLlm
-from google.adk.models.llm_request import LlmRequest
-from google.adk.models.llm_response import LlmResponse
-from pydantic import ConfigDict, Field
-from typing_extensions import override
+from pydantic import Field
 
 from veadk.routing.context import get_route_selection
-from veadk.utils.logger import get_logger
-
-logger = get_logger(__name__)
 
 
 class RoutingLlm(BaseLlm):
-    """Delegate each call to the strong or first-capable cheap model."""
+    """Own the configured adapters without storing a mutable current model."""
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    model: str
     strong_model: BaseLlm
     runtimes: list[Any] = Field(default_factory=list)
     registry: Any = None
     store: Any = None
+    classifier: Any = None
+    config: Any = None
+    active_runs: int = 0
 
-    @override
-    async def generate_content_async(
-        self, llm_request: LlmRequest, stream: bool = False
-    ) -> AsyncGenerator[LlmResponse, None]:
-        selection = get_route_selection()
-
-        if selection is None or selection.route != "simple":
-            async for response in self.strong_model.generate_content_async(
-                self._request_for(self.strong_model, llm_request),
-                stream=stream,
-            ):
-                yield response
-            return
-
-        runtime = (
-            self.registry.get(selection.model_name)
-            if self.registry is not None and selection.model_name
-            else None
-        )
+    def selected_model(self, selection: Any) -> BaseLlm:
+        if selection.route == "strong":
+            return self.strong_model
+        runtime = self.registry.get(selection.model_name)
         if runtime is None:
-            async for response in self.strong_model.generate_content_async(
-                self._request_for(self.strong_model, llm_request),
-                stream=stream,
-            ):
-                yield response
-            return
+            raise ValueError("the fixed routing target is no longer configured")
+        return runtime.llm
 
-        emitted = False
-        try:
-            async for response in runtime.llm.generate_content_async(
-                self._request_for(runtime.llm, llm_request),
-                stream=stream,
-            ):
-                emitted = True
-                yield response
-            return
-        except Exception as exc:
-            if emitted:
-                # Once any chunk is visible a retry could duplicate output.
-                raise
-            logger.warning(
-                "query routing simple model failed before first chunk: "
-                "model=%s error=%s; falling back to strong model",
-                runtime.config.name,
-                type(exc).__name__,
-            )
-            if self.registry is not None and self._is_capability_error(exc):
-                self.registry.mark_failed(runtime)
-            if self.store is not None and selection.session_id:
-                self.store.upgrade_session(selection.session_id)
-
-        async for response in self.strong_model.generate_content_async(
-            self._request_for(self.strong_model, llm_request),
-            stream=stream,
-        ):
+    async def generate_content_async(self, llm_request, stream=False):
+        # Direct use remains possible; Agent resolves the concrete model earlier.
+        selection = get_route_selection()
+        model = self.selected_model(selection) if selection else self.strong_model
+        request = llm_request.model_copy(deep=True)
+        request.tools_dict = dict(llm_request.tools_dict)
+        request.model = model.model
+        async for response in model.generate_content_async(request, stream=stream):
             yield response
-
-    @staticmethod
-    def _request_for(model: BaseLlm, llm_request: LlmRequest) -> LlmRequest:
-        """Return a request whose ``model`` matches the delegated instance.
-
-        ADK's LiteLlm prefers ``llm_request.model`` over the instance's own
-        model, so leaving the strong model name in place would silently call
-        the wrong tier.
-        """
-
-        target = getattr(model, "model", None)
-        if not target or llm_request.model == target:
-            return llm_request
-        request = llm_request.model_copy(deep=False)
-        request.model = target
-        return request
-
-    @staticmethod
-    def _is_capability_error(error: BaseException) -> bool:
-        candidates = (
-            getattr(error, "status_code", None),
-            getattr(getattr(error, "response", None), "status_code", None),
-        )
-        for value in candidates:
-            try:
-                if int(value) in {400, 404}:
-                    return True
-            except (TypeError, ValueError):
-                continue
-        return False

@@ -112,10 +112,10 @@ def test_invalid_value_is_rejected():
         factory.resolve_query_routing_config("config.yaml")
 
 
-def test_responses_cache_conflict_is_rejected_before_building_models():
+def test_responses_cache_is_supported():
     agent = fake_agent(enable_responses=True, enable_responses_cache=True)
-    with pytest.raises(QueryRoutingConfigError, match="Responses cache"):
-        factory.build_query_routing(config(), agent, judge=FakeJudge())
+    router, _ = factory.build_query_routing(config(), agent, judge=FakeJudge())
+    assert router.runtimes[0].llm.enable_responses_cache is True
 
 
 def test_build_uses_the_agent_model_as_strong_tier():
@@ -201,7 +201,7 @@ def test_build_model_uses_ark_responses_without_cache():
     model = factory._build_model(fake_agent(enable_responses=True), "cheap")
     assert isinstance(model, ArkLlm)
     assert model.model == "ark/cheap"
-    assert model.enable_responses_cache is False
+    assert model.enable_responses_cache is True
 
 
 def test_decision_connection_uses_explicit_url_and_key():
@@ -271,3 +271,45 @@ def test_decision_connection_requires_a_key_when_deriving():
     agent = fake_agent(model_api_key="")
     with pytest.raises(QueryRoutingConfigError, match="API key is not configured"):
         factory._resolve_decision_connection(config(), agent)
+
+
+def test_routing_rejects_underlying_model_fallbacks():
+    model = ArkLlm(model="openai/strong", fallbacks=["openai/other"])
+    with pytest.raises(QueryRoutingConfigError, match="entire turn"):
+        factory.build_query_routing(
+            config(), fake_agent(model=model), judge=FakeJudge()
+        )
+
+
+def test_independent_endpoint_never_inherits_credentials_or_provider_extras():
+    from veadk.configs.routing_configs import SimpleModelConfig
+
+    spec = SimpleModelConfig(name="cheap", api_base="https://other.example/v1")
+    with pytest.raises(QueryRoutingConfigError, match="independent api_base"):
+        factory._build_model(fake_agent(), spec)
+    spec = SimpleModelConfig(
+        name="cheap",
+        api_base="https://other.example/v1",
+        api_key="other-only",
+        api="chat_completions",
+    )
+    model = factory._build_model(
+        fake_agent(model_extra_config={"extra_headers": {"provider-only": "yes"}}), spec
+    )
+    assert model._additional_args["api_key"] == "other-only"
+    assert "provider-only" not in str(model._additional_args)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"previous_response_id": "stale-id"},
+        {"extra_body": {"model": "other-model"}},
+    ],
+)
+def test_parent_transport_options_cannot_bypass_fixed_routing(extra):
+    model = ArkLlm(model="openai/strong", **extra)
+    with pytest.raises(QueryRoutingConfigError, match="override"):
+        factory.build_query_routing(
+            config(), fake_agent(model=model), judge=FakeJudge()
+        )

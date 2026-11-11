@@ -11,12 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Classify one model call and apply the conservative routing gates."""
+"""Classify one root user turn and apply the conservative routing gates."""
 
 from __future__ import annotations
 
 import asyncio
 import time
+import json
 from typing import Any
 
 from veadk.configs.routing_configs import QueryRoutingConfig
@@ -24,7 +25,7 @@ from veadk.decision import DecisionClientError, DecisionQuestion
 from veadk.routing.context import RouteSelection
 from veadk.routing.policy import ConservativePolicy
 from veadk.routing.registry import ModelRegistry
-from veadk.routing.state import QueryStateBuilder
+from veadk.routing.state import QueryStateBuilder, IncompleteRoutingState
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -34,8 +35,7 @@ class QueryClassifier:
     """Run local gates, call the Decision API, and return one route label.
 
     Any timeout, transport failure, malformed answer, or missing capability
-    fails closed to the strong model. Classification never blocks or fails the
-    user request.
+    fails closed to the strong model. Classification has a bounded timeout; cancellation propagates.
     """
 
     def __init__(
@@ -66,6 +66,11 @@ class QueryClassifier:
 
         return self._registry
 
+    async def aclose(self) -> None:
+        close = getattr(self._judge, "aclose", None)
+        if close is not None:
+            await close()
+
     async def classify(
         self,
         llm_request: Any,
@@ -79,9 +84,32 @@ class QueryClassifier:
         if runtime is None:
             return self._strong("no_capable_simple_model", invocation_id, session_id)
 
-        state = self._state_builder.build_for_routing(llm_request)
+        try:
+            state = self._state_builder.build_for_routing(llm_request)
+        except IncompleteRoutingState:
+            return self._strong("incomplete_state", invocation_id, session_id)
         if not state:
             return self._strong("empty_state", invocation_id, session_id)
+
+        state.insert(
+            0,
+            {
+                "type": "text",
+                "text": "Judge the CURRENT user turn using the history and task rules. "
+                "Candidate capabilities: "
+                + json.dumps(
+                    runtime.config.model_dump(
+                        include={
+                            "name",
+                            "supports_tools",
+                            "supports_media",
+                            "supports_structured_output",
+                            "max_context_chars",
+                        }
+                    )
+                ),
+            },
+        )
 
         try:
             response = await asyncio.wait_for(
@@ -108,6 +136,16 @@ class QueryClassifier:
         decision = self._policy.evaluate(getattr(response, "answers", None))
         elapsed_ms = round((time.monotonic() - started_at) * 1000, 2)
 
+        raw = getattr(response, "raw", None) or {}
+        usage = raw.get("usage") or {}
+        input_tokens = usage.get("input_tokens")
+        if (
+            not isinstance(input_tokens, int)
+            or isinstance(input_tokens, bool)
+            or input_tokens < 0
+        ):
+            input_tokens = None
+
         if decision.route == "strong":
             logger.info(
                 "query routing decision: invocation_id=%s route=strong reason=%s "
@@ -122,7 +160,8 @@ class QueryClassifier:
                 reason=decision.reason,
                 invocation_id=invocation_id,
                 session_id=session_id,
-                upgrade_session=decision.upgrade_session,
+                latency_ms=elapsed_ms,
+                input_tokens=input_tokens,
             )
 
         if self._config.mode == "shadow":
@@ -140,6 +179,8 @@ class QueryClassifier:
                 session_id=session_id,
                 model_name=runtime.config.name,
                 shadow=True,
+                latency_ms=elapsed_ms,
+                input_tokens=input_tokens,
             )
 
         logger.info(
@@ -156,6 +197,8 @@ class QueryClassifier:
             invocation_id=invocation_id,
             session_id=session_id,
             model_name=runtime.config.name,
+            latency_ms=elapsed_ms,
+            input_tokens=input_tokens,
         )
 
     @staticmethod

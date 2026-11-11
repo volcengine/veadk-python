@@ -143,7 +143,6 @@ async def test_policy_rejection_routes_strong_and_upgrades_session():
     selection = await classifier(judge).classify(request(), invocation_id="inv")
     assert selection.route == "strong"
     assert selection.reason == "is_complex_above_threshold"
-    assert selection.upgrade_session is True
 
 
 @pytest.mark.asyncio
@@ -164,6 +163,7 @@ async def test_judge_receives_builtin_and_custom_questions():
     config = QueryRoutingConfig.model_validate(
         {
             "simple_models": ["simple"],
+            "mode": "enforce",
             "questions": [{"question": "是否需要最新信息？", "threshold": 0.2}],
         }
     )

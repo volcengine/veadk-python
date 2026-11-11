@@ -30,7 +30,6 @@ class RoutingDecision:
     route: Literal["simple", "strong"]
     reason: str
     probabilities: dict[str, float] = field(default_factory=dict)
-    upgrade_session: bool = False
 
 
 class ConservativePolicy:
@@ -74,7 +73,6 @@ class ConservativePolicy:
                     route="strong",
                     reason=f"{question.id}_above_threshold",
                     probabilities=probabilities,
-                    upgrade_session=True,
                 )
 
         return RoutingDecision(
@@ -92,7 +90,10 @@ class ConservativePolicy:
         value = answer.get("noul")
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return None
-        probability = float(value)
+        try:
+            probability = float(value)
+        except OverflowError:
+            return None
         if not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
             return None
         return probability

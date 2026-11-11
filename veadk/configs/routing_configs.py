@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -45,6 +46,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SecretStr,
     field_validator,
     model_validator,
 )
@@ -54,18 +56,30 @@ from veadk.content_safety.config import DecisionConfig
 DEFAULT_QUERY_ROUTING_THRESHOLD = 0.15
 DEFAULT_QUERY_ROUTING_TIMEOUT_SECONDS = 2.0
 MAX_QUERY_ROUTING_CONTEXT_CHARS = 32_000
+_REQUEST_OVERRIDE_FIELDS = frozenset(
+    {
+        "previous_response_id",
+        "previous_interaction_id",
+        "input",
+        "messages",
+        "instructions",
+        "tools",
+        "functions",
+    }
+)
+_CONNECTION_FIELDS = frozenset({"model", "api_key", "api_base", "fallbacks"})
 
 _BUILTIN_QUESTIONS: tuple[tuple[str, str, float], ...] = (
     (
         "is_complex",
-        "问题是否需要多步推理、规划、代码或数学推导、长链分析？"
+        "完成当前用户任务是否需要超出候选模型能力的复杂推理、规划、代码或数学推导？"
         "简单事实问答和单步改写判为否。",
         0.15,
     ),
     (
         "needs_tools",
-        "是否必须调用外部工具、函数、检索或执行代码才能可靠回答？"
-        "仅凭对话内容和常识可答判为否。",
+        "完成当前任务是否需要超出候选模型已声明能力的工具编排或错误恢复？"
+        "候选模型支持的简单工具查询判为否。",
         0.15,
     ),
     (
@@ -135,12 +149,43 @@ class SimpleModelConfig(BaseModel):
         validation_alias=AliasChoices("name", "model", "model_name"),
     )
     supports_tools: bool = False
+    provider: str | None = None
+    api_base: str | None = None
+    api_key: SecretStr | None = Field(default=None, repr=False)
+    api_key_env: str | None = None
+    api: Literal["chat_completions", "responses"] | None = None
+    extra_config: dict[str, Any] = Field(default_factory=dict, repr=False)
     supports_media: bool = False
     supports_structured_output: bool = False
     max_context_chars: int = Field(
         default=MAX_QUERY_ROUTING_CONTEXT_CHARS,
         ge=1,
     )
+
+    @property
+    def api_key_value(self) -> str | None:
+        if self.api_key_env:
+            value = os.getenv(self.api_key_env)
+            if not value:
+                raise QueryRoutingConfigError(
+                    f"missing credential variable: {self.api_key_env}"
+                )
+            return value
+        return self.api_key.get_secret_value() if self.api_key else None
+
+    @model_validator(mode="after")
+    def _connection_contract(self) -> "SimpleModelConfig":
+        if self.api_base:
+            DecisionConfig(api_url=self.api_base)
+        if self.api_key and self.api_key_env:
+            raise ValueError("use only one of api_key and api_key_env")
+        forbidden = _CONNECTION_FIELDS | _REQUEST_OVERRIDE_FIELDS
+        body = self.extra_config.get("extra_body") or {}
+        if forbidden.intersection(self.extra_config) or forbidden.intersection(body):
+            raise ValueError(
+                "connection, request and fallback fields are not allowed in extra_config"
+            )
+        return self
 
 
 def default_questions() -> list[RoutingQuestion]:
@@ -157,7 +202,7 @@ class QueryRoutingConfig(BaseModel):
 
     ``questions`` always contains the built-in questions followed by the
     caller's questions. Built-in ids are reserved, so a custom question can
-    never weaken a built-in gate.
+    never replace a built-in question. Thresholds have explicit overrides.
     """
 
     model_config = ConfigDict(
@@ -168,7 +213,8 @@ class QueryRoutingConfig(BaseModel):
 
     simple_models: list[SimpleModelConfig] = Field(min_length=1)
     strong_model: str | None = None
-    mode: Literal["enforce", "shadow"] = "enforce"
+    mode: Literal["enforce", "shadow"] = "shadow"
+    builtin_thresholds: dict[str, float] = Field(default_factory=dict)
     questions: list[RoutingQuestion] = Field(default_factory=list)
     decision: DecisionConfig = Field(default_factory=DecisionConfig)
     decision_timeout: float = Field(
@@ -204,6 +250,12 @@ class QueryRoutingConfig(BaseModel):
             }
             for question in default_questions()
         ]
+        thresholds = data.get("builtin_thresholds", {})
+        if set(thresholds) - {q["id"] for q in merged}:
+            raise ValueError("unknown built-in threshold id")
+        for entry in merged:
+            if entry["id"] in thresholds:
+                entry["threshold"] = thresholds[entry["id"]]
         seen = {question["id"] for question in merged}
         for index, item in enumerate(provided, start=1):
             if isinstance(item, str):
