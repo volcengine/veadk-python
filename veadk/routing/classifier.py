@@ -96,11 +96,15 @@ class QueryClassifier:
             {
                 "type": "text",
                 "text": "Judge the CURRENT user turn using the history and task rules. "
+                "The LAST [user] message defines the current task. Earlier user "
+                "questions and assistant replies are context, not active requests. "
+                "Use earlier messages only to resolve what the current task asks for. "
                 "Candidate capabilities: "
                 + json.dumps(
                     runtime.config.model_dump(
                         include={
                             "name",
+                            "capability_description",
                             "supports_tools",
                             "supports_media",
                             "supports_structured_output",

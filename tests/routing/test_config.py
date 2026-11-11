@@ -74,6 +74,14 @@ def test_custom_question_only_needs_text_and_threshold():
     assert custom.type == "noul"
 
 
+@pytest.mark.parametrize("description", ["", "x" * 2001, 1])
+def test_candidate_description_has_bounded_text_contract(description):
+    with pytest.raises(ValidationError):
+        QueryRoutingConfig(
+            simple_models=[{"name": "cheap", "capability_description": description}]
+        )
+
+
 def test_custom_question_accepts_leading_string():
     config = QueryRoutingConfig(
         simple_models=["cheap"], questions=["是否需要实时数据？"]

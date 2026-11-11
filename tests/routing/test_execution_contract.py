@@ -8,6 +8,8 @@ import httpx
 import pytest
 from google.adk.agents import LlmAgent, SequentialAgent, ParallelAgent
 from google.adk.events import Event
+from google.adk.models.llm_response import LlmResponse
+from google.adk.models.llm_request import LlmRequest
 from google.adk.tools import AgentTool
 from google.genai import types
 from pydantic import BaseModel
@@ -23,6 +25,135 @@ from tests.routing.test_turn_contract import (
 )
 from veadk.routing.context import get_turn_context
 from veadk.routing.execution import _RECORD, _REQUEST, _select, _portable_contents
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])
+async def test_responses_tool_order_is_strictly_opt_in(mode):
+    from veadk.routing.context import _TURN
+
+    model = RecordingArk(model="openai/model")
+    content = types.Content(
+        role="model",
+        parts=[
+            types.Part(text="Preparing lookup"),
+            types.Part(
+                function_call=types.FunctionCall(name="lookup", id="call-1", args={})
+            ),
+            types.Part(
+                function_call=types.FunctionCall(name="lookup", id="call-2", args={})
+            ),
+        ],
+    )
+    original = content.model_copy(deep=True)
+    binding = (
+        None
+        if mode == "off"
+        else SimpleNamespace(selection=SimpleNamespace(shadow=mode == "shadow"))
+    )
+    token = _TURN.set(binding)
+    try:
+        results = types.Content(
+            role="user",
+            parts=[
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        name="lookup", id=identifier, response={"value": "ORCHID"}
+                    )
+                )
+                for identifier in ("call-1", "call-2")
+            ],
+        )
+        async for _ in model.generate_content_async(
+            LlmRequest(contents=[content, results])
+        ):
+            pass
+    finally:
+        _TURN.reset(token)
+    items = model.calls[0]["input"]
+    expected = (
+        ["message", "function_call", "function_call"]
+        if mode == "enforce"
+        else ["function_call", "function_call", "message"]
+    )
+    expected += ["function_call_output", "function_call_output"]
+    assert [item["type"] for item in items] == expected
+    assert [item["call_id"] for item in items if item["type"] == "function_call"] == [
+        "call-1",
+        "call-2",
+    ]
+    assert content == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cache", [False, True])
+async def test_responses_replay_keeps_explanation_before_tool_calls(monkeypatch, cache):
+    from veadk.models.ark_llm import request_reorganization_by_ark
+
+    class MixedArk(RecordingArk):
+        async def generate_content_via_responses(self, responses_args, stream=False):
+            if self.calls:
+                async for response in super().generate_content_via_responses(
+                    responses_args, stream
+                ):
+                    yield response
+                return
+            self.calls.append(
+                request_reorganization_by_ark(
+                    copy.deepcopy(responses_args), self.enable_responses_cache
+                )
+            )
+            yield LlmResponse(
+                content=types.Content(
+                    role="model",
+                    parts=[
+                        types.Part(text="I will retrieve the code."),
+                        types.Part(
+                            function_call=types.FunctionCall(
+                                name="lookup", id="call-original", args={}
+                            )
+                        ),
+                    ],
+                ),
+                interaction_id="mixed-first",
+            )
+
+    def lookup() -> dict:
+        return {"code": "ORCHID"}
+
+    cheap = MixedArk(model="openai/cheap", enable_responses_cache=cache)
+    strong = RecordingArk(model="openai/strong", enable_responses_cache=cache)
+    judge = Judge((0.01, 0.9, 0.01))
+    root = routed(
+        monkeypatch, judge, strong, cheap, tools=[lookup], enable_responses=True
+    )
+    runner, session = await setup(root)
+    try:
+        await turn(runner, session, "Retrieve the code")
+        await turn(runner, session, "Recall the code")
+        await turn(runner, session, "Recall it again")
+        assert len(judge.calls) == 3
+        assert len(cheap.calls) == 3 and len(strong.calls) == 1
+        assert cheap.calls[1].get("previous_response_id") == (
+            "mixed-first" if cache else None
+        )
+        for request in (strong.calls[0], cheap.calls[2]):
+            assert not request.get("previous_response_id")
+            items = request["input"]
+            index = next(
+                i for i, item in enumerate(items) if item.get("type") == "function_call"
+            )
+            assert items[index - 1]["role"] == "assistant"
+            assert "retrieve the code" in str(items[index - 1])
+            assert items[index + 1]["type"] == "function_call_output"
+            assert (
+                items[index]["call_id"]
+                == items[index + 1]["call_id"]
+                == "call-original"
+            )
+            assert "ORCHID" in items[index + 1]["output"]
+    finally:
+        await runner.close()
 
 
 class ExpiringArk(RecordingArk):

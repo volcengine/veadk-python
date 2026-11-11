@@ -22,7 +22,7 @@ isolated without mutating the shared Agent.
 from __future__ import annotations
 
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
@@ -48,6 +48,8 @@ class TurnContext:
     model: Any
     router: Any
     target: str
+    # Shared by nested tasks, owned by this root turn; the model binding stays fixed.
+    tool_argument_errors: dict[str, int] = field(default_factory=dict, compare=False)
 
 
 _TURN: ContextVar[TurnContext | None] = ContextVar("veadk_query_turn", default=None)

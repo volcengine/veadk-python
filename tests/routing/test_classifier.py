@@ -93,6 +93,29 @@ def test_registry_property_exposes_the_model_pool():
 
 
 @pytest.mark.asyncio
+async def test_optional_capability_description_is_sent_without_connection_secrets():
+    description = (
+        "Validated for extraction and one-step tools; not exact long-table sums."
+    )
+    config = QueryRoutingConfig(
+        simple_models=[
+            {
+                "name": "simple",
+                "capability_description": description,
+                "api_key_env": "TEST_CREDENTIAL_REFERENCE",
+            }
+        ]
+    )
+    runtime = SimpleModelRuntime(config=config.simple_models[0], llm=FakeOuterLlm())
+    judge = Judge()
+    classifier = QueryClassifier(config, judge, ModelRegistry(runtimes=[runtime]))
+    await classifier.classify(request(), invocation_id="inv")
+    state = str(judge.calls[0][0])
+    assert description in state
+    assert "TEST_CREDENTIAL_REFERENCE" not in state
+
+
+@pytest.mark.asyncio
 async def test_no_capable_model_skips_decision_call():
     judge = Judge()
     req = request()

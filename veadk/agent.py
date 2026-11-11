@@ -728,6 +728,18 @@ class Agent(LlmAgent):
             [*callbacks, bind_request] if get_turn_context() is not None else callbacks
         )
 
+    @property
+    def canonical_before_tool_callbacks(self):
+        from veadk.routing.context import get_turn_context
+        from veadk.routing.tool_arguments import validate_tool_arguments
+
+        callbacks = super().canonical_before_tool_callbacks
+        return (
+            [*callbacks, validate_tool_arguments]
+            if get_turn_context() is not None
+            else callbacks
+        )
+
     def update_model(self, model_name: str):
         """Point the agent at a different model.
 

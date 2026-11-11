@@ -86,9 +86,12 @@ Each `simple_models` entry can declare capabilities; anything not declared is tr
 | `api_key_env` / `api_key` | `str` | Agent credential | Environment variable name or secret value; mutually exclusive. Prefer `api_key_env`. |
 | `extra_config` | `dict` | `{}` | Provider options. Cannot override routing, history or connection fields. Independent endpoints do not inherit the Agent’s provider options. |
 | `supports_tools` | `bool` | `False` | Whether the model supports tool calls. |
+| `capability_description` | `str \| None` | `None` | Optional, 1–2000 characters. Describe validated task suitability, limitations, and tool dependencies to SystemOne. This does not override instructions, capability flags, or thresholds, and does not guarantee quality. Do not include credentials. |
 | `supports_media` | `bool` | `False` | Whether the model supports image, audio, video, or file input. |
 | `supports_structured_output` | `bool` | `False` | Whether the model supports structured output. |
 | `max_context_chars` | `int` | `32000` | Character budget including instructions, tools, schemas and history; media uses an estimate. This is not a tokenizer-based context-window guarantee. |
+
+In enforce mode, tool arguments are validated against the tool's declared schema before execution. Unambiguous decimal integer strings can be converted losslessly when the schema explicitly requires an integer; fractions, booleans, and ambiguous formats are not coerced to integers. Invalid arguments return a structured error without original argument values for correction by the model already selected for this turn. At most two correction responses are allowed across the root turn, including nested agents; further invalid calls fail explicitly. Tools that have already executed are not automatically retried. Tools without parameter schemas retain their existing behavior; schema references must be local. Responses replay places explanatory text before the structured tool calls from the same model message, preserving all text, call IDs, arguments and tool results without inserting an assistant message between calls and results. Disabled routing and shadow mode preserve the original tool argument behavior.
 
 Control questions always use the `noul` type. Four questions are built in:
 
@@ -96,8 +99,8 @@ Control questions always use the `noul` type. Four questions are built in:
 | :--- | :--- | :--- |
 | `is_complex` | `0.15` | Whether reasoning, planning, code or math exceeds the candidate’s declared capabilities. |
 | `needs_tools` | `0.15` | Whether tool orchestration or recovery exceeds the candidate’s declared capabilities. Supported simple tool calls are not automatically escalated. |
-| `needs_long_context` | `0.15` | Whether it needs global understanding across a long history or multiple documents. |
-| `is_high_stakes` | `0.05` | Whether it involves high-risk medical, legal, financial, or safety conclusions, or irreversible actions. |
+| `needs_long_context` | `0.15` | Whether the current task requires global analysis across a long history or multiple documents. Extracting stated facts from a few recent messages is not long-context analysis. |
+| `is_high_stakes` | `0.05` | Whether the current task asks for high-risk medical, legal, financial, or safety conclusions, or irreversible actions. A past high-risk topic does not automatically escalate an ordinary factual extraction; follow-up requests for related advice remain high-risk. |
 
 A custom question only needs `question` and `threshold`; its ID is generated as `custom_1`, `custom_2`, and so on. Built-in IDs are reserved and cannot be overridden. Every question returns a probability from `0` to `1`; **the simple model is used only when all probabilities are at or below their thresholds**. Any probability above its threshold, a missing or invalid answer, a Decision timeout, or a Decision error routes the request to the strong model. Incomplete decision input, unsupported media or unavailable dynamic tool declarations also select the strong model. Effective history is never silently truncated to enable a downgrade. After selection, a provider failure propagates; it never triggers a model switch. Late capability growth fails explicitly. Underlying cross-model fallbacks must be removed when routing is enabled.
 
@@ -106,6 +109,8 @@ Responses continuation is reused only when the target, endpoint, identity, reque
 Nested AgentTool calls retain separate sessions and inherit one root decision. Native ADK LlmAgent and standard sub-agent workflows are adapted on owned copies; custom native LlmAgent subclasses must implement turn binding explicitly. Resume uses the persisted session decision and requires unchanged routing configuration. Live bidirectional execution and external runtimes are outside this ADK text-turn contract. Concurrent execution of the same session still requires application-level serialization; cross-process simultaneous classification is not a distributed lock.
 
 Model events expose `veadk_query_routing` metadata with root turn ID, route, model and target digest. The decision event also includes reason, latency and reported input tokens. Credentials and raw query text are excluded.
+
+Verification on 2026-11-12 covered opt-in/off/shadow behavior, turn pinning, full-history replay, nested tools, and real ADK HTTP execution with Pro/Lite, Kimi/Lite, Pro/DeepSeek Economy and Kimi/DeepSeek Economy. Routing production-line diff coverage was 98.67%; the Python regression suite passed. These checks establish the tested execution contracts, not universal model quality or savings: both vary by task, and provider context limits and undeclared-tool failures remain observable errors. Reproduce the isolated HTTP experiment with `tests/e2e/test_query_routing_economics_live.py`; native benchmark adapter contracts are in `tests/e2e/test_query_routing_public_benchmarks.py` and require a pinned local source bundle.
 
 ```python title="agent.py"
 agent = Agent(
@@ -124,7 +129,7 @@ agent = Agent(
 )
 ```
 
-Real protocol tests are opt-in: set `VEADK_QUERY_ROUTING_LIVE=1`, `MODEL_AGENT_API_KEY` and `MODEL_AGENT_API_BASE`, then run `uv run --extra dev pytest tests/e2e/test_query_routing_live.py`. Model names can be set with `VEADK_QUERY_ROUTING_SIMPLE_MODEL` and `VEADK_QUERY_ROUTING_STRONG_MODEL`. These tests validate transport and turn contracts; production routing quality and cost savings require a representative task benchmark.
+Real protocol tests are opt-in: set `VEADK_QUERY_ROUTING_LIVE=1`, `MODEL_AGENT_API_KEY` and `MODEL_AGENT_API_BASE`, then run `uv run --extra dev pytest tests/e2e/test_query_routing_live.py`. Model names can be set with `VEADK_QUERY_ROUTING_SIMPLE_MODEL` and `VEADK_QUERY_ROUTING_STRONG_MODEL`. These tests validate transport and turn contracts; production routing quality and cost savings require a representative task benchmark. For separate-process HTTP validation, run `uv run --extra dev pytest tests/e2e/test_query_routing_http_live.py`; it starts an ADK API Server and calls `/run` and `/run_sse` over real TCP. Routing does not guarantee tool-protocol conformance for every model: an undeclared tool name raises an ADK error, and an aborted call without a result can cause the provider to reject later history replay. Applications must handle failed sessions; routing does not silently delete tool history or switch models to conceal errors.
 
 
 ## Customize the model client

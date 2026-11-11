@@ -34,6 +34,15 @@ class RoutedLlmAgent(LlmAgent):
         return [*callbacks, bind_request] if get_turn_context() else callbacks
 
     @property
+    def canonical_before_tool_callbacks(self):
+        from veadk.routing.tool_arguments import validate_tool_arguments
+
+        callbacks = super().canonical_before_tool_callbacks
+        return (
+            [*callbacks, validate_tool_arguments] if get_turn_context() else callbacks
+        )
+
+    @property
     def _llm_flow(self):
         return prepare_flow(super()._llm_flow)
 

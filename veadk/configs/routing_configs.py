@@ -84,14 +84,17 @@ _BUILTIN_QUESTIONS: tuple[tuple[str, str, float], ...] = (
     ),
     (
         "needs_long_context",
-        "是否需要跨较长对话历史或多份材料做全局理解？"
-        "单轮短问题和只看最近一句可答的判为否。",
+        "当前用户任务是否必须综合较长历史或多份材料进行全局分析？"
+        "仅从少量最近消息提取已明确给出的代号、姓名、数值等事实，判为否；"
+        "不能因为任务需要回看历史就判为是。只判断当前任务实际需要的分析。",
         0.15,
     ),
     (
         "is_high_stakes",
-        "是否涉及医疗、法律、金融、安全等高风险结论，或不可撤销的操作？"
-        "一般咨询、创作和草稿判为否。",
+        "当前用户任务是否要求医疗、法律、金融、安全等高风险结论，或不可撤销的操作？"
+        "一般咨询、创作、草稿和单纯提取已给出的非敏感事实判为否。"
+        "历史中曾讨论高风险主题不代表当前任务也是高风险；"
+        "但当前任务仍在追问相关建议或操作时判为是。",
         0.05,
     ),
 )
@@ -149,6 +152,9 @@ class SimpleModelConfig(BaseModel):
         validation_alias=AliasChoices("name", "model", "model_name"),
     )
     supports_tools: bool = False
+    capability_description: str | None = Field(
+        default=None, min_length=1, max_length=2000
+    )
     provider: str | None = None
     api_base: str | None = None
     api_key: SecretStr | None = Field(default=None, repr=False)
