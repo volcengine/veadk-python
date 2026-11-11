@@ -15,6 +15,7 @@ VeADK builds the model client on [LiteLLM](https://github.com/BerriAI/litellm) b
 | `enable_responses` | `bool` | `False` | Use the Ark Responses API; see [Responses API](/en/docs/framework/agent/responses-api). |
 | `enable_responses_cache` | `bool` | `True` | Reuse `previous_response_id` for multi-turn continuation and caching; only when `enable_responses=True`. |
 | `context_cache_config` | `ContextCacheConfig` | `None` | Context-cache config to reduce repeated computation on long contexts. |
+| `query_routing` | `bool \| dict \| QueryRoutingConfig` | `None` | Query routing between cheap and strong models. `None` auto-loads the `query_routing` block from `config.yaml`; `False` disables it. See [Query routing](#query-routing). |
 
 ## Use a different model
 
@@ -35,6 +36,68 @@ Pass a list to `model_name`: the first model is tried first; on failure the next
 ```python title="agent.py"
 agent = Agent(model_name=["doubao-seed-1-8-251228", "deepseek-r1-250528"])
 ```
+
+## Query routing
+
+When enabled, the Agent classifies each request before the model call: simple requests go to a low-cost model from `simple_models`, while complex or high-risk requests stay on the strong model. The feature is off by default — it only activates when `query_routing` is configured, so an unconfigured project behaves exactly as before.
+
+Add the block to `config.yaml` in the project root:
+
+```yaml title="config.yaml"
+query_routing:
+  simple_models:
+    - doubao-seed-2-1-lite-260915
+  # strong_model: kimi-k3-1-pro-261024  # optional; defaults to the Agent's model_name
+  mode: enforce
+  decision:
+    model: doubao-seed-2-1-lite-260915
+  decision_timeout: 2.0
+  questions:
+    - question: Does the answer need up-to-date, real-time information?
+      threshold: 0.2
+```
+
+The Agent discovers `config.yaml` in the current working directory and its parents at startup, so no extra code is needed:
+
+```python title="agent.py"
+agent = Agent(model_name="kimi-k3-1-pro-261024")
+```
+
+You can also pass a mapping directly with `Agent(query_routing={...})`, or disable routing explicitly with `query_routing=False`.
+
+| Field | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `simple_models` | `list[str \| dict]` | required | Low-cost models, at least one. The first model that supports the current request is selected in list order. A string is shorthand for a mapping with only `name`. |
+| `strong_model` | `str` | Agent's `model_name` | Strong model name. When it differs from the Agent's primary model, it is built separately with the same connection settings. |
+| `mode` | `"enforce" \| "shadow"` | `"enforce"` | `shadow` only records routing decisions and always uses the strong model, so you can observe results before switching. |
+| `decision` | `dict` | derived from the Agent's Ark connection | Decision service connection with optional `api_url`, `api_key`, and `model`. A custom non-Ark `api_url` requires an explicit `api_key`. |
+| `decision_timeout` | `float` | `2.0` | Per-classification timeout in seconds, in `(0, 30]`. A timeout routes to the strong model. |
+| `questions` | `list[str \| dict]` | `[]` | Custom questions appended to the four built-in questions. A string is shorthand for `{question: ...}`. |
+
+Each `simple_models` entry can declare capabilities; anything not declared is treated as unsupported:
+
+| Capability field | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `name` | `str` | required | Model name; `model` and `model_name` are accepted aliases. |
+| `supports_tools` | `bool` | `False` | Whether the model supports tool calls. |
+| `supports_media` | `bool` | `False` | Whether the model supports image, audio, video, or file input. |
+| `supports_structured_output` | `bool` | `False` | Whether the model supports structured output. |
+| `max_context_chars` | `int` | `32000` | Maximum request text length; media is estimated at a fixed character cost. |
+
+Control questions always use the `noul` type. Four questions are built in:
+
+| Question ID | Default threshold | What it checks |
+| :--- | :--- | :--- |
+| `is_complex` | `0.15` | Whether the request needs multi-step reasoning, planning, code or math derivation, or long-chain analysis. |
+| `needs_tools` | `0.15` | Whether it must call external tools, functions, retrieval, or code execution. |
+| `needs_long_context` | `0.15` | Whether it needs global understanding across a long history or multiple documents. |
+| `is_high_stakes` | `0.05` | Whether it involves high-risk medical, legal, financial, or safety conclusions, or irreversible actions. |
+
+A custom question only needs `question` and `threshold`; its ID is generated as `custom_1`, `custom_2`, and so on. Built-in IDs are reserved and cannot be overridden. Every question returns a probability from `0` to `1`; **the simple model is used only when all probabilities are at or below their thresholds**. Any probability above its threshold, a missing or invalid answer, a Decision timeout, or a Decision error routes the request to the strong model. A strong-model decision pins the session, so later turns are not classified again.
+
+<Callout type="warn">
+  Query routing currently supports only `runtime="adk"` and is incompatible with Responses cache continuation when `enable_responses=True`. Session pinning and same-turn deduplication are process-local; multi-process deployments maintain them independently per process.
+</Callout>
 
 ## Customize the model client
 

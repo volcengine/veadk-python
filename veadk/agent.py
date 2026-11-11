@@ -377,6 +377,20 @@ class Agent(LlmAgent):
     ``plugins=agent.content_safety_plugins``.
     """
 
+    query_routing: Any = Field(default=None, exclude=True)
+    """Opt-in query routing between a strong model and manually listed cheap models.
+
+    ``None`` (default) uses a ``query_routing`` block from ``config.yaml`` when
+    one exists, so a project without that block keeps its existing behavior.
+    ``False`` disables routing explicitly. ``True`` requires the YAML block.
+    A mapping or :class:`veadk.configs.routing_configs.QueryRoutingConfig`
+    supplies the configuration directly.
+
+    Routing is only supported by the ADK runtime. It preserves the Agent's
+    configured model as the strong tier and delegates cheap-tier calls to
+    prebuilt per-tier model instances.
+    """
+
     def model_post_init(self, __context: Any) -> None:
         # Snapshot before anything below assigns fields on ``self``: pydantic
         # adds every assignment to ``model_fields_set``, so this is the only
@@ -644,6 +658,8 @@ class Agent(LlmAgent):
             else:
                 self.after_agent_callback = dataset_auto_gen_callback
 
+        self._setup_query_routing()
+
         logger.info(f"VeADK version: {VERSION}")
 
         logger.info(f"{self.__class__.__name__} `{self.name}` init done.")
@@ -661,6 +677,39 @@ class Agent(LlmAgent):
 
             check_agent_runtime_support(self, self.runtime)
 
+    def _setup_query_routing(self) -> None:
+        """Wrap the built model when query routing is configured.
+
+        The configuration is resolved after the strong model exists, so a
+        project without a ``query_routing`` block is untouched and keeps the
+        exact model instance it built above.
+        """
+
+        from veadk.routing.factory import (
+            build_query_routing,
+            resolve_query_routing_config,
+        )
+
+        config = resolve_query_routing_config(self.query_routing)
+        if config is None:
+            return
+        if self.runtime != "adk":
+            raise ValueError(
+                "query_routing is only supported by the ADK runtime; "
+                f"got runtime={self.runtime}"
+            )
+
+        router, callback = build_query_routing(config, self)
+        self.query_routing = config
+        self.model = router
+
+        if self.before_model_callback is None:
+            self.before_model_callback = callback
+        elif isinstance(self.before_model_callback, list):
+            self.before_model_callback = [*self.before_model_callback, callback]
+        else:
+            self.before_model_callback = [self.before_model_callback, callback]
+
     def update_model(self, model_name: str):
         """Point the agent at a different model.
 
@@ -674,6 +723,13 @@ class Agent(LlmAgent):
         Args:
             model_name (str): The new model name, without a provider prefix.
         """
+        from veadk.routing.llm import RoutingLlm
+
+        if isinstance(self.model, RoutingLlm):
+            raise ValueError(
+                "update_model is not supported while query_routing is enabled; "
+                "configure strong_model in query_routing instead"
+            )
         logger.info(f"Updating model to {model_name}")
         self.model_name = model_name
         self.model = self.model.model_copy(
