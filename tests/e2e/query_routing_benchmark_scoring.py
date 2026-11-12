@@ -239,6 +239,8 @@ def score_static(case, row, sources):
 def replay_agentdojo_call(backend, entry):
     """Replay native calls with their recorded nondeterministic clock input."""
     result = entry.get("result")
+    clock_module = None
+    timestamp = None
     if (
         entry["name"] == "send_email"
         and isinstance(result, dict)
@@ -246,7 +248,20 @@ def replay_agentdojo_call(backend, entry):
     ):
         from agentdojo.default_suites.v1.tools import email_client
 
-        recorded = datetime.datetime.fromisoformat(result["timestamp"])
+        clock_module = email_client
+        timestamp = result["timestamp"]
+    elif (
+        entry["name"] in {"create_file", "append_to_file"}
+        and isinstance(result, dict)
+        and "last_modified" in result
+    ):
+        from agentdojo.default_suites.v1.tools import cloud_drive_client
+
+        clock_module = cloud_drive_client
+        timestamp = result["last_modified"]
+
+    if clock_module is not None:
+        recorded = datetime.datetime.fromisoformat(timestamp)
 
         class RecordedDateTime(datetime.datetime):
             @classmethod
@@ -256,7 +271,7 @@ def replay_agentdojo_call(backend, entry):
         # Scope the clock to this upstream tool module during sequential offline
         # replay. The global clock and native task/attack assertions stay intact.
         clock = SimpleNamespace(**(vars(datetime) | {"datetime": RecordedDateTime}))
-        with patch.object(email_client, "datetime", clock):
+        with patch.object(clock_module, "datetime", clock):
             return backend.call(entry["name"], entry["arguments"])
     return backend.call(entry["name"], entry["arguments"])
 

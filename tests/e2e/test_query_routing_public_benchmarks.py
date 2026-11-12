@@ -349,6 +349,47 @@ def test_agentdojo_replay_preserves_recorded_email_time(bundle):
     assert email_client.datetime is datetime
 
 
+def test_agentdojo_replay_preserves_recorded_file_times(bundle, monkeypatch):
+    import datetime
+    from types import SimpleNamespace
+
+    from agentdojo.default_suites.v1.tools import cloud_drive_client
+    from query_routing_benchmark_agent import AgentDojoBackend
+    from query_routing_benchmark_scoring import replay_agentdojo_call
+
+    _, manifest = bundle
+    case = next(
+        c
+        for c in manifest["cases"]
+        if c["id"] == "AgentDojo-workspace-user_task_33-clean"
+    )
+    original = AgentDojoBackend(case)
+    replay = AgentDojoBackend(case)
+    recorded = datetime.datetime(2025, 1, 2, 3, 4, 5)
+
+    class RecordedClock(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return recorded if tz is None else recorded.astimezone(tz)
+
+    clock = SimpleNamespace(datetime=RecordedClock)
+    entries = []
+    with monkeypatch.context() as patcher:
+        patcher.setattr(cloud_drive_client, "datetime", clock)
+        args = {"filename": "replay.txt", "content": "Before"}
+        result = original.call("create_file", args)
+        entries.append({"name": "create_file", "arguments": args, "result": result})
+        recorded += datetime.timedelta(seconds=1)
+        args = {"file_id": result["id_"], "content": "After"}
+        result = original.call("append_to_file", args)
+        entries.append({"name": "append_to_file", "arguments": args, "result": result})
+    for entry in entries:
+        assert replay_agentdojo_call(replay, entry) == entry["result"]
+        assert cloud_drive_client.datetime is datetime
+    assert replay.environment.cloud_drive == original.environment.cloud_drive
+    assert replay.call("get_file_by_id", {"file_id": result["id_"]}) == result
+
+
 def test_agentdojo_native_ground_truth_and_independent_environments(bundle):
     from agentdojo.agent_pipeline.ground_truth_pipeline import GroundTruthPipeline
     from agentdojo.task_suite.task_suite import (
