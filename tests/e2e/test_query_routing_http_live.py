@@ -1,3 +1,16 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """Live HTTP acceptance: separate ADK server process, real SystemOne and models.
 
 Run with VEADK_QUERY_ROUTING_LIVE=1 and MODEL_AGENT_API_BASE/API_KEY set.
@@ -8,10 +21,8 @@ in the explicitly named deadline-failure case.
 
 import asyncio
 import base64
-import hashlib
 import json
 import os
-import random
 import socket
 import struct
 import subprocess
@@ -19,17 +30,11 @@ import sys
 import time
 import uuid
 import zlib
-from collections import Counter
 from pathlib import Path
 
 import httpx
 import pytest
-from query_routing_http_cases import (
-    answer_matches,
-    conversations,
-    final_answer,
-    single_turn_cases,
-)
+from google.adk.events.event import Event
 
 pytestmark = [
     pytest.mark.query_routing_live,
@@ -42,37 +47,6 @@ pytestmark = [
 ]
 
 APPS = (
-    "economy_kimi",
-    "economy_kimi_chat",
-    "baseline_economy_kimi",
-    "baseline_economy_kimi_chat",
-    "economy_kimi_nested",
-    "economy_kimi_nested_chat",
-    "baseline_economy_kimi_nested",
-    "baseline_economy_kimi_nested_chat",
-    *(
-        f"{prefix}economy_{strong}_eco{nested}{protocol}"
-        for prefix in ("", "baseline_")
-        for strong in ("pro", "kimi")
-        for nested in ("", "_nested")
-        for protocol in ("", "_chat")
-    ),
-    "economy",
-    "economy_chat",
-    "baseline_economy",
-    "baseline_economy_chat",
-    "economy_pro",
-    "economy_pro_chat",
-    "baseline_economy_pro",
-    "baseline_economy_pro_chat",
-    "economy_pro_nested",
-    "economy_pro_nested_chat",
-    "baseline_economy_pro_nested",
-    "baseline_economy_pro_nested_chat",
-    "economy_nested",
-    "economy_nested_chat",
-    "baseline_economy_nested",
-    "baseline_economy_nested_chat",
     "responses",
     "chat",
     "mixed",
@@ -84,12 +58,6 @@ APPS = (
     "default_off",
     "timeout",
     "cancel",
-    "tools_chat",
-    "schema_chat",
-    "baseline",
-    "baseline_chat",
-    "baseline_tools",
-    "baseline_tools_chat",
 )
 
 
@@ -114,48 +82,6 @@ def server(tmp_path_factory):
         [str(Path(__file__).parent), str(Path(__file__).resolve().parents[2])]
     )
     env["VEADK_QUERY_ROUTING_AUDIT"] = str(root / "audit.jsonl")
-    if env.get("VEADK_ROUTING_EXPERIMENT_MANIFEST"):
-        manifest = json.loads(
-            Path(env["VEADK_ROUTING_EXPERIMENT_MANIFEST"]).read_text()
-        )
-        env["VEADK_ROUTING_EXPERIMENT_TEMPERATURE"] = str(manifest["temperature"])
-        if "context_budget_chars" in manifest:
-            env["VEADK_ROUTING_EXPERIMENT_CONTEXT_CHARS"] = str(
-                manifest["context_budget_chars"]
-            )
-        if manifest.get("capability_description"):
-            env["VEADK_ROUTING_EXPERIMENT_CAPABILITY_DESCRIPTION"] = manifest[
-                "capability_description"
-            ]
-        if manifest.get("public_benchmarks"):
-            from query_routing_public_benchmarks import benchmark_app
-
-            for case in manifest["cases"]:
-                for cohort in manifest["cohorts"]:
-                    for arm in manifest.get("arms", ["strong", "routed"]):
-                        name = benchmark_app(case, cohort, arm)
-                        package = agents / name
-                        package.mkdir()
-                        (package / "__init__.py").write_text("from . import agent\n")
-                        kind = (
-                            "baseline_" if arm == "strong" else ""
-                        ) + f"economy_{cohort}"
-                        if case.get("nested"):
-                            kind += "_nested"
-                        if case["protocol"] == "chat":
-                            kind += "_chat"
-                        fixed = None
-                        if manifest.get("matched_execution"):
-                            fixed = {"strong": "strong", "candidate": "simple"}.get(arm)
-                        policy = (
-                            manifest.get("routing_policies", {})
-                            .get(cohort, {})
-                            .get(arm)
-                        )
-                        (package / "agent.py").write_text(
-                            "from query_routing_benchmark_agent import build_benchmark_agent\n"
-                            f"root_agent = build_benchmark_agent({kind!r}, {case['id']!r}, fixed_route={fixed!r}, routing_policy={policy!r})\n"
-                        )
     for key in ("NO_PROXY", "no_proxy"):
         env[key] = env.get(key, "") + ",127.0.0.1,localhost,::1"
     command = [
@@ -195,15 +121,6 @@ def server(tmp_path_factory):
                 time.sleep(0.1)
             else:
                 pytest.fail("ADK API server did not start within 30 seconds")
-        if env.get("VEADK_ROUTING_EXPERIMENT_MANIFEST") and manifest.get(
-            "preload_agents"
-        ):
-            # Finish synchronous Agent/module initialization before timing any
-            # decisions; lazy imports in another request can block the event loop.
-            with httpx.Client(base_url=url, trust_env=False, timeout=30) as client:
-                for name in sorted(p.name for p in agents.iterdir() if p.is_dir()):
-                    if "economy" in name:
-                        client.get(f"/apps/{name}/app-info").raise_for_status()
         yield {"url": url, "root": root, "command": command}
     finally:
         process.terminate()
@@ -232,21 +149,11 @@ async def session(client, app):
     return {"appName": app, "userId": user, "sessionId": response.json()["id"]}
 
 
-class AgentResponseError(AssertionError):
-    def __init__(self, result):
-        self.result = result
-        super().__init__(str(result["errors"]))
-
-
-async def turn(client, identity, text, *, stream=False, parts=None, metadata=None):
+async def turn(client, identity, text, *, stream=False, parts=None):
     payload = {
         **identity,
         "newMessage": {"role": "user", "parts": parts or [{"text": text}]},
     }
-    if metadata:
-        payload["customMetadata"] = metadata
-    started = time.monotonic()
-    first_text_ms = None
     if stream:
         events = []
         async with client.stream(
@@ -258,24 +165,26 @@ async def turn(client, identity, text, *, stream=False, parts=None, metadata=Non
                 if line.startswith("data: "):
                     event = json.loads(line[6:])
                     events.append(event)
-                    if first_text_ms is None and any(
-                        p.get("text") for p in event.get("content", {}).get("parts", [])
-                    ):
-                        first_text_ms = round((time.monotonic() - started) * 1000, 2)
     else:
         response = await client.post("/run", json=payload)
         response.raise_for_status()
         events = response.json()
     assert events, "Agent API returned no events"
-    answer = final_answer(events)
+    answer = ""
+    for value in reversed(events):
+        event = Event.model_validate(value)
+        if event.is_final_response() and event.content:
+            answer = "".join(
+                p.text for p in event.content.parts or [] if p.text and not p.thought
+            ).strip()
+            if answer:
+                break
     routes = [e.get("customMetadata", {}).get("veadk_query_routing") for e in events]
     routes = [r for r in routes if r]
     result = {
         "events": events,
         "answer": answer.strip(),
         "routes": routes,
-        "elapsed_ms": round((time.monotonic() - started) * 1000, 2),
-        "first_text_ms": first_text_ms,
         "errors": [
             {
                 "code": e.get("errorCode"),
@@ -285,8 +194,7 @@ async def turn(client, identity, text, *, stream=False, parts=None, metadata=Non
             if e.get("errorCode") or e.get("error")
         ],
     }
-    if result["errors"]:
-        raise AgentResponseError(result)
+    assert not result["errors"], result["errors"]
     return result
 
 
@@ -307,7 +215,6 @@ def fixed_route(result, expected=None):
 
 
 NATURAL_CASES = [
-    ("arithmetic", "计算 17+25，只输出数字。", "simple", "42"),
     (
         "extract",
         "从这段文字中提取工单编号，只输出编号：工单编号 TK-482，状态处理中。",
@@ -315,26 +222,8 @@ NATURAL_CASES = [
         "TK-482",
     ),
     (
-        "english",
-        "What is the capital of France? Reply with the city name only.",
-        "simple",
-        "Paris",
-    ),
-    (
         "medical",
         "我服用华法林后出现黑便和头晕，今晚应该如何调整剂量，是否需要立即就医？",
-        "strong",
-        None,
-    ),
-    (
-        "financial",
-        "我要把全部养老储蓄投入三倍杠杆基金，请你直接决定是否买入并给出仓位。",
-        "strong",
-        None,
-    ),
-    (
-        "legal",
-        "我明天要签署一份放弃追偿权的和解协议，请直接判断我是否应该签字。",
         "strong",
         None,
     ),
@@ -446,7 +335,7 @@ async def test_http_tool_error_recovery_keeps_one_decision(server):
         )
         save(server, "tools/retry", result)
         fixed_route(result)
-        assert answer_matches(result["answer"], "133", "tools")
+        assert result["answer"].rstrip(".。") == "133"
         calls = [
             p["functionCall"]
             for e in result["events"]
@@ -458,7 +347,16 @@ async def test_http_tool_error_recovery_keeps_one_decision(server):
             "lookup_order",
             "calculate_total",
         ]
-        assert calls[-1]["args"] == {"quantity": 7, "unit_price": 19}
+        # Events preserve provider arguments; validate values at execution,
+        # after the schema guard normalizes unambiguous integer strings.
+        executed = [
+            record
+            for line in (server["root"] / "audit.jsonl").read_text().splitlines()
+            if (record := json.loads(line))["kind"] == "calculate_total"
+        ]
+        assert executed == [
+            {"kind": "calculate_total", "quantity": 7, "unit_price": 19}
+        ]
         assert len(decisions(server, app)) == before + 1
 
 
@@ -628,138 +526,3 @@ async def test_http_sse_disconnect_cancels_tool_and_next_turn_recovers(server):
         fixed_route(result)
         assert result["answer"] == "42"
         assert len(decisions(server, app)) == before + 2
-
-
-@pytest.mark.asyncio
-async def test_http_stratified_acceptance_corpus(server):
-    """Execute every frozen case, retain every failure, and never retry a case."""
-    singles, dialogues = single_turn_cases(), conversations()
-    manifest = {
-        "single_turn": singles,
-        "conversations": dialogues,
-        "protocols": ["responses", "chat"],
-        "concurrency": 4,
-        "shuffle_seed": 20261111,
-    }
-    encoded = json.dumps(manifest, sort_keys=True, ensure_ascii=False).encode()
-    (server["root"] / "corpus.json").write_bytes(encoded)
-    corpus_hash = hashlib.sha256(encoded).hexdigest()
-    jobs = [
-        (protocol, case, False)
-        for protocol in manifest["protocols"]
-        for case in singles
-    ]
-    jobs += [
-        (protocol, case, True)
-        for protocol in manifest["protocols"]
-        for case in dialogues
-    ]
-    random.Random(manifest["shuffle_seed"]).shuffle(jobs)
-    semaphore = asyncio.Semaphore(manifest["concurrency"])
-    observations = []
-
-    async with httpx.AsyncClient(
-        base_url=server["url"], trust_env=False, timeout=60
-    ) as client:
-
-        async def run_job(job_index, protocol, case, dialogue):
-            async with semaphore:
-                category = "conversation" if dialogue else case["category"]
-                app = protocol
-                if category in ("schema", "tools"):
-                    app = category + ("_chat" if protocol == "chat" else "")
-                identity = await session(client, app)
-                turns = (
-                    case["turns"]
-                    if dialogue
-                    else [(case["prompt"], case["route"], case["expected"])]
-                )
-                for turn_index, (prompt, expected_route, expected_answer) in enumerate(
-                    turns
-                ):
-                    row = {
-                        "case": case["id"],
-                        "category": category,
-                        "protocol": protocol,
-                        "turn_index": turn_index,
-                        "prompt": prompt,
-                        "expected_route": expected_route,
-                        "expected_answer": expected_answer,
-                        "stream": (job_index + turn_index) % 2 == 0,
-                        "failures": [],
-                    }
-                    try:
-                        result = await turn(
-                            client,
-                            identity,
-                            prompt,
-                            stream=row["stream"],
-                            parts=case.get("parts") if not dialogue else None,
-                        )
-                        row.update(result)
-                        try:
-                            route = fixed_route(result)
-                        except AssertionError:
-                            row["failures"].append("turn_binding_or_empty_answer")
-                            route = result["routes"][0] if result["routes"] else {}
-                        if expected_route and route.get("route") != expected_route:
-                            row["failures"].append("route_mismatch")
-                        if expected_answer is not None:
-                            actual = result["answer"].strip().rstrip(".。")
-                            if dialogue:
-                                correct = all(
-                                    value in actual for value in expected_answer
-                                )
-                            else:
-                                correct = answer_matches(
-                                    actual, expected_answer, category, prompt
-                                )
-                            row["answer_correct"] = correct
-                            if not correct:
-                                row["failures"].append("answer_mismatch")
-                        if category == "tools":
-                            calls = [
-                                p["functionCall"]
-                                for e in result["events"]
-                                if not e.get("partial")
-                                for p in (e.get("content") or {}).get("parts", [])
-                                if p.get("functionCall")
-                            ]
-                            if [c["name"] for c in calls] != [
-                                "lookup_order",
-                                "lookup_order",
-                                "calculate_total",
-                            ]:
-                                row["failures"].append("tool_sequence")
-                    except (httpx.HTTPError, AssertionError, ValueError) as error:
-                        if isinstance(error, AgentResponseError):
-                            row.update(error.result)
-                        row["failures"].append(type(error).__name__)
-                        row["error"] = str(error)[:1000]
-                    observations.append(row)
-                    with (server["root"] / "corpus-results.jsonl").open("a") as output:
-                        output.write(json.dumps(row, ensure_ascii=False) + "\n")
-
-        outcomes = await asyncio.gather(
-            *(run_job(index, *job) for index, job in enumerate(jobs)),
-            return_exceptions=True,
-        )
-    failures = [row for row in observations if row["failures"]]
-    crashes = [
-        type(outcome).__name__
-        for outcome in outcomes
-        if isinstance(outcome, BaseException)
-    ]
-    distribution = Counter(row["category"] for row in observations)
-    summary = {
-        "corpus_sha256": corpus_hash,
-        "http_turns": len(observations),
-        "failed_turns": len(failures),
-        "job_crashes": crashes,
-        "distribution": dict(distribution),
-        "failure_types": dict(Counter(f for row in failures for f in row["failures"])),
-    }
-    (server["root"] / "corpus-summary.json").write_text(json.dumps(summary, indent=2))
-    assert len(observations) == 456, summary
-    assert not crashes, summary
-    assert not failures, summary

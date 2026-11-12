@@ -134,8 +134,6 @@ agent = Agent(
 
 模型事件提供 `veadk_query_routing` 元数据，包含根 turn ID、路由、模型及目标摘要。决策事件还包含原因、耗时及服务上报的输入 token 数，不包含凭据或原始 query。
 
-验证范围（2026-11-12）：覆盖 opt-in/off/shadow、turn 内固定模型、完整历史重放、嵌套工具，以及 Pro/Lite、Kimi/Lite、Pro/DeepSeek Economy、Kimi/DeepSeek Economy 的真实 ADK HTTP 执行。路由生产代码变更行覆盖率为 98.67%，Python 回归套件通过。这些检查验证已测执行契约；模型质量和节省幅度仍取决于任务，提供方上下文限制和未声明工具调用仍会明确报错。隔离 HTTP 实验入口为 `tests/e2e/test_query_routing_economics_live.py`；原生基准适配契约见 `tests/e2e/test_query_routing_public_benchmarks.py`，需要固定版本的本地源码包。
-
 ```python title="agent.py"
 agent = Agent(
     model_name="strong-model",

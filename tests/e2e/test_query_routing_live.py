@@ -38,7 +38,7 @@ from veadk.routing import factory
 KEY = os.getenv("MODEL_AGENT_API_KEY")
 BASE = os.getenv("MODEL_AGENT_API_BASE")
 SIMPLE = os.getenv("VEADK_QUERY_ROUTING_SIMPLE_MODEL", "doubao-seed-2-1-lite-260915")
-STRONG = os.getenv("VEADK_QUERY_ROUTING_STRONG_MODEL", "deepseek-v4-1-flash-261017")
+STRONG = os.getenv("VEADK_QUERY_ROUTING_STRONG_MODEL", "doubao-seed-2-1-pro-260915")
 pytestmark = [
     pytest.mark.query_routing_live,
     pytest.mark.skipif(

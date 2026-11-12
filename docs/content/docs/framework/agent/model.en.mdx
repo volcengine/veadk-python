@@ -134,8 +134,6 @@ Nested AgentTool calls retain separate sessions and inherit one root decision. N
 
 Model events expose `veadk_query_routing` metadata with root turn ID, route, model and target digest. The decision event also includes reason, latency and reported input tokens. Credentials and raw query text are excluded.
 
-Verification on 2026-11-12 covered opt-in/off/shadow behavior, turn pinning, full-history replay, nested tools, and real ADK HTTP execution with Pro/Lite, Kimi/Lite, Pro/DeepSeek Economy and Kimi/DeepSeek Economy. Routing production-line diff coverage was 98.67%; the Python regression suite passed. These checks establish the tested execution contracts, not universal model quality or savings: both vary by task, and provider context limits and undeclared-tool failures remain observable errors. Reproduce the isolated HTTP experiment with `tests/e2e/test_query_routing_economics_live.py`; native benchmark adapter contracts are in `tests/e2e/test_query_routing_public_benchmarks.py` and require a pinned local source bundle.
-
 ```python title="agent.py"
 agent = Agent(
     model_name="strong-model",
