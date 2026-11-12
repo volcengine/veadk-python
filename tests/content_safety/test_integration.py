@@ -19,6 +19,7 @@ from google.adk.apps import App
 from google.adk.plugins import BasePlugin
 
 from veadk import Agent, Runner
+from veadk.decision import DecisionConfig, load_decision_config
 from veadk.content_safety import (
     DEFAULT_QUESTION_INSTRUCTIONS,
     ContentSafetyConfig,
@@ -33,13 +34,13 @@ DECISION_BLOCK = """
 tool:
   content_safety:
     provider: decision
-    decision:
-      api_url: https://systemone.example/v1/judge
-      api_key: test-key
     questions:
       prompt_injection:
         instructions: test instructions
         threshold: 0.5
+decision:
+  api_url: https://systemone.example/v1/judge
+  api_key: test-key
 """
 
 
@@ -82,7 +83,7 @@ class TestOptionalLoader:
         config = load_content_safety_config_if_present()
         assert config is not None
         assert config.provider is Provider.DECISION
-        assert config.decision.api_url == "https://systemone.example/v1/judge"
+        assert load_decision_config().api_url == "https://systemone.example/v1/judge"
 
     def test_omitted_questions_use_defaults(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -92,9 +93,9 @@ class TestOptionalLoader:
 tool:
   content_safety:
     provider: decision
-    decision:
-      api_url: https://systemone.example/v1/judge
-      api_key: test-key
+decision:
+  api_url: https://systemone.example/v1/judge
+  api_key: test-key
 """,
         )
         plugin = resolve_content_safety_plugin()
@@ -160,10 +161,6 @@ class TestResolvePlugin:
         config = ContentSafetyConfig.from_dict(
             {
                 "provider": "decision",
-                "decision": {
-                    "api_url": "https://inline.example/v1/judge",
-                    "api_key": "inline-key",
-                },
                 "questions": {
                     "prompt_injection": {
                         "instructions": "inline instructions",
@@ -172,7 +169,15 @@ class TestResolvePlugin:
                 },
             }
         )
-        agent = make_agent(content_safety=config)
+        agent = make_agent(
+            content_safety=config,
+            decision=DecisionConfig.model_validate(
+                {
+                    "api_url": "https://inline.example/v1/judge",
+                    "api_key": "inline-key",
+                }
+            ),
+        )
         plugin = resolve_content_safety_plugin(agent)
         assert plugin is not None
         assert plugin.name == "content_safety_decision"

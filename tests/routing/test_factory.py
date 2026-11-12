@@ -20,6 +20,11 @@ from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
 from google.genai import types
 
+from veadk.decision import (
+    DecisionConfig,
+    DecisionConfigError,
+    resolve_decision_connection,
+)
 from veadk.configs.routing_configs import (
     QueryRoutingConfig,
     QueryRoutingConfigError,
@@ -204,43 +209,49 @@ def test_build_model_uses_ark_responses_without_cache():
     assert model.enable_responses_cache is True
 
 
+def resolve_for_agent(config, agent):
+    return resolve_decision_connection(
+        config, agent.model_api_base, agent.model_api_key
+    )
+
+
 def test_decision_connection_uses_explicit_url_and_key():
     agent = fake_agent(model_api_base="https://api.openai.com/v1", model_api_key="x")
-    decision = config(
-        decision={
+    decision = DecisionConfig(
+        **{
             "api_url": "https://ark.cn-beijing.volces.com/api/v1/systemone",
             "api_key": "explicit",
         }
     )
-    assert factory._resolve_decision_connection(decision, agent) == (
+    assert resolve_for_agent(decision, agent) == (
         "https://ark.cn-beijing.volces.com/api/v1/systemone",
         "explicit",
     )
 
 
 def test_decision_connection_refuses_cross_provider_endpoint():
-    decision = config(decision={"api_url": "https://example.com/systemone"})
-    with pytest.raises(QueryRoutingConfigError, match="not an Ark endpoint"):
-        factory._resolve_decision_connection(decision, fake_agent())
+    decision = DecisionConfig(**{"api_url": "https://example.com/systemone"})
+    with pytest.raises(DecisionConfigError, match="not an Ark endpoint"):
+        resolve_for_agent(decision, fake_agent())
 
 
 def test_decision_connection_requires_ark_model_base_for_ark_url():
-    decision = config(decision={"api_url": SYSTEMONE})
+    decision = DecisionConfig(**{"api_url": SYSTEMONE})
     agent = fake_agent(model_api_base="https://api.openai.com/v1")
-    with pytest.raises(QueryRoutingConfigError, match="fallback Ark API base"):
-        factory._resolve_decision_connection(decision, agent)
+    with pytest.raises(DecisionConfigError, match="fallback Ark API base"):
+        resolve_for_agent(decision, agent)
 
 
 def test_decision_connection_requires_a_key_for_ark_url():
-    decision = config(decision={"api_url": SYSTEMONE})
+    decision = DecisionConfig(**{"api_url": SYSTEMONE})
     agent = fake_agent(model_api_key="")
-    with pytest.raises(QueryRoutingConfigError, match="API key is not configured"):
-        factory._resolve_decision_connection(decision, agent)
+    with pytest.raises(DecisionConfigError, match="API key is not configured"):
+        resolve_for_agent(decision, agent)
 
 
 def test_decision_connection_reuses_ark_key_for_ark_url():
-    decision = config(decision={"api_url": SYSTEMONE})
-    assert factory._resolve_decision_connection(decision, fake_agent()) == (
+    decision = DecisionConfig(**{"api_url": SYSTEMONE})
+    assert resolve_for_agent(decision, fake_agent()) == (
         SYSTEMONE,
         "agent-key",
     )
@@ -248,20 +259,20 @@ def test_decision_connection_reuses_ark_key_for_ark_url():
 
 def test_decision_connection_rejects_non_ark_model_base_without_url():
     agent = fake_agent(model_api_base="https://api.openai.com/v1")
-    with pytest.raises(QueryRoutingConfigError, match="cannot derive"):
-        factory._resolve_decision_connection(config(), agent)
+    with pytest.raises(DecisionConfigError, match="cannot derive"):
+        resolve_for_agent(DecisionConfig(), agent)
 
 
 def test_decision_connection_derives_systemone_from_ark_base():
-    assert factory._resolve_decision_connection(config(), fake_agent()) == (
+    assert resolve_for_agent(DecisionConfig(), fake_agent()) == (
         SYSTEMONE,
         "agent-key",
     )
 
 
 def test_decision_connection_prefers_explicit_key_when_deriving():
-    decision = config(decision={"api_key": "explicit"})
-    assert factory._resolve_decision_connection(decision, fake_agent()) == (
+    decision = DecisionConfig(**{"api_key": "explicit"})
+    assert resolve_for_agent(decision, fake_agent()) == (
         SYSTEMONE,
         "explicit",
     )
@@ -269,8 +280,8 @@ def test_decision_connection_prefers_explicit_key_when_deriving():
 
 def test_decision_connection_requires_a_key_when_deriving():
     agent = fake_agent(model_api_key="")
-    with pytest.raises(QueryRoutingConfigError, match="API key is not configured"):
-        factory._resolve_decision_connection(config(), agent)
+    with pytest.raises(DecisionConfigError, match="API key is not configured"):
+        resolve_for_agent(DecisionConfig(), agent)
 
 
 def test_routing_rejects_underlying_model_fallbacks():

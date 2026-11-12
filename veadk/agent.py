@@ -39,6 +39,7 @@ from google.adk.examples.base_example_provider import BaseExampleProvider
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from typing_extensions import Any
 
+from veadk.decision import DecisionConfig, load_decision_config
 from veadk.config import settings
 from veadk.consts import DEFAULT_AGENT_NAME, DEFAULT_MODEL_EXTRA_CONFIG
 from veadk.knowledgebase import KnowledgeBase
@@ -363,6 +364,9 @@ class Agent(LlmAgent):
     resource servers (e.g. MCP servers) connected through `veadk.tunnel` show up
     as tools for this agent. The cloud app must also mount the tunnel routes via
     `veadk.tunnel.mount_tunnel`/`mount_tunnel_if_enabled`."""
+
+    decision: DecisionConfig | None = Field(default=None, exclude=True)
+    """Shared SystemOne connection; does not enable routing or content safety."""
 
     content_safety: Any = Field(default=None, exclude=True)
     """Opt-in content-safety configuration.
@@ -699,7 +703,9 @@ class Agent(LlmAgent):
                 f"got runtime={self.runtime}"
             )
 
-        router, _ = build_query_routing(config, self)
+        if self.decision is None:
+            self.decision = load_decision_config()
+        router, _ = build_query_routing(config, self, decision=self.decision)
         self.query_routing = config
         self.model = router
         from veadk.routing.agent_tool import bind_sub_agents

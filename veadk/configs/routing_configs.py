@@ -51,7 +51,8 @@ from pydantic import (
     model_validator,
 )
 
-from veadk.content_safety.config import DecisionConfig
+
+from veadk.decision import DecisionConfig
 
 DEFAULT_QUERY_ROUTING_THRESHOLD = 0.15
 DEFAULT_QUERY_ROUTING_TIMEOUT_SECONDS = 2.0
@@ -212,6 +213,7 @@ class QueryRoutingConfig(BaseModel):
     """
 
     model_config = ConfigDict(
+        hide_input_in_errors=True,
         extra="forbid",
         frozen=True,
         populate_by_name=True,
@@ -222,7 +224,6 @@ class QueryRoutingConfig(BaseModel):
     mode: Literal["enforce", "shadow"] = "shadow"
     builtin_thresholds: dict[str, float] = Field(default_factory=dict)
     questions: list[RoutingQuestion] = Field(default_factory=list)
-    decision: DecisionConfig = Field(default_factory=DecisionConfig)
     decision_timeout: float = Field(
         default=DEFAULT_QUERY_ROUTING_TIMEOUT_SECONDS,
         gt=0.0,

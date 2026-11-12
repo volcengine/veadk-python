@@ -67,9 +67,9 @@ async def test_paired_quality_and_cost(server):  # noqa: F811 - imported pytest 
 
                 apps = {
                     arm: benchmark_app(case, cohort, arm)
-                    for arm in ("strong", "routed")
+                    for arm in manifest.get("arms", ["strong", "routed"])
                 }
-            order = ["strong", "routed"]
+            order = list(manifest.get("arms", ["strong", "routed"]))
             random.Random(case["id"] + cohort).shuffle(order)
             async with httpx.AsyncClient(
                 base_url=server["url"],
@@ -167,11 +167,19 @@ async def test_paired_quality_and_cost(server):  # noqa: F811 - imported pytest 
     attempts = [
         json.loads(line) for line in (root / "audit.jsonl").read_text().splitlines()
     ]
-    report = summarize(rows, attempts)
-    if manifest.get("public_benchmarks"):
+    if manifest.get("matched_execution"):
+        from query_routing_calibration import summarize_comparisons
+
+        report = summarize_comparisons(rows, attempts)
+    else:
+        report = summarize(rows, attempts)
+    if manifest.get("public_benchmarks") and not manifest.get("matched_execution"):
         from query_routing_benchmark_report import build_benchmark_report
 
         report["public_benchmarks"] = build_benchmark_report(rows, attempts, manifest)
+    (root / "accounted-results.jsonl").write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
+    )
     report["manifest_sha256"] = hashlib.sha256(raw).hexdigest()
     report["server_command"] = server["command"]
     (root / "economics-summary.json").write_text(
@@ -188,7 +196,9 @@ async def test_paired_quality_and_cost(server):  # noqa: F811 - imported pytest 
     # financial acceptance. Failed tasks remain in every denominator.
     assert all(len(r["execution_models"]) <= 1 for r in rows)
     assert all(r["decision_calls"] <= 1 for r in rows)
-    assert not any(r["decision_calls"] for r in rows if r["arm"] == "strong")
+    assert not any(
+        r["decision_calls"] for r in rows if r["arm"] in {"strong", "candidate"}
+    )
     # Quality/cost thresholds are reporting references, not a binary benchmark
     # exam. Preserve the measurements and intervals even when a reference
     # check is false; only violated execution contracts fail this test.

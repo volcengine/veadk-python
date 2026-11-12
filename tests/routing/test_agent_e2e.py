@@ -118,10 +118,10 @@ query_routing:
   mode: {mode}
   simple_models:
     - cheap-model
-  decision:
-    api_url: http://127.0.0.1:{server.server_address[1]}/api/v1/systemone
-    api_key: e2e-key
-    model: e2e-judge
+decision:
+  api_url: http://127.0.0.1:{server.server_address[1]}/api/v1/systemone
+  api_key: e2e-key
+  model: e2e-judge
 """,
         encoding="utf-8",
     )

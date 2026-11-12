@@ -414,6 +414,13 @@ def score_public_rows(manifest, rows, root):
     for (_, _, case_id), group in grouped.items():
         case = cases[case_id]
         group.sort(key=lambda row: int(row["id"].rsplit(":", 1)[1]))
+        if not case.get("benchmark"):
+            for row in group:
+                row["native_score"] = {
+                    "success": row["success"],
+                    "method": "task_oracle",
+                }
+            continue
         if case["source"] == "BFCL":
             score = score_bfcl(case, group, sources)
             for row in group:

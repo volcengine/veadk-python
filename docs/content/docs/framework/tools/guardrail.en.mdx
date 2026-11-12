@@ -92,18 +92,19 @@ print(response)
 Configure it in `config.yaml`; agents run through `Runner` or deployed through AgentKit mount the plugin automatically:
 
 ```yaml title="config.yaml"
+decision:
+  # Optional; derived from the current Ark API base when omitted
+  api_url: https://ark.cn-beijing.volces.com/api/v1/systemone
+  # Optional; reuses the Ark API key when omitted
+  api_key: <your_api_key>
+  # Optional; defaults to doubao-seed-2-1-lite-260915
+  model: doubao-seed-2-1-lite-260915
+
 tool:
   content_safety:
     provider: decision
     on_error: allow            # allow (default, marked degraded) or block
     block_message: "Your request was blocked by the content safety policy."
-    decision:
-      # Optional; derived from the current Ark API base when omitted
-      api_url: https://ark.cn-beijing.volces.com/api/v1/systemone
-      # Optional; reuses the Ark API key when omitted
-      api_key: <your_api_key>
-      # Optional; defaults to doubao-seed-2-1-lite-260915
-      model: doubao-seed-2-1-lite-260915
     use_default_questions: true
     questions:
       # Override a built-in question by name, or append a new one
@@ -112,7 +113,9 @@ tool:
         threshold: 0.5
 ```
 
-The connection fields can also be overridden with `TOOL_CONTENT_SAFETY_DECISION_API_URL`, `TOOL_CONTENT_SAFETY_DECISION_API_KEY`, and `TOOL_CONTENT_SAFETY_DECISION_MODEL`.
+The root `decision` block is shared connection configuration; it does not enable either feature or share mutable clients. Content-safety questions and thresholds remain local. Import `DecisionConfig` from `veadk.decision` and pass it through `Agent(decision=...)` or `build_content_safety(config, decision=...)`. See [model configuration](../agent/model) for all connection fields.
+
+The connection fields can also be overridden with `DECISION_API_URL`, `DECISION_API_KEY`, and `DECISION_MODEL`.
 
 When a custom `decision.api_url` is configured, `decision.api_key` must also be supplied explicitly; the SDK never reuses Ark credentials for a third-party endpoint. You can configure it in code instead:
 

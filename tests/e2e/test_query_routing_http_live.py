@@ -132,7 +132,7 @@ def server(tmp_path_factory):
 
             for case in manifest["cases"]:
                 for cohort in manifest["cohorts"]:
-                    for arm in ("strong", "routed"):
+                    for arm in manifest.get("arms", ["strong", "routed"]):
                         name = benchmark_app(case, cohort, arm)
                         package = agents / name
                         package.mkdir()
@@ -140,11 +140,21 @@ def server(tmp_path_factory):
                         kind = (
                             "baseline_" if arm == "strong" else ""
                         ) + f"economy_{cohort}"
+                        if case.get("nested"):
+                            kind += "_nested"
                         if case["protocol"] == "chat":
                             kind += "_chat"
+                        fixed = None
+                        if manifest.get("matched_execution"):
+                            fixed = {"strong": "strong", "candidate": "simple"}.get(arm)
+                        policy = (
+                            manifest.get("routing_policies", {})
+                            .get(cohort, {})
+                            .get(arm)
+                        )
                         (package / "agent.py").write_text(
                             "from query_routing_benchmark_agent import build_benchmark_agent\n"
-                            f"root_agent = build_benchmark_agent({kind!r}, {case['id']!r})\n"
+                            f"root_agent = build_benchmark_agent({kind!r}, {case['id']!r}, fixed_route={fixed!r}, routing_policy={policy!r})\n"
                         )
     for key in ("NO_PROXY", "no_proxy"):
         env[key] = env.get(key, "") + ",127.0.0.1,localhost,::1"

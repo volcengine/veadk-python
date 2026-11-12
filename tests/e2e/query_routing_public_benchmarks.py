@@ -71,7 +71,8 @@ def read_jsonl(path):
     ]
 
 
-def prepare_static(sources):
+def prepare_static(sources, *, excluded_ids=(), seed_suffix=""):
+    excluded_ids = set(excluded_ids)
     import pyarrow.parquet as pq
 
     sources = Path(sources)
@@ -96,6 +97,7 @@ def prepare_static(sources):
     data = read_jsonl(
         sources / "ifeval/instruction_following_eval/data/input_data.jsonl"
     )
+    data = [i for i in data if f"IFEval-{i['key']}" not in excluded_ids]
     for item in balanced_constraints(data, 60):
         add(
             "IFEval",
@@ -110,10 +112,11 @@ def prepare_static(sources):
     ).to_pylist()
     groups = defaultdict(list)
     for item in data:
-        groups[item["category"]].append(item)
+        if f"MMLU-Pro-{item['question_id']}" not in excluded_ids:
+            groups[item["category"]].append(item)
     assert len(groups) == 14
     for category, items in sorted(groups.items()):
-        for item in stable_sample(items, 4, "MMLU-Pro-" + category):
+        for item in stable_sample(items, 4, "MMLU-Pro-" + category + seed_suffix):
             options = "\n".join(
                 f"({chr(65 + i)}) {text}" for i, text in enumerate(item["options"])
             )
@@ -127,7 +130,8 @@ def prepare_static(sources):
 
     for path in sorted((sources / "data/MMMU/MMMU").glob("*/validation-*.parquet")):
         data = pq.read_table(path).to_pylist()
-        item = stable_sample(data, 1, "MMMU-" + path.parent.name)[0]
+        data = [i for i in data if f"MMMU-{i['id']}" not in excluded_ids]
+        item = stable_sample(data, 1, "MMMU-" + path.parent.name + seed_suffix)[0]
         options = ast.literal_eval(item["options"])
         prompt = item["question"]
         if item["question_type"] == "multiple-choice":
@@ -165,7 +169,8 @@ def prepare_static(sources):
     data = json.loads((sources / "data/zai-org/LongBench-v2/data.json").read_text())
     groups = defaultdict(list)
     for item in data:
-        groups[item["domain"]].append(item)
+        if f"LongBench-v2-{item['_id']}" not in excluded_ids:
+            groups[item["domain"]].append(item)
     assert len(groups) == 6
     template = (sources / "longbench/prompts/0shot.txt").read_text()
     for category, items in sorted(groups.items()):
@@ -177,7 +182,9 @@ def prepare_static(sources):
             for i in range(3)
         ]
         for band, group in enumerate(strata):
-            for item in stable_sample(group, 2, f"LongBench-v2-{category}-{band}"):
+            for item in stable_sample(
+                group, 2, f"LongBench-v2-{category}-{band}" + seed_suffix
+            ):
                 prompt = template.replace("$DOC$", item["context"]).replace(
                     "$Q$", item["question"]
                 )
@@ -209,8 +216,13 @@ def prepare_static(sources):
         with path.open() as stream:
             for line in stream:
                 item = json.loads(line)
+                if (
+                    f"LiveCodeBench-code-{item['platform']}-{item['question_id']}"
+                    in excluded_ids
+                ):
+                    continue
                 key = hashlib.sha256(
-                    f"LCB-generation-{item['platform']}-{item['question_id']}".encode()
+                    f"{seed_suffix}LCB-generation-{item['platform']}-{item['question_id']}".encode()
                 ).hexdigest()
                 bucket = groups[item["difficulty"]]
                 bucket.append((key, item))
@@ -235,10 +247,11 @@ def prepare_static(sources):
     fn = upstream_definitions(
         lcb / "prompts/code_execution.py", ["make_direct_output_prompt"]
     )
+    data = [i for i in data if f"LiveCodeBench-execution-{i['id']}" not in excluded_ids]
     ordered = sorted(data, key=lambda i: i["numsteps"])
     for band in range(3):
         group = ordered[band * len(ordered) // 3 : (band + 1) * len(ordered) // 3]
-        for item in stable_sample(group, 3, f"LCB-execution-{band}"):
+        for item in stable_sample(group, 3, f"LCB-execution-{band}" + seed_suffix):
             add(
                 "LiveCodeBench",
                 f"code_execution_depth_{band + 1}",
@@ -252,7 +265,11 @@ def prepare_static(sources):
     ).to_pylist()
     groups = defaultdict(list)
     for item in data:
-        groups[item["difficulty"]].append(item)
+        if (
+            f"LiveCodeBench-output-{item['question_id']}-{item['test_id']}"
+            not in excluded_ids
+        ):
+            groups[item["difficulty"]].append(item)
     fn = upstream_definitions(
         lcb / "prompts/test_output_prediction.py",
         [
@@ -262,7 +279,7 @@ def prepare_static(sources):
         ],
     )
     for difficulty, items in sorted(groups.items()):
-        for item in stable_sample(items, 3, "LCB-output-" + difficulty):
+        for item in stable_sample(items, 3, "LCB-output-" + difficulty + seed_suffix):
             test = json.loads(item["test"])[0]
             prompt = fn.get_generic_question_template_test_completion(
                 SimpleNamespace(**item), test["input"]
@@ -284,7 +301,8 @@ def prepare_static(sources):
     return cases
 
 
-def prepare_bfcl(sources):
+def prepare_bfcl(sources, *, excluded_ids=(), seed_suffix=""):
+    excluded_ids = set(excluded_ids)
     root = Path(sources) / "bfcl/berkeley-function-call-leaderboard/bfcl_eval"
     config = {}
     exec((root / "constants/executable_backend_config.py").read_text(), config)  # noqa: S102 - pinned upstream source, never model output
@@ -299,6 +317,7 @@ def prepare_bfcl(sources):
     }
     for category, count in allocation.items():
         data = read_jsonl(root / f"data/BFCL_v4_{category}.json")
+        data = [i for i in data if "BFCL-" + i["id"] not in excluded_ids]
         answers = (
             {
                 i["id"]: i
@@ -309,7 +328,9 @@ def prepare_bfcl(sources):
             if category != "irrelevance"
             else {}
         )
-        for index, item in enumerate(stable_sample(data, count, "BFCL-" + category)):
+        for index, item in enumerate(
+            stable_sample(data, count, "BFCL-" + category + seed_suffix)
+        ):
             functions = list(item.get("function", []))
             for name in item.get("involved_classes", []):
                 path = (
@@ -363,7 +384,8 @@ def benchmark_app(case, cohort, arm):
     return f"economy_bench_{digest}_{cohort}_{arm}"
 
 
-def prepare_agentdojo(sources):
+def prepare_agentdojo(sources, *, excluded_ids=(), seed_suffix=""):
+    excluded_ids = set(excluded_ids)
     import sys
 
     sys.path.insert(0, str(Path(sources) / "agentdojo/src"))
@@ -381,6 +403,11 @@ def prepare_agentdojo(sources):
         )
         eligible = []
         for task in suite.user_tasks.values():
+            if any(
+                f"AgentDojo-{domain}-{task.ID}-{c}" in excluded_ids
+                for c in ("clean", "attack")
+            ):
+                continue
             try:
                 attack.get_injection_candidates(task)
             except ValueError as exc:
@@ -388,7 +415,7 @@ def prepare_agentdojo(sources):
                     raise
             else:
                 eligible.append(task)
-        selected = stable_sample(eligible, 5, "AgentDojo-" + domain)
+        selected = stable_sample(eligible, 5, "AgentDojo-" + domain + seed_suffix)
         injection_tasks = list(suite.injection_tasks.values())
         for index, task in enumerate(selected):
             injection_task = stable_sample(

@@ -294,7 +294,7 @@ def test_unreadable_path_raises(tmp_path):
 def test_decision_block_defaults(tmp_path):
     path = write_config(tmp_path, "query_routing:\n  simple_models: [cheap]\n")
     config = load_query_routing_config(path)
-    assert config.decision.model == "doubao-seed-2-1-lite-260915"
+    assert "decision" not in type(config).model_fields
     assert config.decision_timeout == 2.0
 
 

@@ -23,10 +23,6 @@ Canonical shape::
     tool:
       content_safety:
         provider: decision
-        decision:
-          api_url: https://ark.example/api/v1/systemone   # optional
-          api_key: ...                                    # optional
-          model: doubao-seed-2-1-lite-260915              # optional
         questions:            # optional; overrides/extends the built-ins
           prompt_injection:
             instructions: ...
@@ -35,21 +31,17 @@ Canonical shape::
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import math
-import os
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlsplit
 
 import yaml
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    SecretStr,
     field_validator,
     model_validator,
 )
@@ -60,17 +52,10 @@ from .types import Provider
 
 logger = get_logger(__name__)
 
-DEFAULT_DECISION_MODEL = "doubao-seed-2-1-lite-260915"
 DEFAULT_BLOCK_MESSAGE = (
     "Your request was blocked by the content safety policy. "
     "Please modify your input and try again."
 )
-_ENV_PREFIX = "TOOL_CONTENT_SAFETY_DECISION_"
-_ENV_FIELDS = {
-    "api_url": "API_URL",
-    "api_key": "API_KEY",
-    "model": "MODEL",
-}
 DEFAULT_QUESTION_INSTRUCTIONS = {
     # Resource and input manipulation
     "compute_abuse": (
@@ -188,57 +173,6 @@ class ContentSafetyConfigError(ValueError):
     """Raised when a content-safety configuration file cannot be trusted."""
 
 
-class DecisionConfig(BaseModel):
-    """Connection details for the System One decision API.
-
-    ``api_url`` is a complete System One URL and is used verbatim. When it is
-    absent, the factory derives ``/api/v1/systemone`` from the effective Ark
-    API base. ``api_key`` defaults to the existing Ark credential resolution and
-    is stored as a ``SecretStr`` so repr and serialization do not expose it.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    api_url: str | None = None
-    api_key: SecretStr | None = None
-    model: str = Field(default=DEFAULT_DECISION_MODEL, min_length=1)
-
-    @field_validator("api_url")
-    @classmethod
-    def _validate_api_url(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        if not value.startswith(("http://", "https://")):
-            raise ValueError("decision.api_url must start with http:// or https://")
-        try:
-            parsed = urlsplit(value)
-        except ValueError as exc:
-            raise ValueError("decision.api_url must be a valid URL") from exc
-        if not parsed.hostname:
-            raise ValueError("decision.api_url must include a host")
-        if parsed.scheme == "http" and parsed.hostname.lower() not in {
-            "localhost",
-            "127.0.0.1",
-            "::1",
-        }:
-            raise ValueError(
-                "decision.api_url must use https unless it targets loopback"
-            )
-        return value
-
-    @field_validator("api_key")
-    @classmethod
-    def _validate_api_key(cls, value: SecretStr | None) -> SecretStr | None:
-        if value is not None and not value.get_secret_value():
-            raise ValueError("decision.api_key must be non-empty when set")
-        return value
-
-    @property
-    def api_key_value(self) -> str | None:
-        """Return the plaintext key for the HTTP layer, never for display."""
-        return self.api_key.get_secret_value() if self.api_key is not None else None
-
-
 class QuestionConfig(BaseModel):
     """One question sent to System One.
 
@@ -294,12 +228,11 @@ class ContentSafetyConfig(BaseModel):
     behind an adapter.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(hide_input_in_errors=True, extra="forbid", frozen=True)
 
     provider: Provider = Provider.NONE
     on_error: Literal["allow", "block"] = "allow"
     block_message: str = Field(default=DEFAULT_BLOCK_MESSAGE, min_length=1)
-    decision: DecisionConfig = Field(default_factory=DecisionConfig)
     use_default_questions: bool = True
     """Merge the built-in questions under ``questions``.
 
@@ -448,7 +381,6 @@ def _read_config_document(config_path: Path) -> dict[str, Any]:
 
 
 def _build_config(block: dict[str, Any], config_path: Path) -> ContentSafetyConfig:
-    block = _apply_decision_env(block)
     try:
         return ContentSafetyConfig.model_validate(block)
     except Exception as exc:
@@ -478,23 +410,6 @@ def _resolve_config_path(path: str | Path | None, *, optional: bool) -> Path | N
     return Path(found)
 
 
-def _apply_decision_env(block: dict[str, Any]) -> dict[str, Any]:
-    """Apply process/.env overrides to the decision connection fields."""
-    block = copy.deepcopy(block)
-    decision = block.get("decision")
-    if decision is None:
-        decision = {}
-    if not isinstance(decision, dict):
-        return block
-    for field, suffix in _ENV_FIELDS.items():
-        value = os.getenv(f"{_ENV_PREFIX}{suffix}")
-        if value:
-            decision[field] = value
-    if decision:
-        block["decision"] = decision
-    return block
-
-
 def load_content_safety_config(
     path: str | Path | None = None,
 ) -> ContentSafetyConfig:
@@ -506,9 +421,8 @@ def load_content_safety_config(
     This is deliberately opt-in: importing :mod:`veadk.content_safety` never
     looks for this file, and the rest of VeADK keeps its existing behavior.
 
-    Precedence for the three decision connection fields is process environment
-    (which includes a loaded ``.env``) over YAML; explicit code values passed
-    through :meth:`ContentSafetyConfig.from_dict` are never overridden.
+    Shared connection fields are loaded separately by
+    :func:`veadk.decision.load_decision_config` from root ``decision``.
     """
 
     _load_dotenv()

@@ -26,8 +26,12 @@ from veadk.configs.routing_configs import (
     load_query_routing_config,
     load_query_routing_config_if_present,
 )
-from veadk.content_safety.factory import _is_ark_api_base, _systemone_url
-from veadk.decision import DecisionClient
+from veadk.decision import (
+    DecisionClient,
+    DecisionConfig,
+    load_decision_config,
+    resolve_decision_connection,
+)
 from veadk.routing.callback import build_before_model_callback
 from veadk.routing.classifier import QueryClassifier
 from veadk.routing.llm import RoutingLlm
@@ -64,6 +68,7 @@ def build_query_routing(
     config: QueryRoutingConfig,
     agent: Any,
     *,
+    decision: DecisionConfig | None = None,
     store: RouteStore | None = None,
     judge: Any | None = None,
 ) -> tuple[RoutingLlm, Any]:
@@ -83,11 +88,16 @@ def build_query_routing(
     route_store = store or get_route_store()
 
     if judge is None:
-        endpoint, api_key = _resolve_decision_connection(config, agent)
+        connection = decision if decision is not None else load_decision_config()
+        endpoint, api_key = resolve_decision_connection(
+            connection,
+            getattr(agent, "model_api_base", None),
+            getattr(agent, "model_api_key", None),
+        )
         judge = DecisionClient(
             endpoint=endpoint,
             api_key=api_key,
-            model=config.decision.model,
+            model=connection.model,
             timeout=config.decision_timeout,
         )
 
@@ -185,45 +195,3 @@ def _build_model(agent: Any, specification: Any) -> BaseLlm:
         model = RetryingLiteLlm(**kwargs)
     _validate_model_contract(model)
     return model
-
-
-def _resolve_decision_connection(
-    config: QueryRoutingConfig, agent: Any
-) -> tuple[str, str]:
-    """Resolve the System One URL and key without crossing providers.
-
-    Mirrors the content-safety rule: an Ark credential is never sent to a
-    non-Ark endpoint, and a non-Ark credential is never sent to Ark.
-    """
-
-    api_base = getattr(agent, "model_api_base", "") or ""
-    api_key = getattr(agent, "model_api_key", "") or ""
-    explicit_key = config.decision.api_key_value
-
-    if config.decision.api_url:
-        endpoint = config.decision.api_url
-        if explicit_key:
-            return endpoint, explicit_key
-        if not _is_ark_api_base(endpoint):
-            raise QueryRoutingConfigError(
-                "decision.api_key is required when decision.api_url is not an Ark "
-                "endpoint; refusing to reuse the Ark credential for a custom endpoint"
-            )
-        if not _is_ark_api_base(api_base):
-            raise QueryRoutingConfigError(
-                "decision.api_key is required when the fallback Ark API base is "
-                "not an Ark endpoint"
-            )
-        if not api_key:
-            raise QueryRoutingConfigError("decision API key is not configured")
-        return endpoint, api_key
-
-    if not _is_ark_api_base(api_base):
-        raise QueryRoutingConfigError(
-            "cannot derive the System One endpoint from a non-Ark model API base; "
-            "set query_routing.decision.api_url explicitly"
-        )
-    key = explicit_key or api_key
-    if not key:
-        raise QueryRoutingConfigError("decision API key is not configured")
-    return _systemone_url(api_base), key

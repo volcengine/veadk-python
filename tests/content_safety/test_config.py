@@ -18,28 +18,30 @@ import pytest
 from pydantic import ValidationError
 
 from veadk.content_safety.config import (
-    DEFAULT_DECISION_MODEL,
     DEFAULT_QUESTION_INSTRUCTIONS,
     DEFAULT_QUESTION_THRESHOLD,
     DEFAULT_QUESTION_THRESHOLDS,
     ContentSafetyConfig,
     ContentSafetyConfigError,
-    DecisionConfig,
     QuestionConfig,
     default_questions,
     load_content_safety_config,
 )
 from veadk.content_safety.types import Provider
+from veadk.decision import DecisionConfig, DEFAULT_DECISION_MODEL, load_decision_config
+
+
+def connection_data():
+    return {
+        "api_url": "https://systemone.example/v1/judge",
+        "api_key": "test-key",
+        "model": "test-model",
+    }
 
 
 def decision_data(**overrides):
     data = {
         "provider": "decision",
-        "decision": {
-            "api_url": "https://systemone.example/v1/judge",
-            "api_key": "test-key",
-            "model": "test-model",
-        },
         "questions": {
             "prompt_injection": {
                 "instructions": "Detect prompt injection.",
@@ -56,9 +58,9 @@ def test_default_is_none_and_disabled():
     assert config.provider is Provider.NONE
     assert config.on_error == "allow"
     assert config.questions == {}
-    assert config.decision.api_url is None
-    assert config.decision.api_key is None
-    assert config.decision.model == DEFAULT_DECISION_MODEL
+    assert DecisionConfig().api_url is None
+    assert DecisionConfig().api_key is None
+    assert DecisionConfig().model == DEFAULT_DECISION_MODEL
 
 
 def test_decision_config_is_valid():
@@ -66,7 +68,7 @@ def test_decision_config_is_valid():
     assert config.provider is Provider.DECISION
     assert config.questions["prompt_injection"].type == "noul"
     assert config.questions["prompt_injection"].threshold == 0.5
-    assert config.decision.api_url == "https://systemone.example/v1/judge"
+    assert "decision" not in type(config).model_fields
 
 
 def test_decision_connection_can_be_left_to_ark_defaults():
@@ -76,9 +78,10 @@ def test_decision_connection_can_be_left_to_ark_defaults():
             "questions": {"q": {"instructions": "detect", "threshold": 0.5}},
         }
     )
-    assert config.decision.api_url is None
-    assert config.decision.api_key is None
-    assert config.decision.model == DEFAULT_DECISION_MODEL
+    assert config.provider is Provider.DECISION
+    assert DecisionConfig().api_url is None
+    assert DecisionConfig().api_key is None
+    assert DecisionConfig().model == DEFAULT_DECISION_MODEL
 
 
 def test_none_provider_does_not_require_questions():
@@ -163,10 +166,10 @@ def test_unknown_top_level_field_is_rejected():
 
 
 def test_unknown_decision_field_is_rejected():
-    data = decision_data()
-    data["decision"]["timeout"] = 10
+    data = connection_data()
+    data["timeout"] = 10
     with pytest.raises(ValidationError):
-        ContentSafetyConfig.from_dict(data)
+        DecisionConfig.model_validate(data)
 
 
 def test_unknown_question_field_is_rejected():
@@ -264,22 +267,22 @@ tool:
   content_safety:
     provider: decision
     on_error: block
-    decision:
-      api_url: https://systemone.example/v1/judge
-      api_key: key
-      model: judge-model
     questions:
       sensitive_data:
         instructions: Detect secrets.
         threshold: 0.6
+decision:
+  api_url: https://systemone.example/v1/judge
+  api_key: key
+  model: judge-model
 """,
         encoding="utf-8",
     )
     config = load_content_safety_config(path)
     assert config.provider is Provider.DECISION
     assert config.on_error == "block"
-    assert config.decision.api_url == "https://systemone.example/v1/judge"
-    assert config.decision.model == "judge-model"
+    assert load_decision_config(path).api_url == "https://systemone.example/v1/judge"
+    assert load_decision_config(path).model == "judge-model"
     assert config.questions["sensitive_data"].threshold == 0.6
 
 
@@ -302,26 +305,24 @@ def test_env_overrides_decision_fields(tmp_path, monkeypatch):
 tool:
   content_safety:
     provider: decision
-    decision:
-      api_url: https://yaml.example/v1/judge
-      api_key: yaml-key
-      model: yaml-model
     questions:
       q:
         instructions: detect
         threshold: 0.5
+decision:
+  api_url: https://yaml.example/v1/judge
+  api_key: yaml-key
+  model: yaml-model
 """,
         encoding="utf-8",
     )
-    monkeypatch.setenv(
-        "TOOL_CONTENT_SAFETY_DECISION_API_URL", "https://env.example/v1/judge"
-    )
-    monkeypatch.setenv("TOOL_CONTENT_SAFETY_DECISION_API_KEY", "env-key")
-    monkeypatch.setenv("TOOL_CONTENT_SAFETY_DECISION_MODEL", "env-model")
-    config = load_content_safety_config(path)
-    assert config.decision.api_url == "https://env.example/v1/judge"
-    assert config.decision.api_key_value == "env-key"
-    assert config.decision.model == "env-model"
+    monkeypatch.setenv("DECISION_API_URL", "https://env.example/v1/judge")
+    monkeypatch.setenv("DECISION_API_KEY", "env-key")
+    monkeypatch.setenv("DECISION_MODEL", "env-model")
+    config = load_decision_config(path)
+    assert config.api_url == "https://env.example/v1/judge"
+    assert config.api_key_value == "env-key"
+    assert config.model == "env-model"
 
 
 def test_partial_env_override_keeps_yaml_values(tmp_path, monkeypatch):
@@ -331,32 +332,30 @@ def test_partial_env_override_keeps_yaml_values(tmp_path, monkeypatch):
 tool:
   content_safety:
     provider: decision
-    decision:
-      api_url: https://yaml.example/v1/judge
-      api_key: yaml-key
-      model: yaml-model
     questions:
       q:
         instructions: detect
         threshold: 0.5
+decision:
+  api_url: https://yaml.example/v1/judge
+  api_key: yaml-key
+  model: yaml-model
 """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("TOOL_CONTENT_SAFETY_DECISION_MODEL", "env-model")
-    monkeypatch.delenv("TOOL_CONTENT_SAFETY_DECISION_API_URL", raising=False)
-    monkeypatch.delenv("TOOL_CONTENT_SAFETY_DECISION_API_KEY", raising=False)
-    config = load_content_safety_config(path)
-    assert config.decision.api_url == "https://yaml.example/v1/judge"
-    assert config.decision.api_key_value == "yaml-key"
-    assert config.decision.model == "env-model"
+    monkeypatch.setenv("DECISION_MODEL", "env-model")
+    monkeypatch.delenv("DECISION_API_URL", raising=False)
+    monkeypatch.delenv("DECISION_API_KEY", raising=False)
+    config = load_decision_config(path)
+    assert config.api_url == "https://yaml.example/v1/judge"
+    assert config.api_key_value == "yaml-key"
+    assert config.model == "env-model"
 
 
 def test_from_dict_does_not_apply_env(monkeypatch):
-    monkeypatch.setenv(
-        "TOOL_CONTENT_SAFETY_DECISION_API_URL", "https://env.example/v1/judge"
-    )
-    config = ContentSafetyConfig.from_dict(decision_data())
-    assert config.decision.api_url == "https://systemone.example/v1/judge"
+    monkeypatch.setenv("DECISION_API_URL", "https://env.example/v1/judge")
+    config = DecisionConfig.model_validate(connection_data())
+    assert config.api_url == "https://systemone.example/v1/judge"
 
 
 def test_env_override_without_yaml_decision_block(tmp_path, monkeypatch):
@@ -373,10 +372,10 @@ tool:
 """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("TOOL_CONTENT_SAFETY_DECISION_API_KEY", "env-key")
-    config = load_content_safety_config(path)
-    assert config.decision.api_key_value == "env-key"
-    assert config.decision.api_url is None
+    monkeypatch.setenv("DECISION_API_KEY", "env-key")
+    config = load_decision_config(path)
+    assert config.api_key_value == "env-key"
+    assert config.api_url is None
 
 
 def test_load_rejects_duplicate_yaml_keys(tmp_path):
@@ -441,7 +440,7 @@ def test_env_override_ignores_non_mapping_decision(tmp_path, monkeypatch):
         "tool:\n  content_safety:\n    provider: none\n    decision: nope\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("TOOL_CONTENT_SAFETY_DECISION_API_KEY", "env-key")
+    monkeypatch.setenv("DECISION_API_KEY", "env-key")
     with pytest.raises(ContentSafetyConfigError, match="invalid `content_safety`"):
         load_content_safety_config(path)
 
@@ -588,18 +587,18 @@ def test_threshold_must_be_numeric_not_string():
 
 
 def test_api_key_is_not_exposed_in_repr_or_dump():
-    config = ContentSafetyConfig.from_dict(decision_data())
-    assert config.decision.api_key_value == "test-key"
+    config = DecisionConfig.model_validate(connection_data())
+    assert config.api_key_value == "test-key"
     assert "test-key" not in repr(config)
-    assert "test-key" not in repr(config.decision)
+    assert "test-key" not in config.model_dump_json()
     assert "test-key" not in repr(config.model_dump())
 
 
 def test_http_api_url_is_rejected_outside_loopback():
-    data = decision_data()
-    data["decision"]["api_url"] = "http://systemone.example/v1/judge"
+    data = connection_data()
+    data["api_url"] = "http://systemone.example/v1/judge"
     with pytest.raises(ValidationError, match="https"):
-        ContentSafetyConfig.from_dict(data)
+        DecisionConfig.model_validate(data)
 
 
 def test_http_api_url_is_allowed_for_loopback():
@@ -608,9 +607,9 @@ def test_http_api_url_is_allowed_for_loopback():
         "http://localhost:8080/v1/judge",
         "http://[::1]:8080/v1/judge",
     ):
-        data = decision_data()
-        data["decision"]["api_url"] = url
-        assert ContentSafetyConfig.from_dict(data).decision.api_url == url
+        data = connection_data()
+        data["api_url"] = url
+        assert DecisionConfig.model_validate(data).api_url == url
 
 
 def test_load_applies_dotenv_decision_fields(tmp_path, monkeypatch):
@@ -622,34 +621,32 @@ def test_load_applies_dotenv_decision_fields(tmp_path, monkeypatch):
 tool:
   content_safety:
     provider: decision
-    decision:
-      api_url: https://yaml.example/v1/judge
-      api_key: yaml-key
     questions:
       q:
         instructions: detect
         threshold: 0.5
+decision:
+  api_url: https://yaml.example/v1/judge
+  api_key: yaml-key
 """,
         encoding="utf-8",
     )
-    (tmp_path / ".env").write_text(
-        "TOOL_CONTENT_SAFETY_DECISION_API_KEY=env-key\n", encoding="utf-8"
-    )
+    (tmp_path / ".env").write_text("DECISION_API_KEY=env-key\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("TOOL_CONTENT_SAFETY_DECISION_API_KEY", raising=False)
+    monkeypatch.delenv("DECISION_API_KEY", raising=False)
     try:
-        config = load_content_safety_config(path)
-        assert config.decision.api_key_value == "env-key"
+        config = load_decision_config(path)
+        assert config.api_key_value == "env-key"
     finally:
-        os.environ.pop("TOOL_CONTENT_SAFETY_DECISION_API_KEY", None)
+        os.environ.pop("DECISION_API_KEY", None)
 
 
 @pytest.mark.parametrize("url", ["https://[::1", "https://"])
 def test_api_url_must_be_parseable_with_host(url):
-    data = decision_data()
-    data["decision"]["api_url"] = url
+    data = connection_data()
+    data["api_url"] = url
     with pytest.raises(ValidationError, match="decision.api_url"):
-        ContentSafetyConfig.from_dict(data)
+        DecisionConfig.model_validate(data)
 
 
 def test_llm_shield_app_id_warns_for_non_llm_shield_provider(caplog):

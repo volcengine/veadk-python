@@ -44,13 +44,14 @@ SystemOne 在每个用户 turn 开始时，根据有效历史、指令、工具�
 在项目根目录的 `config.yaml` 中新增配置块：
 
 ```yaml title="config.yaml"
+decision:
+  model: doubao-seed-2-1-lite-260915
+
 query_routing:
   simple_models:
     - doubao-seed-2-1-lite-260915
   # strong_model: kimi-k3-1-pro-261024  # 可选；默认使用 Agent 的 model_name
   mode: shadow  # 先观察；设为 enforce 才实际执行路由
-  decision:
-    model: doubao-seed-2-1-lite-260915
   decision_timeout: 2.0
   questions:
     - question: 回答是否需要最新的实时信息？
@@ -70,10 +71,31 @@ agent = Agent(model_name="kimi-k3-1-pro-261024")
 | `simple_models` | `list[str \| dict]` | 必填 | 低成本模型列表，至少一个。按列出顺序选择第一个满足当前请求能力要求的模型。字符串等价于只声明 `name` 的字典。 |
 | `strong_model` | `str` | Agent 的 `model_name` | 强模型名称。与 Agent 的主模型不同时，用同一套连接信息单独构建。 |
 | `mode` | `"enforce" \| "shadow"` | `"shadow"` | `shadow` 只记录分级结果，所有请求仍走强模型，便于观察效果后再切换。 |
-| `decision` | `dict` | 从 Agent 的方舟连接推导 | Decision 服务连接，可配置 `api_url`、`api_key`、`model`。自定义非方舟 `api_url` 时必须同时提供 `api_key`。 |
 | `decision_timeout` | `float` | `2.0` | 单次分级超时（秒），范围 `(0, 30]`。超时按强模型处理。 |
 | `builtin_thresholds` | `dict[str, float]` | `{}` | 可覆盖内置问题阈值，范围 `[0, 1]`；正式执行前应使用代表性查询校准。 |
 | `questions` | `list[str \| dict]` | `[]` | 追加到四个内置问题之后的自定义问题。字符串等价于 `{question: ...}`。 |
+
+
+根级 `decision` 由查询路由和内容安全共用，配置它不会启用任何功能。代码中通过 `Agent(decision=DecisionConfig(...))` 显式传入不可变连接配置；各功能独立创建客户端、管理问题。连接只在公共位置配置，不放在功能内部。
+
+| 配置项 | 必填 | 默认值 / 规则 |
+| :--- | :--- | :--- |
+| `decision.api_url` | 否 | 从 Agent 的方舟地址推导 `/api/v1/systemone`；使用自定义网关时必填。 |
+| `decision.api_key` | 否 | 复用 Agent 的方舟密钥；非方舟决策地址必须显式填写。 |
+| `decision.model` | 否 | `doubao-seed-2-1-lite-260915`，用于 SystemOne 决策的模型。 |
+
+`DECISION_API_URL`、`DECISION_API_KEY`、`DECISION_MODEL` 可覆盖 YAML。覆盖已配置的目标地址时，必须同时提供对应的 `DECISION_API_KEY`。显式构造 `DecisionConfig` 不读取文件或环境变量。问题、阈值及 `decision_timeout` 归各功能管理；修改路由规则不会修改内容安全规则。
+
+```python
+from veadk import Agent
+from veadk.decision import DecisionConfig
+
+agent = Agent(
+    name="router",
+    decision=DecisionConfig(model="doubao-seed-2-1-lite-260915"),
+    query_routing={"simple_models": ["doubao-seed-2-1-lite-260915"]},
+)
+```
 
 每个 `simple_models` 条目可声明能力；未声明的能力一律视为不支持：
 

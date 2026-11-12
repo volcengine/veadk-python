@@ -97,6 +97,7 @@ def resolve_content_safety_plugin(
 
     return build_content_safety(
         config,
+        decision=getattr(agent, "decision", None),
         ark_api_base=getattr(agent, "model_api_base", None),
         ark_api_key=getattr(agent, "model_api_key", None),
     )

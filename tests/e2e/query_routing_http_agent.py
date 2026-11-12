@@ -45,13 +45,16 @@ class ObservedDecisionClient(DecisionClient):
             }
         )
         started = time.monotonic()
-        audit(kind="decision_start", app=self.app_name, root_turn_id=_AUDIT_TURN.get())
+        audit(
+            kind="decision_start",
+            **REQUEST_SCOPE.get(),
+            questions={k: v.instructions for k, v in kwargs["questions"].items()},
+        )
         try:
             response = await super().judge(**kwargs)
             audit(
                 kind="decision_end",
-                app=self.app_name,
-                root_turn_id=_AUDIT_TURN.get(),
+                **REQUEST_SCOPE.get(),
                 latency_ms=round((time.monotonic() - started) * 1000, 2),
                 answers=response.answers,
                 usage=response.raw.get("usage"),
@@ -177,7 +180,7 @@ class CodeResult(BaseModel):
     quantity: int
 
 
-def build_agent(kind: str) -> Agent:
+def build_agent(kind: str, *, fixed_route=None, routing_policy=None) -> Agent:
     responses = kind != "chat" and not kind.endswith("_chat")
     candidate = "deepseek-v4-1-flash-economy-261017" if "_eco" in kind else SIMPLE
     routing = {
@@ -246,7 +249,9 @@ def build_agent(kind: str) -> Agent:
     if responses:
         options["model_extra_config"]["store"] = True
         options["model_extra_config"]["extra_body"]["caching"] = {"type": "disabled"}
-    baseline = kind.startswith("baseline")
+    if routing_policy:
+        routing.update(routing_policy)
+    baseline = kind.startswith("baseline") and fixed_route is None
     if kind != "default_off":
         options["query_routing"] = False if kind == "disabled" or baseline else routing
     if kind in ("tools", "tools_chat", "baseline_tools", "baseline_tools_chat"):
@@ -292,4 +297,8 @@ def build_agent(kind: str) -> Agent:
     root = Agent(**options)
     if kind not in ("disabled", "default_off") and not baseline:
         root.model.classifier._judge.app_name = kind
+    if fixed_route is not None:
+        from query_routing_calibration import install_fixed_control
+
+        install_fixed_control(root, fixed_route)
     return root

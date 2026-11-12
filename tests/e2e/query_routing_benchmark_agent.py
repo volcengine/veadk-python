@@ -201,11 +201,13 @@ def get_backend(case_id, session_id):
     return _BACKENDS[key]
 
 
-def build_benchmark_agent(kind, case_id):
+def build_benchmark_agent(kind, case_id, *, fixed_route=None, routing_policy=None):
     from query_routing_http_agent import build_agent
 
     case = benchmark_case(case_id)
-    root = build_agent(kind)
+    root = build_agent(kind, fixed_route=fixed_route, routing_policy=routing_policy)
+    if case["source"] in {"GSM8K", "BBH", "engineering"}:
+        return root
     root.instruction = "Follow the user's request and its output constraints. Retain relevant facts across turns."
     root.tools = []
     if case["source"] == "BFCL":

@@ -37,6 +37,7 @@ from pydantic import Field
 
 from veadk import Agent as VeADKAgent
 from veadk import Runner as VeADKRunner
+from veadk.decision import DecisionConfig
 from veadk.content_safety import (
     Checkpoint,
     ContentSafetyConfig,
@@ -155,6 +156,14 @@ def dangerous_tool(query: str) -> dict:
     return {"ok": True, "query": query}
 
 
+def connection(server):
+    return DecisionConfig(
+        api_url=f"http://127.0.0.1:{server.server_address[1]}/api/v1/systemone",
+        api_key="e2e-key",
+        model="e2e-judge",
+    )
+
+
 def make_config(server, *, on_error="allow"):
     return ContentSafetyConfig.from_dict(
         {
@@ -168,11 +177,6 @@ def make_config(server, *, on_error="allow"):
                     "threshold": 0.5,
                 }
                 for name in ALL_QUESTIONS
-            },
-            "decision": {
-                "api_url": f"http://127.0.0.1:{server.server_address[1]}/v1/judge",
-                "api_key": "e2e-key",
-                "model": "e2e-judge",
             },
         }
     )
@@ -223,7 +227,7 @@ def event_text(event):
 def test_e2e_allow_full_adk_turn():
     TOOL_CALLS.clear()
     with systemone_server() as server:
-        plugin = build_content_safety(make_config(server))
+        plugin = build_content_safety(make_config(server), decision=connection(server))
         llm, events = asyncio.run(
             run_agent(
                 turns=[[text_response("hello from the model")]],
@@ -255,7 +259,7 @@ def test_e2e_allow_full_adk_turn():
 def test_e2e_blocks_user_input_before_model_call():
     TOOL_CALLS.clear()
     with systemone_server() as server:
-        plugin = build_content_safety(make_config(server))
+        plugin = build_content_safety(make_config(server), decision=connection(server))
         llm, events = asyncio.run(
             run_agent(
                 turns=[[text_response("should never be called")]],
@@ -278,7 +282,7 @@ def test_e2e_blocks_user_input_before_model_call():
 def test_e2e_blocks_model_output_after_model_call():
     TOOL_CALLS.clear()
     with systemone_server() as server:
-        plugin = build_content_safety(make_config(server))
+        plugin = build_content_safety(make_config(server), decision=connection(server))
         llm, events = asyncio.run(
             run_agent(
                 turns=[[text_response("SECRET value")]],
@@ -301,7 +305,7 @@ def test_e2e_blocks_model_output_after_model_call():
 def test_e2e_blocks_streamed_output_without_leaking_partials():
     TOOL_CALLS.clear()
     with systemone_server() as server:
-        plugin = build_content_safety(make_config(server))
+        plugin = build_content_safety(make_config(server), decision=connection(server))
         llm, events = asyncio.run(
             run_agent(
                 turns=[
@@ -330,7 +334,7 @@ def test_e2e_blocks_streamed_output_without_leaking_partials():
 def test_e2e_blocks_tool_before_execution():
     TOOL_CALLS.clear()
     with systemone_server() as server:
-        plugin = build_content_safety(make_config(server))
+        plugin = build_content_safety(make_config(server), decision=connection(server))
         llm, events = asyncio.run(
             run_agent(
                 turns=[
@@ -362,7 +366,7 @@ def test_e2e_blocks_tool_before_execution():
 def test_e2e_tool_runs_when_content_is_allowed():
     TOOL_CALLS.clear()
     with systemone_server() as server:
-        plugin = build_content_safety(make_config(server))
+        plugin = build_content_safety(make_config(server), decision=connection(server))
         llm, events = asyncio.run(
             run_agent(
                 turns=[
@@ -390,7 +394,7 @@ def test_e2e_tool_runs_when_content_is_allowed():
 def test_e2e_tool_argument_metadata_key_is_audited():
     TOOL_CALLS.clear()
     with systemone_server() as server:
-        plugin = build_content_safety(make_config(server))
+        plugin = build_content_safety(make_config(server), decision=connection(server))
         llm, events = asyncio.run(
             run_agent(
                 turns=[
@@ -418,7 +422,9 @@ def test_e2e_tool_argument_metadata_key_is_audited():
 def test_e2e_on_error_allow_degrades_open():
     TOOL_CALLS.clear()
     with systemone_server() as server:
-        plugin = build_content_safety(make_config(server, on_error="allow"))
+        plugin = build_content_safety(
+            make_config(server, on_error="allow"), decision=connection(server)
+        )
         llm, events = asyncio.run(
             run_agent(
                 turns=[[text_response("still answered")]],
@@ -439,7 +445,9 @@ def test_e2e_on_error_allow_degrades_open():
 def test_e2e_on_error_block_fails_closed():
     TOOL_CALLS.clear()
     with systemone_server() as server:
-        plugin = build_content_safety(make_config(server, on_error="block"))
+        plugin = build_content_safety(
+            make_config(server, on_error="block"), decision=connection(server)
+        )
         llm, events = asyncio.run(
             run_agent(
                 turns=[[text_response("should not appear")]],
@@ -480,10 +488,6 @@ tool:
     provider: decision
     use_default_questions: false
     block_message: {BLOCK_MESSAGE!r}
-    decision:
-      api_url: http://127.0.0.1:{server.server_address[1]}/v1/judge
-      api_key: e2e-key
-      model: e2e-judge
     questions:
       prompt_injection:
         instructions: Detect prompt_injection.
@@ -494,6 +498,10 @@ tool:
       high_risk_operation:
         instructions: Detect high_risk_operation.
         threshold: 0.5
+decision:
+  api_url: http://127.0.0.1:{server.server_address[1]}/v1/judge
+  api_key: e2e-key
+  model: e2e-judge
 """,
             encoding="utf-8",
         )
@@ -524,7 +532,7 @@ tool:
 def test_e2e_multimodal_image_reaches_decision_api():
     TOOL_CALLS.clear()
     with systemone_server() as server:
-        plugin = build_content_safety(make_config(server))
+        plugin = build_content_safety(make_config(server), decision=connection(server))
         llm, events = asyncio.run(
             run_agent(
                 turns=[[text_response("image noted")]],
