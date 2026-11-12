@@ -42,7 +42,7 @@ def test_builtin_questions_are_always_present_and_ordered():
     thresholds = {question.id: question.threshold for question in config.questions}
     assert thresholds["is_high_stakes"] == 0.05
     assert all(
-        thresholds[name] == 0.15
+        thresholds[name] == 0.5
         for name in ("is_complex", "needs_tools", "needs_long_context")
     )
     assert all(question.type == "noul" for question in config.questions)
@@ -340,7 +340,14 @@ def test_builtin_threshold_calibration_validates_ids_and_bounds():
     cfg = QueryRoutingConfig(
         simple_models=["cheap"], builtin_thresholds={"needs_tools": 0.4}
     )
-    assert next(q.threshold for q in cfg.questions if q.id == "needs_tools") == 0.4
+    assert {q.id: q.threshold for q in cfg.questions} == {
+        "is_complex": 0.5,
+        "needs_tools": 0.4,
+        "needs_long_context": 0.5,
+        "is_high_stakes": 0.05,
+    }
+    fresh = QueryRoutingConfig(simple_models=["cheap"])
+    assert next(q.threshold for q in fresh.questions if q.id == "needs_tools") == 0.5
     with pytest.raises(ValueError, match="unknown"):
         QueryRoutingConfig(simple_models=["cheap"], builtin_thresholds={"unknown": 0.4})
     for threshold in (-0.1, 1.1, float("nan")):

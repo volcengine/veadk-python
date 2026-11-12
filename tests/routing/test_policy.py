@@ -59,10 +59,10 @@ def test_all_questions_below_threshold_routes_simple():
 @pytest.mark.parametrize(
     ("question", "value"),
     [
-        ("is_complex", 0.16),
-        ("needs_tools", 0.16),
-        ("needs_long_context", 0.16),
-        ("is_high_stakes", 0.06),
+        ("is_complex", 0.500001),
+        ("needs_tools", 0.500001),
+        ("needs_long_context", 0.500001),
+        ("is_high_stakes", 0.050001),
     ],
 )
 def test_any_question_above_threshold_routes_strong(question, value):
@@ -71,8 +71,17 @@ def test_any_question_above_threshold_routes_strong(question, value):
     assert decision.reason == f"{question}_above_threshold"
 
 
-def test_threshold_is_inclusive():
-    decision = policy().evaluate(all_low(is_complex=0.15))
+@pytest.mark.parametrize(
+    "question", ["is_complex", "needs_tools", "needs_long_context"]
+)
+@pytest.mark.parametrize("value", [0.49, 0.5])
+def test_default_threshold_accepts_probability_up_to_half(question, value):
+    decision = policy().evaluate(all_low(**{question: value}))
+    assert decision.route == "simple"
+
+
+def test_high_stakes_threshold_is_inclusive():
+    decision = policy().evaluate(all_low(is_high_stakes=0.05))
     assert decision.route == "simple"
 
 

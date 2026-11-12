@@ -119,10 +119,12 @@ Control questions always use the `noul` type. Four questions are built in:
 
 | Question ID | Default threshold | What it checks |
 | :--- | :--- | :--- |
-| `is_complex` | `0.15` | Whether reasoning, planning, code or math exceeds the candidate’s declared capabilities. |
-| `needs_tools` | `0.15` | Whether tool orchestration or recovery exceeds the candidate’s declared capabilities. Supported simple tool calls are not automatically escalated. |
-| `needs_long_context` | `0.15` | Whether the current task requires global analysis across a long history or multiple documents. Extracting stated facts from a few recent messages is not long-context analysis. |
+| `is_complex` | `0.5` | Whether reasoning, planning, code or math exceeds the candidate’s declared capabilities. |
+| `needs_tools` | `0.5` | Whether tool orchestration or recovery exceeds the candidate’s declared capabilities. Supported simple tool calls are not automatically escalated. |
+| `needs_long_context` | `0.5` | Whether the current task requires global analysis across a long history or multiple documents. Extracting stated facts from a few recent messages is not long-context analysis. |
 | `is_high_stakes` | `0.05` | Whether the current task asks for high-risk medical, legal, financial, or safety conclusions, or irreversible actions. A past high-risk topic does not automatically escalate an ordinary factual extraction; follow-up requests for related advice remain high-risk. |
+
+The default thresholds are `0.5` for complex reasoning, tool orchestration and long context, and `0.05` for high stakes. Explicit `builtin_thresholds` values take precedence; custom questions still default to `0.15` when their threshold is omitted. A threshold bounds the SystemOne question probability, not the task error rate. These defaults apply only when routing is enabled; `shadow` mode still executes with the strong model.
 
 A custom question only needs `question` and `threshold`; its ID is generated as `custom_1`, `custom_2`, and so on. Built-in IDs are reserved and cannot be overridden. Every question returns a probability from `0` to `1`; **the simple model is used only when all probabilities are at or below their thresholds**. Any probability above its threshold, a missing or invalid answer, a Decision timeout, or a Decision error routes the request to the strong model. Incomplete decision input, unsupported media or unavailable dynamic tool declarations also select the strong model. Effective history is never silently truncated to enable a downgrade. After selection, a provider failure propagates; it never triggers a model switch. Late capability growth fails explicitly. Underlying cross-model fallbacks must be removed when routing is enabled.
 
