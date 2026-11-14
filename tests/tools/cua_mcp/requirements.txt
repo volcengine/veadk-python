@@ -1,0 +1,8 @@
+# Published baseline, pinned identically to the client default.
+# Current schema-description tests require the newer local candidate until it is
+# published. From the VeADK repository root, with a sibling cua-sandbox checkout:
+# uv build --wheel --out-dir /tmp/cua-mcp-candidate ../cua-sandbox/packages/agentkit-cua-mcp
+# uv pip install --python .venv/bin/python --reinstall /tmp/cua-mcp-candidate/agentkit_cua_mcp-1.0.0-py3-none-any.whl
+# uv run --no-sync pytest -q tests/tools/cua_mcp
+# Demo and bilingual integration guide: cua-sandbox repository, examples/agentkit-cua/.
+agentkit-cua-mcp @ https://browser-use-test.tos-cn-beijing.volces.com/agentkit-cua-mcp/1.0.0/agentkit_cua_mcp-1.0.0-py3-none-any.whl?revision=bdf9d949ae148fb3c9b6953fa67ec65bf136681502c0737971a3e0751f128840#sha256=bdf9d949ae148fb3c9b6953fa67ec65bf136681502c0737971a3e0751f128840
