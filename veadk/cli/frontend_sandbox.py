@@ -2967,12 +2967,17 @@ class SandboxAgentSessionService:
             raise SandboxSessionUnavailableError(
                 f"AgentKit Session 尚未就绪，当前状态：{status}。"
             )
-        token = secrets.token_urlsafe(32)
-        self._workspaces[(owner_id, session_id)] = (
-            cloud,
-            token,
-            time.monotonic() + STUDIO_SANDBOX_TTL_SECONDS,
-        )
+        # Read after the cloud lookup: another open may have issued a capability
+        # while this request was awaiting GetSession. Reuse it so existing tabs
+        # and in-flight asset requests keep working, without extending its TTL.
+        now = time.monotonic()
+        workspace = self._workspaces.get((owner_id, session_id))
+        if workspace is not None and workspace[2] > now:
+            _, token, expires_at = workspace
+        else:
+            token = secrets.token_urlsafe(32)
+            expires_at = now + STUDIO_SANDBOX_TTL_SECONDS
+        self._workspaces[(owner_id, session_id)] = (cloud, token, expires_at)
         return cloud, token
 
     async def delete(
