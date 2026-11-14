@@ -98,6 +98,39 @@ def _set_parallel_run_code_context(tool, tool_context, max_workers: int | None) 
         )
 
 
+def patch_adk_dynamic_agent_transfer() -> None:
+    """Resolve scheduler transfers against the agent instance that just ran."""
+    if get_adk_version() < Version("2.8.0"):
+        return
+
+    from google.adk.agents import BaseAgent
+    from google.adk.workflow import _dynamic_node_scheduler
+    from google.adk.workflow.utils import _transfer_utils
+
+    original = _transfer_utils.resolve_and_derive_transfer_context
+    if getattr(original, "_veadk_dynamic_transfer_patch", False):
+        return
+
+    @functools.wraps(original)
+    def resolve_transfer(
+        target_name, current_agent, root_agent, curr_ctx, curr_parent_ctx
+    ):
+        # The runner executes a clone but otherwise resolves against its template.
+        active_agent = getattr(curr_ctx, "node", None)
+        if isinstance(active_agent, BaseAgent):
+            current_agent = active_agent
+            root_agent = active_agent.root_agent
+        return original(
+            target_name, current_agent, root_agent, curr_ctx, curr_parent_ctx
+        )
+
+    resolve_transfer._veadk_dynamic_transfer_patch = True
+    _transfer_utils.resolve_and_derive_transfer_context = resolve_transfer
+    # ADK 2.8/2.9 import locally; 2.10/2.11 retain a module-level alias.
+    if hasattr(_dynamic_node_scheduler, "resolve_and_derive_transfer_context"):
+        _dynamic_node_scheduler.resolve_and_derive_transfer_context = resolve_transfer
+
+
 def patch_asyncio():
     """Patch asyncio to ignore 'Event loop is closed' error.
 
@@ -106,6 +139,7 @@ def patch_asyncio():
     - https://github.com/google/adk-python/pull/1420
     """
     patch_adk_workflow_agent_mode()
+    patch_adk_dynamic_agent_transfer()
 
     original_del = asyncio.base_subprocess.BaseSubprocessTransport.__del__
 
@@ -242,19 +276,33 @@ def patch_tracer() -> None:
 def patch_adk_sync_tool_thread_pool() -> None:
     """Enable ADK's tool thread pool for non-live ``run_async`` tool calls.
 
-    Google ADK exposes ``RunConfig.tool_thread_pool_config`` and already has a
-    thread-pool helper for sync tools, but some supported versions only consult
-    that config in the live-tool path. VeADK agents use the standard async flow,
-    so sync tools such as builtin ``run_code`` would otherwise block the event
-    loop and serialize same-turn tool calls.
+    ADK before 2.11 needs the helper for both RunConfig and Agent defaults. ADK 2.11
+    handles RunConfig natively, but still needs VeADK's Agent default and
+    parallel run_code session isolation.
     """
     try:
         from google.adk.flows.llm_flows import functions as adk_functions
+        from google.adk.tools.function_tool import FunctionTool
 
         if getattr(adk_functions, "_veadk_sync_tool_thread_pool_patched", False):
             return
 
-        original_call_tool_async = getattr(adk_functions, "__call_tool_async")
+        adk_version = get_adk_version()
+        native_thread_pool = adk_version >= Version("2.11.0")
+        if adk_version >= Version("2.10.0"):
+            # The compatibility module only re-exports this function; patch its
+            # defining module so real Runner calls use it too.
+            from google.adk.flows.llm_flows.tools import _caller as call_module
+
+            call_name = "_call_tool_async"
+        elif adk_version >= Version("2.9.0"):
+            from google.adk.flows.llm_flows import _tool_caller as call_module
+
+            call_name = "_call_tool_async"
+        else:
+            call_module = adk_functions
+            call_name = "__call_tool_async"
+        original_call_tool_async = getattr(call_module, call_name)
         original_handle_function_call_list_async = getattr(
             adk_functions, "handle_function_call_list_async"
         )
@@ -270,7 +318,16 @@ def patch_adk_sync_tool_thread_pool() -> None:
             max_workers = _resolve_tool_thread_pool_max_workers(tool, tool_context)
             _set_parallel_run_code_context(tool, tool_context, max_workers)
 
-            if max_workers is not None:
+            invocation_context = getattr(tool_context, "_invocation_context", None)
+            run_config = getattr(invocation_context, "run_config", None)
+            uses_native_pool = native_thread_pool and (
+                getattr(run_config, "tool_thread_pool_config", None) is not None
+            )
+            sync_function_tool = isinstance(tool, FunctionTool) and (
+                adk_functions._is_sync_tool(tool)
+            )
+            # Async tools such as AgentTool must keep their caller's event loop.
+            if max_workers is not None and not uses_native_pool and sync_function_tool:
                 return await call_tool_in_thread_pool(
                     tool,
                     args=args,
@@ -312,7 +369,7 @@ def patch_adk_sync_tool_thread_pool() -> None:
             finally:
                 _PARALLEL_RUN_CODE_CALL_COUNT.reset(token)
 
-        adk_functions.__call_tool_async = veadk_call_tool_async
+        setattr(call_module, call_name, veadk_call_tool_async)
         adk_functions.handle_function_call_list_async = (
             veadk_handle_function_call_list_async
         )

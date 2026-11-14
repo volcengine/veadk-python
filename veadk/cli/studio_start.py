@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
 from enum import Enum
 import importlib
 import importlib.machinery
@@ -127,7 +128,62 @@ class _DeferredGenaiTypeMeta(type):
             )
         load_real = cls.__dict__["_load_real_module"]
         target_name = cls.__dict__["_target_name"]
+        if attribute == "model_fields" and "_deferred_model_fields" in cls.__dict__:
+            return cls.__dict__["_deferred_model_fields"]()
         return getattr(getattr(load_real(), target_name), attribute)
+
+    def __instancecheck__(cls, instance: Any) -> bool:
+        load_real = cls.__dict__["_load_real_module"]
+        return isinstance(instance, getattr(load_real(), cls.__dict__["_target_name"]))
+
+
+def _deferred_genai_type(
+    target_name: str,
+    module_name: str,
+    load_real_module: Callable[[], ModuleType],
+) -> type[Any]:
+    def _validate(value: Any) -> Any:
+        target = getattr(load_real_module(), target_name)
+        try:
+            if isinstance(value, target):
+                return value
+        except TypeError:
+            pass
+        model_validate = getattr(target, "model_validate", None)
+        if callable(model_validate):
+            return model_validate(value)
+        from pydantic import ConfigDict, TypeAdapter
+
+        # GenAI aliases can include arbitrary types, as can an injected Client.
+        return TypeAdapter(
+            target, config=ConfigDict(arbitrary_types_allowed=True)
+        ).validate_python(value)
+
+    def _core_schema(cls: type[Any], source_type: Any, handler: Any) -> Any:
+        del cls, source_type, handler
+        from pydantic_core import core_schema
+
+        return core_schema.no_info_after_validator_function(
+            _validate, core_schema.any_schema()
+        )
+
+    def _json_schema(cls: type[Any], schema: Any, handler: Any) -> dict[str, Any]:
+        del cls, schema, handler
+        from pydantic import TypeAdapter
+
+        return TypeAdapter(getattr(load_real_module(), target_name)).json_schema()
+
+    return _DeferredGenaiTypeMeta(
+        target_name,
+        (),
+        {
+            "__module__": module_name,
+            "_target_name": target_name,
+            "_load_real_module": staticmethod(load_real_module),
+            "__get_pydantic_core_schema__": classmethod(_core_schema),
+            "__get_pydantic_json_schema__": classmethod(_json_schema),
+        },
+    )
 
 
 def _install_lazy_genai_types() -> ModuleType:
@@ -185,64 +241,58 @@ def _install_lazy_genai_types() -> ModuleType:
     _DeferredGenaiType.__module__ = name
     setattr(proxy, "Type", _DeferredGenaiType)
 
-    def _deferred_type(target_name: str) -> type[Any]:
-        def _validate(value: Any) -> Any:
-            target = getattr(_load_real_module(), target_name)
-            try:
-                if isinstance(value, target):
-                    return value
-            except TypeError:
-                pass
-            model_validate = getattr(target, "model_validate", None)
-            if callable(model_validate):
-                return model_validate(value)
-            from pydantic import ConfigDict, TypeAdapter
+    class _DeferredField:
+        def __init__(self, field_name: str, alias: str) -> None:
+            self.name = field_name
+            self.alias = alias
 
-            # GenAI aliases such as SchemaUnion include GenericAlias and
-            # UnionType, matching its own arbitrary-types model configuration.
-            return TypeAdapter(
-                target, config=ConfigDict(arbitrary_types_allowed=True)
-            ).validate_python(value)
+        def __getattr__(self, attribute: str) -> Any:
+            fields = _load_real_module().GenerateContentConfig.model_fields
+            return getattr(fields[self.name], attribute)
 
-        def _core_schema(
-            cls: type[Any],
-            source_type: Any,
-            handler: Any,
-        ) -> Any:
-            del cls, source_type, handler
-            from pydantic_core import core_schema
+    field_metadata: dict[str, Any] = {}
 
-            return core_schema.no_info_after_validator_function(
-                _validate,
-                core_schema.any_schema(),
-            )
+    def _generate_content_fields() -> dict[str, Any]:
+        if loaded:
+            return loaded[0].GenerateContentConfig.model_fields
+        if field_metadata:
+            return field_metadata
+        from pydantic.alias_generators import to_camel
 
-        def _json_schema(
-            cls: type[Any],
-            schema: Any,
-            handler: Any,
-        ) -> dict[str, Any]:
-            del cls, schema, handler
-            from pydantic import TypeAdapter
-
-            return TypeAdapter(getattr(_load_real_module(), target_name)).json_schema()
-
-        return _DeferredGenaiTypeMeta(
-            target_name,
-            (),
-            {
-                "__module__": name,
-                "_target_name": target_name,
-                "_load_real_module": staticmethod(_load_real_module),
-                "__get_pydantic_core_schema__": classmethod(_core_schema),
-                "__get_pydantic_json_schema__": classmethod(_json_schema),
-            },
-        )
+        # ADK reads names and aliases for argument hints during import. Derive
+        # them from the installed SDK without executing its generated models.
+        source = Path(str(spec.origin)).read_text(encoding="utf-8")
+        for node in ast.parse(source).body:
+            if (
+                not isinstance(node, ast.ClassDef)
+                or node.name != "GenerateContentConfig"
+            ):
+                continue
+            for field in node.body:
+                if not isinstance(field, ast.AnnAssign) or not isinstance(
+                    field.target, ast.Name
+                ):
+                    continue
+                field_name = field.target.id
+                alias = to_camel(field_name)
+                if isinstance(field.value, ast.Call):
+                    for keyword in field.value.keywords:
+                        if (
+                            keyword.arg == "alias"
+                            and isinstance(keyword.value, ast.Constant)
+                            and isinstance(keyword.value.value, str)
+                        ):
+                            alias = keyword.value.value
+                field_metadata[field_name] = _DeferredField(field_name, alias)
+            return field_metadata
+        raise ImportError("Unable to locate Google GenAI GenerateContentConfig fields")
 
     def _load_attribute(attribute: str) -> Any:
         if attribute.startswith("__"):
             raise AttributeError(f"module {name!r} has no attribute {attribute!r}")
-        value = _deferred_type(attribute)
+        value = _deferred_genai_type(attribute, name, _load_real_module)
+        if attribute == "GenerateContentConfig":
+            value._deferred_model_fields = staticmethod(_generate_content_fields)
         setattr(proxy, attribute, value)
         return value
 
@@ -340,6 +390,12 @@ def _install_studio_genai_imports() -> None:
             "__version__": ("google.genai.version", "__version__"),
         },
     )
+    if "google.genai.client" not in sys.modules:
+        package.Client = _deferred_genai_type(
+            "Client",
+            "google.genai.client",
+            lambda: importlib.import_module("google.genai.client"),
+        )
     types_module = _install_lazy_genai_types()
     setattr(package, "types", types_module)
     models_module = _install_lazy_genai_models()
