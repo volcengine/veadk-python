@@ -15,6 +15,8 @@
 import json
 from dataclasses import dataclass
 
+import pytest
+
 from opentelemetry import context as context_api
 from opentelemetry.sdk import trace as trace_sdk
 
@@ -307,6 +309,39 @@ def test_trace_tool_call_skips_content_when_env_false(monkeypatch):
         assert "cozeloop.output" not in span.attributes
         assert "gen_ai.input" not in span.attributes
         assert "gen_ai.output" not in span.attributes
+
+
+class _DeferredResponseTool(_FakeTool):
+    # Mirrors ADK's task-delegation tool, whose response the framework
+    # synthesizes after the sub-agent finishes.
+    _defers_response = True
+
+
+class _LongRunningTool(_FakeTool):
+    is_long_running = True
+
+
+@pytest.mark.parametrize("tool", [_DeferredResponseTool(), _LongRunningTool()])
+def test_trace_tool_call_marks_a_deferred_response_as_pending(monkeypatch, tool):
+    monkeypatch.setenv("OBSERVABILITY_OPENTELEMETRY_TRACE_CONTENT", "true")
+
+    with _start_test_span("execute_tool lookup") as span:
+        telemetry.trace_tool_call(tool, {"request": "check"}, None)
+
+        for name in ("gen_ai.tool.output", "cozeloop.output", "gen_ai.output"):
+            assert json.loads(span.attributes[name]) == {"status": "pending"}
+
+
+def test_trace_tool_call_keeps_unknown_output_when_a_response_is_missing(
+    monkeypatch,
+):
+    monkeypatch.setenv("OBSERVABILITY_OPENTELEMETRY_TRACE_CONTENT", "true")
+
+    with _start_test_span("execute_tool lookup") as span:
+        telemetry.trace_tool_call(_FakeTool(), {"query": "q"}, None)
+
+        for name in ("gen_ai.tool.output", "cozeloop.output", "gen_ai.output"):
+            assert span.attributes[name] == "<unknown_tool_output>"
 
 
 def test_apmplus_tool_metrics_skip_token_usage_when_tool_content_missing():

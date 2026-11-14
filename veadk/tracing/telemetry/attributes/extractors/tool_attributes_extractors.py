@@ -115,6 +115,14 @@ def tool_gen_ai_tool_name(params: ToolAttributesParams) -> ExtractorResponse:
     return ExtractorResponse(content=params.tool.name or "<unknown_tool_name>")
 
 
+def _responds_later(tool) -> bool:
+    """Whether a tool's response can arrive after its call returns."""
+    return bool(
+        getattr(tool, "is_long_running", False)
+        or getattr(tool, "_defers_response", False)
+    )
+
+
 def tool_gen_ai_tool_output(params: ToolAttributesParams) -> ExtractorResponse:
     """Extract tool output data for span attributes.
 
@@ -125,10 +133,18 @@ def tool_gen_ai_tool_output(params: ToolAttributesParams) -> ExtractorResponse:
         params: Tool execution parameters containing function response event
 
     Returns:
-        ExtractorResponse: Response containing JSON serialized tool output data
+        ExtractorResponse: Response containing JSON serialized tool output data,
+            ``{"status": "pending"}`` when a long-running or deferred-response
+            tool has not responded yet
     """
     function_responses = get_event_function_responses(params.function_response_event)
     if not function_responses:
+        if _responds_later(params.tool):
+            # The call was accepted and its response arrives later (a
+            # long-running tool, or ADK's task delegation, whose response is
+            # synthesized once the sub-agent finishes): record that state
+            # instead of an output that looks missing.
+            return ExtractorResponse(content=safe_json_serialize({"status": "pending"}))
         return ExtractorResponse(content="<unknown_tool_output>")
     function_response_obj = function_responses[0]
     if hasattr(function_response_obj, "model_dump"):
