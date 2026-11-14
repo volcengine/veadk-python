@@ -160,3 +160,69 @@ def test_tracing_file_to_evalset():
     )
 
     os.remove(tracing_file_path)
+
+
+def test_tracing_file_creates_isolated_eval_case_per_sorted_trace(tmp_path):
+    trace_a = 101
+    trace_b = 202
+
+    def call_llm(trace_id, start_time, app_name, user_id, prompt="", completion=""):
+        return {
+            "name": "call_llm",
+            "trace_id": trace_id,
+            "start_time": start_time,
+            "attributes": {
+                "gen_ai.app.name": app_name,
+                "gen_ai.user.id": user_id,
+                "gen_ai.prompt.0.content": prompt,
+                "gen_ai.completion.0.content": completion,
+            },
+        }
+
+    def execute_tool(start_time, tool_name):
+        return {
+            "name": f"execute_tool {tool_name}",
+            "trace_id": trace_a,
+            "start_time": start_time,
+            "attributes": {
+                "gen_ai.tool.name": tool_name,
+                "gen_ai.tool.input": json.dumps({"parameters": {"order": tool_name}}),
+                "gen_ai.tool.output": json.dumps({"id": f"call-{tool_name}"}),
+            },
+        }
+
+    tracing_data = [
+        call_llm(trace_a, 40, "app-a", "user-a", completion="answer-a"),
+        call_llm(trace_b, 60, "app-b", "user-b", completion="answer-b"),
+        execute_tool(30, "second"),
+        call_llm(trace_b, 50, "app-b", "user-b", prompt="question-b"),
+        call_llm(trace_a, 10, "app-a", "user-a", prompt="question-a"),
+        execute_tool(20, "first"),
+    ]
+    tracing_file_path = tmp_path / "tracing.json"
+    tracing_file_path.write_text(json.dumps(tracing_data))
+
+    eval_set = BaseEvaluator(
+        agent=None, name="test_evaluator"
+    )._build_eval_set_from_tracing_json(str(tracing_file_path))
+
+    assert len(eval_set.eval_cases) == 2
+    eval_cases = {
+        eval_case.session_input.app_name: eval_case for eval_case in eval_set.eval_cases
+    }
+
+    case_a = eval_cases["app-a"]
+    assert case_a.session_input.user_id == "user-a"
+    assert case_a.creation_timestamp == 10 / 1e9
+    assert case_a.conversation[0].user_content.parts[0].text == "question-a"
+    assert case_a.conversation[0].final_response.parts[0].text == "answer-a"
+    assert [
+        tool.name for tool in case_a.conversation[0].intermediate_data.tool_uses
+    ] == ["first", "second"]
+
+    case_b = eval_cases["app-b"]
+    assert case_b.session_input.user_id == "user-b"
+    assert case_b.creation_timestamp == 50 / 1e9
+    assert case_b.conversation[0].user_content.parts[0].text == "question-b"
+    assert case_b.conversation[0].final_response.parts[0].text == "answer-b"
+    assert case_b.conversation[0].intermediate_data.tool_uses == []
