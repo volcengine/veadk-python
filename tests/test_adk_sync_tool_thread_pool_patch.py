@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 import pytest
@@ -21,13 +22,18 @@ from google.adk.agents import LlmAgent, RunConfig
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.agents.run_config import ToolThreadPoolConfig
 from google.adk.flows.llm_flows import functions
+from google.adk.models.base_llm import BaseLlm
+from google.adk.models.llm_response import LlmResponse
+from google.adk.runners import InMemoryRunner
 from google.adk.sessions.in_memory_session_service import InMemorySessionService
 from google.adk.sessions.session import Session
+from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
 from veadk import Agent
+from veadk.tools.builtin_tools import run_code as run_code_module
 from veadk.utils.patches import patch_adk_sync_tool_thread_pool
 
 
@@ -202,3 +208,149 @@ async def test_run_code_uses_agent_thread_pool_when_configured() -> None:
     assert start_gap < 0.1
     assert parallel_call_counts == {"a": 2, "b": 2}
     assert _overlapped(windows)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configure_runner", [False, True])
+async def test_async_tools_keep_the_callers_event_loop(configure_runner) -> None:
+    caller_loop = asyncio.get_running_loop()
+
+    async def async_tool() -> dict:
+        await asyncio.sleep(0)
+        return {"same_loop": asyncio.get_running_loop() is caller_loop}
+
+    pool = ToolThreadPoolConfig(max_workers=2)
+    tool = FunctionTool(async_tool)
+    agent = Agent(
+        name="agent",
+        model_name="test-model",
+        model_provider="openai",
+        model_api_key="test-key",
+        model_api_base="http://example.com",
+        tools=[tool],
+        tool_thread_pool_config=None if configure_runner else pool,
+    )
+    response = await functions.handle_function_call_list_async(
+        _ctx(
+            agent, RunConfig(tool_thread_pool_config=pool if configure_runner else None)
+        ),
+        [types.FunctionCall(id="async-call", name="async_tool", args={})],
+        {tool.name: tool},
+    )
+
+    assert response.get_function_responses()[0].response == {"same_loop": True}
+
+
+class _ToolCallingModel(BaseLlm):
+    tool_name: str = "run_code"
+
+    async def generate_content_async(self, llm_request, stream=False):
+        del stream
+        has_response = any(
+            part.function_response
+            for content in llm_request.contents
+            for part in content.parts or []
+        )
+        if has_response:
+            parts = [types.Part(text="done")]
+        elif self.tool_name == "run_code":
+            parts = [
+                types.Part(
+                    function_call=types.FunctionCall(
+                        id=f"call-{label}",
+                        name="run_code",
+                        args={"code": label, "language": "python3"},
+                    )
+                )
+                for label in ("a", "b")
+            ]
+        else:
+            parts = [
+                types.Part(
+                    function_call=types.FunctionCall(
+                        name=self.tool_name, args={"request": "run both tools"}
+                    )
+                )
+            ]
+        yield LlmResponse(content=types.Content(role="model", parts=parts))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("agent_workers", "run_workers", "nested", "overlap"),
+    [
+        (2, None, False, True),
+        (2, 1, False, False),
+        (None, 2, False, True),
+        (2, None, True, True),
+    ],
+)
+async def test_runner_preserves_thread_pool_config_and_run_code_isolation(
+    monkeypatch, agent_workers, run_workers, nested, overlap
+) -> None:
+    windows: dict[str, tuple[float, float]] = {}
+    session_ids: dict[str, str] = {}
+
+    def invoke(**kwargs):
+        label = kwargs["code"]
+        started = time.perf_counter()
+        session_ids[label] = kwargs["tool_user_session_id"]
+        time.sleep(0.1)
+        windows[label] = (started, time.perf_counter())
+        return {"Result": {"Result": label}}
+
+    monkeypatch.delenv("VEADK_RUN_CODE_ISOLATE_PARALLEL_CALLS", raising=False)
+    monkeypatch.setattr(run_code_module, "resolve_agentkit_tool_id", lambda _: "tool")
+    monkeypatch.setattr(
+        run_code_module,
+        "get_agentkit_endpoint_config",
+        lambda: ("service", "region", "host", "https"),
+    )
+    monkeypatch.setattr(run_code_module, "invoke_agentkit_run_code", invoke)
+    agent = Agent(
+        name="worker",
+        model=_ToolCallingModel(model="fake"),
+        model_api_key="test-key",
+        tools=[run_code_module.run_code],
+        tool_thread_pool_config=(
+            ToolThreadPoolConfig(max_workers=agent_workers)
+            if agent_workers is not None
+            else None
+        ),
+    )
+    if nested:
+        agent = Agent(
+            name="parent",
+            model=_ToolCallingModel(model="fake", tool_name="worker"),
+            model_api_key="test-key",
+            tools=[AgentTool(agent=agent)],
+            tool_thread_pool_config=ToolThreadPoolConfig(max_workers=1),
+        )
+    runner = InMemoryRunner(agent=agent, app_name="test-app")
+    await runner.session_service.create_session(
+        app_name="test-app", user_id="user", session_id="session"
+    )
+    run_config = RunConfig(
+        tool_thread_pool_config=(
+            ToolThreadPoolConfig(max_workers=run_workers)
+            if run_workers is not None
+            else None
+        )
+    )
+    original_config = run_config.model_dump()
+    events = [
+        event
+        async for event in runner.run_async(
+            user_id="user",
+            session_id="session",
+            new_message=types.UserContent(parts=[types.Part(text="run")]),
+            run_config=run_config,
+        )
+    ]
+
+    assert _overlapped(windows) is overlap
+    assert session_ids["a"].endswith("_call-a")
+    assert session_ids["b"].endswith("_call-b")
+    assert session_ids["a"] != session_ids["b"]
+    assert run_config.model_dump() == original_config
+    assert events[-1].is_final_response()

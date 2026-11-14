@@ -1110,6 +1110,102 @@ with tempfile.TemporaryDirectory() as agents_dir:
     )
 
 
+def test_studio_deferred_genai_fields_preserve_aliases_and_argument_hints() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+import tempfile
+
+from veadk.cli.studio_start import studio_fast_api_factory
+
+with tempfile.TemporaryDirectory() as agents_dir:
+    studio_fast_api_factory()(agents_dir=agents_dir, web=False)
+
+from google.genai import types
+
+loaded = types._veadk_real_module_loaded
+fields = types.GenerateContentConfig.model_fields
+aliases = {name: field.alias for name, field in fields.items()}
+assert aliases["top_p"] == "topP"
+assert not loaded()
+
+from google.adk.agents import llm_agent
+from pydantic import ValidationError
+
+if hasattr(llm_agent, "_GENERATE_CONTENT_FIELD_NAMES"):
+    try:
+        llm_agent.LlmAgent(name="test", model="unused", topP=0.5)
+    except ValidationError as error:
+        assert "GenerateContentConfig" in str(error)
+        assert "top_p" in str(error)
+    else:
+        raise AssertionError("misplaced generation field was accepted")
+assert not loaded()
+
+annotation = fields["temperature"].annotation
+assert loaded()
+real_fields = sys.modules["google.genai.types"].GenerateContentConfig.model_fields
+assert aliases == {name: field.alias for name, field in real_fields.items()}
+assert annotation == real_fields["temperature"].annotation
+assert types.GenerateContentConfig.model_fields is real_fields
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_studio_deferred_genai_client_preserves_injection_and_validation() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+import tempfile
+
+from veadk.cli.studio_start import studio_fast_api_factory
+
+with tempfile.TemporaryDirectory() as agents_dir:
+    studio_fast_api_factory()(agents_dir=agents_dir, web=False)
+
+from google import genai
+from google.adk.models.google_llm import Gemini
+from pydantic import ConfigDict, TypeAdapter, ValidationError
+
+deferred_client = genai.Client
+adapter = TypeAdapter(deferred_client, config=ConfigDict(arbitrary_types_allowed=True))
+assert "google.genai.client" not in sys.modules
+client = deferred_client(api_key="test-only-key")
+try:
+    assert type(client) is sys.modules["google.genai.client"].Client
+    assert isinstance(client, deferred_client)
+    assert adapter.validate_python(client) is client
+    if "client" in Gemini.model_fields:
+        assert Gemini(client=client).client is client
+        validate = lambda value: Gemini(client=value)
+    else:
+        validate = adapter.validate_python
+    try:
+        validate(object())
+    except ValidationError:
+        pass
+    else:
+        raise AssertionError("invalid Client instance was accepted")
+finally:
+    client.close()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_studio_deferred_genai_types_accept_evaluation_output_schema() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """
