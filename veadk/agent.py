@@ -39,6 +39,7 @@ from google.adk.examples.base_example_provider import BaseExampleProvider
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from typing_extensions import Any
 
+from veadk.decision import DecisionConfig, load_decision_config
 from veadk.config import settings
 from veadk.consts import DEFAULT_AGENT_NAME, DEFAULT_MODEL_EXTRA_CONFIG
 from veadk.knowledgebase import KnowledgeBase
@@ -364,6 +365,9 @@ class Agent(LlmAgent):
     as tools for this agent. The cloud app must also mount the tunnel routes via
     `veadk.tunnel.mount_tunnel`/`mount_tunnel_if_enabled`."""
 
+    decision: DecisionConfig | None = Field(default=None, exclude=True)
+    """Shared SystemOne connection; does not enable routing or content safety."""
+
     content_safety: Any = Field(default=None, exclude=True)
     """Opt-in content-safety configuration.
 
@@ -375,6 +379,20 @@ class Agent(LlmAgent):
     :class:`veadk.Runner` mounts the resolved plugin automatically. When
     constructing ``google.adk.apps.App`` manually, pass
     ``plugins=agent.content_safety_plugins``.
+    """
+
+    query_routing: Any = Field(default=None, exclude=True)
+    """Opt-in query routing between a strong model and manually listed cheap models.
+
+    ``None`` (default) uses a ``query_routing`` block from ``config.yaml`` when
+    one exists, so a project without that block keeps its existing behavior.
+    ``False`` disables routing explicitly. ``True`` requires the YAML block.
+    A mapping or :class:`veadk.configs.routing_configs.QueryRoutingConfig`
+    supplies the configuration directly.
+
+    Routing is only supported by the ADK runtime. It preserves the Agent's
+    configured model as the strong tier and delegates cheap-tier calls to
+    prebuilt per-tier model instances.
     """
 
     def model_post_init(self, __context: Any) -> None:
@@ -644,6 +662,8 @@ class Agent(LlmAgent):
             else:
                 self.after_agent_callback = dataset_auto_gen_callback
 
+        self._setup_query_routing()
+
         logger.info(f"VeADK version: {VERSION}")
 
         logger.info(f"{self.__class__.__name__} `{self.name}` init done.")
@@ -661,6 +681,71 @@ class Agent(LlmAgent):
 
             check_agent_runtime_support(self, self.runtime)
 
+    def _setup_query_routing(self) -> None:
+        """Wrap the built model when query routing is configured.
+
+        The configuration is resolved after the strong model exists, so a
+        project without a ``query_routing`` block is untouched and keeps the
+        exact model instance it built above.
+        """
+
+        from veadk.routing.factory import (
+            build_query_routing,
+            resolve_query_routing_config,
+        )
+
+        config = resolve_query_routing_config(self.query_routing)
+        if config is None:
+            return
+        if self.runtime != "adk":
+            raise ValueError(
+                "query_routing is only supported by the ADK runtime; "
+                f"got runtime={self.runtime}"
+            )
+
+        if self.decision is None:
+            self.decision = load_decision_config()
+        router, _ = build_query_routing(config, self, decision=self.decision)
+        self.query_routing = config
+        self.model = router
+        from veadk.routing.agent_tool import bind_sub_agents
+
+        bind_sub_agents(self)
+
+    @property
+    def canonical_model(self):
+        from veadk.routing.context import get_turn_context
+        from veadk.routing.llm import RoutingLlm
+
+        turn = get_turn_context()
+        if turn is not None:
+            return turn.model
+        if isinstance(self.model, RoutingLlm):
+            return self.model.strong_model
+        return super().canonical_model
+
+    @property
+    def canonical_before_model_callbacks(self):
+        from veadk.routing.context import get_turn_context
+        from veadk.routing.execution import bind_request
+
+        callbacks = super().canonical_before_model_callbacks
+        return (
+            [*callbacks, bind_request] if get_turn_context() is not None else callbacks
+        )
+
+    @property
+    def canonical_before_tool_callbacks(self):
+        from veadk.routing.context import get_turn_context
+        from veadk.routing.tool_arguments import validate_tool_arguments
+
+        callbacks = super().canonical_before_tool_callbacks
+        return (
+            [*callbacks, validate_tool_arguments]
+            if get_turn_context() is not None
+            else callbacks
+        )
+
     def update_model(self, model_name: str):
         """Point the agent at a different model.
 
@@ -674,6 +759,13 @@ class Agent(LlmAgent):
         Args:
             model_name (str): The new model name, without a provider prefix.
         """
+        from veadk.routing.llm import RoutingLlm
+
+        if isinstance(self.model, RoutingLlm):
+            raise ValueError(
+                "update_model is not supported while query_routing is enabled; "
+                "configure strong_model in query_routing instead"
+            )
         logger.info(f"Updating model to {model_name}")
         self.model_name = model_name
         self.model = self.model.model_copy(
@@ -878,6 +970,7 @@ class Agent(LlmAgent):
 
     @property
     def _llm_flow(self) -> BaseLlmFlow:
+        from veadk.routing.execution import prepare_flow
         from google.adk.flows.llm_flows.auto_flow import AutoFlow
         from google.adk.flows.llm_flows.single_flow import SingleFlow
 
@@ -890,16 +983,16 @@ class Agent(LlmAgent):
 
             if self.enable_supervisor:
                 logger.debug(f"Enable supervisor flow for agent: {self.name}")
-                return SupervisorSingleFlow(supervised_agent=self)
+                return prepare_flow(SupervisorSingleFlow(supervised_agent=self))
             else:
-                return SingleFlow()
+                return prepare_flow(SingleFlow())
         else:
             from veadk.flows.supervise_auto_flow import SupervisorAutoFlow
 
             if self.enable_supervisor:
                 logger.debug(f"Enable supervisor flow for agent: {self.name}")
-                return SupervisorAutoFlow(supervised_agent=self)
-            return AutoFlow()
+                return prepare_flow(SupervisorAutoFlow(supervised_agent=self))
+            return prepare_flow(AutoFlow())
 
     async def _run_async_impl(
         self, ctx: "InvocationContext"
@@ -917,6 +1010,16 @@ class Agent(LlmAgent):
             return
 
         if self.runtime == "adk":
+            from veadk.routing.context import get_turn_context
+            from veadk.routing.execution import run_routed, routing_owner
+
+            if routing_owner(self) is not None or get_turn_context() is not None:
+                async with aclosing(
+                    run_routed(self, ctx, super()._run_async_impl)
+                ) as events:
+                    async for event in events:
+                        yield event
+                return
             # A transfer can close this wrapper before the LLM stream ends.
             # Close it in the same task so tracing contexts do not leak into
             # async-generator finalization or the receiving sub-agent.

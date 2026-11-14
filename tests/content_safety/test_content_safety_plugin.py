@@ -83,10 +83,6 @@ def config(*, on_error="allow", questions=None):
                     "threshold": 0.5,
                 }
             },
-            "decision": {
-                "api_url": "https://systemone.example",
-                "api_key": "k",
-            },
         }
     )
 

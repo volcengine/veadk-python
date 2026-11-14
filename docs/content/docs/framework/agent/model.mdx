@@ -15,6 +15,7 @@ VeADK 默认基于 [LiteLLM](https://github.com/BerriAI/litellm) 构建模型客
 | `enable_responses` | `bool` | `False` | 启用方舟 Responses API，详见 [Responses API 支持](/cn/docs/framework/agent/responses-api)。 |
 | `enable_responses_cache` | `bool` | `True` | 在 Responses API 下复用 `previous_response_id` 做多轮续接与缓存，仅在 `enable_responses=True` 时生效。 |
 | `context_cache_config` | `ContextCacheConfig` | `None` | 上下文缓存配置，用于降低长上下文的重复计算成本。 |
+| `query_routing` | `bool \| dict \| QueryRoutingConfig` | `None` | 查询分级与模型路由。`None` 自动读取 `config.yaml` 的 `query_routing` 配置，`False` 显式关闭。详见[查询分级与模型路由](#查询分级与模型路由)。 |
 
 ## 使用不同模型
 
@@ -35,6 +36,123 @@ agent = Agent(
 ```python title="agent.py"
 agent = Agent(model_name=["doubao-seed-1-8-251228", "deepseek-r1-250528"])
 ```
+
+## 查询分级与模型路由
+
+SystemOne 在每个用户 turn 开始时，根据有效历史、指令、工具声明及候选模型能力选择一次模型。工具循环、嵌套 AgentTool 和子 Agent 转交全程保持该选择；下一个用户 turn 重新判断。该能力默认关闭，只有显式配置才生效；不配置时保留原有执行行为。
+
+在项目根目录的 `config.yaml` 中新增配置块：
+
+```yaml title="config.yaml"
+decision:
+  model: doubao-seed-2-1-lite-260915
+
+query_routing:
+  simple_models:
+    - doubao-seed-2-1-lite-260915
+  # strong_model: kimi-k3-1-pro-261024  # 可选；默认使用 Agent 的 model_name
+  mode: shadow  # 先观察；设为 enforce 才实际执行路由
+  decision_timeout: 2.0
+  questions:
+    - question: 回答是否需要最新的实时信息？
+      threshold: 0.2
+```
+
+Agent 启动时会自动发现当前工作目录及上级目录中的 `config.yaml`，无需额外代码：
+
+```python title="agent.py"
+agent = Agent(model_name="kimi-k3-1-pro-261024")
+```
+
+也可以直接传入字典：`Agent(query_routing={...})`；显式关闭则传 `query_routing=False`。
+
+| 字段 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `simple_models` | `list[str \| dict]` | 必填 | 低成本模型列表，至少一个。按列出顺序选择第一个满足当前请求能力要求的模型。字符串等价于只声明 `name` 的字典。 |
+| `strong_model` | `str` | Agent 的 `model_name` | 强模型名称。与 Agent 的主模型不同时，用同一套连接信息单独构建。 |
+| `mode` | `"enforce" \| "shadow"` | `"shadow"` | `shadow` 只记录分级结果，所有请求仍走强模型，便于观察效果后再切换。 |
+| `decision_timeout` | `float` | `2.0` | 单次分级超时（秒），范围 `(0, 30]`。超时按强模型处理。 |
+| `builtin_thresholds` | `dict[str, float]` | `{}` | 可覆盖内置问题阈值，范围 `[0, 1]`；正式执行前应使用代表性查询校准。 |
+| `questions` | `list[str \| dict]` | `[]` | 追加到四个内置问题之后的自定义问题。字符串等价于 `{question: ...}`。 |
+
+
+根级 `decision` 由查询路由和内容安全共用，配置它不会启用任何功能。代码中通过 `Agent(decision=DecisionConfig(...))` 显式传入不可变连接配置；各功能独立创建客户端、管理问题。连接只在公共位置配置，不放在功能内部。
+
+| 配置项 | 必填 | 默认值 / 规则 |
+| :--- | :--- | :--- |
+| `decision.api_url` | 否 | 从 Agent 的方舟地址推导 `/api/v1/systemone`；使用自定义网关时必填。 |
+| `decision.api_key` | 否 | 复用 Agent 的方舟密钥；非方舟决策地址必须显式填写。 |
+| `decision.model` | 否 | `doubao-seed-2-1-lite-260915`，用于 SystemOne 决策的模型。 |
+
+`DECISION_API_URL`、`DECISION_API_KEY`、`DECISION_MODEL` 可覆盖 YAML。覆盖已配置的目标地址时，必须同时提供对应的 `DECISION_API_KEY`。显式构造 `DecisionConfig` 不读取文件或环境变量。问题、阈值及 `decision_timeout` 归各功能管理；修改路由规则不会修改内容安全规则。
+
+```python
+from veadk import Agent
+from veadk.decision import DecisionConfig
+
+agent = Agent(
+    name="router",
+    decision=DecisionConfig(model="doubao-seed-2-1-lite-260915"),
+    query_routing={"simple_models": ["doubao-seed-2-1-lite-260915"]},
+)
+```
+
+每个 `simple_models` 条目可声明能力；未声明的能力一律视为不支持：
+
+| 能力字段 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `name` | `str` | 必填 | 模型名称，也可写成 `model` 或 `model_name`。 |
+| `provider` | `str` | Agent provider | 无前缀名称使用的 LiteLLM provider。 |
+| `api` | `str` | Agent 协议 | `chat_completions` 或 `responses`（方舟 Responses 适配器）。 |
+| `api_base` | `str` | Agent endpoint | 独立 endpoint；不同 endpoint 必须显式配置凭据。 |
+| `api_key_env` / `api_key` | `str` | Agent 凭据 | 环境变量名或密钥值，二者互斥；推荐 `api_key_env`。 |
+| `extra_config` | `dict` | `{}` | Provider 选项，不得覆盖路由、历史及连接字段。独立 endpoint 不继承 Agent 的 provider 选项。 |
+| `supports_tools` | `bool` | `False` | 是否支持工具调用。 |
+| `capability_description` | `str \| None` | `None` | 可选，1–2000 字符。向 SystemOne 说明候选模型经验证的适用任务、限制及工具依赖；不是提示词覆盖，不替代能力标记或阈值，也不自动保证质量。不得包含凭据。 |
+| `supports_media` | `bool` | `False` | 是否支持图片、音频、视频或文件输入。 |
+| `supports_structured_output` | `bool` | `False` | 是否支持结构化输出。 |
+| `max_context_chars` | `int` | `32000` | 包含指令、工具、schema 和历史的字符预算；媒体按固定成本估算，不等同于 tokenizer 精确的上下文窗口保证。 |
+
+在 enforce 模式下，工具执行前会按工具声明的 schema 校验参数。明确声明为整数的十进制整数字符串可无损转换；小数、布尔值及歧义格式不会被强制转成整数。不合法的参数返回不包含原始参数值的结构化错误，由本 turn 已选择的模型纠正，整个根 turn（含嵌套 Agent）最多返回两次纠正反馈，随后明确报错。已经执行的工具不会因此被自动重试。工具没有参数 schema 时保持原有行为；schema 的引用必须为本地引用。Responses 重放会将同一条模型消息中的说明文本置于结构化工具调用之前，保留全部文本、调用 ID、参数和工具结果，避免在工具调用与结果之间插入模型消息。未启用路由以及 shadow 模式均保留原有工具参数行为。
+
+内部控制问题固定为 `noul` 类型，内置四个：
+
+| 问题 ID | 默认阈值 | 判断内容 |
+| :--- | :--- | :--- |
+| `is_complex` | `0.5` | 推理、规划、代码或数学是否超出候选模型已声明的能力。 |
+| `needs_tools` | `0.5` | 工具编排或恢复是否超出候选模型已声明的能力；已支持的简单工具调用不会因此自动升级。 |
+| `needs_long_context` | `0.5` | 当前任务是否需要跨较长历史或多份材料做全局分析；从少量最近消息提取已给出的事实不属于长上下文分析。 |
+| `is_high_stakes` | `0.05` | 当前任务是否要求医疗、法律、金融、安全等高风险结论或不可撤销操作；历史出现高风险主题不会自动将当前的普通事实提取升级，但继续追问相关建议仍属于高风险。 |
+
+默认阈值为：复杂推理、工具编排、长上下文 `0.5`，高风险 `0.05`。`builtin_thresholds` 中显式填写的值优先；自定义问题省略阈值时仍使用 `0.15`。阈值是 SystemOne 问题概率的上限，不是任务错误率。未启用路由时不生效，`shadow` 模式仍由强模型执行。
+
+自定义问题只需提供 `question` 与 `threshold`，ID 自动生成为 `custom_1`、`custom_2`……；内置 ID 保留，不能覆盖。所有问题都返回 `0` 到 `1` 的概率，**只有全部不超过各自阈值时才走简单模型**；任一问题超过阈值、返回值缺失或非法、Decision 超时或报错时，都走强模型。决策输入不完整、媒体无法表示或动态工具声明不可用时也选择强模型，不会静默截断有效历史以促成降级。选择确定后，provider 失败直接传播，不切换模型；后续请求超出候选能力时显式报错。开启路由时必须移除底层跨模型 fallback。
+
+只有目标、endpoint、身份、请求配置及有效历史一致时才复用 Responses 续链。切换模型（包括 A → B → A）会使用完整业务历史重建；ID 过期时在同一模型上携带完整历史重试。不同目标间不重放 provider 专属的推理内容及签名。`enable_responses_cache=False` 始终发送完整历史。服务端缓存仍需对应模型的缓存服务权限；Responses 续接也可使用 `store=True` 与 `extra_body={"caching": {"type": "disabled"}}`。
+
+嵌套 AgentTool 保持独立 session，并继承同一个根决策。原生 ADK LlmAgent 及标准子 Agent 工作流通过独立副本适配；自定义原生 LlmAgent 子类需显式实现 turn 绑定。恢复执行使用 session 中持久化的决策，要求路由配置不变。双向 Live 执行及外部 runtime 不在此 ADK 文本 turn 契约内。同一 session 的并发执行仍需应用侧串行化；跨进程同时分级不提供分布式锁。
+
+模型事件提供 `veadk_query_routing` 元数据，包含根 turn ID、路由、模型及目标摘要。决策事件还包含原因、耗时及服务上报的输入 token 数，不包含凭据或原始 query。
+
+```python title="agent.py"
+agent = Agent(
+    model_name="strong-model",
+    query_routing={
+        "mode": "enforce",
+        "simple_models": [{
+            "name": "small-model",
+            "provider": "openai",
+            "api": "chat_completions",
+            "api_base": "https://models.example.com/v1",
+            "api_key_env": "SMALL_MODEL_API_KEY",
+            "supports_tools": True,
+        }],
+    },
+)
+```
+
+真实协议测试需显式开启：设置 `VEADK_QUERY_ROUTING_LIVE=1`、`MODEL_AGENT_API_KEY` 和 `MODEL_AGENT_API_BASE`，执行 `uv run --extra dev pytest tests/e2e/test_query_routing_live.py`。可通过 `VEADK_QUERY_ROUTING_SIMPLE_MODEL` 和 `VEADK_QUERY_ROUTING_STRONG_MODEL` 指定模型。测试验证协议与 turn 契约；生产路由质量及成本收益仍需代表性任务集评测。独立进程 HTTP 验收可执行 `uv run --extra dev pytest tests/e2e/test_query_routing_http_live.py`，测试会启动 ADK API Server 并通过真实 TCP 调用 `/run`、`/run_sse`。开启路由不保证任意模型都满足工具协议；例如输出不存在的工具名会按 ADK 契约报错，中止后未获得结果的工具调用还可能使后续历史重放被 provider 拒绝。应用需处理失败会话，路由不会静默删除工具历史或切换模型来掩盖错误。
+
 
 ## 自定义模型客户端
 

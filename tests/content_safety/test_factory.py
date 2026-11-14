@@ -21,13 +21,16 @@ from types import SimpleNamespace
 
 import pytest
 
+from veadk.decision import (
+    DecisionConfig,
+    DecisionConfigError,
+    resolve_decision_connection,
+)
 from veadk.content_safety import (
     ContentSafetyConfig,
-    ContentSafetyConfigError,
     build_content_safety,
 )
-from veadk.content_safety.factory import (
-    _ark_defaults,
+from veadk.decision.connection import (
     _is_ark_api_base,
     _systemone_url,
 )
@@ -68,11 +71,6 @@ def decision_config():
         {
             "provider": "decision",
             "questions": {"q": {"instructions": "detect", "threshold": 0.5}},
-            "decision": {
-                "api_url": "https://systemone.example/v1/judge",
-                "api_key": "key",
-                "model": "judge-model",
-            },
         }
     )
 
@@ -89,7 +87,14 @@ def test_decision_provider_uses_injected_client():
 
 
 def test_decision_provider_builds_default_client():
-    plugin = build_content_safety(decision_config())
+    plugin = build_content_safety(
+        decision_config(),
+        decision=DecisionConfig(
+            api_url="https://systemone.example/v1/judge",
+            api_key="key",
+            model="judge-model",
+        ),
+    )
     assert isinstance(plugin, DecisionPlugin)
     assert isinstance(plugin._client, DecisionClient)
     assert plugin._client.endpoint == "https://systemone.example/v1/judge"
@@ -259,14 +264,13 @@ def test_systemone_url_derivation(base, expected):
     assert _systemone_url(base) == expected
 
 
-def test_ark_defaults_uses_explicit_values():
-    assert _ark_defaults("https://ark.example", "key") == (
-        "https://ark.example",
-        "key",
-    )
+def test_connection_uses_explicit_values():
+    assert resolve_decision_connection(
+        DecisionConfig(), "https://ark.cn-beijing.volces.com/api/v3", "key"
+    ) == ("https://ark.cn-beijing.volces.com/api/v1/systemone", "key")
 
 
-def test_ark_defaults_reads_veadk_settings(monkeypatch):
+def test_connection_reads_only_missing_veadk_settings(monkeypatch):
     import veadk.config as veadk_config
 
     monkeypatch.setattr(
@@ -274,22 +278,20 @@ def test_ark_defaults_reads_veadk_settings(monkeypatch):
         "settings",
         SimpleNamespace(
             model=SimpleNamespace(
-                api_base="https://ark.example/api/v3", api_key="ark-key"
+                api_base="https://ark.cn-beijing.volces.com/api/v3", api_key="ark-key"
             )
         ),
     )
-    assert _ark_defaults(None, None) == (
-        "https://ark.example/api/v3",
+    assert resolve_decision_connection(DecisionConfig()) == (
+        "https://ark.cn-beijing.volces.com/api/v1/systemone",
         "ark-key",
     )
-    assert _ark_defaults("https://override", None) == (
-        "https://override",
-        "ark-key",
-    )
-    assert _ark_defaults(None, "override-key") == (
-        "https://ark.example/api/v3",
-        "override-key",
-    )
+    assert resolve_decision_connection(
+        DecisionConfig(), "https://ark.ap-southeast.bytepluses.com/api/v3"
+    ) == ("https://ark.ap-southeast.bytepluses.com/api/v1/systemone", "ark-key")
+    assert resolve_decision_connection(
+        DecisionConfig(), ark_api_key="override-key"
+    ) == ("https://ark.cn-beijing.volces.com/api/v1/systemone", "override-key")
 
 
 def test_is_ark_api_base_accepts_ark_hosts_and_rejects_unsafe_urls():
@@ -352,7 +354,7 @@ def test_decision_provider_rejects_non_ark_fallback_base():
             "questions": {"q": {"instructions": "detect", "threshold": 0.5}},
         }
     )
-    with pytest.raises(ContentSafetyConfigError, match="decision.api_url"):
+    with pytest.raises(DecisionConfigError, match="decision.api_url"):
         build_content_safety(
             config,
             ark_api_base="https://api.openai.com/v1",
@@ -376,13 +378,15 @@ def test_decision_provider_uses_ark_api_url_but_resolves_missing_key(monkeypatch
     config = ContentSafetyConfig.from_dict(
         {
             "provider": "decision",
-            "decision": {
-                "api_url": "https://ark.cn-beijing.volces.com/api/v1/systemone"
-            },
             "questions": {"q": {"instructions": "detect", "threshold": 0.5}},
         }
     )
-    plugin = build_content_safety(config)
+    plugin = build_content_safety(
+        config,
+        decision=DecisionConfig.model_validate(
+            {"api_url": "https://ark.cn-beijing.volces.com/api/v1/systemone"}
+        ),
+    )
     assert (
         plugin._client.endpoint == "https://ark.cn-beijing.volces.com/api/v1/systemone"
     )
@@ -405,29 +409,33 @@ def test_decision_provider_rejects_custom_api_url_without_key(monkeypatch):
     config = ContentSafetyConfig.from_dict(
         {
             "provider": "decision",
-            "decision": {"api_url": "https://custom.example/v1/systemone"},
             "questions": {"q": {"instructions": "detect", "threshold": 0.5}},
         }
     )
-    with pytest.raises(ContentSafetyConfigError, match="decision.api_key"):
-        build_content_safety(config)
+    with pytest.raises(DecisionConfigError, match="decision.api_key"):
+        build_content_safety(
+            config,
+            decision=DecisionConfig.model_validate(
+                {"api_url": "https://custom.example/v1/systemone"}
+            ),
+        )
 
 
 def test_decision_provider_rejects_ark_url_with_non_ark_fallback():
     config = ContentSafetyConfig.from_dict(
         {
             "provider": "decision",
-            "decision": {
-                "api_url": ("https://ark.cn-beijing.volces.com/api/v1/systemone")
-            },
             "questions": {"q": {"instructions": "detect", "threshold": 0.5}},
         }
     )
-    with pytest.raises(ContentSafetyConfigError, match="non-Ark"):
+    with pytest.raises(DecisionConfigError, match="not an Ark"):
         build_content_safety(
             config,
             ark_api_base="https://api.openai.com/v1",
             ark_api_key="openai-key",
+            decision=DecisionConfig.model_validate(
+                {"api_url": ("https://ark.cn-beijing.volces.com/api/v1/systemone")}
+            ),
         )
 
 

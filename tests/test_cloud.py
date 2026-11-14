@@ -14,6 +14,7 @@
 
 import os
 import tempfile
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
@@ -565,6 +566,7 @@ def test_vefaas_large_code_upload_retries_one_connection_interruption() -> None:
             raise requests.ConnectionError()
         return Mock(status_code=200)
 
+    sleep = Mock()
     with (
         patch(
             "veadk.integrations.ve_faas.ve_faas.zip_and_encode_folder",
@@ -575,8 +577,9 @@ def test_vefaas_large_code_upload_retries_one_connection_interruption() -> None:
             side_effect=send_archive,
         ) as upload,
         patch("veadk.integrations.ve_faas.ve_faas.signed_request") as callback,
-        patch("veadk.integrations.ve_faas.ve_faas.time.sleep") as sleep,
+        patch("veadk.integrations.ve_faas.ve_faas.time", SimpleNamespace(sleep=sleep)),
     ):
+        assert time.sleep is not sleep
         service._upload_and_mount_code("function-id", ".")
 
     assert upload.call_count == 2
