@@ -142,9 +142,10 @@ long_term_memory:
   # port: 9200
   # username: admin
   # password: ""
-  # -- redis --       env DATABASE_REDIS_*     flags: --long-term-memory-host / -port / -password / -db
+  # -- redis --       env DATABASE_REDIS_*     flags: --long-term-memory-host / -port / -username / -password / -db
   # host: 1.2.3.4
   # port: 6379
+  # username: default
   # password: ""
   # db: 0
   # -- mem0 --        env DATABASE_MEM0_*      flags: --long-term-memory-api-key / -api-key-id / -project-id / -base-url
