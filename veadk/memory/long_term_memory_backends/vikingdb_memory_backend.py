@@ -345,18 +345,59 @@ class VikingDBLTMBackend(BaseLongTermMemoryBackend):
 
         logger.debug(f"Original response from Viking Memory: {response}")
 
-        result = response.get("data", {}).get("result_list", [])
-
-        return (
-            [
+        result_list = response.get("data", {}).get("result_list", [])
+        memories: list[str] = []
+        for item in result_list:
+            text = self._memory_item_to_text(item)
+            if not text:
+                continue
+            memories.append(
                 json.dumps(
-                    {"role": "user", "parts": [{"text": str(result)}]},
+                    {"role": "user", "parts": [{"text": text}]},
                     ensure_ascii=False,
                 )
-            ]
-            if result
-            else []
-        )
+            )
+        return memories
+
+    @staticmethod
+    def _memory_item_to_text(item: Any) -> str:
+        """Extract a readable memory string from one SearchMemory hit.
+
+        VikingDB returns each hit as an object with ``memory_info`` whose shape
+        depends on ``memory_type`` (event attributes, profile attributes, etc.).
+        Prefer common text fields; otherwise serialize ``memory_info``.
+        """
+        if isinstance(item, str):
+            return item.strip()
+        if not isinstance(item, dict):
+            return str(item)
+
+        memory_info = item.get("memory_info")
+        if isinstance(memory_info, str):
+            return memory_info.strip()
+        if isinstance(memory_info, dict):
+            for key in (
+                "summary",
+                "user_profile",
+                "original_messages",
+                "question",
+                "answer",
+                "content",
+                "text",
+            ):
+                value = memory_info.get(key)
+                if value and not isinstance(value, (dict, list)):
+                    return str(value).strip()
+            if memory_info:
+                return json.dumps(memory_info, ensure_ascii=False)
+        elif memory_info is not None:
+            return str(memory_info).strip()
+
+        for key in ("summary", "content", "text"):
+            value = item.get(key)
+            if value and not isinstance(value, (dict, list)):
+                return str(value).strip()
+        return json.dumps(item, ensure_ascii=False) if item else ""
 
     def get_user_profile(self, user_id: str) -> str:
         logger.info(

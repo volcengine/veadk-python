@@ -542,3 +542,98 @@ def test_direct_volcengine_viking_memory_client_uses_region_env(
 
     assert client.get_host() == "api-knowledgebase.mlp.cn-shanghai.volces.com"
     assert client.service_info.credentials.region == "cn-shanghai"
+
+
+def test_viking_memory_search_returns_one_entry_per_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """search_memory must not dump the whole result_list via str(list).
+
+    On main it returns a single JSON blob whose text is the Python repr of the
+    entire result_list, so callers (LongTermMemory → MemoryEntry) see one
+    unusable memory instead of each hit.
+    """
+    module = _load_backend_module(monkeypatch)
+    captured: dict[str, Any] = {}
+
+    class FakeCollection:
+        def search_memory(self, **kwargs: Any) -> dict[str, Any]:
+            captured["search_kwargs"] = kwargs
+            return {
+                "code": 0,
+                "data": {
+                    "result_list": [
+                        {
+                            "id": "m1",
+                            "score": 0.9,
+                            "memory_info": {"summary": "likes tea"},
+                        },
+                        {
+                            "id": "m2",
+                            "score": 0.8,
+                            "memory_info": {"summary": "lives in Shanghai"},
+                        },
+                    ]
+                },
+            }
+
+    class FakeSdkClient:
+        def get_collection(self, **kwargs: Any) -> FakeCollection:
+            return FakeCollection()
+
+    monkeypatch.setattr(
+        module.VikingDBLTMBackend,
+        "_collection_exist",
+        lambda self: True,
+    )
+    monkeypatch.setattr(
+        module.VikingDBLTMBackend,
+        "_get_sdk_client",
+        lambda self: FakeSdkClient(),
+    )
+
+    backend = module.VikingDBLTMBackend(index="agent_memory", api_key="mem-api-key")
+    results = backend.search_memory(user_id="user-42", query="tea", top_k=5)
+
+    assert captured["search_kwargs"]["filter"] == {
+        "user_id": "user-42",
+        "memory_type": backend.memory_type,
+    }
+    assert captured["search_kwargs"]["limit"] == 5
+    assert len(results) == 2
+
+    import json
+
+    parsed = [json.loads(item) for item in results]
+    texts = [item["parts"][0]["text"] for item in parsed]
+    assert texts == ["likes tea", "lives in Shanghai"]
+    # Must not be the Python list repr of the whole result_list.
+    assert not any(text.startswith("[{") for text in texts)
+
+
+def test_viking_memory_search_returns_empty_when_no_hits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_backend_module(monkeypatch)
+
+    class FakeCollection:
+        def search_memory(self, **kwargs: Any) -> dict[str, Any]:
+            return {"code": 0, "data": {"result_list": []}}
+
+    class FakeSdkClient:
+        def get_collection(self, **kwargs: Any) -> FakeCollection:
+            return FakeCollection()
+
+    monkeypatch.setattr(
+        module.VikingDBLTMBackend,
+        "_collection_exist",
+        lambda self: True,
+    )
+    monkeypatch.setattr(
+        module.VikingDBLTMBackend,
+        "_get_sdk_client",
+        lambda self: FakeSdkClient(),
+    )
+
+    backend = module.VikingDBLTMBackend(index="agent_memory", api_key="mem-api-key")
+    assert backend.search_memory(user_id="user-42", query="tea", top_k=5) == []
