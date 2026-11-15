@@ -65,7 +65,10 @@ class MysqlConfig(BaseSettings):
 
     database: str = ""
 
-    charset: str = "utf8"
+    charset: str = "utf8mb4"
+    """Connection character set, sent to the driver as ``?charset=``. The
+    default matches what PyMySQL and aiomysql pick when none is given. Set it
+    to an empty string to leave the choice to the driver."""
 
     secret_token: str = ""
     """STS token for MySQL auth, not supported yet."""
