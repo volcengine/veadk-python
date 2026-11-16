@@ -1,5 +1,8 @@
 # VeADK 示例
 
+使用其他 Agent 框架的客户可参考 [不依赖 VeADK 的 CUA 接入](./cua_without_veadk/)：
+最小模型循环、标准 MCP Client、截图回传和实例绑定。该示例使用独立依赖，无须执行下方的 VeADK 通用安装步骤。
+
 一份动手实践的 VeADK 上手指南，从最小可运行的智能体，一路到多智能体工作流。
 每个目录都自成一体：一个 `main.py`、一个 `.env.example`，以及中英双语 README。
 

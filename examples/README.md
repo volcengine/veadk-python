@@ -6,6 +6,10 @@ and a bilingual README (English + 中文).
 
 > 中文版见 [README.zh.md](./README.zh.md)
 
+For customers using another Agent framework, [CUA without VeADK](./cua_without_veadk/)
+shows a minimal model + standard MCP client loop with screenshot handling and sandbox binding.
+It has independent dependencies and does not require the common VeADK setup below.
+
 ## Learning path
 
 | # | Example | Level | What you'll learn |
