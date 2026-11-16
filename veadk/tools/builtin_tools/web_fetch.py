@@ -102,6 +102,24 @@ def _check_url(url: str) -> str:
     return parsed.hostname
 
 
+def assert_public_url(url: str) -> str:
+    """Validate that *url* is an http(s) URL on a public address.
+
+    This is the reusable guard behind ``web_fetch``; other outbound-HTTP tools
+    such as ``http_request`` use it so SSRF policy stays in one place.
+
+    Returns:
+        The URL hostname.
+
+    Raises:
+        ValueError: If the scheme, host, or resolved address is not allowed.
+    """
+    try:
+        return _check_url(url)
+    except _WebFetchError as e:
+        raise ValueError(str(e)) from e
+
+
 # ---------------------------------------------- coarse HTML -> markdown/text --
 def _normalize_whitespace(value: str) -> str:
     value = value.replace("\r", "")

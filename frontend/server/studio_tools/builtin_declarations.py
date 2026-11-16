@@ -20,6 +20,28 @@ from typing import Any
 
 
 BUILTIN_TOOL_DECLARATIONS: dict[str, tuple[str, dict[str, Any]]] = {
+    "calculator": (
+        "Evaluate a numeric arithmetic expression safely.\n\nUse this "
+        "tool for arithmetic, percentages, powers, roots, logarithms, "
+        "and\nbasic trigonometry. Named constants ``pi`` and ``e`` and "
+        "the functions\n``abs``, ``round``, ``min``, ``max``, ``sqrt``, "
+        "``log``, ``log10``,\n``exp``, ``sin``, ``cos``, ``tan``, ``floor``, "
+        "and ``ceil`` are supported.\n\nArgs:\n    expression: The arithmetic "
+        'expression, for example ``"(1 + 2) * 3"``.\n    precision: '
+        "Decimal places for a floating-point result (0-15).\n\nReturns:\n"
+        "    A dict with ``expression`` and ``result``. On invalid input, "
+        "a dict with\n    an ``error`` key.",
+        {
+            "additionalProperties": False,
+            "properties": {
+                "expression": {"title": "Expression", "type": "string"},
+                "precision": {"default": 10, "title": "Precision", "type": "integer"},
+            },
+            "required": ["expression"],
+            "title": "calculatorParams",
+            "type": "object",
+        },
+    ),
     "coding": (
         "Create code with the pre-configured OpenCode AgentKit sandbox.",
         {
@@ -30,6 +52,154 @@ BUILTIN_TOOL_DECLARATIONS: dict[str, tuple[str, dict[str, Any]]] = {
             },
             "required": ["workflow_prompt"],
             "title": "codingParams",
+            "type": "object",
+        },
+    ),
+    "datetime": (
+        "Work with dates and times, including timezone conversions.\n"
+        "\nUse this tool for the current time, parsing or formatting "
+        "a timestamp,\nconverting a timestamp between timezones, computing "
+        "the difference between\ntwo timestamps, or adding a duration. "
+        "Timestamps without an explicit offset\nuse ``timezone`` (default "
+        "UTC).\n\nArgs:\n    action: One of ``now``, ``parse``, ``format``, "
+        "``convert``, ``diff``,\n        ``add``.\n    value: The primary "
+        "date/time string for ``parse``, ``format``,\n        ``convert``, "
+        "``diff``, and ``add``.\n    value2: The second date/time string "
+        "for ``diff``.\n    timezone: IANA timezone name (for example "
+        "``Asia/Shanghai``) used when\n        ``value`` has no offset. "
+        "Defaults to UTC.\n    target_timezone: IANA timezone name to "
+        "convert to (``convert`` only).\n    format: ``strftime`` format "
+        "string (``format`` only).\n    amount: Numeric amount to add "
+        "(``add`` only).\n    unit: One of ``seconds``, ``minutes``, "
+        "``hours``, ``days``, ``weeks``\n        (``add`` only).\n\nReturns:\n"
+        "    A dict with the requested fields. On invalid input, a dict "
+        "with an\n    ``error`` key.",
+        {
+            "additionalProperties": False,
+            "properties": {
+                "action": {"title": "Action", "type": "string"},
+                "amount": {
+                    "anyOf": [{"type": "number"}, {"type": "null"}],
+                    "default": None,
+                    "title": "Amount",
+                },
+                "format": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "title": "Format",
+                },
+                "target_timezone": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "title": "Target Timezone",
+                },
+                "timezone": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "title": "Timezone",
+                },
+                "unit": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "title": "Unit",
+                },
+                "value": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "title": "Value",
+                },
+                "value2": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "title": "Value2",
+                },
+            },
+            "required": ["action"],
+            "title": "datetimeParams",
+            "type": "object",
+        },
+    ),
+    "doc_generate": (
+        "Generate a document and attach it to the current conversation.\n"
+        "\nArgs:\n    format: One of ``docx``, ``xlsx``, ``csv``, or "
+        "``md`` (case-insensitive).\n    title: Document title. Rendered "
+        "as the Word title and the Markdown\n        heading; ignored "
+        "for CSV.\n    content: Markdown-ish body for ``docx``/``md``; "
+        "raw CSV text fallback\n        for ``csv``. Supports ``#``-``###`` "
+        "headings and ``-``/``*``/``+``\n        bullets for Word.\n "
+        '   sheets: For ``xlsx``, a list of ``{"name": str, "rows": '
+        "list[list]}``.\n    rows: For ``csv``, a list of rows. CSV output "
+        "is plain UTF-8 without a\n        byte-order mark.\n    filename: "
+        "Optional output filename; the correct extension is forced.\n"
+        "    tool_context: Current ADK tool context used to save the "
+        "artifact. When\n        omitted, the file is written to a temporary "
+        'directory instead.\n\nReturns:\n    ``{"filename", "format", '
+        '"size_bytes", "mime_type",\n    "artifact_saved", "path"}`` '
+        'on success, or ``{"error"}`` on failure.',
+        {
+            "additionalProperties": False,
+            "properties": {
+                "content": {"default": "", "title": "Content", "type": "string"},
+                "filename": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "title": "Filename",
+                },
+                "format": {"title": "Format", "type": "string"},
+                "rows": {
+                    "anyOf": [
+                        {"items": {"items": {}, "type": "array"}, "type": "array"},
+                        {"type": "null"},
+                    ],
+                    "default": None,
+                    "title": "Rows",
+                },
+                "sheets": {
+                    "anyOf": [
+                        {
+                            "items": {"additionalProperties": True, "type": "object"},
+                            "type": "array",
+                        },
+                        {"type": "null"},
+                    ],
+                    "default": None,
+                    "title": "Sheets",
+                },
+                "title": {"title": "Title", "type": "string"},
+            },
+            "required": ["format", "title"],
+            "title": "doc_generateParams",
+            "type": "object",
+        },
+    ),
+    "document_parse": (
+        "Parse a document into bounded plain text.\n\nAccepts a local "
+        "file path or a public http(s) URL. The format is taken from\n"
+        "``format`` when supplied, otherwise inferred from the file extension, "
+        "then\nfrom the response ``Content-Type``, then from the file's magic "
+        "bytes, then\nfrom an HTML sniff, and finally treated as UTF-8 "
+        "text.\n\nArgs:\n    source: Local path or public http(s) URL.\n"
+        "    format: Optional override: pdf, docx, xlsx, csv, txt, md, "
+        "json, or html.\n    max_chars: Maximum characters returned (1,000-1,000,000).\n"
+        '\nReturns:\n    ``{"format", "text", "truncated", "metadata"}`` '
+        'on success, or\n    ``{"error"}`` on failure.',
+        {
+            "additionalProperties": False,
+            "properties": {
+                "format": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "title": "Format",
+                },
+                "max_chars": {
+                    "default": 200000,
+                    "title": "Max Chars",
+                    "type": "integer",
+                },
+                "source": {"title": "Source", "type": "string"},
+            },
+            "required": ["source"],
+            "title": "document_parseParams",
             "type": "object",
         },
     ),
@@ -50,6 +220,72 @@ BUILTIN_TOOL_DECLARATIONS: dict[str, tuple[str, dict[str, Any]]] = {
             "properties": {"city": {"title": "City", "type": "string"}},
             "required": ["city"],
             "title": "get_location_weatherParams",
+            "type": "object",
+        },
+    ),
+    "http_request": (
+        "Make an HTTP(S) request and return the status, headers, and "
+        "body.\n\nUse this tool when you need to call an HTTP API or "
+        "download a small\nresource. Private/internal addresses are blocked. "
+        "Redirects are only\nfollowed when ``follow_redirects`` is true "
+        "(at most three hops), and every\nhop is re-validated. Set a "
+        "header value to ``env:NAME`` to read a secret\nfrom environment "
+        "variable ``NAME`` without exposing it in the arguments.\n\nArgs:\n"
+        "    url: The absolute http(s) URL to request.\n    method: One "
+        "of GET, POST, PUT, PATCH, DELETE, HEAD (case-insensitive).\n"
+        "    headers: Optional request headers. ``env:NAME`` values are "
+        "resolved from\n        the environment.\n    params: Optional "
+        "query parameters.\n    json_body: Optional JSON-serializable "
+        "request body.\n    body: Optional raw string request body. Mutually "
+        "exclusive with\n        ``json_body``.\n    timeout: Request "
+        "timeout in seconds (1-120).\n    max_bytes: Maximum response "
+        "body size in bytes (1,000-20,000,000).\n        Larger bodies "
+        "are truncated and ``truncated`` is set to true.\n    follow_redirects: "
+        "Whether to follow 301/302/303/307/308 redirects.\n\nReturns:\n"
+        "    A dict with ``status_code``, ``url``, ``headers``, ``content_type``,\n"
+        "    ``body``, ``bytes``, and ``truncated``. On failure, a dict "
+        "with an\n    ``error`` key.",
+        {
+            "additionalProperties": False,
+            "properties": {
+                "body": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "title": "Body",
+                },
+                "follow_redirects": {
+                    "default": False,
+                    "title": "Follow Redirects",
+                    "type": "boolean",
+                },
+                "headers": {
+                    "anyOf": [
+                        {"additionalProperties": {"type": "string"}, "type": "object"},
+                        {"type": "null"},
+                    ],
+                    "default": None,
+                    "title": "Headers",
+                },
+                "json_body": {"default": None, "title": "Json Body"},
+                "max_bytes": {
+                    "default": 5000000,
+                    "title": "Max Bytes",
+                    "type": "integer",
+                },
+                "method": {"default": "GET", "title": "Method", "type": "string"},
+                "params": {
+                    "anyOf": [
+                        {"additionalProperties": True, "type": "object"},
+                        {"type": "null"},
+                    ],
+                    "default": None,
+                    "title": "Params",
+                },
+                "timeout": {"default": 30, "title": "Timeout", "type": "integer"},
+                "url": {"title": "Url", "type": "string"},
+            },
+            "required": ["url"],
+            "title": "http_requestParams",
             "type": "object",
         },
     ),
@@ -247,6 +483,89 @@ BUILTIN_TOOL_DECLARATIONS: dict[str, tuple[str, dict[str, Any]]] = {
             "type": "object",
         },
     ),
+    "image_transform": (
+        "Apply ordered Pillow operations to an image and save the result.\n"
+        "\n``source`` may be a local path or an http(s) URL. Operations "
+        "are applied in\norder; each item is a dict with a ``type``:\n"
+        "\n- ``resize``: ``width`` and/or ``height`` (positive ints). "
+        "When only one\n  side is given the aspect ratio is preserved. "
+        "With both sides and\n  ``keep_aspect`` true (default) the image "
+        "fits inside the box.\n- ``crop``: ``left``, ``top``, ``right``, "
+        "``bottom`` pixel coordinates.\n- ``rotate``: ``degrees`` (float), "
+        "expanding the canvas and filling with\n  white (RGB) or transparency "
+        "(RGBA).\n- ``flip``: ``direction`` equal to ``horizontal`` or "
+        "``vertical``.\n- ``thumbnail``: ``max_size`` (positive int), "
+        "preserving aspect ratio.\n- ``grayscale``: converts the image "
+        "to grayscale.\n- ``convert``: ``format`` of ``png``, ``jpeg`` "
+        "or ``webp``; the output\n  format is applied after every operation.\n"
+        "\nArgs:\n    source: Local image path or public http(s) URL.\n"
+        "    operations: Ordered list of operation dicts (at most 20).\n"
+        "    output_format: png, jpeg or webp. Defaults to the source "
+        "format when it\n        is png/jpeg/webp, otherwise png.\n  "
+        "  quality: Encoder quality from 1 to 100 for jpeg/webp only.\n"
+        "    filename: Optional output filename; sanitized with the right "
+        "extension.\n    tool_context: Current ADK tool context used "
+        "to save the result artifact.\n\nReturns:\n    A dict with filename, "
+        "format, width, height, size_bytes, mime_type,\n    artifact_saved "
+        "and path. On failure, a dict with an ``error`` key.",
+        {
+            "additionalProperties": False,
+            "properties": {
+                "filename": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "title": "Filename",
+                },
+                "operations": {
+                    "items": {"additionalProperties": True, "type": "object"},
+                    "title": "Operations",
+                    "type": "array",
+                },
+                "output_format": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "title": "Output Format",
+                },
+                "quality": {"default": 90, "title": "Quality", "type": "integer"},
+                "source": {"title": "Source", "type": "string"},
+            },
+            "required": ["source", "operations"],
+            "title": "image_transformParams",
+            "type": "object",
+        },
+    ),
+    "image_understand": (
+        "Describe one or more images in detail with a vision model.\n"
+        "\nArgs:\n    images: Local image paths or public http(s) URLs "
+        "(1 to 8 items).\n    prompt: What to ask about the images. The "
+        "default requests a detailed\n        description covering objects, "
+        "text, layout and notable details.\n    model_name: Optional "
+        'vision model override.\n\nReturns:\n    ``{"text": ..., "model": '
+        '...}`` on success, otherwise\n    ``{"error": ...}``.',
+        {
+            "additionalProperties": False,
+            "properties": {
+                "images": {
+                    "items": {"type": "string"},
+                    "title": "Images",
+                    "type": "array",
+                },
+                "model_name": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "title": "Model Name",
+                },
+                "prompt": {
+                    "default": "Describe the image in detail.",
+                    "title": "Prompt",
+                    "type": "string",
+                },
+            },
+            "required": ["images"],
+            "title": "image_understandParams",
+            "type": "object",
+        },
+    ),
     "link_reader": (
         "Use this tool when you need to fetch content from web pages, PDFs, "
         "or Douyin videos.\n"
@@ -269,6 +588,58 @@ BUILTIN_TOOL_DECLARATIONS: dict[str, tuple[str, dict[str, Any]]] = {
             },
             "required": ["url_list"],
             "title": "link_readerParams",
+            "type": "object",
+        },
+    ),
+    "mindmap_generate": (
+        "Build a Mermaid mindmap and a deterministic SVG from a Markdown "
+        "outline.\n\nHeadings (``#`` through ``######``) nest by level; "
+        "``-``/``*``/``+`` bullets\nnest by two-space indentation. Blank "
+        "lines and plain text are ignored.\n\nArgs:\n    title: Root "
+        "node label.\n    markdown: Outline using headings and/or indented "
+        "bullets.\n    filename: Optional base filename; ``.mmd`` and "
+        "``.svg`` are generated.\n    tool_context: Current ADK tool "
+        "context. When omitted, both files are\n        written to a "
+        'temporary directory instead.\n\nReturns:\n    ``{"title", '
+        '"mermaid", "mmd_filename", "svg_filename", "nodes",\n'
+        '    "artifact_saved", "mmd_path", "svg_path"}`` on success, '
+        'or\n    ``{"error"}`` on failure.',
+        {
+            "additionalProperties": False,
+            "properties": {
+                "filename": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "title": "Filename",
+                },
+                "markdown": {"title": "Markdown", "type": "string"},
+                "title": {"title": "Title", "type": "string"},
+            },
+            "required": ["title", "markdown"],
+            "title": "mindmap_generateParams",
+            "type": "object",
+        },
+    ),
+    "ocr": (
+        "Transcribe text from an image with a vision model.\n\nArgs:\n"
+        "    image: Local image path or public http(s) URL.\n    language: "
+        "Expected text language, or ``auto`` to let the model decide.\n"
+        "    model_name: Optional vision model override.\n\nReturns:\n"
+        '    ``{"text": ..., "language": ..., "model": ...}`` on '
+        'success, otherwise\n    ``{"error": ...}``.',
+        {
+            "additionalProperties": False,
+            "properties": {
+                "image": {"title": "Image", "type": "string"},
+                "language": {"default": "auto", "title": "Language", "type": "string"},
+                "model_name": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "title": "Model Name",
+                },
+            },
+            "required": ["image"],
+            "title": "ocrParams",
             "type": "object",
         },
     ),
@@ -339,6 +710,46 @@ BUILTIN_TOOL_DECLARATIONS: dict[str, tuple[str, dict[str, Any]]] = {
             "type": "object",
         },
     ),
+    "qrcode_generate": (
+        "Generate a PNG QR code for text or a URL and save it.\n\nArgs:\n"
+        "    content: Text or URL to encode (non-empty, at most 2000 "
+        "characters).\n    filename: Output filename; a .png extension "
+        "is enforced.\n    box_size: Pixels per QR module, from 1 to "
+        "50.\n    border: Quiet-zone size in modules, from 0 to 20.\n"
+        "    fill_color: Pillow color name or hex value for the dark "
+        "modules.\n    back_color: Pillow color name or hex value for "
+        "the background.\n    tool_context: Current ADK tool context "
+        "used to save the result artifact.\n\nReturns:\n    A dict with "
+        "filename, format, width, height, size_bytes, mime_type,\n   "
+        " artifact_saved and path. On failure, a dict with an ``error`` "
+        "key.",
+        {
+            "additionalProperties": False,
+            "properties": {
+                "back_color": {
+                    "default": "white",
+                    "title": "Back Color",
+                    "type": "string",
+                },
+                "border": {"default": 4, "title": "Border", "type": "integer"},
+                "box_size": {"default": 10, "title": "Box Size", "type": "integer"},
+                "content": {"title": "Content", "type": "string"},
+                "filename": {
+                    "default": "qrcode.png",
+                    "title": "Filename",
+                    "type": "string",
+                },
+                "fill_color": {
+                    "default": "black",
+                    "title": "Fill Color",
+                    "type": "string",
+                },
+            },
+            "required": ["content"],
+            "title": "qrcode_generateParams",
+            "type": "object",
+        },
+    ),
     "run_code": (
         "Run code in a code sandbox and return the output.\n"
         "For C++ code, don't execute it directly, compile and execute via "
@@ -391,6 +802,26 @@ BUILTIN_TOOL_DECLARATIONS: dict[str, tuple[str, dict[str, Any]]] = {
             },
             "required": ["code", "language"],
             "title": "run_codeParams",
+            "type": "object",
+        },
+    ),
+    "speech_to_text": (
+        "Transcribe speech in an audio file into text.\n\nSupports local "
+        "wav/mp3/ogg/opus files (up to 100 MB) and public http(s)\naudio "
+        "URLs. The service auto-detects the spoken language.\n\nArgs:\n"
+        "    audio: Local file path or public http(s) URL of the audio.\n"
+        "    timeout: Request timeout in seconds, between 1 and 600.\n"
+        "\nReturns:\n    A dict with ``text``, ``duration_ms``, ``utterances`` "
+        "and ``log_id``,\n    or a dict with ``error`` when transcription "
+        "fails.",
+        {
+            "additionalProperties": False,
+            "properties": {
+                "audio": {"title": "Audio", "type": "string"},
+                "timeout": {"default": 300, "title": "Timeout", "type": "integer"},
+            },
+            "required": ["audio"],
+            "title": "speech_to_textParams",
             "type": "object",
         },
     ),

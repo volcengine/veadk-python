@@ -50,6 +50,17 @@ Built-in tools depend on Volcengine services. Enable the corresponding service a
 | `image_edit` | [Edit images](https://www.volcengine.com/docs/82379/1541523) (image-to-image) | `from veadk.tools.builtin_tools.image_edit import image_edit` |
 | `video_generate` | [Generate videos](https://www.volcengine.com/docs/82379/1520757) from text | `from veadk.tools.builtin_tools.video_generate import video_generate` |
 | `text_to_speech` | Text-to-speech (TTS) | `from veadk.tools.builtin_tools.tts import text_to_speech` |
+| `speech_to_text` | Speech recognition (ASR) for local files or public audio URLs | `from veadk.tools.builtin_tools.speech_to_text import speech_to_text` |
+| `http_request` | Generic HTTP requests with SSRF guards and a response-size cap | `from veadk.tools.builtin_tools.http_request import http_request` |
+| `document_parse` | Extract text from PDF / Word / Excel / CSV / HTML documents | `from veadk.tools.builtin_tools.document_parse import document_parse` |
+| `doc_generate` | Generate Word / Excel / CSV / Markdown documents | `from veadk.tools.builtin_tools.doc_generate import doc_generate` |
+| `mindmap_generate` | Generate a mind map (Mermaid + SVG) from a Markdown outline | `from veadk.tools.builtin_tools.mindmap_generate import mindmap_generate` |
+| `qrcode_generate` | Generate a QR code PNG | `from veadk.tools.builtin_tools.qrcode_generate import qrcode_generate` |
+| `image_transform` | Resize, crop, rotate, flip, and convert images | `from veadk.tools.builtin_tools.image_transform import image_transform` |
+| `image_understand` | Understand images with the configured model | `from veadk.tools.builtin_tools.image_understand import image_understand` |
+| `ocr` | Extract image text with the configured model | `from veadk.tools.builtin_tools.ocr import ocr` |
+| `calculator` | Safe arithmetic evaluation | `from veadk.tools.builtin_tools.calculator import calculator` |
+| `datetime` | Parse, format, convert, and calculate dates and times | `from veadk.tools.builtin_tools.datetime_tool import datetime` |
 | `run_code` | Execute code in an AgentKit sandbox | `from veadk.tools.builtin_tools.run_code import run_code` |
 | `execute_skills` | Run an `agent.py` workflow in a prebuilt skills sandbox | `from veadk.tools.builtin_tools.execute_skills import execute_skills` |
 | `coding` | Run a code-generation workflow in a prebuilt OpenCode sandbox | `from veadk.tools.builtin_tools.coding import coding` |
@@ -468,6 +479,40 @@ Environment variables:
 - `TOOL_VESPEECH_API_KEY`: VeSpeech service API key
 - `TOOL_VESPEECH_SPEAKER`: voice, defaults to `zh_female_vv_uranus_bigtts`
 - `TOOL_VESPEECH_AUDIO_OUTPUT_PATH`: audio output directory, defaults to the system temp directory
+
+## General-purpose tools
+
+These tools cover general data processing, office documents, and multimodal work without binding to one business service. None require extra credentials except `speech_to_text`; `image_understand` and `ocr` reuse the current agent's model configuration.
+
+```python
+from veadk import Agent
+from veadk.tools.builtin_tools.calculator import calculator
+from veadk.tools.builtin_tools.datetime_tool import datetime
+from veadk.tools.builtin_tools.http_request import http_request
+
+agent = Agent(
+    name="utility_agent",
+    instruction="Use the available tools to answer precisely.",
+    tools=[calculator, datetime, http_request],
+)
+```
+
+- `http_request(url, method="GET", headers=None, params=None, json_body=None, body=None, timeout=30, max_bytes=5_000_000, follow_redirects=False)`: make an HTTP(S) request. Only http/https is allowed; private, loopback, link-local, and cloud-metadata addresses are rejected. Redirects are off by default; when enabled, every hop is revalidated and at most three hops are followed. Bodies larger than `max_bytes` are truncated with `truncated: true`. A header value of `env:NAME` reads a secret from the environment so it never enters model arguments. Set `TOOL_HTTP_ALLOWLIST=api.example.com,cdn.example.com` to restrict target hosts.
+- `document_parse(source, format=None, max_chars=200000)`: parse a local file or public URL as pdf, docx, xlsx, csv, txt, md, json, or html. Scanned PDFs return `needs_ocr: true`; pass them to `ocr`.
+- `doc_generate(format, title, content="", sheets=None, rows=None, filename=None)`: generate docx, xlsx, csv, or md and save it as an artifact. PDF generation is not supported.
+- `mindmap_generate(title, markdown, filename=None)`: build Mermaid text and an SVG from headings and indented bullets; no Node.js is required.
+- `qrcode_generate(content, filename="qrcode.png", box_size=10, border=4, fill_color="black", back_color="white")`: generate a PNG QR code. Decoding is not supported.
+- `image_transform(source, operations, output_format=None, quality=90, filename=None)`: apply `resize`, `crop`, `rotate`, `flip`, `thumbnail`, `grayscale`, and `convert` in order and output png, jpeg, or webp. Local paths and public URLs are accepted.
+- `image_understand(images, prompt="Describe the image in detail.", model_name=None)`: understand one to eight local or public images; `model_name` overrides the vision model.
+- `ocr(image, language="auto", model_name=None)`: extract text from an image. `language` is a hint only; `auto` adds no constraint.
+- `speech_to_text(audio, timeout=300)`: call Volcengine flash ASR for wav, mp3, ogg, or opus audio up to 100 MB, from a local path or a public URL.
+- `calculator(expression, precision=10)`: arithmetic, powers, modulo, and a small function set such as `sqrt`, `log`, and `sin`. Arbitrary Python is rejected.
+- `datetime(action, value=None, value2=None, timezone=None, target_timezone=None, format=None, amount=None, unit=None)`: `action` is `now`, `parse`, `format`, `convert`, `diff`, or `add`; timezones use IANA names.
+
+Environment variables:
+
+- `TOOL_SPEECH_TO_TEXT_API_KEY`: ASR API key; falls back to `TOOL_VESPEECH_API_KEY`. Used only by `speech_to_text`.
+- `TOOL_HTTP_ALLOWLIST`: optional comma-separated host allowlist, used only by `http_request`.
 
 ## Code sandboxes
 

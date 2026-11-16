@@ -50,6 +50,17 @@ agent = Agent(tools=[web_search])
 | `image_edit` | [编辑图片](https://www.volcengine.com/docs/82379/1541523)（图生图） | `from veadk.tools.builtin_tools.image_edit import image_edit` |
 | `video_generate` | 根据文本描述[生成视频](https://www.volcengine.com/docs/82379/1520757) | `from veadk.tools.builtin_tools.video_generate import video_generate` |
 | `text_to_speech` | 语音合成（TTS） | `from veadk.tools.builtin_tools.tts import text_to_speech` |
+| `speech_to_text` | 语音识别（ASR），支持本地文件或公网音频 URL | `from veadk.tools.builtin_tools.speech_to_text import speech_to_text` |
+| `http_request` | 带 SSRF 防护与体积上限的通用 HTTP 请求 | `from veadk.tools.builtin_tools.http_request import http_request` |
+| `document_parse` | 解析 PDF / Word / Excel / CSV / HTML 等文档文本 | `from veadk.tools.builtin_tools.document_parse import document_parse` |
+| `doc_generate` | 生成 Word / Excel / CSV / Markdown 文档 | `from veadk.tools.builtin_tools.doc_generate import doc_generate` |
+| `mindmap_generate` | 由 Markdown 大纲生成思维导图（Mermaid + SVG） | `from veadk.tools.builtin_tools.mindmap_generate import mindmap_generate` |
+| `qrcode_generate` | 生成二维码 PNG | `from veadk.tools.builtin_tools.qrcode_generate import qrcode_generate` |
+| `image_transform` | 图片缩放、裁剪、旋转、翻转、格式转换 | `from veadk.tools.builtin_tools.image_transform import image_transform` |
+| `image_understand` | 复用当前模型配置理解图片 | `from veadk.tools.builtin_tools.image_understand import image_understand` |
+| `ocr` | 复用当前模型配置识别图片文字 | `from veadk.tools.builtin_tools.ocr import ocr` |
+| `calculator` | 安全的算术表达式计算 | `from veadk.tools.builtin_tools.calculator import calculator` |
+| `datetime` | 日期时间解析、格式化、时区转换与计算 | `from veadk.tools.builtin_tools.datetime_tool import datetime` |
 | `run_code` | 在 AgentKit 沙箱中执行代码 | `from veadk.tools.builtin_tools.run_code import run_code` |
 | `execute_skills` | 在预制技能沙箱中远程执行 `agent.py` 工作流 | `from veadk.tools.builtin_tools.execute_skills import execute_skills` |
 | `coding` | 在预制 OpenCode 沙箱中执行代码生成工作流 | `from veadk.tools.builtin_tools.coding import coding` |
@@ -465,6 +476,40 @@ if __name__ == "__main__":
 - `TOOL_VESPEECH_API_KEY`：VeSpeech 服务的 API Key
 - `TOOL_VESPEECH_SPEAKER`：音色，默认为 `zh_female_vv_uranus_bigtts`
 - `TOOL_VESPEECH_AUDIO_OUTPUT_PATH`：音频输出目录，默认为系统临时目录
+
+## 通用工具
+
+以下工具面向通用数据处理、办公文档与多模态场景，不绑定单一业务服务。除 `speech_to_text` 外均无需额外凭证；`image_understand`、`ocr` 直接复用当前 Agent 的模型配置。
+
+```python
+from veadk import Agent
+from veadk.tools.builtin_tools.calculator import calculator
+from veadk.tools.builtin_tools.datetime_tool import datetime
+from veadk.tools.builtin_tools.http_request import http_request
+
+agent = Agent(
+    name="utility_agent",
+    instruction="Use the available tools to answer precisely.",
+    tools=[calculator, datetime, http_request],
+)
+```
+
+- `http_request(url, method="GET", headers=None, params=None, json_body=None, body=None, timeout=30, max_bytes=5_000_000, follow_redirects=False)`：发起 HTTP(S) 请求。仅允许 http/https，默认拒绝内网、回环、链路本地和云元数据地址；重定向默认关闭，开启后每一跳都会重新校验，最多 3 跳；响应体超过 `max_bytes` 时截断并返回 `truncated: true`。请求头值写成 `env:NAME` 可从环境变量读取密钥，避免密钥进入模型参数。可用 `TOOL_HTTP_ALLOWLIST=api.example.com,cdn.example.com` 限定目标域名。
+- `document_parse(source, format=None, max_chars=200000)`：解析本地文件或公网 URL，支持 pdf、docx、xlsx、csv、txt、md、json、html。扫描版 PDF 返回 `needs_ocr: true`，可继续调用 `ocr`。
+- `doc_generate(format, title, content="", sheets=None, rows=None, filename=None)`：生成 docx、xlsx、csv 或 md 并保存为 artifact；不支持 PDF。
+- `mindmap_generate(title, markdown, filename=None)`：按标题层级和缩进列表生成 Mermaid 文本与 SVG，无需 Node.js。
+- `qrcode_generate(content, filename="qrcode.png", box_size=10, border=4, fill_color="black", back_color="white")`：生成 PNG 二维码；仅支持生成，不支持解码。
+- `image_transform(source, operations, output_format=None, quality=90, filename=None)`：按顺序执行 `resize`、`crop`、`rotate`、`flip`、`thumbnail`、`grayscale`、`convert`，输出 png / jpeg / webp；本地路径和公网 URL 均可。
+- `image_understand(images, prompt="Describe the image in detail.", model_name=None)`：理解 1–8 张图片，支持本地路径或公网 URL，可传 `model_name` 覆盖视觉模型。
+- `ocr(image, language="auto", model_name=None)`：提取图片文字；`language` 仅作为提示，`auto` 时不额外约束。
+- `speech_to_text(audio, timeout=300)`：调用火山引擎录音文件识别极速版，支持 wav / mp3 / ogg / opus，单文件不超过 100 MB，也支持公网音频 URL。
+- `calculator(expression, precision=10)`：支持四则运算、幂、取模和 `sqrt` / `log` / `sin` 等少量函数，拒绝任意 Python 代码。
+- `datetime(action, value=None, value2=None, timezone=None, target_timezone=None, format=None, amount=None, unit=None)`：`action` 取 `now` / `parse` / `format` / `convert` / `diff` / `add`，时区使用 IANA 名称。
+
+环境变量：
+
+- `TOOL_SPEECH_TO_TEXT_API_KEY`：语音识别 API Key；未设置时回退读取 `TOOL_VESPEECH_API_KEY`。仅 `speech_to_text` 需要。
+- `TOOL_HTTP_ALLOWLIST`：可选，逗号分隔的允许域名列表，仅 `http_request` 使用。
 
 ## 代码沙箱
 
