@@ -5844,6 +5844,25 @@ def test_mpa_update_rejects_incompatible_manifest_before_launch(
             },
             headers=headers,
         )
+        # The endpoint answers 202 while the background lookup is pending; a
+        # loaded CI runner can exceed the route's initial wait budget even when
+        # every runtime call is stubbed.
+        capability_deadline = time.monotonic() + 30.0
+        while capability.status_code == 202:
+            assert time.monotonic() < capability_deadline, (
+                "Runtime update capability remained pending"
+            )
+            time.sleep(0.05)
+            capability = client.get(
+                "/web/runtime-update-capability",
+                params={
+                    "runtimeId": runtime.runtime_id,
+                    "region": "cn-beijing",
+                    "appName": "mpa-agent",
+                    "currentVersion": 3,
+                },
+                headers=headers,
+            )
         response = client.post(
             "/web/deploy-agentkit",
             headers=headers,
