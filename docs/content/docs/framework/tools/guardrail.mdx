@@ -92,18 +92,19 @@ print(response)
 在 `config.yaml` 中配置后，通过 `Runner` 运行或部署 Agent 时会自动挂载插件：
 
 ```yaml title="config.yaml"
+decision:
+  # 可选；省略时由当前 Ark API Base 推导 /api/v1/systemone
+  api_url: https://ark.cn-beijing.volces.com/api/v1/systemone
+  # 可选；省略时复用 Ark API Key
+  api_key: <your_api_key>
+  # 可选；默认 doubao-seed-2-1-lite-260915
+  model: doubao-seed-2-1-lite-260915
+
 tool:
   content_safety:
     provider: decision
     on_error: allow            # allow（默认，标记 degraded）或 block
     block_message: "Your request was blocked by the content safety policy."
-    decision:
-      # 可选；省略时由当前 Ark API Base 推导 /api/v1/systemone
-      api_url: https://ark.cn-beijing.volces.com/api/v1/systemone
-      # 可选；省略时复用 Ark API Key
-      api_key: <your_api_key>
-      # 可选；默认 doubao-seed-2-1-lite-260915
-      model: doubao-seed-2-1-lite-260915
     use_default_questions: true
     questions:
       # 覆盖同名内置问题，或追加新问题
@@ -112,7 +113,13 @@ tool:
         threshold: 0.5
 ```
 
-连接字段也可以用环境变量覆盖 YAML：`TOOL_CONTENT_SAFETY_DECISION_API_URL`、`TOOL_CONTENT_SAFETY_DECISION_API_KEY`、`TOOL_CONTENT_SAFETY_DECISION_MODEL`。
+根级 `decision` 是公共连接配置，本身不启用功能，也不共享可变客户端；内容安全问题和阈值仍独立管理。从 `veadk.decision` 导入 `DecisionConfig`，通过 `Agent(decision=...)` 或 `build_content_safety(config, decision=...)` 传入。完整连接项见[模型配置](../agent/model)。
+
+连接字段也可以用环境变量覆盖 YAML：`DECISION_API_URL`、`DECISION_API_KEY`、`DECISION_MODEL`。
+
+<Callout type="warning" title="从 1.1.27 及更早版本迁移">
+旧版的 `tool.content_safety.decision.{api_url,api_key,model}` 与 `TOOL_CONTENT_SAFETY_DECISION_{API_URL,API_KEY,MODEL}` 环境变量仍然兼容；当 `provider` 为 `decision` 时它们仍会生效并打印弃用警告。旧版的 `from veadk.content_safety import DecisionConfig, DEFAULT_DECISION_MODEL` 导入也可继续使用一个版本，但会产生 `DeprecationWarning`；请改为从 `veadk.decision` 导入。请迁移到根级 `decision` 与 `DECISION_*`；根级 `decision` 或任一 `DECISION_*` 一旦存在就优先于旧位置，两者不会合并字段。两处同时配置时，请把旧位置的连接字段删除，避免误判实际使用的地址或密钥。
+</Callout>
 
 如果配置了自定义 `decision.api_url`，必须同时显式提供 `decision.api_key`；SDK 不会把 Ark 凭证复用给第三方地址。也可以在代码中直接配置：
 

@@ -809,6 +809,16 @@ class Runner(ADKRunner):
                 return True
         return False
 
+    async def close(self) -> None:
+        """Close the runner, its tools/plugins, and routing clients."""
+        try:
+            await super().close()
+        finally:
+            agent = getattr(self, "agent", None)
+            close = getattr(agent, "aclose", None)
+            if callable(close):
+                await close()
+
     async def save_session_to_long_term_memory(
         self, session_id: str, user_id: str = "", app_name: str = "", **kwargs
     ) -> None:

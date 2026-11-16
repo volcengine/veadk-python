@@ -17,7 +17,7 @@ Enable explicitly to avoid accidentally calling a production moderation
 service from normal test runs::
 
     VEADK_CONTENT_SAFETY_LIVE=1 \
-    TOOL_CONTENT_SAFETY_DECISION_API_KEY=... \
+    DECISION_API_KEY=... \
     pytest tests/e2e/test_content_safety_live.py -q
 
 The API key is read from the environment and is never logged or asserted.
@@ -35,6 +35,7 @@ from types import SimpleNamespace
 import pytest
 from google.genai import types
 
+from veadk.decision import DecisionConfig
 from veadk.content_safety import (
     AuditAction,
     AuditStatus,
@@ -45,9 +46,7 @@ from veadk.content_safety import (
 )
 
 LIVE_ENABLED = os.getenv("VEADK_CONTENT_SAFETY_LIVE") == "1"
-LIVE_API_KEY = os.getenv("TOOL_CONTENT_SAFETY_DECISION_API_KEY") or os.getenv(
-    "ARK_API_KEY"
-)
+LIVE_API_KEY = os.getenv("DECISION_API_KEY") or os.getenv("ARK_API_KEY")
 DEFAULT_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v1/systemone"
 RED_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAK0lEQVR4nO3NQQEAAATAQGTQ"
@@ -90,8 +89,7 @@ RED_MP4 = base64.b64decode(
 pytestmark = pytest.mark.skipif(
     not (LIVE_ENABLED and LIVE_API_KEY),
     reason=(
-        "set VEADK_CONTENT_SAFETY_LIVE=1 and "
-        "TOOL_CONTENT_SAFETY_DECISION_API_KEY (or ARK_API_KEY) to run"
+        "set VEADK_CONTENT_SAFETY_LIVE=1 and DECISION_API_KEY (or ARK_API_KEY) to run"
     ),
 )
 
@@ -107,20 +105,22 @@ def _plugin():
     config = ContentSafetyConfig.from_dict(
         {
             "provider": "decision",
-            "decision": {
-                "api_url": os.getenv(
-                    "TOOL_CONTENT_SAFETY_DECISION_API_URL", DEFAULT_ENDPOINT
-                ),
-                "api_key": LIVE_API_KEY,
-                "model": os.getenv(
-                    "TOOL_CONTENT_SAFETY_DECISION_MODEL",
-                    "doubao-seed-2-1-lite-260915",
-                ),
-            },
             "questions": questions,
         }
     )
-    return build_content_safety(config)
+    return build_content_safety(
+        config,
+        decision=DecisionConfig.model_validate(
+            {
+                "api_url": os.getenv("DECISION_API_URL", DEFAULT_ENDPOINT),
+                "api_key": LIVE_API_KEY,
+                "model": os.getenv(
+                    "DECISION_MODEL",
+                    "doubao-seed-2-1-lite-260915",
+                ),
+            }
+        ),
+    )
 
 
 def _request(text: str):
@@ -180,19 +180,21 @@ def _plugin_with_question(instructions):
                     "threshold": 0.5,
                 }
             },
-            "decision": {
-                "api_url": os.getenv(
-                    "TOOL_CONTENT_SAFETY_DECISION_API_URL", DEFAULT_ENDPOINT
-                ),
-                "api_key": LIVE_API_KEY,
-                "model": os.getenv(
-                    "TOOL_CONTENT_SAFETY_DECISION_MODEL",
-                    "doubao-seed-2-1-lite-260915",
-                ),
-            },
         }
     )
-    return build_content_safety(config)
+    return build_content_safety(
+        config,
+        decision=DecisionConfig.model_validate(
+            {
+                "api_url": os.getenv("DECISION_API_URL", DEFAULT_ENDPOINT),
+                "api_key": LIVE_API_KEY,
+                "model": os.getenv(
+                    "DECISION_MODEL",
+                    "doubao-seed-2-1-lite-260915",
+                ),
+            }
+        ),
+    )
 
 
 def _media_request(parts):

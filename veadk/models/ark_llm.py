@@ -262,6 +262,8 @@ def _get_content(
 
 def _content_to_input_item(
     content: types.Content,
+    *,
+    text_before_tool_calls: bool = False,
 ) -> Union[ResponseInputItemParam, List[ResponseInputItemParam]]:
     role = _to_ark_role(content.role)
 
@@ -286,6 +288,11 @@ def _content_to_input_item(
         if input_content:
             return input_content
     else:  # model
+        # Portable replay keeps a tool call adjacent to its result. Otherwise
+        # explanatory text can prematurely close the tool-call message group.
+        if input_content and text_before_tool_calls:
+            input_list.append(input_content)
+            input_content = None
         # 3. Processing model messages
         for part in content.parts:
             if part.function_call:
@@ -375,6 +382,8 @@ def _responses_schema_to_text(
 
 def _get_responses_inputs(
     llm_request: LlmRequest,
+    *,
+    text_before_tool_calls: bool = False,
 ) -> Tuple[
     Optional[str],
     Optional[List[ResponseInputItemParam]],
@@ -392,7 +401,9 @@ def _get_responses_inputs(
         # Each content represents `one conversation`.
         # This `one conversation` may contain `multiple pieces of content`,
         # but it cannot contain `multiple conversations`.
-        input_item_or_list = _content_to_input_item(content)
+        input_item_or_list = _content_to_input_item(
+            content, text_before_tool_calls=text_before_tool_calls
+        )
         if isinstance(input_item_or_list, list):
             input_params.extend(input_item_or_list)
         elif input_item_or_list:
@@ -744,8 +755,15 @@ class ArkLlm(Gemini):
         self._maybe_append_user_content(llm_request)
         # logger.debug(_build_request_log(llm_request))
 
+        from veadk.routing.context import get_turn_context
+
+        turn = get_turn_context()
+
         instructions, input_param, tools, text_format, generation_params = (
-            _get_responses_inputs(llm_request)
+            _get_responses_inputs(
+                llm_request,
+                text_before_tool_calls=turn is not None and not turn.selection.shadow,
+            )
         )
 
         if "functions" in self._additional_args:

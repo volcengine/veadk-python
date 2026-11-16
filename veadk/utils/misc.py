@@ -137,16 +137,18 @@ def set_envs(config_yaml_path: str, env_from_dotenv: dict = None) -> tuple[dict,
     with open(config_yaml_path, "r", encoding="utf-8") as yaml_file:
         config_dict = safe_load(yaml_file)
 
-    # The content-safety subtree is structured runtime configuration, not a
-    # source of environment variables. Keep its questions/decision values out
-    # of the flattened env so nested data is not lossy or surprising.
+    # Structured feature and shared connection blocks stay local to each
+    # consumer; exporting them would leak configuration into later agents.
     env_config_dict = config_dict
     if isinstance(config_dict, dict):
         tool_config = config_dict.get("tool")
         has_tool_block = (
             isinstance(tool_config, dict) and "content_safety" in tool_config
         )
-        has_root_block = "content_safety" in config_dict
+        has_root_block = any(
+            key in config_dict
+            for key in ("content_safety", "query_routing", "decision")
+        )
         if has_tool_block or has_root_block:
             env_config_dict = dict(config_dict)
             if has_tool_block:
@@ -156,7 +158,8 @@ def set_envs(config_yaml_path: str, env_from_dotenv: dict = None) -> tuple[dict,
                     env_config_dict["tool"] = remaining_tool
                 else:
                     env_config_dict.pop("tool", None)
-            env_config_dict.pop("content_safety", None)
+            for key in ("content_safety", "query_routing", "decision"):
+                env_config_dict.pop(key, None)
 
     flatten_config_dict = flatten_dict(env_config_dict)
     config_upper_map = {k.upper(): v for k, v in flatten_config_dict.items()}

@@ -35,13 +35,11 @@ The explicit API remains available::
 
 from .config import (
     DEFAULT_BLOCK_MESSAGE,
-    DEFAULT_DECISION_MODEL,
     DEFAULT_QUESTION_INSTRUCTIONS,
     DEFAULT_QUESTION_THRESHOLD,
     DEFAULT_QUESTION_THRESHOLDS,
     ContentSafetyConfig,
     ContentSafetyConfigError,
-    DecisionConfig,
     QuestionConfig,
     default_questions,
     load_content_safety_config,
@@ -64,6 +62,27 @@ from .types import (
     QuestionResult,
 )
 
+# Connection symbols moved to ``veadk.decision``. Keep the released import
+# paths working for one release; remove this shim afterwards.
+_DEPRECATED_IMPORTS = ("DecisionConfig", "DEFAULT_DECISION_MODEL")
+
+
+def __getattr__(name: str) -> object:
+    if name in _DEPRECATED_IMPORTS:
+        import warnings
+
+        from veadk import decision
+
+        warnings.warn(
+            f"veadk.content_safety.{name} is deprecated; import it from "
+            "veadk.decision instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return getattr(decision, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "AuditAction",
     "AuditResult",
@@ -72,7 +91,6 @@ __all__ = [
     "ContentSafetyConfig",
     "ContentSafetyConfigError",
     "DecisionPlugin",
-    "DecisionConfig",
     "Provider",
     "QuestionConfig",
     "QuestionResult",
@@ -80,7 +98,6 @@ __all__ = [
     "StatePayload",
     "STATE_POLICY_PREFIX",
     "DEFAULT_BLOCK_MESSAGE",
-    "DEFAULT_DECISION_MODEL",
     "DEFAULT_QUESTION_INSTRUCTIONS",
     "DEFAULT_QUESTION_THRESHOLD",
     "DEFAULT_QUESTION_THRESHOLDS",

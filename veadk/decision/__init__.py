@@ -19,6 +19,14 @@ from .client import (
     DecisionClientError,
     DecisionJudge,
 )
+from .config import (
+    DEFAULT_DECISION_MODEL,
+    DecisionConfig,
+    DecisionConfigError,
+    has_explicit_decision_config,
+    load_decision_config,
+)
+from .connection import resolve_decision_connection
 from .types import (
     DecisionQuestion,
     DecisionRequest,
@@ -27,6 +35,12 @@ from .types import (
 )
 
 __all__ = [
+    "DEFAULT_DECISION_MODEL",
+    "DecisionConfig",
+    "DecisionConfigError",
+    "has_explicit_decision_config",
+    "load_decision_config",
+    "resolve_decision_connection",
     "DEFAULT_TIMEOUT_SECONDS",
     "DecisionClient",
     "DecisionClientError",
