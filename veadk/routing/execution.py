@@ -179,20 +179,45 @@ def _owner_name(agent: Any, router: Any) -> str:
 _TRANSIENT_CLIENT_CODES = frozenset({408, 429})
 
 
+def _http_status(error: Exception) -> int | None:
+    """Extract an HTTP status from the provider exception shapes we consume.
+
+    LiteLLM puts the response status on ``status_code``; the Ark SDK keeps the
+    HTTP status on ``status_code`` while ``code`` is a string business code
+    such as ``InvalidParameter``. Only fall back to ``code`` when it parses as
+    an integer, which also covers ``google.genai.errors.APIError``.
+    """
+
+    candidates = (
+        getattr(error, "status_code", None),
+        getattr(getattr(error, "response", None), "status_code", None),
+        getattr(error, "code", None),
+    )
+    for value in candidates:
+        if value is None or isinstance(value, bool):
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _opens_circuit(error: Exception) -> bool:
     """Whether a provider error indicates an unhealthy simple tier.
 
     A request-specific 4xx (bad arguments, auth, missing model) says nothing
     about the next request, so cooling the tier down would only move later
     turns to the strong model. Timeouts and rate limits are transient and do
-    open the cooldown. Errors without a status code keep the previous
+    open the cooldown. Errors without an HTTP status keep the previous
     conservative behavior.
     """
 
-    code = getattr(error, "code", None)
-    if isinstance(code, int) and not isinstance(code, bool):
-        if 400 <= code < 500:
-            return code in _TRANSIENT_CLIENT_CODES
+    status = _http_status(error)
+    if status is None:
+        return True
+    if 400 <= status < 500:
+        return status in _TRANSIENT_CLIENT_CODES
     return True
 
 
