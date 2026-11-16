@@ -226,6 +226,57 @@ async def test_xlsx_converts_non_basic_cell_values() -> None:
 
 
 @pytest.mark.asyncio
+async def test_xlsx_writes_formula_like_cells_as_text() -> None:
+    import openpyxl
+
+    result = await doc_generate(
+        "xlsx",
+        "",
+        sheets=[
+            {
+                "name": "S",
+                "rows": [
+                    ["=1+1", "+1", "-1", "@SUM(A1)", "\r=cmd", "safe"],
+                    [1, -2, 3.5, True, None, "x"],
+                ],
+            }
+        ],
+        tool_context=None,
+    )
+
+    workbook = openpyxl.load_workbook(result["path"], data_only=False)
+    worksheet = workbook["S"]
+    for column in ("A1", "B1", "C1", "D1", "E1"):
+        assert worksheet[column].value.startswith(("=", "+", "-", "@", "\r"))
+        assert worksheet[column].data_type == "s"
+    assert worksheet["F1"].value == "safe"
+    # Numbers and booleans keep their native type.
+    assert worksheet["A2"].value == 1
+    assert worksheet["B2"].value == -2
+    assert worksheet["D2"].value is True
+
+
+@pytest.mark.asyncio
+async def test_xlsx_truncation_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(doc_generate_module, "_MAX_COLUMNS", 1)
+    result = await doc_generate(
+        "xlsx",
+        "",
+        sheets=[{"name": "S", "rows": [["a", "b"]]}],
+        tool_context=None,
+    )
+    assert result["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_docx_and_md_are_never_truncated() -> None:
+    docx_result = await doc_generate("docx", "T", content="body", tool_context=None)
+    md_result = await doc_generate("md", "T", content="body", tool_context=None)
+    assert docx_result["truncated"] is False
+    assert md_result["truncated"] is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "sheets",
     [
@@ -306,6 +357,36 @@ async def test_csv_row_cap(monkeypatch: pytest.MonkeyPatch) -> None:
         tool_context=None,
     )
     assert Path(result["path"]).read_bytes() == b"a\r\n"
+    assert result["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_csv_neutralizes_formula_cells() -> None:
+    rows = [
+        ["=1+1", "+1", "-1", "@SUM(A1)", "\t=cmd|'/C calc'!A0", "safe", " - note"],
+    ]
+    result = await doc_generate("csv", "", rows=rows, tool_context=None)
+
+    parsed = list(
+        csv.reader(io.StringIO(Path(result["path"]).read_text(encoding="utf-8")))
+    )
+    assert parsed == [
+        [
+            "'=1+1",
+            "'+1",
+            "'-1",
+            "'@SUM(A1)",
+            "'\t=cmd|'/C calc'!A0",
+            "safe",
+            " - note",
+        ]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_csv_without_truncation_sets_flag_false() -> None:
+    result = await doc_generate("csv", "", rows=[["a"]], tool_context=None)
+    assert result["truncated"] is False
 
 
 @pytest.mark.asyncio

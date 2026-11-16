@@ -128,14 +128,21 @@ BUILTIN_TOOL_DECLARATIONS: dict[str, tuple[str, dict[str, Any]]] = {
         "raw CSV text fallback\n        for ``csv``. Supports ``#``-``###`` "
         "headings and ``-``/``*``/``+``\n        bullets for Word.\n "
         '   sheets: For ``xlsx``, a list of ``{"name": str, "rows": '
-        "list[list]}``.\n    rows: For ``csv``, a list of rows. CSV output "
-        "is plain UTF-8 without a\n        byte-order mark.\n    filename: "
+        "list[list]}``.\n        String cells starting with ``=``, ``+``, "
+        "``-`` or ``@`` (after\n        leading tab/CR/LF) are written as "
+        "text, never as formulas.\n    rows: For ``csv``, a list of rows. "
+        "CSV output is plain UTF-8 without a\n        byte-order mark. "
+        "Formula-like cells get a leading ``'`` so\n        spreadsheet "
+        "applications treat them as text.\n    filename: "
         "Optional output filename; the correct extension is forced.\n"
         "    tool_context: Current ADK tool context used to save the "
         "artifact. When\n        omitted, the file is written to a temporary "
         'directory instead.\n\nReturns:\n    ``{"filename", "format", '
-        '"size_bytes", "mime_type",\n    "artifact_saved", "path"}`` '
-        'on success, or ``{"error"}`` on failure.',
+        '"size_bytes", "mime_type", "truncated",\n    "artifact_saved", '
+        '"path"}`` on success, or ``{"error"}`` on failure.\n    '
+        "``truncated`` is true when sheets, rows, or columns hit the "
+        "documented\n    caps and the generated file is shorter than the "
+        "input.",
         {
             "additionalProperties": False,
             "properties": {
@@ -178,11 +185,15 @@ BUILTIN_TOOL_DECLARATIONS: dict[str, tuple[str, dict[str, Any]]] = {
         "``format`` when supplied, otherwise inferred from the file extension, "
         "then\nfrom the response ``Content-Type``, then from the file's magic "
         "bytes, then\nfrom an HTML sniff, and finally treated as UTF-8 "
-        "text.\n\nArgs:\n    source: Local path or public http(s) URL.\n"
-        "    format: Optional override: pdf, docx, xlsx, csv, txt, md, "
-        "json, or html.\n    max_chars: Maximum characters returned (1,000-1,000,000).\n"
-        '\nReturns:\n    ``{"format", "text", "truncated", "metadata"}`` '
-        'on success, or\n    ``{"error"}`` on failure.',
+        "text.\n\nArgs:\n    source: Local path or public http(s) URL. A "
+        "local file larger than\n        20,000,000 bytes returns an error; "
+        "a remote body larger than that\n        is truncated and flagged in "
+        '``metadata["download_truncated"]``.\n    format: Optional override: '
+        "pdf, docx, xlsx, csv, txt, md, json, or html.\n    max_chars: "
+        "Maximum characters returned (1,000-1,000,000).\n\nReturns:\n    "
+        '``{"format", "text", "truncated", "metadata"}`` on success, or\n    '
+        '``{"error"}`` on failure. ``metadata`` reports ``size_bytes`` and\n'
+        "    whether the byte cap truncated the download.",
         {
             "additionalProperties": False,
             "properties": {
@@ -228,9 +239,12 @@ BUILTIN_TOOL_DECLARATIONS: dict[str, tuple[str, dict[str, Any]]] = {
         "body.\n\nUse this tool when you need to call an HTTP API or "
         "download a small\nresource. Private/internal addresses are blocked. "
         "Redirects are only\nfollowed when ``follow_redirects`` is true "
-        "(at most three hops), and every\nhop is re-validated. Set a "
-        "header value to ``env:NAME`` to read a secret\nfrom environment "
-        "variable ``NAME`` without exposing it in the arguments.\n\nArgs:\n"
+        "(at most three hops), and every\nhop is re-validated. Credentials "
+        "(``Authorization``, ``Cookie``,\n``Proxy-Authorization``, and any "
+        "``env:``-resolved header) are dropped when\na redirect changes "
+        "origin or downgrades to http. Set a header value to\n"
+        "``env:NAME`` to read a secret from environment variable ``NAME`` "
+        "without\nexposing it in the arguments.\n\nArgs:\n"
         "    url: The absolute http(s) URL to request.\n    method: One "
         "of GET, POST, PUT, PATCH, DELETE, HEAD (case-insensitive).\n"
         "    headers: Optional request headers. ``env:NAME`` values are "
@@ -490,10 +504,12 @@ BUILTIN_TOOL_DECLARATIONS: dict[str, tuple[str, dict[str, Any]]] = {
         "\n- ``resize``: ``width`` and/or ``height`` (positive ints). "
         "When only one\n  side is given the aspect ratio is preserved. "
         "With both sides and\n  ``keep_aspect`` true (default) the image "
-        "fits inside the box.\n- ``crop``: ``left``, ``top``, ``right``, "
+        "fits inside the box. The output\n  canvas may not exceed 40,000,000 "
+        "pixels.\n- ``crop``: ``left``, ``top``, ``right``, "
         "``bottom`` pixel coordinates.\n- ``rotate``: ``degrees`` (float), "
         "expanding the canvas and filling with\n  white (RGB) or transparency "
-        "(RGBA).\n- ``flip``: ``direction`` equal to ``horizontal`` or "
+        "(RGBA); the expanded canvas is subject to the\n  same pixel limit.\n"
+        "- ``flip``: ``direction`` equal to ``horizontal`` or "
         "``vertical``.\n- ``thumbnail``: ``max_size`` (positive int), "
         "preserving aspect ratio.\n- ``grayscale``: converts the image "
         "to grayscale.\n- ``convert``: ``format`` of ``png``, ``jpeg`` "

@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from io import BytesIO
 from pathlib import Path
@@ -25,9 +26,13 @@ import httpx
 from PIL import Image
 
 from veadk.config import getenv, settings
+from veadk.tools.builtin_tools.web_fetch import assert_public_url
 
 _MAX_IMAGES = 8
 _MAX_IMAGE_BYTES = 20 * 1024 * 1024
+# Base64 inflates payloads by roughly a third, so a per-image cap alone still
+# allows a ~200 MB request for eight images. Bound the aggregate local payload.
+_MAX_TOTAL_IMAGE_BYTES = 40 * 1024 * 1024
 _DEFAULT_TIMEOUT_SECONDS = 60
 _ERROR_DETAIL_LIMIT = 200
 
@@ -89,21 +94,35 @@ def _guess_mime(data: bytes, path: Path | None) -> str:
     return "application/octet-stream"
 
 
-def _image_part(image: str) -> dict:
+def _image_part(image: str) -> tuple[dict, int]:
+    """Build a message part and return its local payload size in bytes.
+
+    Remote URLs are forwarded to the provider, so no local bytes are read and
+    the returned size is 0. Local files are read under the per-image cap and
+    their size is reported so the caller can enforce an aggregate budget.
+    """
     if _is_http_url(image):
-        return {"type": "image_url", "image_url": {"url": image}}
+        # The provider fetches the URL, so apply the shared SSRF policy first:
+        # a model-supplied internal address must never reach the provider.
+        assert_public_url(image)
+        return {"type": "image_url", "image_url": {"url": image}}, 0
     path = Path(image)
     if not path.is_file():
         raise ValueError(f"image file does not exist: {image}")
-    data = path.read_bytes()
+    # Bounded read so a huge local file cannot be buffered whole.
+    with path.open("rb") as handle:
+        data = handle.read(_MAX_IMAGE_BYTES + 1)
     if len(data) > _MAX_IMAGE_BYTES:
         raise ValueError(f"image exceeds the {_MAX_IMAGE_BYTES} byte limit")
     mime_type = _guess_mime(data, path)
     encoded = base64.b64encode(data).decode("ascii")
-    return {
-        "type": "image_url",
-        "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
-    }
+    return (
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
+        },
+        len(data),
+    )
 
 
 def _error_detail(response: object) -> str:
@@ -180,7 +199,10 @@ async def analyze_images(
     """Send one or more images to the configured vision model.
 
     Args:
-        images: Local image paths or public http(s) URLs (1 to 8 items).
+        images: Local image paths or public http(s) URLs (1 to 8 items). Remote
+            URLs are SSRF-checked before they are forwarded to the model.
+            Local images are capped at 20,000,000 bytes each and 40,000,000
+            bytes in total.
         prompt: Instruction for the model.
         model_name: Optional vision model override. Defaults to
             ``MODEL_VISION_NAME`` or the agent model name.
@@ -198,7 +220,17 @@ async def analyze_images(
         if not isinstance(base_url, str) or not base_url.strip():
             raise ValueError("vision model API base is not configured")
 
-        image_parts = [_image_part(image) for image in images]
+        image_parts: list[dict] = []
+        total_bytes = 0
+        for image in images:
+            # Offload blocking DNS lookups and file reads off the event loop.
+            part, size = await asyncio.to_thread(_image_part, image)
+            total_bytes += size
+            if total_bytes > _MAX_TOTAL_IMAGE_BYTES:
+                raise ValueError(
+                    f"images exceed the {_MAX_TOTAL_IMAGE_BYTES} byte total limit"
+                )
+            image_parts.append(part)
         payload = {
             "model": model,
             "messages": [

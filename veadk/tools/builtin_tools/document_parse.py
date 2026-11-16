@@ -154,24 +154,29 @@ def _detect_format(
 
 
 # ----------------------------------------------------------------- download --
-def _read_capped(response: requests.Response) -> bytes:
+def _read_capped(response: requests.Response) -> tuple[bytes, bool]:
+    """Read at most ``_MAX_DOWNLOAD_BYTES`` and report whether more remained."""
     chunks: list[bytes] = []
     total = 0
+    # Keep reading until the cap is exceeded so an exactly-sized body is not
+    # misreported as truncated.
     for chunk in response.iter_content(chunk_size=16_384):
         if not chunk:
             continue
         chunks.append(chunk)
         total += len(chunk)
-        if total >= _MAX_DOWNLOAD_BYTES:
+        if total > _MAX_DOWNLOAD_BYTES:
             break
-    return b"".join(chunks)[:_MAX_DOWNLOAD_BYTES]
+    data = b"".join(chunks)
+    return data[:_MAX_DOWNLOAD_BYTES], len(data) > _MAX_DOWNLOAD_BYTES
 
 
-def _download_url(url: str) -> tuple[bytes, str, str | None]:
+def _download_url(url: str) -> tuple[bytes, bool, str, str | None]:
     """Download *url*, re-validating each redirect hop and capping the size.
 
-    Returns the body, the final URL after redirects, and the response
-    ``Content-Type`` (if any) so format detection can use it.
+    Returns the body, whether the cap truncated it, the final URL after
+    redirects, and the response ``Content-Type`` (if any) so format detection
+    can use it.
     """
     current = url
     hops = 0
@@ -195,11 +200,8 @@ def _download_url(url: str) -> tuple[bytes, str, str | None]:
                 continue
             if not response.ok:
                 raise _ParseError(f"HTTP {response.status_code}")
-            return (
-                _read_capped(response),
-                current,
-                response.headers.get("content-type"),
-            )
+            data, truncated = _read_capped(response)
+            return data, truncated, current, response.headers.get("content-type")
         finally:
             response.close()
 
@@ -254,6 +256,10 @@ def _extract_docx(data: bytes) -> tuple[str, dict]:
 def _extract_xlsx(data: bytes) -> tuple[str, dict]:
     import openpyxl
 
+    # ``read_only`` keeps memory proportional to one row at a time, but the
+    # 20,000,000-byte input cap is the only bound on zip/XML expansion inside
+    # openpyxl. Treat xlsx input as trusted up to that cap; lowering the cap is
+    # the way to tighten this, not adding a second decompression budget here.
     workbook = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     try:
         sheet_names = list(workbook.sheetnames)[:_MAX_XLSX_SHEETS]
@@ -358,13 +364,16 @@ def document_parse(
     from an HTML sniff, and finally treated as UTF-8 text.
 
     Args:
-        source: Local path or public http(s) URL.
+        source: Local path or public http(s) URL. A local file larger than
+            20,000,000 bytes returns an error; a remote body larger than that
+            is truncated and flagged in ``metadata["download_truncated"]``.
         format: Optional override: pdf, docx, xlsx, csv, txt, md, json, or html.
         max_chars: Maximum characters returned (1,000-1,000,000).
 
     Returns:
         ``{"format", "text", "truncated", "metadata"}`` on success, or
-        ``{"error"}`` on failure.
+        ``{"error"}`` on failure. ``metadata`` reports ``size_bytes`` and
+        whether the byte cap truncated the download.
     """
     try:
         limit = _validate_max_chars(max_chars)
@@ -378,10 +387,13 @@ def document_parse(
     metadata: dict[str, object] = {}
     detection_source = source
     content_type: str | None = None
+    download_truncated = False
     try:
         if _is_url(source):
             try:
-                data, final_url, content_type = _download_url(source)
+                data, download_truncated, final_url, content_type = _download_url(
+                    source
+                )
             except ValueError as exc:
                 return {"error": str(exc)}
             except _ParseError as exc:
@@ -403,12 +415,20 @@ def document_parse(
             if not path.is_file():
                 return {"error": f"file not found: {source}"}
             try:
-                data = path.read_bytes()
+                # Bound the read even though the file may grow between the
+                # existence check and the read.
+                with path.open("rb") as handle:
+                    data = handle.read(_MAX_DOWNLOAD_BYTES + 1)
             except OSError as exc:
                 return {"error": f"failed to read file: {exc}"}
+            if len(data) > _MAX_DOWNLOAD_BYTES:
+                return {"error": f"file exceeds the {_MAX_DOWNLOAD_BYTES} byte limit"}
             metadata.update({"source_kind": "file", "path": str(path)})
 
         metadata["size_bytes"] = len(data)
+        # Remote bodies cannot be rejected before reading, so the cap truncates
+        # them; surface that explicitly or a parse error looks unexplainable.
+        metadata["download_truncated"] = download_truncated
         detected = _detect_format(detection_source, data, format, content_type)
         if detected is None:
             return {"error": f"unsupported format: {format}"}

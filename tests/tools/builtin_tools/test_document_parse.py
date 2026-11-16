@@ -299,6 +299,7 @@ def test_parse_empty_text_file(tmp_path: Path) -> None:
             "source_kind": "file",
             "path": str(path),
             "size_bytes": 0,
+            "download_truncated": False,
             "format": "txt",
         },
     }
@@ -403,10 +404,10 @@ def test_read_failure_returns_error(
     path = tmp_path / "denied.txt"
     path.write_text("x", encoding="utf-8")
 
-    def explode(self):
+    def explode(self, *args, **kwargs):
         raise PermissionError("denied")
 
-    monkeypatch.setattr(Path, "read_bytes", explode)
+    monkeypatch.setattr(Path, "open", explode)
 
     result = document_parse(str(path))
 
@@ -671,6 +672,30 @@ def test_url_request_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "download failed" in result["error"]
 
 
+def test_local_file_is_capped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(document_parse_module, "_MAX_DOWNLOAD_BYTES", 10)
+    path = tmp_path / "big.txt"
+    path.write_bytes(b"x" * 11)
+
+    result = document_parse(str(path))
+
+    assert "error" in result
+    assert "byte limit" in result["error"]
+
+
+def test_local_file_at_cap_is_parsed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(document_parse_module, "_MAX_DOWNLOAD_BYTES", 10)
+    path = tmp_path / "exact.txt"
+    path.write_bytes(b"x" * 10)
+
+    result = document_parse(str(path))
+
+    assert result["text"] == "x" * 10
+    assert result["metadata"]["size_bytes"] == 10
+
+
 def test_url_download_is_capped(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(document_parse_module, "_MAX_DOWNLOAD_BYTES", 10)
     response = FakeResponse(chunks=[b"", b"x" * 8, b"y" * 8])
@@ -683,6 +708,32 @@ def test_url_download_is_capped(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert result["text"] == "xxxxxxxxyy"
     assert result["metadata"]["size_bytes"] == 10
+    assert result["metadata"]["download_truncated"] is True
+
+
+def test_url_exact_cap_is_not_flagged_as_truncated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(document_parse_module, "_MAX_DOWNLOAD_BYTES", 10)
+    response = FakeResponse(body=b"x" * 10)
+    monkeypatch.setattr(
+        document_parse_module, "assert_public_url", lambda url: "example.com"
+    )
+    monkeypatch.setattr(document_parse_module.requests, "get", lambda *a, **k: response)
+
+    result = document_parse("https://example.com/exact", format="txt")
+
+    assert result["text"] == "x" * 10
+    assert result["metadata"]["download_truncated"] is False
+
+
+def test_local_file_never_reports_download_truncation(tmp_path: Path) -> None:
+    path = tmp_path / "note.txt"
+    path.write_text("hello", encoding="utf-8")
+
+    result = document_parse(str(path))
+
+    assert result["metadata"]["download_truncated"] is False
 
 
 def test_url_private_address_is_rejected_before_request() -> None:

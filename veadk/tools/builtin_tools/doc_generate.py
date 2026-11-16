@@ -44,6 +44,10 @@ _MAX_FILENAME_LENGTH = 120
 _ALLOWED_FILENAME_RE = re.compile(r"[^A-Za-z0-9._\-一-鿿]+")
 _HEADING_RE = re.compile(r"^(#{1,3})\s+(.*)$")
 _ANY_HEADING_RE = re.compile(r"^\s*#{1,6}(?:\s|$)")
+# Spreadsheet applications treat these leading characters as formula starts;
+# generated files embed model-extracted data, so neutralize them.
+_FORMULA_PREFIXES = ("=", "+", "-", "@")
+_FORMULA_LEADING_WHITESPACE = "\t\r\n"
 
 
 class _DocError(Exception):
@@ -113,7 +117,11 @@ def _cell_value(value: object) -> object:
     return str(value)
 
 
-def _build_xlsx(sheets: list[dict] | None) -> bytes:
+def _is_formula_like(value: str) -> bool:
+    return value.lstrip(_FORMULA_LEADING_WHITESPACE).startswith(_FORMULA_PREFIXES)
+
+
+def _build_xlsx(sheets: list[dict] | None) -> tuple[bytes, bool]:
     import openpyxl
     from openpyxl.styles import Font
     from openpyxl.utils import get_column_letter
@@ -124,6 +132,7 @@ def _build_xlsx(sheets: list[dict] | None) -> bytes:
     workbook = openpyxl.Workbook()
     used_names: set[str] = set()
     first_sheet = True
+    truncated = len(sheets) > _MAX_SHEETS
     for index, sheet in enumerate(sheets[:_MAX_SHEETS]):
         if not isinstance(sheet, dict):
             raise _DocError("each sheet must be an object")
@@ -145,16 +154,23 @@ def _build_xlsx(sheets: list[dict] | None) -> bytes:
         else:
             worksheet = workbook.create_sheet(title=name)
 
+        truncated = truncated or len(rows) > _MAX_ROWS_PER_SHEET
         widths: dict[int, int] = {}
         for row_index, row in enumerate(rows[:_MAX_ROWS_PER_SHEET], start=1):
             if not isinstance(row, (list, tuple)):
                 raise _DocError(f"sheet {name!r} contains a non-list row")
+            truncated = truncated or len(row) > _MAX_COLUMNS
             for column_index, value in enumerate(row[:_MAX_COLUMNS], start=1):
-                worksheet.cell(
+                cell_value = _cell_value(value)
+                cell = worksheet.cell(
                     row=row_index,
                     column=column_index,
-                    value=_cell_value(value),
+                    value=cell_value,
                 )
+                if isinstance(cell_value, str) and _is_formula_like(cell_value):
+                    # Force a text cell so the value is never evaluated as a
+                    # spreadsheet formula.
+                    cell.data_type = "s"
                 width = len(str(value)) if value is not None else 0
                 widths[column_index] = max(widths.get(column_index, 0), width)
         if rows:
@@ -167,11 +183,11 @@ def _build_xlsx(sheets: list[dict] | None) -> bytes:
 
     output = io.BytesIO()
     workbook.save(output)
-    return output.getvalue()
+    return output.getvalue(), truncated
 
 
 # ---------------------------------------------------------------------- csv --
-def _build_csv(rows: list[list] | None, content: str) -> bytes:
+def _build_csv(rows: list[list] | None, content: str) -> tuple[bytes, bool]:
     if rows is not None:
         if not isinstance(rows, list):
             raise _DocError("rows must be a list")
@@ -180,10 +196,18 @@ def _build_csv(rows: list[list] | None, content: str) -> bytes:
         for row in rows[:_MAX_CSV_ROWS]:
             if not isinstance(row, (list, tuple)):
                 raise _DocError("each row must be a list")
-            writer.writerow(["" if value is None else str(value) for value in row])
-        return buffer.getvalue().encode("utf-8")
+            cells = ["" if value is None else str(value) for value in row]
+            # CSV has no cell types, so prefix dangerous values with a quote
+            # (the usual spreadsheet text marker) instead.
+            writer.writerow(
+                [
+                    f"'{cell}" if cell and _is_formula_like(cell) else cell
+                    for cell in cells
+                ]
+            )
+        return buffer.getvalue().encode("utf-8"), len(rows) > _MAX_CSV_ROWS
     if content:
-        return content.encode("utf-8")
+        return content.encode("utf-8"), False
     raise _DocError("csv requires rows or content")
 
 
@@ -233,15 +257,20 @@ async def doc_generate(
             for ``csv``. Supports ``#``-``###`` headings and ``-``/``*``/``+``
             bullets for Word.
         sheets: For ``xlsx``, a list of ``{"name": str, "rows": list[list]}``.
+            String cells starting with ``=``, ``+``, ``-`` or ``@`` (after
+            leading tab/CR/LF) are written as text, never as formulas.
         rows: For ``csv``, a list of rows. CSV output is plain UTF-8 without a
-            byte-order mark.
+            byte-order mark. Formula-like cells get a leading ``'`` so
+            spreadsheet applications treat them as text.
         filename: Optional output filename; the correct extension is forced.
         tool_context: Current ADK tool context used to save the artifact. When
             omitted, the file is written to a temporary directory instead.
 
     Returns:
-        ``{"filename", "format", "size_bytes", "mime_type",
+        ``{"filename", "format", "size_bytes", "mime_type", "truncated",
         "artifact_saved", "path"}`` on success, or ``{"error"}`` on failure.
+        ``truncated`` is true when sheets, rows, or columns hit the documented
+        caps and the generated file is shorter than the input.
     """
     fmt = format.strip().lower() if isinstance(format, str) else ""
     if fmt not in _SUPPORTED_FORMATS:
@@ -256,13 +285,14 @@ async def doc_generate(
         else ("" if content is None else str(content))
     )
 
+    truncated = False
     try:
         if fmt == "docx":
             data = _build_docx(title_text.strip(), content_text)
         elif fmt == "xlsx":
-            data = _build_xlsx(sheets)
+            data, truncated = _build_xlsx(sheets)
         elif fmt == "csv":
-            data = _build_csv(rows, content_text)
+            data, truncated = _build_csv(rows, content_text)
         else:
             data = _build_md(title_text.strip(), content_text)
     except _DocError as exc:
@@ -277,6 +307,7 @@ async def doc_generate(
         "format": fmt,
         "size_bytes": len(data),
         "mime_type": mime_type,
+        "truncated": truncated,
         "artifact_saved": False,
         "path": None,
     }

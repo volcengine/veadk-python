@@ -494,14 +494,14 @@ agent = Agent(
 )
 ```
 
-- `http_request(url, method="GET", headers=None, params=None, json_body=None, body=None, timeout=30, max_bytes=5_000_000, follow_redirects=False)`：发起 HTTP(S) 请求。仅允许 http/https，默认拒绝内网、回环、链路本地和云元数据地址；重定向默认关闭，开启后每一跳都会重新校验，最多 3 跳；响应体超过 `max_bytes` 时截断并返回 `truncated: true`。请求头值写成 `env:NAME` 可从环境变量读取密钥，避免密钥进入模型参数。可用 `TOOL_HTTP_ALLOWLIST=api.example.com,cdn.example.com` 限定目标域名。
-- `document_parse(source, format=None, max_chars=200000)`：解析本地文件或公网 URL，支持 pdf、docx、xlsx、csv、txt、md、json、html。扫描版 PDF 返回 `needs_ocr: true`，可继续调用 `ocr`。
-- `doc_generate(format, title, content="", sheets=None, rows=None, filename=None)`：生成 docx、xlsx、csv 或 md 并保存为 artifact；不支持 PDF。
+- `http_request(url, method="GET", headers=None, params=None, json_body=None, body=None, timeout=30, max_bytes=5_000_000, follow_redirects=False)`：发起 HTTP(S) 请求。仅允许 http/https，默认拒绝内网、回环、链路本地和云元数据地址；重定向默认关闭，开启后每一跳都会重新校验，最多 3 跳；响应体超过 `max_bytes` 时截断并返回 `truncated: true`。请求头值写成 `env:NAME` 可从环境变量读取密钥，避免密钥进入模型参数。跨域重定向或 https→http 降级时会自动丢弃 `Authorization`、`Cookie`、`Proxy-Authorization` 以及所有从 `env:` 解析出的请求头（同域 http→https 升级除外），避免凭证泄露给重定向目标。可用 `TOOL_HTTP_ALLOWLIST=api.example.com,cdn.example.com` 限定目标域名。
+- `document_parse(source, format=None, max_chars=200000)`：解析本地文件或公网 URL，支持 pdf、docx、xlsx、csv、txt、md、json、html。扫描版 PDF 返回 `needs_ocr: true`，可继续调用 `ocr`。本地文件超过 20,000,000 字节直接报错；URL 下载超过该上限会截断，并在 `metadata.download_truncated` 中标记。
+- `doc_generate(format, title, content="", sheets=None, rows=None, filename=None)`：生成 docx、xlsx、csv 或 md 并保存为 artifact；不支持 PDF。以 `=`、`+`、`-`、`@` 开头的字符串单元格会按文本写入（CSV 加 `'` 前缀），防止公式注入；因 sheet/行列上限被截断时返回 `truncated: true`。
 - `mindmap_generate(title, markdown, filename=None)`：按标题层级和缩进列表生成 Mermaid 文本与 SVG，无需 Node.js。
 - `qrcode_generate(content, filename="qrcode.png", box_size=10, border=4, fill_color="black", back_color="white")`：生成 PNG 二维码；仅支持生成，不支持解码。
-- `image_transform(source, operations, output_format=None, quality=90, filename=None)`：按顺序执行 `resize`、`crop`、`rotate`、`flip`、`thumbnail`、`grayscale`、`convert`，输出 png / jpeg / webp；本地路径和公网 URL 均可。
-- `image_understand(images, prompt="Describe the image in detail.", model_name=None)`：理解 1–8 张图片，支持本地路径或公网 URL，可传 `model_name` 覆盖视觉模型。
-- `ocr(image, language="auto", model_name=None)`：提取图片文字；`language` 仅作为提示，`auto` 时不额外约束。
+- `image_transform(source, operations, output_format=None, quality=90, filename=None)`：按顺序执行 `resize`、`crop`、`rotate`、`flip`、`thumbnail`、`grayscale`、`convert`，输出 png / jpeg / webp；本地路径和公网 URL 均可。输出画布（含 `rotate` 扩展后的尺寸）不得超过 40,000,000 像素。
+- `image_understand(images, prompt="Describe the image in detail.", model_name=None)`：理解 1–8 张图片，支持本地路径或公网 URL，可传 `model_name` 覆盖视觉模型。本地图片单张上限 20,000,000 字节、合计上限 40,000,000 字节。公网 URL 会先经过与 `http_request` 相同的 SSRF 校验，再交给模型服务。
+- `ocr(image, language="auto", model_name=None)`：提取图片文字；`language` 仅作为提示，`auto` 时不额外约束。公网 URL 同样先做 SSRF 校验；本地图片适用相同的单张与合计大小限制。
 - `speech_to_text(audio, timeout=300)`：调用火山引擎录音文件识别极速版，支持 wav / mp3 / ogg / opus，单文件不超过 100 MB，也支持公网音频 URL。
 - `calculator(expression, precision=10)`：支持四则运算、幂、取模和 `sqrt` / `log` / `sin` 等少量函数，拒绝任意 Python 代码。
 - `datetime(action, value=None, value2=None, timezone=None, target_timezone=None, format=None, amount=None, unit=None)`：`action` 取 `now` / `parse` / `format` / `convert` / `diff` / `add`，时区使用 IANA 名称。

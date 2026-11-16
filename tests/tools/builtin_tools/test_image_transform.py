@@ -180,6 +180,49 @@ async def test_resize_validation(tmp_path, operation):
 
 
 @pytest.mark.asyncio
+async def test_local_source_is_size_capped(tmp_path, monkeypatch):
+    monkeypatch.setattr(tool, "_MAX_DOWNLOAD_BYTES", 4)
+    source = tmp_path / "big.png"
+    source.write_bytes(b"12345")
+    result = await tool.image_transform(str(source), [{"type": "grayscale"}])
+    assert "error" in result
+    assert "byte limit" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_resize_rejects_oversized_output(tmp_path):
+    source = _save(tmp_path, "source.png", size=(10, 10))
+    result = await tool.image_transform(
+        source,
+        [{"type": "resize", "width": 50000, "height": 50000, "keep_aspect": False}],
+    )
+    assert "error" in result
+    assert "pixel limit" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_resize_rejects_oversized_derived_dimension(tmp_path):
+    source = _save(tmp_path, "source.png", size=(10, 10))
+    result = await tool.image_transform(source, [{"type": "resize", "height": 40000}])
+    assert "error" in result
+    assert "pixel limit" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_rotate_rejects_oversized_expanded_canvas(tmp_path, monkeypatch):
+    monkeypatch.setattr(tool, "_MAX_OUTPUT_PIXELS", 100)
+    source = _save(tmp_path, "source.png", size=(40, 20))
+    result = await tool.image_transform(source, [{"type": "rotate", "degrees": 45}])
+    assert "error" in result
+    assert "pixel limit" in result["error"]
+
+
+def test_rotated_size_matches_pillow():
+    width, height = tool._rotated_size(100, 50, 90)
+    assert (width, height) == (50, 100)
+
+
+@pytest.mark.asyncio
 async def test_crop(tmp_path):
     source = _save(tmp_path, "source.png", size=(10, 10))
     result = await tool.image_transform(

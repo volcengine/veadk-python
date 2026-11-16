@@ -24,7 +24,7 @@ values from the environment via ``env:NAME``, and caps the downloaded body at
 
 import os
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -35,6 +35,13 @@ _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _MAX_REDIRECTS = 3
 _ALLOWLIST_ENV = "TOOL_HTTP_ALLOWLIST"
 _BLOCKED_HEADERS = frozenset({"host", "content-length"})
+# Credentials must not be replayed to a different origin (or over a
+# downgraded scheme). httpx strips `Authorization` itself, but this tool
+# follows redirects manually and therefore has to do it here.
+_SENSITIVE_HEADERS = frozenset(
+    {"authorization", "proxy-authorization", "cookie", "cookie2"}
+)
+_DEFAULT_PORTS = {"http": 80, "https": 443}
 _MIN_TIMEOUT = 1
 _MAX_TIMEOUT = 120
 _MIN_MAX_BYTES = 1_000
@@ -65,13 +72,20 @@ def _read_allowlist() -> tuple[str, ...]:
     return tuple(entry.strip().lower() for entry in raw.split(",") if entry.strip())
 
 
-def _resolve_headers(headers: dict[str, str] | None) -> dict[str, str]:
-    """Validate headers and resolve ``env:NAME`` values from the environment."""
+def _resolve_headers(
+    headers: dict[str, str] | None,
+) -> tuple[dict[str, str], frozenset[str]]:
+    """Validate headers and resolve ``env:NAME`` values from the environment.
+
+    Returns the resolved headers and the names whose values came from the
+    environment, so redirects can drop secrets even for custom header names.
+    """
     if headers is None:
-        return {}
+        return {}, frozenset()
     if not isinstance(headers, dict):
         raise _RequestAborted("headers must be an object")
     resolved: dict[str, str] = {}
+    from_environment: set[str] = set()
     for name, value in headers.items():
         if not isinstance(name, str) or not isinstance(value, str):
             raise _RequestAborted("header names and values must be strings")
@@ -90,9 +104,57 @@ def _resolve_headers(headers: dict[str, str] | None) -> dict[str, str]:
                     f"environment variable for header {name!r} is not set"
                 )
             resolved[name] = env_value
+            from_environment.add(name)
         else:
             resolved[name] = value
-    return resolved
+    return resolved, frozenset(from_environment)
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    if port is None:
+        port = _DEFAULT_PORTS.get(scheme)
+    return scheme, (parsed.hostname or "").lower(), port
+
+
+def _headers_for_redirect(
+    headers: dict[str, str],
+    env_header_names: frozenset[str],
+    previous_url: str,
+    next_url: str,
+) -> dict[str, str]:
+    """Drop credentials that must not cross to the redirect target.
+
+    Mirrors httpx's redirect handling: auth headers survive only a same-origin
+    hop or a same-host http -> https upgrade. ``env:``-resolved headers are
+    treated as secrets regardless of their name, and a scheme downgrade always
+    strips credentials.
+    """
+    previous = _origin(previous_url)
+    next_origin = _origin(next_url)
+    if previous == next_origin:
+        return headers
+    previous_scheme, previous_host, previous_port = previous
+    next_scheme, next_host, next_port = next_origin
+    # Same-host upgrade on the standard ports (requests' behaviour).
+    if (
+        previous_scheme == "http"
+        and next_scheme == "https"
+        and previous_host == next_host
+        and previous_port == 80
+        and next_port == 443
+    ):
+        return headers
+    return {
+        name: value
+        for name, value in headers.items()
+        if name.lower() not in _SENSITIVE_HEADERS and name not in env_header_names
+    }
 
 
 def _read_body(response: httpx.Response, max_bytes: int) -> tuple[bytes, bool]:
@@ -153,12 +215,14 @@ def _perform_request(
     max_bytes: int,
     follow_redirects: bool,
     allowlist: tuple[str, ...],
+    env_header_names: frozenset[str] = frozenset(),
 ) -> dict:
     current_url = url
     current_method = method
     current_params = params
     current_json = json_body
     current_body = body
+    current_headers = headers
     hops = 0
 
     while True:
@@ -166,7 +230,7 @@ def _perform_request(
         with client.stream(
             current_method,
             current_url,
-            headers=headers,
+            headers=current_headers,
             params=current_params,
             json=current_json,
             content=current_body,
@@ -180,8 +244,20 @@ def _perform_request(
                             f"too many redirects (max {_MAX_REDIRECTS})"
                         )
                     next_url = urljoin(current_url, location)
-                    if response.status_code == 303 or (
-                        response.status_code in (301, 302) and current_method == "POST"
+                    # Credentials follow httpx semantics: never cross origins
+                    # or downgrade to http, including env-resolved secrets.
+                    current_headers = _headers_for_redirect(
+                        current_headers,
+                        env_header_names,
+                        current_url,
+                        next_url,
+                    )
+                    if current_method != "HEAD" and (
+                        response.status_code == 303
+                        or (
+                            response.status_code in (301, 302)
+                            and current_method == "POST"
+                        )
                     ):
                         current_method = "GET"
                         current_json = None
@@ -226,7 +302,7 @@ def _run(
         raise _RequestAborted("provide only one of json_body or body")
 
     allowlist = _read_allowlist()
-    resolved_headers = _resolve_headers(headers)
+    resolved_headers, env_header_names = _resolve_headers(headers)
 
     client = httpx.Client(timeout=timeout, follow_redirects=False)
     try:
@@ -241,6 +317,7 @@ def _run(
             max_bytes,
             follow_redirects,
             allowlist,
+            env_header_names,
         )
     finally:
         client.close()
@@ -262,8 +339,11 @@ def http_request(
     Use this tool when you need to call an HTTP API or download a small
     resource. Private/internal addresses are blocked. Redirects are only
     followed when ``follow_redirects`` is true (at most three hops), and every
-    hop is re-validated. Set a header value to ``env:NAME`` to read a secret
-    from environment variable ``NAME`` without exposing it in the arguments.
+    hop is re-validated. Credentials (``Authorization``, ``Cookie``,
+    ``Proxy-Authorization``, and any ``env:``-resolved header) are dropped when
+    a redirect changes origin or downgrades to http. Set a header value to
+    ``env:NAME`` to read a secret from environment variable ``NAME`` without
+    exposing it in the arguments.
 
     Args:
         url: The absolute http(s) URL to request.

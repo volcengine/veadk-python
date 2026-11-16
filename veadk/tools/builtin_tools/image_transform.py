@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import math
 import os
 import re
 import tempfile
@@ -32,6 +34,9 @@ from veadk.tools.builtin_tools.web_fetch import assert_public_url
 
 _MAX_OPERATIONS = 20
 _MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
+# Pillow's decompression-bomb guard only protects input decoding; upscaling via
+# resize/rotate allocates the output bitmap directly, so bound it explicitly.
+_MAX_OUTPUT_PIXELS = 40_000_000
 _MAX_REDIRECTS = 3
 _DOWNLOAD_TIMEOUT_SECONDS = 30
 _USER_AGENT = "VeADK-ImageTransform/1.0"
@@ -95,7 +100,8 @@ async def _download_url(url: str) -> bytes:
         timeout=_DOWNLOAD_TIMEOUT_SECONDS, follow_redirects=False
     ) as client:
         while True:
-            assert_public_url(current)
+            # DNS resolution blocks; keep it off the event loop.
+            await asyncio.to_thread(assert_public_url, current)
             async with client.stream("GET", current, headers=headers) as response:
                 if response.is_redirect:
                     location = response.headers.get("location")
@@ -145,7 +151,12 @@ async def _read_source(source: str) -> bytes:
     path = Path(source)
     if not path.is_file():
         raise ValueError(f"image file does not exist: {source}")
-    return path.read_bytes()
+    # Match the download cap so a huge local file cannot exhaust memory.
+    with path.open("rb") as handle:
+        data = handle.read(_MAX_DOWNLOAD_BYTES + 1)
+    if len(data) > _MAX_DOWNLOAD_BYTES:
+        raise ValueError(f"image exceeds the {_MAX_DOWNLOAD_BYTES} byte limit")
+    return data
 
 
 def _load_image(data: bytes) -> Image.Image:
@@ -166,6 +177,28 @@ def _normalize_mode(image: Image.Image) -> Image.Image:
     return image.convert("RGBA" if has_alpha else "RGB")
 
 
+def _check_output_size(width: int, height: int) -> None:
+    """Reject outputs whose bitmap would be unreasonably large."""
+    if width * height <= _MAX_OUTPUT_PIXELS:
+        return
+    raise ValueError(
+        f"output image would be {width}x{height} ({width * height} pixels), "
+        f"exceeding the {_MAX_OUTPUT_PIXELS} pixel limit"
+    )
+
+
+def _rotated_size(width: int, height: int, degrees: float) -> tuple[int, int]:
+    """Predicted canvas size of ``rotate(expand=True)`` without allocating it."""
+    angle = math.radians(degrees % 360.0)
+    cos = abs(math.cos(angle))
+    sin = abs(math.sin(angle))
+    # Truncate float noise (cos(90°) is 6e-17, not 0) before rounding up.
+    return (
+        max(1, math.ceil(width * cos + height * sin - 1e-9)),
+        max(1, math.ceil(width * sin + height * cos - 1e-9)),
+    )
+
+
 def _op_resize(image: Image.Image, operation: dict) -> Image.Image:
     width_value = operation.get("width")
     height_value = operation.get("height")
@@ -178,10 +211,13 @@ def _op_resize(image: Image.Image, operation: dict) -> Image.Image:
         raise ValueError("keep_aspect must be a boolean")
     if width is None:
         width = max(1, round(image.width * height / image.height))
+        _check_output_size(width, height)
         return image.resize((width, height))
     if height is None:
         height = max(1, round(image.height * width / image.width))
+        _check_output_size(width, height)
         return image.resize((width, height))
+    _check_output_size(width, height)
     if keep_aspect:
         return ImageOps.contain(image, (width, height))
     return image.resize((width, height))
@@ -206,6 +242,8 @@ def _op_crop(image: Image.Image, operation: dict) -> Image.Image:
 
 def _op_rotate(image: Image.Image, operation: dict) -> Image.Image:
     degrees = _number(operation.get("degrees"), "degrees")
+    # Check the expanded canvas before Pillow allocates it.
+    _check_output_size(*_rotated_size(image.width, image.height, degrees))
     fill = (0, 0, 0, 0) if image.mode == "RGBA" else "white"
     return image.rotate(degrees, expand=True, fillcolor=fill)
 
@@ -304,10 +342,12 @@ async def image_transform(
 
     - ``resize``: ``width`` and/or ``height`` (positive ints). When only one
       side is given the aspect ratio is preserved. With both sides and
-      ``keep_aspect`` true (default) the image fits inside the box.
+      ``keep_aspect`` true (default) the image fits inside the box. The output
+      canvas may not exceed 40,000,000 pixels.
     - ``crop``: ``left``, ``top``, ``right``, ``bottom`` pixel coordinates.
     - ``rotate``: ``degrees`` (float), expanding the canvas and filling with
-      white (RGB) or transparency (RGBA).
+      white (RGB) or transparency (RGBA); the expanded canvas is subject to the
+      same pixel limit.
     - ``flip``: ``direction`` equal to ``horizontal`` or ``vertical``.
     - ``thumbnail``: ``max_size`` (positive int), preserving aspect ratio.
     - ``grayscale``: converts the image to grayscale.

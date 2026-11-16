@@ -544,6 +544,141 @@ def test_307_308_preserve_method_and_body(monkeypatch, status):
     assert redirected["json"] == {"a": 1}
 
 
+def test_credentials_are_kept_on_same_origin_redirect(monkeypatch):
+    monkeypatch.setenv("VEADK_TEST_TOKEN", "s3cret-value")
+    created = _patch_client(
+        monkeypatch,
+        [
+            _FakeResponse(302, {"location": "/next"}),
+            _FakeResponse(200, content=b"ok"),
+        ],
+    )
+    http_request(
+        "https://example.com/start",
+        headers={"Authorization": "env:VEADK_TEST_TOKEN", "X-Plain": "ok"},
+        follow_redirects=True,
+    )
+    assert created[0].calls[1]["headers"] == {
+        "Authorization": "s3cret-value",
+        "X-Plain": "ok",
+    }
+
+
+def test_explicit_default_port_is_same_origin(monkeypatch):
+    created = _patch_client(
+        monkeypatch,
+        [
+            _FakeResponse(302, {"location": "http://example.com/next"}),
+            _FakeResponse(200, content=b"ok"),
+        ],
+    )
+    http_request(
+        "http://example.com:80/start",
+        headers={"Authorization": "Bearer t"},
+        follow_redirects=True,
+    )
+    assert created[0].calls[1]["headers"] == {"Authorization": "Bearer t"}
+
+
+def test_credentials_are_kept_on_same_host_https_upgrade(monkeypatch):
+    created = _patch_client(
+        monkeypatch,
+        [
+            _FakeResponse(301, {"location": "https://example.com/next"}),
+            _FakeResponse(200, content=b"ok"),
+        ],
+    )
+    http_request(
+        "http://example.com/start",
+        headers={"Authorization": "Bearer t", "Cookie": "a=b", "X-Plain": "ok"},
+        follow_redirects=True,
+    )
+    assert created[0].calls[1]["headers"] == {
+        "Authorization": "Bearer t",
+        "Cookie": "a=b",
+        "X-Plain": "ok",
+    }
+
+
+def test_credentials_are_stripped_across_hosts(monkeypatch):
+    monkeypatch.setenv("VEADK_TEST_TOKEN", "s3cret-value")
+    created = _patch_client(
+        monkeypatch,
+        [
+            _FakeResponse(302, {"location": "https://evil.example/capture"}),
+            _FakeResponse(200, content=b"ok"),
+        ],
+    )
+    result = http_request(
+        "https://safe.example/x",
+        headers={
+            "Authorization": "env:VEADK_TEST_TOKEN",
+            "X-Api-Key": "env:VEADK_TEST_TOKEN",
+            "Proxy-Authorization": "Basic abc",
+            "Cookie": "session=1",
+            "X-Plain": "ok",
+        },
+        follow_redirects=True,
+    )
+    assert result["status_code"] == 200
+    first_headers = created[0].calls[0]["headers"]
+    assert first_headers["Authorization"] == "s3cret-value"
+    assert first_headers["X-Api-Key"] == "s3cret-value"
+    # Only non-secret, non-sensitive headers survive a cross-origin hop.
+    assert created[0].calls[1]["headers"] == {"X-Plain": "ok"}
+
+
+def test_credentials_are_stripped_on_https_to_http_downgrade(monkeypatch):
+    monkeypatch.setenv("VEADK_TEST_TOKEN", "s3cret-value")
+    created = _patch_client(
+        monkeypatch,
+        [
+            _FakeResponse(302, {"location": "http://example.com/next"}),
+            _FakeResponse(200, content=b"ok"),
+        ],
+    )
+    http_request(
+        "https://example.com/start",
+        headers={
+            "Authorization": "env:VEADK_TEST_TOKEN",
+            "X-Api-Key": "env:VEADK_TEST_TOKEN",
+            "X-Plain": "ok",
+        },
+        follow_redirects=True,
+    )
+    assert created[0].calls[1]["headers"] == {"X-Plain": "ok"}
+
+
+def test_stripped_credentials_stay_stripped_on_later_hops(monkeypatch):
+    created = _patch_client(
+        monkeypatch,
+        [
+            _FakeResponse(302, {"location": "https://evil.example/one"}),
+            _FakeResponse(302, {"location": "/two"}),
+            _FakeResponse(200, content=b"ok"),
+        ],
+    )
+    http_request(
+        "https://safe.example/x",
+        headers={"Authorization": "Bearer t"},
+        follow_redirects=True,
+    )
+    assert created[0].calls[1]["headers"] == {}
+    assert created[0].calls[2]["headers"] == {}
+
+
+def test_303_preserves_head_method(monkeypatch):
+    created = _patch_client(
+        monkeypatch,
+        [
+            _FakeResponse(303, {"location": "/done"}),
+            _FakeResponse(200),
+        ],
+    )
+    http_request("http://example.com/api", method="HEAD", follow_redirects=True)
+    assert created[0].calls[1]["method"] == "HEAD"
+
+
 def test_too_many_redirects(monkeypatch):
     created = _patch_client(
         monkeypatch,

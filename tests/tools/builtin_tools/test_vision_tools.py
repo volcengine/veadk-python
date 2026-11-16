@@ -16,6 +16,7 @@
 
 import base64
 import inspect
+import socket
 from types import SimpleNamespace
 
 import httpx
@@ -25,6 +26,22 @@ from PIL import Image
 from veadk.tools.builtin_tools import image_understand as understand_tool
 from veadk.tools.builtin_tools import ocr as ocr_tool
 from veadk.tools.builtin_tools import vision
+
+_PUBLIC_IP = "93.184.216.34"
+
+
+def _addrinfo(ip: str) -> list:
+    return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (ip, 0))]
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_dns(monkeypatch):
+    # Remote image URLs now pass through the shared SSRF guard, which resolves
+    # the host; keep tests off the network.
+    monkeypatch.setattr(
+        "veadk.tools.builtin_tools.web_fetch.socket.getaddrinfo",
+        lambda *args, **kwargs: _addrinfo(_PUBLIC_IP),
+    )
 
 
 def _fake_settings(
@@ -427,6 +444,36 @@ async def test_missing_local_image(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_remote_image_internal_address_is_rejected(monkeypatch):
+    _fake_settings(monkeypatch)
+    captured = _install_client(monkeypatch, FakeResponse(payload=_chat_payload("ok")))
+    monkeypatch.setattr(
+        "veadk.tools.builtin_tools.web_fetch.socket.getaddrinfo",
+        lambda *args, **kwargs: _addrinfo("169.254.169.254"),
+    )
+    result = await vision.analyze_images(
+        ["http://169.254.169.254/latest/meta-data/"], "prompt"
+    )
+    assert "error" in result
+    assert "non-public" in result["error"] or "Blocked" in result["error"]
+    # The provider must never be asked to fetch the internal URL.
+    assert "json" not in captured
+
+
+@pytest.mark.asyncio
+async def test_remote_image_loopback_is_rejected(monkeypatch):
+    _fake_settings(monkeypatch)
+    captured = _install_client(monkeypatch, FakeResponse(payload=_chat_payload("ok")))
+    monkeypatch.setattr(
+        "veadk.tools.builtin_tools.web_fetch.socket.getaddrinfo",
+        lambda *args, **kwargs: _addrinfo("127.0.0.1"),
+    )
+    result = await vision.analyze_images(["http://127.0.0.1/secret.png"], "prompt")
+    assert "error" in result
+    assert "json" not in captured
+
+
+@pytest.mark.asyncio
 async def test_local_image_size_limit(monkeypatch, tmp_path):
     _fake_settings(monkeypatch)
     monkeypatch.setattr(vision, "_MAX_IMAGE_BYTES", 4)
@@ -435,6 +482,22 @@ async def test_local_image_size_limit(monkeypatch, tmp_path):
     _install_client(monkeypatch, FakeResponse(payload=_chat_payload("ok")))
     result = await vision.analyze_images([str(path)], "prompt")
     assert "byte limit" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_local_images_share_an_aggregate_size_limit(monkeypatch, tmp_path):
+    _fake_settings(monkeypatch)
+    monkeypatch.setattr(vision, "_MAX_TOTAL_IMAGE_BYTES", 4)
+    first = tmp_path / "one.png"
+    second = tmp_path / "two.png"
+    first.write_bytes(b"abc")
+    second.write_bytes(b"def")
+    captured = _install_client(monkeypatch, FakeResponse(payload=_chat_payload("ok")))
+
+    result = await vision.analyze_images([str(first), str(second)], "prompt")
+
+    assert "total limit" in result["error"]
+    assert "json" not in captured
 
 
 def test_image_understand_signature_and_defaults():
