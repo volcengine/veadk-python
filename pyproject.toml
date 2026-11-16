@@ -51,7 +51,9 @@ dependencies = [
     "filetype==1.2.0",
     "pypdfium2>=4.30.0", # Frontend PDF attachments are rendered as page images
     "pillow>=10.0.0", # Encode rendered PDF pages as PNG
-    "qrcode>=8,<9", # Render Feishu app-registration links for Studio setup
+    "qrcode>=8,<9", # Render Feishu app-registration links for Studio setup and the qrcode_generate tool
+    "python-docx>=1.1.0,<2", # Read and write Word documents in document_parse/doc_generate
+    "openpyxl>=3.1.0,<4", # Read and write Excel workbooks in document_parse/doc_generate
     "vikingdb-python-sdk>=0.1.32", # For Viking DB
     "agentkit-sdk-python>=0.8.5",
     "websockets>=15,<16", # Stream temporary AgentKit Sandbox conversations

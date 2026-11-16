@@ -42,6 +42,17 @@ _EXPECTED_NAMES = {
     "video_task_query",
     "ppt_generate",
     "text_to_speech",
+    "speech_to_text",
+    "image_transform",
+    "image_understand",
+    "ocr",
+    "http_request",
+    "document_parse",
+    "doc_generate",
+    "mindmap_generate",
+    "qrcode_generate",
+    "calculator",
+    "datetime",
 }
 
 

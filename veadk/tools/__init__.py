@@ -29,16 +29,29 @@ _BUILTIN_TOOLS: dict[str, str] = {
     "parallel_web_search": "veadk.tools.builtin_tools.parallel_web_search:parallel_web_search",
     "vesearch": "veadk.tools.builtin_tools.vesearch:vesearch",
     "link_reader": "veadk.tools.builtin_tools.link_reader:link_reader",
+    "http_request": "veadk.tools.builtin_tools.http_request:http_request",
     # Code
     "run_code": "veadk.tools.builtin_tools.run_code:run_code",
     "coding": "veadk.tools.builtin_tools.coding:coding",
-    # Image / video / speech generation
+    # Image / video / speech
     "image_generate": "veadk.tools.builtin_tools.image_generate:image_generate",
     "image_edit": "veadk.tools.builtin_tools.image_edit:image_edit",
+    "image_transform": "veadk.tools.builtin_tools.image_transform:image_transform",
+    "image_understand": "veadk.tools.builtin_tools.image_understand:image_understand",
+    "ocr": "veadk.tools.builtin_tools.ocr:ocr",
     "video_generate": "veadk.tools.builtin_tools.video_generate:video_generate",
     "video_task_query": "veadk.tools.builtin_tools.video_generate:video_task_query",
     "ppt_generate": "veadk.tools.builtin_tools.ppt_generate:ppt_generate",
     "text_to_speech": "veadk.tools.builtin_tools.tts:text_to_speech",
+    "speech_to_text": "veadk.tools.builtin_tools.speech_to_text:speech_to_text",
+    # Documents and office
+    "document_parse": "veadk.tools.builtin_tools.document_parse:document_parse",
+    "doc_generate": "veadk.tools.builtin_tools.doc_generate:doc_generate",
+    "mindmap_generate": "veadk.tools.builtin_tools.mindmap_generate:mindmap_generate",
+    "qrcode_generate": "veadk.tools.builtin_tools.qrcode_generate:qrcode_generate",
+    # Utility
+    "calculator": "veadk.tools.builtin_tools.calculator:calculator",
+    "datetime": "veadk.tools.builtin_tools.datetime_tool:datetime",
     # Demo / example tools
     "get_city_weather": "veadk.tools.demo_tools:get_city_weather",
     "get_location_weather": "veadk.tools.demo_tools:get_location_weather",
