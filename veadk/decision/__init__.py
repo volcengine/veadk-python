@@ -23,6 +23,7 @@ from .config import (
     DEFAULT_DECISION_MODEL,
     DecisionConfig,
     DecisionConfigError,
+    has_explicit_decision_config,
     load_decision_config,
 )
 from .connection import resolve_decision_connection
@@ -37,6 +38,7 @@ __all__ = [
     "DEFAULT_DECISION_MODEL",
     "DecisionConfig",
     "DecisionConfigError",
+    "has_explicit_decision_config",
     "load_decision_config",
     "resolve_decision_connection",
     "DEFAULT_TIMEOUT_SECONDS",

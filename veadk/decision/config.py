@@ -104,13 +104,8 @@ _UniqueKeyLoader.add_constructor(
 )
 
 
-def load_decision_config(path: str | Path | None = None) -> DecisionConfig:
-    """Load root ``decision``; DECISION_* environment values override YAML.
-
-    No file/block means defaults. An explicit unreadable file, invalid block,
-    or ambiguous destination/key override fails at startup. Code construction
-    bypasses this loader, so explicit values are never overwritten.
-    """
+def _load_decision_block(path: str | Path | None = None) -> dict:
+    """Load the raw root ``decision`` mapping without applying overrides."""
     from dotenv import find_dotenv, load_dotenv
 
     dotenv_path = find_dotenv(filename=".env", usecwd=True)
@@ -121,20 +116,44 @@ def load_decision_config(path: str | Path | None = None) -> DecisionConfig:
         if path is not None
         else find_dotenv(filename="config.yaml", usecwd=True)
     )
-    block = {}
-    if location:
-        try:
-            document = yaml.load(
-                Path(location).read_text(encoding="utf-8"), Loader=_UniqueKeyLoader
-            )
-        except (OSError, yaml.YAMLError):
-            raise DecisionConfigError("cannot read decision configuration") from None
-        if not isinstance(document, dict):
-            raise DecisionConfigError("decision config root must be a mapping")
-        block = document.get("decision", {})
-        if not isinstance(block, dict):
-            raise DecisionConfigError("decision must be a mapping")
-        block = dict(block)
+    if not location:
+        return {}
+    try:
+        document = yaml.load(
+            Path(location).read_text(encoding="utf-8"), Loader=_UniqueKeyLoader
+        )
+    except (OSError, yaml.YAMLError):
+        raise DecisionConfigError("cannot read decision configuration") from None
+    if not isinstance(document, dict):
+        raise DecisionConfigError("decision config root must be a mapping")
+    block = document.get("decision", {})
+    if not isinstance(block, dict):
+        raise DecisionConfigError("decision must be a mapping")
+    return dict(block)
+
+
+def has_explicit_decision_config(path: str | Path | None = None) -> bool:
+    """Whether a root ``decision`` block or a ``DECISION_*`` override exists.
+
+    Used to keep the deprecated ``content_safety.decision`` block as a fallback
+    only: an explicitly configured root block always wins.
+    """
+    if _load_decision_block(path):
+        return True
+    return any(
+        os.getenv(f"DECISION_{field.upper()}") is not None
+        for field in ("api_url", "api_key", "model")
+    )
+
+
+def load_decision_config(path: str | Path | None = None) -> DecisionConfig:
+    """Load root ``decision``; DECISION_* environment values override YAML.
+
+    No file/block means defaults. An explicit unreadable file, invalid block,
+    or ambiguous destination/key override fails at startup. Code construction
+    bypasses this loader, so explicit values are never overwritten.
+    """
+    block = _load_decision_block(path)
     endpoint = os.getenv("DECISION_API_URL")
     key = os.getenv("DECISION_API_KEY")
     if (

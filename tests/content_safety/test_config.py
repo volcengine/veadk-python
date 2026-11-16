@@ -658,3 +658,76 @@ def test_llm_shield_app_id_warns_for_non_llm_shield_provider(caplog):
         ContentSafetyConfig.from_dict(data)
     assert "llm_shield_app_id" in caplog.text
     assert "ignored" in caplog.text
+
+
+def test_legacy_nested_decision_is_accepted_with_warning(caplog):
+    import logging
+
+    data = decision_data(
+        decision={
+            "api_url": "https://legacy.example/v1/judge",
+            "api_key": "legacy-key",
+            "model": "legacy-model",
+        }
+    )
+    with caplog.at_level(logging.WARNING):
+        config = ContentSafetyConfig.from_dict(data)
+    assert config.legacy_decision is not None
+    assert config.legacy_decision.api_url == "https://legacy.example/v1/judge"
+    assert config.legacy_decision.api_key_value == "legacy-key"
+    assert config.legacy_decision.model == "legacy-model"
+    assert "content_safety.decision is deprecated" in caplog.text
+
+
+def test_legacy_decision_env_is_applied_and_overrides_yaml(tmp_path, monkeypatch):
+    import os
+
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        """
+tool:
+  content_safety:
+    provider: decision
+    decision:
+      api_url: https://yaml.example/v1/judge
+      api_key: yaml-key
+      model: yaml-model
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    for name in (
+        "DECISION_API_URL",
+        "DECISION_API_KEY",
+        "DECISION_MODEL",
+        "TOOL_CONTENT_SAFETY_DECISION_API_URL",
+        "TOOL_CONTENT_SAFETY_DECISION_API_KEY",
+        "TOOL_CONTENT_SAFETY_DECISION_MODEL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(
+        "TOOL_CONTENT_SAFETY_DECISION_API_URL", "https://env.example/v1/judge"
+    )
+    monkeypatch.setenv("TOOL_CONTENT_SAFETY_DECISION_API_KEY", "env-key")
+    monkeypatch.setenv("TOOL_CONTENT_SAFETY_DECISION_MODEL", "env-model")
+    try:
+        config = load_content_safety_config(path)
+        assert config.legacy_decision is not None
+        assert config.legacy_decision.api_url == "https://env.example/v1/judge"
+        assert config.legacy_decision.api_key_value == "env-key"
+        assert config.legacy_decision.model == "env-model"
+    finally:
+        for name in (
+            "TOOL_CONTENT_SAFETY_DECISION_API_URL",
+            "TOOL_CONTENT_SAFETY_DECISION_API_KEY",
+            "TOOL_CONTENT_SAFETY_DECISION_MODEL",
+        ):
+            os.environ.pop(name, None)
+
+
+def test_from_dict_does_not_apply_legacy_decision_env(monkeypatch):
+    monkeypatch.setenv(
+        "TOOL_CONTENT_SAFETY_DECISION_API_URL", "https://env.example/v1/judge"
+    )
+    config = ContentSafetyConfig.from_dict(decision_data())
+    assert config.legacy_decision is None

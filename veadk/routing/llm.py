@@ -20,8 +20,6 @@ from typing import Any
 from google.adk.models.base_llm import BaseLlm
 from pydantic import Field
 
-from veadk.routing.context import get_route_selection
-
 
 class RoutingLlm(BaseLlm):
     """Own the configured adapters without storing a mutable current model."""
@@ -32,7 +30,6 @@ class RoutingLlm(BaseLlm):
     store: Any = None
     classifier: Any = None
     config: Any = None
-    active_runs: int = 0
 
     def selected_model(self, selection: Any) -> BaseLlm:
         if selection.route == "strong":
@@ -43,11 +40,18 @@ class RoutingLlm(BaseLlm):
         return runtime.llm
 
     async def generate_content_async(self, llm_request, stream=False):
-        # Direct use remains possible; Agent resolves the concrete model earlier.
-        selection = get_route_selection()
-        model = self.selected_model(selection) if selection else self.strong_model
+        # ADK always resolves the concrete turn model before preprocessing. This
+        # direct path is only a safe strong-model fallback; using a cheap model
+        # here would bypass portable replay and the capability re-check.
         request = llm_request.model_copy(deep=True)
         request.tools_dict = dict(llm_request.tools_dict)
-        request.model = model.model
-        async for response in model.generate_content_async(request, stream=stream):
+        request.model = self.strong_model.model
+        async for response in self.strong_model.generate_content_async(
+            request, stream=stream
+        ):
             yield response
+
+    async def aclose(self) -> None:
+        """Close the decision client when the owning Agent is closed."""
+        if self.classifier is not None:
+            await self.classifier.aclose()

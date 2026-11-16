@@ -18,11 +18,11 @@ import pytest
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
+from google.adk.tools import FunctionTool
 from google.genai import types
 from pydantic import Field
 
 from veadk.configs.routing_configs import SimpleModelConfig
-from veadk.routing.context import RouteSelection, set_route_selection
 from veadk.routing.llm import RoutingLlm
 from veadk.routing.registry import ModelRegistry, SimpleModelRuntime
 from veadk.routing.store import RouteStore
@@ -30,140 +30,81 @@ from veadk.routing.store import RouteStore
 
 class FakeLlm(BaseLlm):
     model: str
-    fail_before: bool = False
-    fail_after: bool = False
-    error: Exception | None = Field(default=None, exclude=True)
-    seen_models: list[str] = Field(default_factory=list)
-    calls: int = 0
+    seen_requests: list[LlmRequest] = Field(default_factory=list, exclude=True)
 
     async def generate_content_async(
         self, llm_request: LlmRequest, stream: bool = False
     ) -> AsyncGenerator[LlmResponse, None]:
-        self.calls += 1
-        self.seen_models.append(llm_request.model)
-        if self.error is not None:
-            raise self.error
-        if self.fail_before:
-            raise RuntimeError("before")
+        self.seen_requests.append(llm_request)
         yield LlmResponse(
             content=types.Content(role="model", parts=[types.Part(text=self.model)])
         )
-        if self.fail_after:
-            raise RuntimeError("after")
 
 
-def build(fail_before=False, fail_after=False, error=None):
+class FakeClassifier:
+    def __init__(self):
+        self.closed = False
+
+    async def aclose(self):
+        self.closed = True
+
+
+def build():
     strong = FakeLlm(model="strong")
-    simple = FakeLlm(
-        model="simple", fail_before=fail_before, fail_after=fail_after, error=error
-    )
+    simple = FakeLlm(model="simple")
     runtime = SimpleModelRuntime(config=SimpleModelConfig(name="simple"), llm=simple)
-    registry = ModelRegistry(runtimes=[runtime])
-    store = RouteStore()
+    classifier = FakeClassifier()
     router = RoutingLlm(
         model="strong",
         strong_model=strong,
         runtimes=[runtime],
-        registry=registry,
-        store=store,
+        registry=ModelRegistry(runtimes=[runtime]),
+        store=RouteStore(),
+        classifier=classifier,
     )
-    return router, strong, simple, store
+    return router, strong, simple, classifier
+
+
+def ping() -> str:
+    """Return a fixed value."""
+    return "pong"
 
 
 def request():
     return LlmRequest(
         model="strong",
         contents=[types.Content(role="user", parts=[types.Part(text="hello")])],
+        tools_dict={"tool": FunctionTool(ping)},
     )
 
 
-async def collect(router, req):
-    return [item async for item in router.generate_content_async(req)]
-
-
 @pytest.mark.asyncio
-async def test_no_selection_uses_strong_model():
+async def test_direct_path_always_uses_the_strong_model():
     router, strong, simple, _ = build()
-    set_route_selection(None)
-    responses = await collect(router, request())
+    req = request()
+    responses = [
+        item async for item in router.generate_content_async(req, stream=False)
+    ]
     assert responses[0].content.parts[0].text == "strong"
-    assert strong.calls == 1
-    assert simple.calls == 0
+    assert len(strong.seen_requests) == 1
+    assert simple.seen_requests == []
 
 
 @pytest.mark.asyncio
-async def test_simple_selection_uses_configured_model():
-    router, strong, simple, _ = build()
-    set_route_selection(
-        RouteSelection(
-            route="simple",
-            reason="ok",
-            invocation_id="inv",
-            model_name="simple",
-        )
-    )
-    responses = await collect(router, request())
-    assert responses[0].content.parts[0].text == "simple"
-    assert simple.calls == 1
-    assert strong.calls == 0
-    assert simple.seen_models == ["simple"]
-
-
-@pytest.mark.asyncio
-async def test_unknown_target_is_rejected_without_switching():
+async def test_direct_path_does_not_mutate_the_caller_request():
     router, strong, _, _ = build()
-    set_route_selection(
-        RouteSelection(
-            route="simple", reason="ok", invocation_id="inv", model_name="missing"
-        )
-    )
-    with pytest.raises(ValueError, match="no longer configured"):
-        await collect(router, request())
-    assert strong.calls == 0
+    req = request()
+    tools = req.tools_dict
+    await anext(router.generate_content_async(req))
+    assert req.model == "strong"
+    assert req.tools_dict is tools
+    forwarded = strong.seen_requests[0]
+    assert forwarded is not req
+    assert forwarded.tools_dict is not req.tools_dict
 
 
 @pytest.mark.asyncio
-async def test_pre_chunk_failure_propagates_without_switching():
-    router, strong, simple, _ = build(fail_before=True)
-    set_route_selection(
-        RouteSelection(
-            route="simple", reason="ok", invocation_id="inv", model_name="simple"
-        )
-    )
-    with pytest.raises(RuntimeError, match="before"):
-        await collect(router, request())
-    assert strong.calls == 0
-    assert simple.calls == 1
-
-
-@pytest.mark.asyncio
-async def test_post_chunk_failure_is_not_retried():
-    router, strong, simple, _ = build(fail_after=True)
-    set_route_selection(
-        RouteSelection(
-            route="simple",
-            reason="ok",
-            invocation_id="inv",
-            model_name="simple",
-        )
-    )
-    with pytest.raises(RuntimeError, match="after"):
-        await collect(router, request())
-    assert strong.calls == 0
-
-
-@pytest.mark.asyncio
-async def test_shadow_route_uses_strong_even_with_model_name():
-    router, strong, simple, _ = build()
-    set_route_selection(
-        RouteSelection(
-            route="strong",
-            reason="shadow",
-            invocation_id="inv",
-            model_name="simple",
-            shadow=True,
-        )
-    )
-    responses = await collect(router, request())
-    assert responses[0].content.parts[0].text == "strong"
-    assert simple.calls == 0
+async def test_aclose_closes_the_classifier_client():
+    router, _, _, classifier = build()
+    await router.aclose()
+    assert classifier.closed is True

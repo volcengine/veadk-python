@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+
 import pytest
 
 from google.adk.models.llm_request import LlmRequest
@@ -126,3 +128,24 @@ def test_media_part_is_converted_to_image_url():
 
 def test_text_only_request_has_no_media():
     assert request_has_media(make_request(("user", "hello"))) is False
+
+
+def test_tool_declarations_are_rendered_as_stable_json():
+    request = make_request(("user", "hello"))
+    request.config = types.GenerateContentConfig(
+        tools=[
+            types.Tool(
+                function_declarations=[
+                    types.FunctionDeclaration(
+                        name="lookup", description="Look things up."
+                    )
+                ]
+            )
+        ]
+    )
+    state = QueryStateBuilder(defuse=False).build_for_routing(request)
+    segment = next(
+        part["text"] for part in state if part["text"].startswith("[tools]\n")
+    )
+    payload = json.loads(segment.split("\n", 1)[1].split("\n[user]", 1)[0])
+    assert payload[0]["function_declarations"][0]["name"] == "lookup"

@@ -453,3 +453,69 @@ def test_adapter_runs_sync_inner_in_worker_thread():
     )
     assert seen
     assert seen[0] is not threading.main_thread()
+
+
+def _clear_decision_env(monkeypatch):
+    for name in (
+        "DECISION_API_URL",
+        "DECISION_API_KEY",
+        "DECISION_MODEL",
+        "TOOL_CONTENT_SAFETY_DECISION_API_URL",
+        "TOOL_CONTENT_SAFETY_DECISION_API_KEY",
+        "TOOL_CONTENT_SAFETY_DECISION_MODEL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_legacy_content_safety_decision_is_used_as_fallback(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _clear_decision_env(monkeypatch)
+    config = ContentSafetyConfig.from_dict(
+        {
+            "provider": "decision",
+            "questions": {"q": {"instructions": "detect", "threshold": 0.5}},
+            "decision": {
+                "api_url": "https://legacy.example/v1/judge",
+                "api_key": "legacy-key",
+                "model": "legacy-model",
+            },
+        }
+    )
+    plugin = build_content_safety(config)
+    assert isinstance(plugin._client, DecisionClient)
+    assert plugin._client.endpoint == "https://legacy.example/v1/judge"
+    assert plugin._client._model == "legacy-model"
+
+
+def test_root_decision_wins_over_legacy_content_safety_decision(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _clear_decision_env(monkeypatch)
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        """
+decision:
+  api_url: https://root.example/v1/judge
+  api_key: root-key
+  model: root-model
+
+tool:
+  content_safety:
+    provider: decision
+    questions:
+      q:
+        instructions: detect
+        threshold: 0.5
+    decision:
+      api_url: https://legacy.example/v1/judge
+      api_key: legacy-key
+      model: legacy-model
+""",
+        encoding="utf-8",
+    )
+    from veadk.content_safety.config import load_content_safety_config
+
+    config = load_content_safety_config(path)
+    plugin = build_content_safety(config)
+    assert isinstance(plugin._client, DecisionClient)
+    assert plugin._client.endpoint == "https://root.example/v1/judge"
+    assert plugin._client._model == "root-model"

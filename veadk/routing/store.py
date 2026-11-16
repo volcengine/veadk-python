@@ -16,27 +16,20 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from collections.abc import Awaitable, Callable
 
 from veadk.routing.context import RouteSelection
 
-DEFAULT_DECISION_TTL_SECONDS = 300.0
-_MAX_ENTRIES = 4_096
-
 
 class RouteStore:
-    """Coalesce concurrent decisions; active turns keep their own immutable binding."""
+    """Coalesce concurrent decisions for the same root turn.
 
-    def __init__(
-        self,
-        *,
-        decision_ttl: float = DEFAULT_DECISION_TTL_SECONDS,
-        clock: Callable[[], float] = time.monotonic,
-    ):
-        self._decision_ttl = decision_ttl
-        self._clock = clock
-        self._decisions: dict[str, tuple[float, RouteSelection]] = {}
+    Decisions are persisted in session state, keyed by invocation and router
+    configuration. A cross-invocation cache here would conflict with the
+    per-turn decision contract, so only the in-flight future is retained.
+    """
+
+    def __init__(self) -> None:
         self._inflight: dict[str, asyncio.Future[RouteSelection]] = {}
 
     async def get_or_create(
@@ -44,15 +37,7 @@ class RouteStore:
         key: str,
         factory: Callable[[], Awaitable[RouteSelection]],
     ) -> RouteSelection:
-        """Return a cached decision, join an in-flight one, or classify once."""
-
-        self._purge()
-        cached = self._decisions.get(key)
-        if cached is not None:
-            created_at, selection = cached
-            if self._clock() - created_at <= self._decision_ttl:
-                return selection
-            self._decisions.pop(key, None)
+        """Join an in-flight decision or classify once."""
 
         inflight = self._inflight.get(key)
         if inflight is not None:
@@ -72,29 +57,15 @@ class RouteStore:
             self._inflight.pop(key, None)
             raise
 
-        self._decisions[key] = (self._clock(), selection)
-        self._inflight.pop(key, None)
         if not future.done():
             future.set_result(selection)
+        self._inflight.pop(key, None)
         return selection
 
     def clear(self) -> None:
-        """Drop all cached state. Intended for tests and process shutdown."""
+        """Drop in-flight state. Intended for tests and process shutdown."""
 
-        self._decisions.clear()
         self._inflight.clear()
-
-    def _purge(self) -> None:
-        if len(self._decisions) <= _MAX_ENTRIES:
-            return
-        now = self._clock()
-        self._decisions = {
-            key: value
-            for key, value in self._decisions.items()
-            if now - value[0] <= self._decision_ttl
-        }
-        while len(self._decisions) > _MAX_ENTRIES:
-            self._decisions.pop(next(iter(self._decisions)))
 
 
 _DEFAULT_STORE = RouteStore()

@@ -52,16 +52,18 @@ def test_only_common_import_is_public():
     assert not hasattr(config, "DecisionConfig")
 
 
-@pytest.mark.parametrize(
-    "consumer,kwargs",
-    [
-        (QueryRoutingConfig, {"simple_models": ["candidate"]}),
-        (ContentSafetyConfig, {"provider": "decision"}),
-    ],
-)
-def test_old_nested_connection_is_rejected(consumer, kwargs):
+def test_old_nested_connection_is_rejected_by_query_routing():
     with pytest.raises(ValidationError, match="decision"):
-        consumer(**kwargs, decision={"model": "old"})
+        QueryRoutingConfig(simple_models=["candidate"], decision={"model": "old"})
+
+
+def test_old_nested_connection_is_accepted_by_content_safety_with_warning(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        config = ContentSafetyConfig(provider="decision", decision={"model": "old"})
+    assert config.legacy_decision is not None
+    assert "deprecated" in caplog.text
 
 
 def test_root_connection_is_immutable_and_enables_nothing(tmp_path):
@@ -207,14 +209,21 @@ def test_explicit_decision_key_does_not_resolve_unused_global_credentials(monkey
         resolve_decision_connection(DecisionConfig(), "https://unrelated.example/v1")
 
 
-@pytest.mark.parametrize(
-    "consumer,kwargs",
-    [
-        (QueryRoutingConfig, {"simple_models": ["candidate"]}),
-        (ContentSafetyConfig, {"provider": "decision"}),
-    ],
-)
-def test_rejecting_removed_connection_never_prints_its_key(consumer, kwargs):
+def test_rejecting_removed_connection_never_prints_its_key():
     with pytest.raises(ValidationError) as error:
-        consumer(**kwargs, decision={"api_key": "obsolete-key-placeholder"})
+        QueryRoutingConfig(
+            simple_models=["candidate"],
+            decision={"api_key": "obsolete-key-placeholder"},
+        )
     assert "obsolete-key-placeholder" not in str(error.value)
+
+
+def test_legacy_content_safety_connection_never_prints_its_key():
+    config = ContentSafetyConfig(
+        provider="decision", decision={"api_key": "obsolete-key-placeholder"}
+    )
+    assert "obsolete-key-placeholder" not in str(config)
+    assert "obsolete-key-placeholder" not in repr(config)
+    assert "obsolete-key-placeholder" not in str(
+        config.model_dump(exclude={"questions"})
+    )

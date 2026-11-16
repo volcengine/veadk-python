@@ -31,9 +31,11 @@ Canonical shape::
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -46,6 +48,7 @@ from pydantic import (
     model_validator,
 )
 
+from veadk.decision.config import DecisionConfig as _DecisionConfig
 from veadk.utils.logger import get_logger
 
 from .types import Provider
@@ -56,6 +59,8 @@ DEFAULT_BLOCK_MESSAGE = (
     "Your request was blocked by the content safety policy. "
     "Please modify your input and try again."
 )
+_LEGACY_DECISION_ENV_PREFIX = "TOOL_CONTENT_SAFETY_DECISION_"
+_LEGACY_DECISION_ENV_FIELDS = ("api_url", "api_key", "model")
 DEFAULT_QUESTION_INSTRUCTIONS = {
     # Resource and input manipulation
     "compute_abuse": (
@@ -228,7 +233,12 @@ class ContentSafetyConfig(BaseModel):
     behind an adapter.
     """
 
-    model_config = ConfigDict(hide_input_in_errors=True, extra="forbid", frozen=True)
+    model_config = ConfigDict(
+        hide_input_in_errors=True,
+        extra="forbid",
+        frozen=True,
+        populate_by_name=True,
+    )
 
     provider: Provider = Provider.NONE
     on_error: Literal["allow", "block"] = "allow"
@@ -242,6 +252,14 @@ class ContentSafetyConfig(BaseModel):
     """
     questions: dict[str, QuestionConfig] = Field(default_factory=dict)
     llm_shield_app_id: str | None = None
+    legacy_decision: _DecisionConfig | None = Field(
+        default=None,
+        alias="decision",
+        description=(
+            "Deprecated pre-1.1.28 location for the decision connection. "
+            "Use the root `decision` block instead."
+        ),
+    )
 
     @field_validator("questions")
     @classmethod
@@ -286,6 +304,11 @@ class ContentSafetyConfig(BaseModel):
             logger.warning(
                 "llm_shield_app_id is ignored when provider=%s",
                 self.provider.value,
+            )
+        if self.legacy_decision is not None:
+            logger.warning(
+                "content_safety.decision is deprecated; move api_url/api_key/model "
+                "to the root `decision` block. The root block wins when both are set."
             )
         return self
 
@@ -380,7 +403,32 @@ def _read_config_document(config_path: Path) -> dict[str, Any]:
     return document
 
 
+def _apply_legacy_decision_env(block: dict[str, Any]) -> dict[str, Any]:
+    """Map released ``TOOL_CONTENT_SAFETY_DECISION_*`` env vars onto the block."""
+    block = copy.deepcopy(block)
+    decision = block.get("decision")
+    if decision is None:
+        decision = {}
+    if not isinstance(decision, dict):
+        return block
+    applied = False
+    for field in _LEGACY_DECISION_ENV_FIELDS:
+        value = os.getenv(f"{_LEGACY_DECISION_ENV_PREFIX}{field.upper()}")
+        if value:
+            decision[field] = value
+            applied = True
+    if applied:
+        logger.warning(
+            "TOOL_CONTENT_SAFETY_DECISION_* environment variables are deprecated; "
+            "use DECISION_* instead."
+        )
+    if decision:
+        block["decision"] = decision
+    return block
+
+
 def _build_config(block: dict[str, Any], config_path: Path) -> ContentSafetyConfig:
+    block = _apply_legacy_decision_env(block)
     try:
         return ContentSafetyConfig.model_validate(block)
     except Exception as exc:

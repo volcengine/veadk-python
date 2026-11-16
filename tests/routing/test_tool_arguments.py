@@ -242,14 +242,53 @@ async def test_budget_shared_by_nested_tasks_persisted_for_resume_and_reset_next
 
 @pytest.mark.asyncio
 async def test_remote_schema_reference_does_not_trigger_network():
+    args = {"count": "7"}
+    state = {}
     token = _TURN.set(binding())
     try:
-        with pytest.raises(ValueError, match="local references"):
+        # Validator-infrastructure failures fail open: the tool keeps its
+        # pre-routing behavior instead of breaking the turn.
+        assert (
             await validate_tool_arguments(
                 declared({"$ref": "https://example.test/schema"}),
-                {},
-                SimpleNamespace(state={}),
+                args,
+                SimpleNamespace(state=state),
             )
+            is None
+        )
+        assert args == {"count": "7"}
+        assert state == {}
+    finally:
+        _TURN.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_strong_route_preserves_pre_routing_tool_arguments():
+    context = binding()
+    context = replace(context, selection=replace(context.selection, route="strong"))
+    token = _TURN.set(context)
+    args = {"count": "7"}
+    state = {}
+    try:
+        assert (
+            await validate_tool_arguments(
+                declared({"$ref": "https://example.test/schema"}),
+                args,
+                SimpleNamespace(state=state),
+            )
+            is None
+        )
+        assert (
+            await validate_tool_arguments(
+                declared({"type": "object", "required": ["count"]}),
+                {},
+                SimpleNamespace(state=state),
+            )
+            is None
+        )
+        assert args == {"count": "7"}
+        assert state == {}
+        assert not context.tool_argument_errors
     finally:
         _TURN.reset(token)
 

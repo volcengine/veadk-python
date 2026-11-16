@@ -746,6 +746,30 @@ class Agent(LlmAgent):
             else callbacks
         )
 
+    @property
+    def canonical_on_model_error_callbacks(self):
+        from veadk.routing.context import get_turn_context
+        from veadk.routing.execution import mark_model_failure
+
+        callbacks = super().canonical_on_model_error_callbacks
+        return (
+            [*callbacks, mark_model_failure]
+            if get_turn_context() is not None
+            else callbacks
+        )
+
+    async def aclose(self) -> None:
+        """Close routing resources owned by this agent and its children."""
+
+        from veadk.routing.llm import RoutingLlm
+
+        if isinstance(self.model, RoutingLlm):
+            await self.model.aclose()
+        for child in self.sub_agents:
+            close = getattr(child, "aclose", None)
+            if callable(close):
+                await close()
+
     def update_model(self, model_name: str):
         """Point the agent at a different model.
 

@@ -96,10 +96,12 @@ async def setup(agent):
 
 
 def routed(monkeypatch, judge, strong, cheap, **kwargs):
+    kwargs = dict(kwargs)
+    name = kwargs.pop("name", "root")
     monkeypatch.setattr(factory, "DecisionClient", lambda **_: judge)
     monkeypatch.setattr(factory, "_build_model", lambda *args, **kw: cheap)
     return Agent(
-        name="root",
+        name=name,
         model=strong,
         model_api_key="test-only",
         model_api_base="https://ark.cn-beijing.volces.com/api/v3",
@@ -134,12 +136,20 @@ async def test_selected_model_failure_never_changes_model(monkeypatch):
         RecordingLlm(model="strong"),
         RecordingLlm(model="cheap", failure=True),
     )
-    agent = routed(monkeypatch, Judge(), strong, cheap)
+    judge = Judge()
+    agent = routed(monkeypatch, judge, strong, cheap)
     runner, session = await setup(agent)
     try:
         with pytest.raises(RuntimeError, match="provider failed"):
             await turn(runner, session, "hello")
         assert not strong.calls
+
+        # The failed cheap model is circuit-broken for later turns. The next
+        # turn goes straight to the strong model instead of selecting it again.
+        await turn(runner, session, "try again")
+        assert len(cheap.calls) == 1
+        assert len(strong.calls) == 1
+        assert len(judge.calls) == 1
     finally:
         await runner.close()
 

@@ -34,6 +34,22 @@ DEFAULT_MAX_TURNS = 10_000
 _MEDIA_CHAR_COST = 4_000
 
 
+def _jsonable(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(exclude_none=True)
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
+    return value
+
+
+def _render(value: Any) -> str:
+    """Render typed GenAI/pydantic values as stable JSON for the judge."""
+
+    return json.dumps(_jsonable(value), ensure_ascii=False, sort_keys=True, default=str)
+
+
 class IncompleteRoutingState(ValueError):
     """The decision input cannot faithfully represent the effective context."""
 
@@ -73,7 +89,7 @@ class QueryStateBuilder(StateBuilder):
         for field in ("tools", "response_schema", "response_json_schema"):
             value = getattr(config, field, None)
             if value:
-                segments.append(f"[{field}]\n{value}")
+                segments.append(f"[{field}]\n{_render(value)}")
         for content in contents[-self._max_turns :]:
             for part in getattr(content, "parts", None) or []:
                 if (
@@ -113,8 +129,10 @@ def request_text_chars(llm_request: Any) -> int:
     config = getattr(llm_request, "config", None)
     if config is not None:
         total += len(str(getattr(config, "system_instruction", "") or ""))
-        total += len(str(getattr(config, "tools", "") or ""))
-        total += len(str(getattr(config, "response_json_schema", "") or ""))
+        tools = getattr(config, "tools", "") or ""
+        schema = getattr(config, "response_json_schema", "") or ""
+        total += len(_render(tools)) if tools else 0
+        total += len(_render(schema)) if schema else 0
     for content in getattr(llm_request, "contents", None) or []:
         for part in getattr(content, "parts", None) or []:
             text = getattr(part, "text", None)

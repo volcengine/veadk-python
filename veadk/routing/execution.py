@@ -41,9 +41,13 @@ from google.adk.tools import BaseTool, FunctionTool
 from google.adk.tools.base_toolset import BaseToolset
 
 from veadk.routing.context import RouteSelection, TurnContext, _TURN, get_turn_context
+from veadk.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 _METADATA = "veadk_query_routing"
 _RECORD = "veadk:query_routing:turn"
+_TARGET_ARG_KEYS = ("api_base", "base_url", "api_version")
 
 
 def digest(value: Any) -> str:
@@ -53,12 +57,16 @@ def digest(value: Any) -> str:
 
 def target_id(model: Any) -> str:
     # Only the digest leaves this function; credentials never enter metadata.
+    # Hash transport identity, not every provider argument: custom headers and
+    # other harmless arguments must not churn reasoning-continuation targets.
+    extra = getattr(model, "_additional_args", {}) or {}
+    target_args = {key: extra[key] for key in _TARGET_ARG_KEYS if key in extra}
     return digest(
         (
             type(model).__module__,
             type(model).__qualname__,
             model.model,
-            getattr(model, "_additional_args", {}),
+            target_args,
             getattr(model, "fallbacks", None),
             getattr(model, "enable_responses_cache", None),
         )
@@ -144,6 +152,51 @@ def _portable_contents(ctx: Any, items: list[Any], target: str) -> list[Any]:
             content.parts = portable
             result.append(content)
     return result
+
+
+def _record_key(router_name: str) -> str:
+    """Namespace the persisted decision by router owner.
+
+    One invocation can contain more than one independently configured router
+    through native agent transfer. A global record would let one router reject
+    or silently adopt another router's decision. The record still stores the
+    configuration hash, so changing the configuration of the same router during
+    a resumed turn fails explicitly instead of being hidden by a new key.
+    """
+
+    return f"{_RECORD}:{router_name}"
+
+
+def _owner_name(agent: Any, router: Any) -> str:
+    owner = routing_owner(agent)
+    if owner is not None:
+        return owner.name
+    return getattr(router, "name", type(router).__name__)
+
+
+async def mark_model_failure(
+    *, callback_context: Any, llm_request: LlmRequest, error: Exception
+) -> None:
+    """Circuit-break a failed simple model for later turns.
+
+    The current turn stays on its frozen route: the exception must still
+    propagate. Marking the runtime unhealthy only prevents the next turn from
+    selecting the same failing tier. Strong-route failures are not classified
+    as simple-tier outages.
+    """
+
+    turn = get_turn_context()
+    if turn is None or turn.selection.route != "simple":
+        return
+    runtime = turn.router.registry.get(turn.selection.model_name)
+    if runtime is None:
+        return
+    turn.router.registry.mark_failed(runtime)
+    logger.warning(
+        "query routing marked simple model unhealthy: model=%s error=%s",
+        turn.selection.model_name,
+        type(error).__name__,
+    )
 
 
 async def bind_request(callback_context: Any, llm_request: LlmRequest) -> None:
@@ -247,7 +300,8 @@ async def routing_request(agent: Any, ctx: Any) -> LlmRequest:
             name = getattr(tool, "name", None) or getattr(
                 tool, "__name__", type(tool).__name__
             )
-            request.tools_dict[f"{member.name}.{name}"] = tool
+            qualified_name = f"{member.name}.{name}"
+            request.tools_dict[qualified_name] = tool
             if isinstance(tool, BaseToolset):
                 # Tools discovered during execution cannot be classified from a
                 # guessed schema; keep the strong model for this turn.
@@ -256,6 +310,12 @@ async def routing_request(agent: Any, ctx: Any) -> LlmRequest:
                 concrete = tool if isinstance(tool, BaseTool) else FunctionTool(tool)
                 declaration = concrete._get_declaration()
                 if declaration:
+                    # Keep the judge's tool names aligned with tools_dict; the
+                    # unqualified function name would not identify the agent
+                    # that owns the tool in a multi-agent request.
+                    declaration = declaration.model_copy(
+                        update={"name": qualified_name}
+                    )
                     request.config.tools = [
                         *(request.config.tools or []),
                         types.Tool(function_declarations=[declaration]),
@@ -269,7 +329,7 @@ async def routing_request(agent: Any, ctx: Any) -> LlmRequest:
 
 async def _select(agent: Any, ctx: Any, router: Any) -> TurnContext:
     config_hash = configuration_id(router)
-    record = ctx.session.state.get(_RECORD, {})
+    record = ctx.session.state.get(_record_key(_owner_name(agent, router)), {})
     if record.get("invocation_id") == ctx.invocation_id:
         if record.get("config_hash") != config_hash:
             raise ValueError("routing configuration changed during a resumed turn")
@@ -303,37 +363,35 @@ def configuration_id(router: Any) -> str:
 async def _scope(agent: Any, ctx: Any):
     inherited = get_turn_context()
     router = inherited.router if inherited else routing_owner(agent).model
-    if inherited is None:
-        router.active_runs += 1
+    turn = inherited or await _select(agent, ctx, router)
+    token = _TURN.set(turn)
+    request_token = _REQUEST.set(RequestState([]))
     try:
-        turn = inherited or await _select(agent, ctx, router)
-        token = _TURN.set(turn)
-        request_token = _REQUEST.set(RequestState([]))
-        try:
-            yield turn, inherited is None
-        finally:
-            _REQUEST.reset(request_token)
-            _TURN.reset(token)
+        # The classifier owns a pooled HTTP client. Keep it alive across ADK's
+        # per-continuation _run_async_impl entries; Runner.close() closes the
+        # routing client with the agent lifecycle.
+        yield turn, inherited is None
     finally:
-        if inherited is None:
-            router.active_runs -= 1
-            if router.active_runs == 0:
-                await router.classifier.aclose()
+        _REQUEST.reset(request_token)
+        _TURN.reset(token)
 
 
 async def run_routed(agent: Any, ctx: Any, execute: Any):
     async with _scope(agent, ctx) as (turn, is_root):
         if is_root:
+            config_hash = configuration_id(turn.router)
             record = {
                 "invocation_id": ctx.invocation_id,
-                "config_hash": configuration_id(turn.router),
+                "config_hash": config_hash,
                 "selection": asdict(turn.selection),
             }
             yield Event(
                 author=agent.name,
                 invocation_id=ctx.invocation_id,
                 branch=ctx.branch,
-                actions=EventActions(state_delta={_RECORD: record}),
+                actions=EventActions(
+                    state_delta={_record_key(_owner_name(agent, turn.router)): record}
+                ),
                 custom_metadata={
                     _METADATA: {
                         "root_turn_id": ctx.invocation_id,

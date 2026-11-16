@@ -56,6 +56,13 @@ class RoutedLlmAgent(LlmAgent):
         )
 
     @property
+    def canonical_on_model_error_callbacks(self):
+        from veadk.routing.execution import mark_model_failure
+
+        callbacks = super().canonical_on_model_error_callbacks
+        return [*callbacks, mark_model_failure] if get_turn_context() else callbacks
+
+    @property
     def _llm_flow(self):
         return prepare_flow(super()._llm_flow)
 

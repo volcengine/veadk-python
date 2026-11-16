@@ -57,20 +57,3 @@ _TURN: ContextVar[TurnContext | None] = ContextVar("veadk_query_turn", default=N
 
 def get_turn_context() -> TurnContext | None:
     return _TURN.get()
-
-
-_ROUTE_SELECTION: ContextVar[RouteSelection | None] = ContextVar(
-    "veadk_route_selection", default=None
-)
-
-
-def set_route_selection(selection: RouteSelection | None) -> None:
-    """Set the route selection for the current task."""
-
-    _ROUTE_SELECTION.set(selection)
-
-
-def get_route_selection() -> RouteSelection | None:
-    """Return the route selection for the current task, if any."""
-
-    return _ROUTE_SELECTION.get()

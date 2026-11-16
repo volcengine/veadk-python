@@ -26,6 +26,9 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from veadk.routing.context import get_turn_context
+from veadk.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 _BUDGET_KEY = "veadk:query_routing:tool_argument_errors"
 _MAX_CORRECTIONS = 2
@@ -79,37 +82,53 @@ def _schema(value: Any) -> Any:
 
 async def validate_tool_arguments(tool, args, tool_context):
     turn = get_turn_context()
-    if turn is None or turn.selection.shadow:
+    if turn is None or turn.selection.shadow or turn.selection.route == "strong":
+        # The guard protects downgraded calls. Strong-route behavior must remain
+        # identical to a non-routed turn, including schemas the validator cannot
+        # represent safely.
         return None
-    declaration = tool._get_declaration()
-    if declaration is None:
+
+    tool_name = getattr(tool, "name", type(tool).__name__)
+    try:
+        declaration = tool._get_declaration()
+        if declaration is None:
+            return None
+        schema = declaration.parameters_json_schema
+        if schema is None and declaration.parameters is not None:
+            schema = _schema(declaration.parameters.model_dump(exclude_none=True))
+        if schema is None:
+            return None
+        # Check references in JSON schemas as well; validation must not perform IO.
+        schema = _schema(schema)
+        Draft202012Validator.check_schema(schema)
+        validator = Draft202012Validator(schema)
+        normalized = copy.deepcopy(args)
+        for error in validator.iter_errors(normalized):
+            # Only an unambiguous integer declaration permits normalization. In
+            # particular, never truncate fractions or convert booleans to integers.
+            if (
+                error.validator == "type"
+                and error.validator_value == "integer"
+                and isinstance(error.instance, str)
+                and re.fullmatch(r"-?(?:0|[1-9][0-9]{0,127})", error.instance)
+                and error.absolute_path
+            ):
+                parent = normalized
+                path = list(error.absolute_path)
+                for key in path[:-1]:
+                    parent = parent[key]
+                parent[path[-1]] = int(error.instance)
+        errors = list(validator.iter_errors(normalized))
+    except Exception as exc:  # noqa: BLE001 - validator infrastructure fails open
+        # A tool schema using an unsupported reference or Draft feature is a
+        # validator limitation, not proof that the model produced bad arguments.
+        # Preserve the pre-routing call path instead of failing the turn.
+        logger.warning(
+            "routing tool argument validation skipped: tool=%s error=%s",
+            tool_name,
+            type(exc).__name__,
+        )
         return None
-    schema = declaration.parameters_json_schema
-    if schema is None and declaration.parameters is not None:
-        schema = _schema(declaration.parameters.model_dump(exclude_none=True))
-    if schema is None:
-        return None
-    # Check references in JSON schemas as well; validation must not perform IO.
-    schema = _schema(schema)
-    Draft202012Validator.check_schema(schema)
-    validator = Draft202012Validator(schema)
-    normalized = copy.deepcopy(args)
-    for error in validator.iter_errors(normalized):
-        # Only an unambiguous integer declaration permits normalization. In
-        # particular, never truncate fractions or convert booleans to integers.
-        if (
-            error.validator == "type"
-            and error.validator_value == "integer"
-            and isinstance(error.instance, str)
-            and re.fullmatch(r"-?(?:0|[1-9][0-9]{0,127})", error.instance)
-            and error.absolute_path
-        ):
-            parent = normalized
-            path = list(error.absolute_path)
-            for key in path[:-1]:
-                parent = parent[key]
-            parent[path[-1]] = int(error.instance)
-    errors = list(validator.iter_errors(normalized))
     if not errors:
         args.clear()
         args.update(normalized)

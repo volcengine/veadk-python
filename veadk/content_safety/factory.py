@@ -23,6 +23,7 @@ from veadk.decision import (
     DecisionClient,
     DecisionJudge,
     DecisionConfig,
+    has_explicit_decision_config,
     load_decision_config,
     resolve_decision_connection,
 )
@@ -63,7 +64,15 @@ def build_content_safety(
     if config.provider is Provider.DECISION:
         judge = client
         if judge is None:
-            connection = decision if decision is not None else load_decision_config()
+            if decision is not None:
+                connection = decision
+            elif (
+                config.legacy_decision is not None
+                and not has_explicit_decision_config()
+            ):
+                connection = config.legacy_decision
+            else:
+                connection = load_decision_config()
             api_url, api_key = resolve_decision_connection(
                 connection, ark_api_base, ark_api_key
             )

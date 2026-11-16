@@ -24,14 +24,6 @@ def selection(reason="ok"):
     return RouteSelection(route="simple", reason=reason, invocation_id="inv")
 
 
-class Clock:
-    def __init__(self):
-        self.now = 1_000.0
-
-    def __call__(self):
-        return self.now
-
-
 @pytest.mark.asyncio
 async def test_concurrent_callers_share_one_classification():
     store = RouteStore()
@@ -58,26 +50,8 @@ async def test_concurrent_callers_share_one_classification():
 
 
 @pytest.mark.asyncio
-async def test_cached_decision_is_reused_within_ttl():
-    clock = Clock()
-    store = RouteStore(decision_ttl=10, clock=clock)
-    calls = 0
-
-    async def factory():
-        nonlocal calls
-        calls += 1
-        return selection()
-
-    assert await store.get_or_create("k", factory) == selection()
-    clock.now += 9
-    assert await store.get_or_create("k", factory) == selection()
-    assert calls == 1
-
-
-@pytest.mark.asyncio
-async def test_expired_decision_is_reclassified():
-    clock = Clock()
-    store = RouteStore(decision_ttl=10, clock=clock)
+async def test_completed_decision_is_not_cached_across_calls():
+    store = RouteStore()
     calls = 0
 
     async def factory():
@@ -85,11 +59,12 @@ async def test_expired_decision_is_reclassified():
         calls += 1
         return selection(str(calls))
 
-    await store.get_or_create("k", factory)
-    clock.now += 11
-    result = await store.get_or_create("k", factory)
+    first = await store.get_or_create("k", factory)
+    second = await store.get_or_create("k", factory)
+    assert first.reason == "1"
+    assert second.reason == "2"
     assert calls == 2
-    assert result.reason == "2"
+    assert store._inflight == {}
 
 
 @pytest.mark.asyncio
@@ -106,24 +81,29 @@ async def test_factory_failure_propagates_and_clears_inflight():
         return selection()
 
     assert await store.get_or_create("k", ok) == selection()
-
-
-def test_clear_drops_all_state():
-    store = RouteStore()
-    store.clear()
-    assert not store._decisions
+    assert store._inflight == {}
 
 
 @pytest.mark.asyncio
-async def test_many_entries_are_pruned_when_expired():
-    clock = Clock()
-    store = RouteStore(decision_ttl=10, clock=clock)
+async def test_cancelled_classification_clears_inflight():
+    store = RouteStore()
+    started = asyncio.Event()
 
-    async def factory():
-        return selection()
+    async def wait_forever():
+        started.set()
+        await asyncio.Event().wait()
 
-    for index in range(4_100):
-        await store.get_or_create(f"k{index}", factory)
-    clock.now += 100
-    await store.get_or_create("fresh", factory)
-    assert len(store._decisions) == 1  # noqa: SLF001
+    task = asyncio.create_task(store.get_or_create("k", wait_forever))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert store._inflight == {}
+
+
+@pytest.mark.asyncio
+async def test_clear_drops_inflight_state():
+    store = RouteStore()
+    store._inflight["k"] = asyncio.get_running_loop().create_future()
+    store.clear()
+    assert store._inflight == {}

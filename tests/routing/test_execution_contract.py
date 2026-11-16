@@ -15,6 +15,8 @@
 
 import asyncio
 import copy
+import json
+from dataclasses import asdict
 from types import SimpleNamespace
 
 import httpx
@@ -36,8 +38,16 @@ from tests.routing.test_turn_contract import (
     setup,
     turn,
 )
-from veadk.routing.context import get_turn_context
-from veadk.routing.execution import _RECORD, _REQUEST, _select, _portable_contents
+from veadk.routing.context import RouteSelection, get_turn_context
+from veadk.routing.execution import (
+    _REQUEST,
+    _portable_contents,
+    _record_key,
+    _select,
+    configuration_id,
+    run_routed,
+    target_id,
+)
 
 
 @pytest.mark.asyncio
@@ -259,7 +269,7 @@ async def test_resume_reuses_persisted_selection_and_rejects_configuration_chang
         saved = await runner.session_service.get_session(
             app_name=session.app_name, user_id=session.user_id, session_id=session.id
         )
-        record = saved.state[_RECORD]
+        record = saved.state[_record_key(root.name)]
         ctx = SimpleNamespace(session=saved, invocation_id=record["invocation_id"])
         binding = await _select(root, ctx, root.model)
         assert binding.model is cheap
@@ -269,6 +279,80 @@ async def test_resume_reuses_persisted_selection_and_rejects_configuration_chang
             await _select(root, ctx, root.model)
     finally:
         await runner.close()
+
+
+@pytest.mark.asyncio
+async def test_independently_configured_routers_keep_separate_records(monkeypatch):
+    cheap_a = RecordingLlm(model="cheap-a")
+    cheap_b = RecordingLlm(model="cheap-b")
+    router_a = routed(
+        monkeypatch,
+        Judge(),
+        RecordingLlm(model="strong-a"),
+        cheap_a,
+        name="router_a",
+    )
+    router_b = routed(
+        monkeypatch,
+        Judge(),
+        RecordingLlm(model="strong-b"),
+        cheap_b,
+        name="router_b",
+    )
+
+    record_a = {
+        "invocation_id": "inv",
+        "config_hash": configuration_id(router_a.model),
+        "selection": asdict(
+            RouteSelection(
+                route="simple",
+                reason="test",
+                invocation_id="inv",
+                model_name="cheap-a",
+            )
+        ),
+    }
+    record_b = {
+        "invocation_id": "inv",
+        "config_hash": configuration_id(router_b.model),
+        "selection": asdict(
+            RouteSelection(
+                route="simple",
+                reason="test",
+                invocation_id="inv",
+                model_name="cheap-b",
+            )
+        ),
+    }
+    assert _record_key(router_a.name) != _record_key(router_b.name)
+    state = {
+        _record_key(router_a.name): record_a,
+        _record_key(router_b.name): record_b,
+    }
+    ctx = SimpleNamespace(
+        session=SimpleNamespace(state=state),
+        invocation_id="inv",
+        branch=None,
+    )
+
+    binding_a = await _select(router_a, ctx, router_a.model)
+    binding_b = await _select(router_b, ctx, router_b.model)
+    assert binding_a.model is cheap_a
+    assert binding_b.model is cheap_b
+
+    async def no_events(_ctx):
+        if False:  # pragma: no cover - empty async generator for run_routed
+            yield
+
+    delta_keys = set()
+    for router in (router_a, router_b):
+        events = [event async for event in run_routed(router, ctx, no_events)]
+        assert len(events) == 1
+        delta_keys.update(events[0].actions.state_delta)
+    assert delta_keys == {
+        _record_key(router_a.name),
+        _record_key(router_b.name),
+    }
 
 
 @pytest.mark.asyncio
@@ -290,19 +374,28 @@ async def test_cancellation_closes_classifier_and_clears_turn_scope(monkeypatch)
         RecordingLlm(model="strong"),
         RecordingLlm(model="cheap"),
     )
-    runner, session = await setup(root)
+    from google.adk.sessions import InMemorySessionService
+    from veadk.runner import Runner as VeADKRunner
+
+    service = InMemorySessionService()
+    runner = VeADKRunner(
+        app_name="routing_contract", agent=root, session_service=service
+    )
+    session = await service.create_session(app_name="routing_contract", user_id="user")
     try:
         task = asyncio.create_task(turn(runner, session, "ORCHID"))
         await started.wait()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert root.model.active_runs == 0
-        assert closed == [True]
+        # The classifier client outlives ADK's continuation entries and is
+        # closed by the Runner/Agent lifecycle, not by a cancelled turn.
+        assert closed == []
         assert get_turn_context() is None and _REQUEST.get() is None
         assert not root.model.store._inflight
     finally:
         await runner.close()
+    assert closed == [True]
 
 
 @pytest.mark.asyncio
@@ -324,6 +417,23 @@ async def test_late_capability_growth_fails_without_switching(monkeypatch):
         assert get_turn_context() is None
     finally:
         await runner.close()
+
+
+def test_target_id_ignores_harmless_provider_arguments():
+    first = RecordingLlm(model="model")
+    second = RecordingLlm(model="model")
+    first._additional_args = {
+        "api_key": "one",
+        "extra_headers": {"x-trace": "one"},
+    }
+    second._additional_args = {
+        "api_key": "two",
+        "extra_headers": {"x-trace": "two"},
+    }
+    assert target_id(first) == target_id(second)
+
+    second._additional_args["api_base"] = "https://other.example/v1"
+    assert target_id(first) != target_id(second)
 
 
 def test_foreign_reasoning_removed_without_losing_tool_pair_or_mutating_session():
@@ -440,6 +550,24 @@ async def test_output_schema_and_tool_description_are_classified(monkeypatch):
         await turn(runner, session, "ORCHID")
         assert "archived project" in str(judge.calls)
         assert "Archive policy" in str(judge.calls)
+        state_text = "\n".join(
+            segment["text"]
+            for segment in judge.calls[0]
+            if isinstance(segment, dict) and isinstance(segment.get("text"), str)
+        )
+        # The judge's tool names must match between the available-tool list and
+        # the declaration schemas, including the owning agent in multi-agent
+        # requests.
+        available = json.loads(
+            state_text.split("[available_tools]\n", 1)[1].split("\n", 1)[0]
+        )
+        schemas = json.loads(state_text.split("[tools]\n", 1)[1].split("\n[", 1)[0])
+        assert available == ["root.lookup_project"]
+        assert [
+            declaration["name"]
+            for tool in schemas
+            for declaration in tool.get("function_declarations", [])
+        ] == ["root.lookup_project"]
         root.output_schema = Output
         await turn(runner, session, "format code")
         assert len(judge.calls) == 1

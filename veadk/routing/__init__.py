@@ -13,11 +13,7 @@
 # limitations under the License.
 """Opt-in per-invocation query routing for VeADK agents."""
 
-from veadk.routing.context import (
-    RouteSelection,
-    get_route_selection,
-    set_route_selection,
-)
+from veadk.routing.context import RouteSelection
 from veadk.routing.llm import RoutingLlm
 from veadk.routing.store import RouteStore, get_route_store
 
@@ -25,7 +21,5 @@ __all__ = [
     "RouteSelection",
     "RouteStore",
     "RoutingLlm",
-    "get_route_selection",
     "get_route_store",
-    "set_route_selection",
 ]
