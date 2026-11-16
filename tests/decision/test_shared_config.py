@@ -27,7 +27,12 @@ from veadk.content_safety import (
     ContentSafetyConfig,
     load_content_safety_config_if_present,
 )
-from veadk.decision import DecisionConfig, DecisionConfigError, load_decision_config
+from veadk.decision import (
+    DEFAULT_DECISION_MODEL,
+    DecisionConfig,
+    DecisionConfigError,
+    load_decision_config,
+)
 
 
 def config_file(tmp_path, **overrides):
@@ -44,12 +49,17 @@ def config_file(tmp_path, **overrides):
     return path
 
 
-def test_only_common_import_is_public():
+def test_content_safety_keeps_a_deprecated_import_shim():
     import veadk.content_safety as safety
     import veadk.content_safety.config as config
 
-    assert not hasattr(safety, "DecisionConfig")
+    # The class now lives in veadk.decision; the released content_safety import
+    # path keeps working (with a warning) for one release.
     assert not hasattr(config, "DecisionConfig")
+    with pytest.warns(DeprecationWarning, match="veadk.decision"):
+        assert safety.DecisionConfig is DecisionConfig
+    with pytest.warns(DeprecationWarning, match="veadk.decision"):
+        assert safety.DEFAULT_DECISION_MODEL == DEFAULT_DECISION_MODEL
 
 
 def test_old_nested_connection_is_rejected_by_query_routing():

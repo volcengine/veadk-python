@@ -679,6 +679,22 @@ def test_legacy_nested_decision_is_accepted_with_warning(caplog):
     assert "content_safety.decision is deprecated" in caplog.text
 
 
+def test_legacy_nested_decision_does_not_warn_without_decision_provider(caplog):
+    import logging
+
+    data = {
+        "provider": "none",
+        "decision": {
+            "api_url": "https://legacy.example/v1/judge",
+            "api_key": "legacy-key",
+        },
+    }
+    with caplog.at_level(logging.WARNING):
+        config = ContentSafetyConfig.from_dict(data)
+    assert config.legacy_decision is not None
+    assert "content_safety.decision is deprecated" not in caplog.text
+
+
 def test_legacy_decision_env_is_applied_and_overrides_yaml(tmp_path, monkeypatch):
     import os
 
@@ -731,3 +747,29 @@ def test_from_dict_does_not_apply_legacy_decision_env(monkeypatch):
     )
     config = ContentSafetyConfig.from_dict(decision_data())
     assert config.legacy_decision is None
+
+
+def test_legacy_decision_env_is_ignored_without_decision_provider(
+    tmp_path, monkeypatch, caplog
+):
+    import logging
+
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        """
+tool:
+  content_safety:
+    provider: none
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    for name in ("DECISION_API_URL", "DECISION_API_KEY", "DECISION_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(
+        "TOOL_CONTENT_SAFETY_DECISION_API_URL", "https://env.example/v1/judge"
+    )
+    with caplog.at_level(logging.WARNING):
+        config = load_content_safety_config(path)
+    assert config.legacy_decision is None
+    assert "TOOL_CONTENT_SAFETY_DECISION_*" not in caplog.text

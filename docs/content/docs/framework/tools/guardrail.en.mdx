@@ -118,7 +118,7 @@ The root `decision` block is shared connection configuration; it does not enable
 The connection fields can also be overridden with `DECISION_API_URL`, `DECISION_API_KEY`, and `DECISION_MODEL`.
 
 <Callout type="warning" title="Migrating from 1.1.27 and earlier">
-The released `tool.content_safety.decision.{api_url,api_key,model}` block and the `TOOL_CONTENT_SAFETY_DECISION_{API_URL,API_KEY,MODEL}` environment variables remain accepted, but they log a deprecation warning. Move them to the root `decision` block and `DECISION_*` variables. A root `decision` block, or any `DECISION_*` variable, takes precedence over the legacy location; the two locations are never merged. Remove the legacy connection fields when both are present so the effective endpoint and key are unambiguous.
+The released `tool.content_safety.decision.{api_url,api_key,model}` block and the `TOOL_CONTENT_SAFETY_DECISION_{API_URL,API_KEY,MODEL}` environment variables remain accepted; when `provider` is `decision` they are still used and log a deprecation warning. The released `from veadk.content_safety import DecisionConfig, DEFAULT_DECISION_MODEL` imports also keep working for one release with a `DeprecationWarning`; import them from `veadk.decision` instead. Move them to the root `decision` block and `DECISION_*` variables. A root `decision` block, or any `DECISION_*` variable, takes precedence over the legacy location; the two locations are never merged. Remove the legacy connection fields when both are present so the effective endpoint and key are unambiguous.
 </Callout>
 
 When a custom `decision.api_url` is configured, `decision.api_key` must also be supplied explicitly; the SDK never reuses Ark credentials for a third-party endpoint. You can configure it in code instead:

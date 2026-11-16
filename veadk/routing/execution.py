@@ -162,6 +162,8 @@ def _record_key(router_name: str) -> str:
     or silently adopt another router's decision. The record still stores the
     configuration hash, so changing the configuration of the same router during
     a resumed turn fails explicitly instead of being hidden by a new key.
+    ADK already requires agent names to be unique within an agent tree, so the
+    owner name disambiguates every routed agent reachable in one invocation.
     """
 
     return f"{_RECORD}:{router_name}"
@@ -174,6 +176,26 @@ def _owner_name(agent: Any, router: Any) -> str:
     return getattr(router, "name", type(router).__name__)
 
 
+_TRANSIENT_CLIENT_CODES = frozenset({408, 429})
+
+
+def _opens_circuit(error: Exception) -> bool:
+    """Whether a provider error indicates an unhealthy simple tier.
+
+    A request-specific 4xx (bad arguments, auth, missing model) says nothing
+    about the next request, so cooling the tier down would only move later
+    turns to the strong model. Timeouts and rate limits are transient and do
+    open the cooldown. Errors without a status code keep the previous
+    conservative behavior.
+    """
+
+    code = getattr(error, "code", None)
+    if isinstance(code, int) and not isinstance(code, bool):
+        if 400 <= code < 500:
+            return code in _TRANSIENT_CLIENT_CODES
+    return True
+
+
 async def mark_model_failure(
     *, callback_context: Any, llm_request: LlmRequest, error: Exception
 ) -> None:
@@ -182,7 +204,8 @@ async def mark_model_failure(
     The current turn stays on its frozen route: the exception must still
     propagate. Marking the runtime unhealthy only prevents the next turn from
     selecting the same failing tier. Strong-route failures are not classified
-    as simple-tier outages.
+    as simple-tier outages, and client-caused 4xx responses do not open the
+    cooldown.
     """
 
     turn = get_turn_context()
@@ -190,6 +213,14 @@ async def mark_model_failure(
         return
     runtime = turn.router.registry.get(turn.selection.model_name)
     if runtime is None:
+        return
+    if not _opens_circuit(error):
+        logger.debug(
+            "query routing keeps simple model after client error: model=%s error=%s code=%s",
+            turn.selection.model_name,
+            type(error).__name__,
+            getattr(error, "code", None),
+        )
         return
     turn.router.registry.mark_failed(runtime)
     logger.warning(

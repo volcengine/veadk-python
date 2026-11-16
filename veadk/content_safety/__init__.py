@@ -62,6 +62,27 @@ from .types import (
     QuestionResult,
 )
 
+# Connection symbols moved to ``veadk.decision``. Keep the released import
+# paths working for one release; remove this shim afterwards.
+_DEPRECATED_IMPORTS = ("DecisionConfig", "DEFAULT_DECISION_MODEL")
+
+
+def __getattr__(name: str) -> object:
+    if name in _DEPRECATED_IMPORTS:
+        import warnings
+
+        from veadk import decision
+
+        warnings.warn(
+            f"veadk.content_safety.{name} is deprecated; import it from "
+            "veadk.decision instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return getattr(decision, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "AuditAction",
     "AuditResult",

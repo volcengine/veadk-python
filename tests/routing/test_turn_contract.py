@@ -50,12 +50,21 @@ class Judge:
         pass
 
 
+class ProviderError(RuntimeError):
+    def __init__(self, message: str, code: int):
+        super().__init__(message)
+        self.code = code
+
+
 class RecordingLlm(BaseLlm):
     calls: list = Field(default_factory=list)
     failure: bool = False
+    failure_code: int | None = None
 
     async def generate_content_async(self, llm_request, stream=False):
         self.calls.append(copy.deepcopy(llm_request.contents))
+        if self.failure_code is not None:
+            raise ProviderError("provider rejected the request", self.failure_code)
         if self.failure:
             raise RuntimeError("provider failed")
         yield LlmResponse(
@@ -150,6 +159,28 @@ async def test_selected_model_failure_never_changes_model(monkeypatch):
         assert len(cheap.calls) == 1
         assert len(strong.calls) == 1
         assert len(judge.calls) == 1
+    finally:
+        await runner.close()
+
+
+@pytest.mark.asyncio
+async def test_client_error_does_not_circuit_break_the_simple_model(monkeypatch):
+    strong, cheap = (
+        RecordingLlm(model="strong"),
+        RecordingLlm(model="cheap", failure_code=400),
+    )
+    judge = Judge()
+    agent = routed(monkeypatch, judge, strong, cheap)
+    runner, session = await setup(agent)
+    try:
+        for _ in range(2):
+            with pytest.raises(RuntimeError, match="rejected the request"):
+                await turn(runner, session, "hello")
+        # A request-specific 4xx is not a tier health signal: the next turn
+        # still selects the simple model and never spends strong-model tokens.
+        assert len(cheap.calls) == 2
+        assert not strong.calls
+        assert len(judge.calls) == 2
     finally:
         await runner.close()
 

@@ -305,7 +305,9 @@ class ContentSafetyConfig(BaseModel):
                 "llm_shield_app_id is ignored when provider=%s",
                 self.provider.value,
             )
-        if self.legacy_decision is not None:
+        if self.legacy_decision is not None and self.provider is Provider.DECISION:
+            # Only provider=decision consumes this connection. Warning for an
+            # inert block on provider=none/llm_shield is noise.
             logger.warning(
                 "content_safety.decision is deprecated; move api_url/api_key/model "
                 "to the root `decision` block. The root block wins when both are set."
@@ -403,8 +405,20 @@ def _read_config_document(config_path: Path) -> dict[str, Any]:
     return document
 
 
+def _provider_value(block: dict[str, Any]) -> Any:
+    provider = block.get("provider", Provider.NONE)
+    return getattr(provider, "value", provider)
+
+
 def _apply_legacy_decision_env(block: dict[str, Any]) -> dict[str, Any]:
-    """Map released ``TOOL_CONTENT_SAFETY_DECISION_*`` env vars onto the block."""
+    """Map released ``TOOL_CONTENT_SAFETY_DECISION_*`` env vars onto the block.
+
+    The deprecated connection is only consumed by ``provider=decision``; other
+    providers ignore it entirely, so neither apply nor warn for them.
+    """
+
+    if _provider_value(block) != Provider.DECISION.value:
+        return block
     block = copy.deepcopy(block)
     decision = block.get("decision")
     if decision is None:

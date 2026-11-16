@@ -118,7 +118,7 @@ tool:
 连接字段也可以用环境变量覆盖 YAML：`DECISION_API_URL`、`DECISION_API_KEY`、`DECISION_MODEL`。
 
 <Callout type="warning" title="从 1.1.27 及更早版本迁移">
-旧版的 `tool.content_safety.decision.{api_url,api_key,model}` 与 `TOOL_CONTENT_SAFETY_DECISION_{API_URL,API_KEY,MODEL}` 环境变量仍然兼容，但会打印弃用警告。请迁移到根级 `decision` 与 `DECISION_*`；根级 `decision` 或任一 `DECISION_*` 一旦存在就优先于旧位置，两者不会合并字段。两处同时配置时，请把旧位置的连接字段删除，避免误判实际使用的地址或密钥。
+旧版的 `tool.content_safety.decision.{api_url,api_key,model}` 与 `TOOL_CONTENT_SAFETY_DECISION_{API_URL,API_KEY,MODEL}` 环境变量仍然兼容；当 `provider` 为 `decision` 时它们仍会生效并打印弃用警告。旧版的 `from veadk.content_safety import DecisionConfig, DEFAULT_DECISION_MODEL` 导入也可继续使用一个版本，但会产生 `DeprecationWarning`；请改为从 `veadk.decision` 导入。请迁移到根级 `decision` 与 `DECISION_*`；根级 `decision` 或任一 `DECISION_*` 一旦存在就优先于旧位置，两者不会合并字段。两处同时配置时，请把旧位置的连接字段删除，避免误判实际使用的地址或密钥。
 </Callout>
 
 如果配置了自定义 `decision.api_url`，必须同时显式提供 `decision.api_key`；SDK 不会把 Ark 凭证复用给第三方地址。也可以在代码中直接配置：
