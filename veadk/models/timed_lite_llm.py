@@ -28,6 +28,7 @@ class TimedLiteLLMClient(LiteLLMClient):
             timing.__exit__(type(error), error, error.__traceback__)
             raise
         if not timing.streaming:
+            timing.observe_response_id(response)
             timing.__exit__(None, None, None)
             return response
         return _TimedStream(response, timing)
@@ -56,6 +57,7 @@ class _TimedStream:
         except BaseException as error:
             await self._finish(error)
             raise
+        self._timing.observe_response_id(chunk)
         self._timing.observe(litellm_output_type(chunk))
         return chunk
 

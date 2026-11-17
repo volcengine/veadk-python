@@ -880,6 +880,7 @@ class ArkLlm(Gemini):
                 response = await self.llm_client.aresponses(**responses_args)
                 try:
                     async for part in response:
+                        timing.observe_response_id(part)
                         timing.observe(ark_output_type(part))
                         llm_response = event_to_generate_content_response(
                             event=part, is_partial=True, model_version=model
@@ -892,6 +893,7 @@ class ArkLlm(Gemini):
                         await close()
             else:
                 raw_response = await self.llm_client.aresponses(**responses_args)
+                timing.observe_response_id(raw_response)
                 llm_response = ark_response_to_generate_content_response(raw_response)
                 yield llm_response
 

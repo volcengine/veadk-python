@@ -15,9 +15,8 @@
 """Record the model provider's response id on the LLM trace span.
 
 Google ADK drops the litellm response's ``id`` when it builds its
-``LlmResponse``, so the tracer never sees it. For Volcengine Ark that id equals
-the ``x-request-id`` response header — the most useful identifier for
-correlating with the provider's logs.
+``LlmResponse``, so the tracer never sees it. The response id is kept as the
+provider returned it and is not inferred from a response header.
 
 A pure litellm callback can read the id but cannot attach it to the span:
 litellm runs its success callbacks detached from the OpenTelemetry context, so

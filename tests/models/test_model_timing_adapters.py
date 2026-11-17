@@ -54,22 +54,26 @@ def spans(monkeypatch):
 async def test_default_litellm_adapter_records_before_adk_aggregation(
     monkeypatch, spans, stream
 ):
+    # REQ-001/REQ-006: both Chat modes preserve output and expose the provider id.
     tracer, exporter = spans
 
     async def chunks():
         yield ModelResponseStream(
+            id="resp-stream",
             model="openai/test",
             choices=[
                 {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
             ],
         )
         yield ModelResponseStream(
+            id="resp-stream",
             model="openai/test",
             choices=[
                 {"index": 0, "delta": {"content": "hello"}, "finish_reason": None}
             ],
         )
         yield ModelResponseStream(
+            id="resp-stream",
             model="openai/test",
             choices=[{"index": 0, "delta": {"content": "!"}, "finish_reason": "stop"}],
         )
@@ -79,6 +83,7 @@ async def test_default_litellm_adapter_records_before_adk_aggregation(
         if kwargs.get("stream"):
             return chunks()
         return ModelResponse(
+            id="resp-plain",
             model=model,
             choices=[
                 {
@@ -104,12 +109,14 @@ async def test_default_litellm_adapter_records_before_adk_aggregation(
         s for s in exporter.get_finished_spans() if s.name == "model_request"
     )
     assert attempt.attributes["gen_ai.request.stream"] is stream
+    expected_response_id = "resp-stream" if stream else "resp-plain"
+    assert attempt.attributes["gen_ai.response.id"] == expected_response_id
     ttft = "gen_ai.chat_completions.streaming_time_to_first_token"
     assert (ttft in attempt.attributes) is stream
     if stream:
         assert attempt.attributes[ttft] >= 0
         assert attempt.start_time + attempt.attributes[ttft] * 1e9 <= attempt.end_time
-    assert not owner.attributes
+    assert owner.attributes["gen_ai.response.id"] == expected_response_id
     assert not owner.events
     assert (
         len([s for s in exporter.get_finished_spans() if s.name == "model_request"])
@@ -179,17 +186,84 @@ async def test_litellm_request_failure_does_not_leak_span(monkeypatch, spans):
     assert exporter.get_finished_spans()[0].status.status_code is StatusCode.ERROR
 
 
+def test_response_id_keeps_first_value_per_attempt_and_isolates_attempts(spans):
+    # REQ-003/REQ-004: ignore empty ids, keep the first id per request, isolate retries.
+    tracer, exporter = spans
+
+    with tracer.start_as_current_span("call_llm") as owner:
+        first = timing.ModelTiming(streaming=True, model="first")
+        first.observe_response_id(NS(id=""))
+        first.observe_response_id(NS(response=NS(id="resp-first")))
+        first.observe_response_id(NS(id="resp-conflict"))
+        first.__exit__(None, None, None)
+
+        second = timing.ModelTiming(streaming=False, model="second")
+        second.observe_response_id(NS(id="resp-second"))
+        second.__exit__(None, None, None)
+
+    attempts = [
+        span for span in exporter.get_finished_spans() if span.name == "model_request"
+    ]
+    assert [span.attributes["gen_ai.response.id"] for span in attempts] == [
+        "resp-first",
+        "resp-second",
+    ]
+    assert owner.attributes["gen_ai.response.id"] == "resp-second"
+
+
+@pytest.mark.asyncio
+async def test_response_id_is_isolated_across_concurrent_calls(spans):
+    # REQ-005: concurrent calls bind ids to their own request and owner spans.
+    tracer, exporter = spans
+    ready = asyncio.Event()
+    started = 0
+
+    async def record(name, response_id):
+        nonlocal started
+        with tracer.start_as_current_span(name) as owner:
+            request = timing.ModelTiming(streaming=True, model=name)
+            started += 1
+            if started == 2:
+                ready.set()
+            await ready.wait()
+            request.observe_response_id(NS(id=response_id))
+            request.__exit__(None, None, None)
+        return owner
+
+    owners = await asyncio.gather(
+        record("call-a", "resp-a"),
+        record("call-b", "resp-b"),
+    )
+
+    assert [owner.attributes["gen_ai.response.id"] for owner in owners] == [
+        "resp-a",
+        "resp-b",
+    ]
+    attempts = [
+        span for span in exporter.get_finished_spans() if span.name == "model_request"
+    ]
+    assert {span.attributes["gen_ai.response.id"] for span in attempts} == {
+        "resp-a",
+        "resp-b",
+    }
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "mode", ["text", "tool_call", "empty", "close", "error", "non_streaming"]
 )
 async def test_ark_raw_events_and_terminal_paths(monkeypatch, spans, mode):
+    # REQ-001/REQ-002/REQ-006: capture the earliest Ark id across terminal paths.
     tracer, exporter = spans
     closed = []
 
     async def chunks():
         try:
-            yield NS(type="response.created", delta="")
+            yield NS(
+                type="response.created",
+                delta="",
+                response=NS(id="resp-ark-stream"),
+            )
             if mode == "error":
                 raise RuntimeError("provider failed")
             if mode == "empty":
@@ -223,7 +297,7 @@ async def test_ark_raw_events_and_terminal_paths(monkeypatch, spans, mode):
 
     async def responses(*args, **kwargs):
         if mode == "non_streaming":
-            return NS()
+            return NS(id="resp-ark-plain")
         return Stream()
 
     monkeypatch.setattr(ArkLlmClient, "aresponses", responses)
@@ -260,10 +334,14 @@ async def test_ark_raw_events_and_terminal_paths(monkeypatch, spans, mode):
         else "observed"
     )
     assert attempt.attributes["gen_ai.request.stream"] is (mode != "non_streaming")
+    expected_response_id = (
+        "resp-ark-plain" if mode == "non_streaming" else "resp-ark-stream"
+    )
+    assert attempt.attributes["gen_ai.response.id"] == expected_response_id
     assert (
         "gen_ai.chat_completions.streaming_time_to_first_token" in attempt.attributes
     ) is (status == "observed")
-    assert not owner.attributes
+    assert owner.attributes["gen_ai.response.id"] == expected_response_id
     assert not owner.events
     assert attempt.status.status_code is (
         StatusCode.ERROR if mode == "error" else StatusCode.UNSET
@@ -332,6 +410,7 @@ async def test_litellm_close_failure_propagates_and_ends_span(monkeypatch, spans
 
 @pytest.mark.asyncio
 async def test_veadk_retry_exports_distinct_sdk_attempts(monkeypatch, spans):
+    # REQ-004: a failed request stays empty and the delivered retry owns its id.
     tracer, exporter = spans
     requests = []
 
@@ -341,6 +420,7 @@ async def test_veadk_retry_exports_distinct_sdk_attempts(monkeypatch, spans):
 
     async def chunks():
         yield ModelResponseStream(
+            id="resp-retry-success",
             model="openai/test",
             choices=[
                 {"index": 0, "delta": {"content": "hello"}, "finish_reason": "stop"}
@@ -373,7 +453,9 @@ async def test_veadk_retry_exports_distinct_sdk_attempts(monkeypatch, spans):
     assert ttft not in attempts[0].attributes
     assert attempts[1].status.status_code is StatusCode.UNSET
     assert ttft in attempts[1].attributes
-    assert not owner.attributes
+    assert "gen_ai.response.id" not in attempts[0].attributes
+    assert attempts[1].attributes["gen_ai.response.id"] == "resp-retry-success"
+    assert owner.attributes["gen_ai.response.id"] == "resp-retry-success"
     assert all(s.parent.span_id == owner.context.span_id for s in attempts)
     assert all(
         not any(key.startswith("veadk.") for key in s.attributes) for s in attempts

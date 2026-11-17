@@ -34,6 +34,7 @@ from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
 _REQUEST_SPAN: ContextVar[Span | None] = ContextVar("veadk_request_span", default=None)
+_GEN_AI_RESPONSE_ID = "gen_ai.response.id"
 
 
 def current_request_span() -> Span | None:
@@ -151,6 +152,8 @@ class ModelTiming:
     def __init__(self, *, streaming: bool, model: str) -> None:
         self.streaming = streaming
         self.model = str(model)
+        self.response_id: str | None = None
+        self.owner_span = trace.get_current_span()
         self.first_token_time: int | None = None
         self.start_time = time.time_ns()
         self.span = trace.get_tracer(__name__).start_span(
@@ -182,6 +185,20 @@ class ModelTiming:
         portal_metrics.portal_metric_recorder.record_model_ttft(
             duration, model=self.model
         )
+
+    def observe_response_id(self, response: Any) -> None:
+        """Record the first provider response id on this request and its owner."""
+        if self.response_id is not None:
+            return
+        response_id = _field(response, "id")
+        if not response_id:
+            response_id = _field(_field(response, "response"), "id")
+        if not response_id:
+            return
+        self.response_id = str(response_id)
+        for span in (self.span, self.owner_span):
+            if span is not None and span.is_recording():
+                span.set_attribute(_GEN_AI_RESPONSE_ID, self.response_id)
 
     def __exit__(
         self,
