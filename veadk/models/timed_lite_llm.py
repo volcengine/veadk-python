@@ -16,6 +16,7 @@
 
 from google.adk.models.lite_llm import LiteLLMClient
 
+from veadk.tracing.telemetry.litellm_response_id import with_response_id
 from veadk.tracing.telemetry.timing import ModelTiming, litellm_output_type
 
 
@@ -23,7 +24,9 @@ class TimedLiteLLMClient(LiteLLMClient):
     async def acompletion(self, model, messages, tools, **kwargs):
         timing = ModelTiming(streaming=bool(kwargs.get("stream")), model=model)
         try:
-            response = await super().acompletion(model, messages, tools, **kwargs)
+            response = await with_response_id(
+                super().acompletion, model, messages, tools, **kwargs
+            )
         except BaseException as error:
             timing.__exit__(type(error), error, error.__traceback__)
             raise

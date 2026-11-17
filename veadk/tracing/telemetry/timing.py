@@ -30,6 +30,7 @@ from opentelemetry.trace import Span, SpanKind, StatusCode
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from veadk.tracing.telemetry import portal_metrics
+from veadk.tracing.telemetry.litellm_response_id import get_response_id
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -190,9 +191,7 @@ class ModelTiming:
         """Record the first provider response id on this request and its owner."""
         if self.response_id is not None:
             return
-        response_id = _field(response, "id")
-        if not response_id:
-            response_id = _field(_field(response, "response"), "id")
+        response_id = get_response_id(response)
         if not response_id:
             return
         self.response_id = str(response_id)

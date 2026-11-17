@@ -15,8 +15,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace as NS
 
+import httpx
 import pytest
 from google.adk.models.lite_llm import LiteLLMClient
 from google.adk.models.llm_request import LlmRequest
@@ -27,6 +29,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import StatusCode
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from openai import AsyncOpenAI
 from volcenginesdkarkruntime.types.responses import (
     ResponseTextDeltaEvent,
     ResponseFunctionCallArgumentsDeltaEvent,
@@ -36,6 +39,7 @@ from veadk.models.ark_llm import ArkLlm, ArkLlmClient
 from veadk.models.retrying_lite_llm import RetryingLiteLlm
 from veadk.models.timed_lite_llm import TimedLiteLLMClient
 from veadk.tracing.telemetry import timing
+from veadk.tracing.telemetry import litellm_response_id
 
 
 @pytest.fixture
@@ -50,6 +54,133 @@ def spans(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("patched", [False, True])
+@pytest.mark.parametrize(
+    "provider_id",
+    [
+        None,
+        "",
+        "omitted",
+        "resp-provider",
+        "chatcmpl-11111111-1111-4111-8111-111111111111",
+    ],
+)
+async def test_chat_provider_id_survives_sdk_conversion(
+    monkeypatch, spans, stream, patched, provider_id
+):
+    # REQ-003: exercise actual LiteLLM/OpenAI conversion, including generated ids.
+    tracer, exporter = spans
+    calls = []
+    logger_events = []
+
+    def handler(request):
+        calls.append(json.loads(request.content))
+        result = {
+            "model": "test",
+            "created": 1700000000,
+            "object": "chat.completion.chunk" if stream else "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta" if stream else "message": {
+                        "role": "assistant",
+                        "content": "OK",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+        if provider_id != "omitted":
+            result["id"] = provider_id
+        if stream:
+            return httpx.Response(
+                200,
+                headers={
+                    "content-type": "text/event-stream",
+                    "x-request-id": "header-only",
+                },
+                text="data: " + json.dumps(result) + "\n\ndata: [DONE]\n\n",
+            )
+        return httpx.Response(200, json=result, headers={"x-request-id": "header-only"})
+
+    if patched:
+        # Restore the class and registration flag after testing the legacy path.
+        monkeypatch.setattr(LiteLLMClient, "acompletion", LiteLLMClient.acompletion)
+        monkeypatch.setattr(litellm_response_id, "_patched", False)
+        litellm_response_id.register()
+        wrapped = LiteLLMClient.acompletion
+        litellm_response_id.register()
+        assert LiteLLMClient.acompletion is wrapped
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = AsyncOpenAI(
+            api_key="unit-test",
+            base_url="http://provider.invalid/v1",
+            http_client=http_client,
+        )
+        with tracer.start_as_current_span("call_llm") as owner:
+            response = await TimedLiteLLMClient().acompletion(
+                "openai/test",
+                [{"role": "user", "content": "hello"}],
+                [],
+                stream=stream,
+                client=client,
+                num_retries=0,
+                logger_fn=lambda details: logger_events.append(
+                    details["log_event_type"]
+                ),
+            )
+            if stream:
+                chunks = [chunk async for chunk in response]
+                assert (
+                    "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+                    == "OK"
+                )
+            else:
+                assert response.choices[0].message.content == "OK"
+    attempt = next(
+        span for span in exporter.get_finished_spans() if span.name == "model_request"
+    )
+    expected = provider_id if provider_id not in {None, "", "omitted"} else None
+    assert attempt.attributes.get("gen_ai.response.id") == expected
+    assert owner.attributes.get("gen_ai.response.id") == expected
+    assert len(calls) == 1
+    assert "post_api_call" in logger_events
+
+
+@pytest.mark.asyncio
+async def test_raw_provider_ids_are_isolated_across_calls(monkeypatch, spans):
+    # REQ-003/REQ-005: raw-id capture is local even on one shared SDK client.
+    tracer, exporter = spans
+
+    async def complete(self, model, messages, tools, **kwargs):
+        raw = {} if model == "no-id" else {"id": "resp-" + model}
+        kwargs["logger_fn"](
+            {"log_event_type": "post_api_call", "original_response": raw}
+        )
+        await asyncio.sleep(0)
+        return ModelResponse()  # SDK fallback id must not replace the raw id.
+
+    monkeypatch.setattr(LiteLLMClient, "acompletion", complete)
+    client = TimedLiteLLMClient()
+
+    async def call(model):
+        with tracer.start_as_current_span(model) as owner:
+            await client.acompletion(model, [], [])
+        return owner.attributes.get("gen_ai.response.id")
+
+    assert await asyncio.gather(call("a"), call("b")) == ["resp-a", "resp-b"]
+    assert await call("no-id") is None
+    attempts = [s for s in exporter.get_finished_spans() if s.name == "model_request"]
+    assert [s.attributes.get("gen_ai.response.id") for s in attempts] == [
+        "resp-a",
+        "resp-b",
+        None,
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [True, False])
 async def test_default_litellm_adapter_records_before_adk_aggregation(
     monkeypatch, spans, stream
@@ -58,30 +189,30 @@ async def test_default_litellm_adapter_records_before_adk_aggregation(
     tracer, exporter = spans
 
     async def chunks():
-        yield ModelResponseStream(
-            id="resp-stream",
-            model="openai/test",
-            choices=[
-                {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
-            ],
-        )
-        yield ModelResponseStream(
-            id="resp-stream",
-            model="openai/test",
-            choices=[
-                {"index": 0, "delta": {"content": "hello"}, "finish_reason": None}
-            ],
-        )
-        yield ModelResponseStream(
-            id="resp-stream",
-            model="openai/test",
-            choices=[{"index": 0, "delta": {"content": "!"}, "finish_reason": "stop"}],
-        )
+        for delta, finish_reason in [
+            ({"role": "assistant"}, None),
+            ({"content": "hello"}, None),
+            ({"content": "!"}, "stop"),
+        ]:
+            chunk = ModelResponseStream(
+                id="resp-stream",
+                model="openai/test",
+                choices=[{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+            )
+            # Match LiteLLM's metadata for an id read from the provider chunk.
+            chunk._hidden_params = {"received_model_id": "resp-stream"}
+            yield chunk
 
     async def complete(self, model, messages, tools, **kwargs):
         assert isinstance(self, TimedLiteLLMClient)
         if kwargs.get("stream"):
             return chunks()
+        kwargs["logger_fn"](
+            {
+                "log_event_type": "post_api_call",
+                "original_response": {"id": "resp-plain"},
+            }
+        )
         return ModelResponse(
             id="resp-plain",
             model=model,
@@ -419,13 +550,15 @@ async def test_veadk_retry_exports_distinct_sdk_attempts(monkeypatch, spans):
         response = NS(headers={"Retry-After": "0"})
 
     async def chunks():
-        yield ModelResponseStream(
+        chunk = ModelResponseStream(
             id="resp-retry-success",
             model="openai/test",
             choices=[
                 {"index": 0, "delta": {"content": "hello"}, "finish_reason": "stop"}
             ],
         )
+        chunk._hidden_params = {"received_model_id": "resp-retry-success"}
+        yield chunk
 
     async def complete(self, model, messages, tools, **kwargs):
         requests.append(model)

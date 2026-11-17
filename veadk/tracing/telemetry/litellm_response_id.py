@@ -33,6 +33,9 @@ code paths are untouched; when patched but not recording, it is a no-op.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
+
 from opentelemetry import trace
 
 from veadk.utils.logger import get_logger
@@ -41,12 +44,71 @@ logger = get_logger(__name__)
 
 # OpenTelemetry GenAI semantic convention: unique id of the model response.
 GEN_AI_RESPONSE_ID = "gen_ai.response.id"
+_PROVIDER_RESPONSE_ID = "_veadk_provider_response_id"
 
 _patched = False
 
 
+def get_response_id(response_obj: object) -> str | None:
+    """Read provider provenance instead of LiteLLM's generated fallback id."""
+    from litellm.types.utils import ModelResponse, ModelResponseStream
+
+    if isinstance(response_obj, (ModelResponse, ModelResponseStream)):
+        hidden = response_obj._hidden_params
+        response_id = hidden.get(_PROVIDER_RESPONSE_ID, hidden.get("received_model_id"))
+    else:
+
+        def field(value, name):
+            return (
+                value.get(name)
+                if isinstance(value, Mapping)
+                else getattr(value, name, None)
+            )
+
+        response_id = field(response_obj, "id") or field(
+            field(response_obj, "response"), "id"
+        )
+    return response_id if isinstance(response_id, str) and response_id.strip() else None
+
+
+async def with_response_id(original, *args, **kwargs):
+    """Keep only the raw completion id via LiteLLM's per-call logging hook."""
+    if kwargs.get("stream") or getattr(original, "_veadk_response_id_wrapped", False):
+        # Stream chunks expose raw provider ids in received_model_id metadata.
+        # A registered client already captures the raw non-streaming id.
+        return await original(*args, **kwargs)
+
+    provider_id = None
+    caller_logger = kwargs.get("logger_fn")
+
+    def observe(details):
+        nonlocal provider_id
+        if details.get("log_event_type") == "post_api_call":
+            raw = details.get("original_response")
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except (ValueError, TypeError):
+                    raw = None
+            # Unknown payloads and missing/empty ids do not prove provenance.
+            raw_id = raw.get("id") if isinstance(raw, Mapping) else None
+            provider_id = raw_id if isinstance(raw_id, str) and raw_id.strip() else None
+        if callable(caller_logger):
+            caller_logger(details)
+
+    response = await original(*args, **{**kwargs, "logger_fn": observe})
+    from litellm.types.utils import ModelResponse
+
+    if isinstance(response, ModelResponse):
+        response._hidden_params = {
+            **response._hidden_params,
+            _PROVIDER_RESPONSE_ID: provider_id,
+        }
+    return response
+
+
 def _set_response_id_on_current_span(response_obj: object) -> None:
-    response_id = getattr(response_obj, "id", None)
+    response_id = get_response_id(response_obj)
     if not response_id:
         return
     span = trace.get_current_span()
@@ -72,7 +134,9 @@ def register() -> None:
         return
 
     async def acompletion(self, model, messages, tools, **kwargs):
-        response = await original(self, model, messages, tools, **kwargs)
+        response = await with_response_id(
+            original, self, model, messages, tools, **kwargs
+        )
         # Non-streaming returns a ModelResponse carrying ``id``; the streaming
         # wrapper has no stable id here, so this is a no-op for it.
         _set_response_id_on_current_span(response)
