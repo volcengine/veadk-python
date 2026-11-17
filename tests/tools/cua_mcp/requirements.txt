@@ -1,0 +1,4 @@
+# Published revision with the descriptions exercised by the CUA schema tests.
+# Test-only dependency; does not choose or change customers' runtime wheel URL.
+# Run: uv pip install -r tests/tools/cua_mcp/requirements.txt
+agentkit-cua-mcp @ https://browser-use-test.tos-cn-beijing.volces.com/agentkit-cua-mcp/1.0.0/revisions/dd3574c1f176/agentkit_cua_mcp-1.0.0-py3-none-any.whl#sha256=dd3574c1f176cf2a8a0230d77f6918e08ece6240873fc0609427761d5e3c5f59

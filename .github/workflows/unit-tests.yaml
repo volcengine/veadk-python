@@ -22,6 +22,7 @@ on:
       - '**.py'
       - 'pyproject.toml'
       - 'requirements*.txt'
+      - 'tests/tools/cua_mcp/requirements.txt'
       - 'uv.lock'
       - '.github/workflows/unit-tests.yaml'
   pull_request:
@@ -29,6 +30,7 @@ on:
         - '**.py'
         - 'pyproject.toml'
         - 'requirements*.txt'
+        - 'tests/tools/cua_mcp/requirements.txt'
         - 'uv.lock'
         - '.github/workflows/unit-tests.yaml'
 
@@ -58,6 +60,11 @@ jobs:
         source .venv/bin/activate
         uv sync --all-extras
         uv pip install -e .
+
+    - name: Install CUA integration test dependency
+      run: |
+        uv pip install --python .venv/bin/python -r tests/tools/cua_mcp/requirements.txt
+        .venv/bin/python -c 'import agentkit_cua_mcp'
 
     - name: Run unit tests with pytest
       run: |
