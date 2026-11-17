@@ -20,10 +20,12 @@ source checkout is loaded into sys.path.
 """
 
 import importlib.util
+from pathlib import Path
 
 import pytest
 
 _CUA_MCP_INSTALLED = importlib.util.find_spec("agentkit_cua_mcp") is not None
+_CUA_TEST_ROOT = Path(__file__).resolve().parent
 
 
 def pytest_collection_modifyitems(config, items):
@@ -33,4 +35,5 @@ def pytest_collection_modifyitems(config, items):
         reason="install tests/tools/cua_mcp/requirements.txt to run CUA integration tests"
     )
     for item in items:
-        item.add_marker(skip)
+        if item.path.resolve().is_relative_to(_CUA_TEST_ROOT):
+            item.add_marker(skip)
