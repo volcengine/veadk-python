@@ -62,6 +62,7 @@ import sys
 import tempfile
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -143,7 +144,9 @@ class _StubResponsesBackend:
     once the shim has advertised the tool.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self, before_answer: Callable[[], Awaitable[None]] | None = None
+    ) -> None:
         self.url: str | None = None
         self.requests: list[dict[str, Any]] = []
         #: Raw output Codex reported for the sandboxed `shell` call, once seen.
@@ -161,7 +164,10 @@ class _StubResponsesBackend:
             body = await request.json()
             self.requests.append(body)
             self._capture_sandbox_probe(body)
-            return JSONResponse(self._script(body))
+            response = self._script(body)
+            if before_answer is not None and response["output"][0]["type"] == "message":
+                await before_answer()
+            return JSONResponse(response)
 
         self._app = app
 
@@ -368,7 +374,15 @@ async def test_real_codex_binary_completes_one_tool_using_turn(monkeypatch) -> N
         executed.append(marker)
         return {"status": "ok", "recorded": marker}
 
-    backend = _StubResponsesBackend()
+    tool_completion_seen = asyncio.Event()
+    model_waited_for_completion = False
+
+    async def wait_for_live_tool_completion() -> None:
+        nonlocal model_waited_for_completion
+        await asyncio.wait_for(tool_completion_seen.wait(), 5)
+        model_waited_for_completion = True
+
+    backend = _StubResponsesBackend(before_answer=wait_for_live_tool_completion)
     backend_url = await backend.start()
 
     # Constructed and started DIRECTLY, never through `get_shim`: that helper
@@ -439,6 +453,11 @@ async def test_real_codex_binary_completes_one_tool_using_turn(monkeypatch) -> N
         async with contextlib.aclosing(stream) as events_stream:
             async for event in events_stream:
                 events.append(event)
+                if event.partial and any(
+                    response.name == _ADK_TOOL_NAME and response.will_continue is False
+                    for response in event.get_function_responses()
+                ):
+                    tool_completion_seen.set()
 
     try:
         await asyncio.wait_for(_drive(), _RUN_TIMEOUT_SECONDS)
@@ -488,15 +507,18 @@ async def test_real_codex_binary_completes_one_tool_using_turn(monkeypatch) -> N
     assert executed == [_TOOL_MARKER], (
         f"the ADK tool executor did not run exactly once: {executed!r}"
     )
+    assert model_waited_for_completion, (
+        "the tool completion did not reach Runner while the model response was blocked"
+    )
     function_responses = [
         response
         for event in events
+        if not event.partial
         for response in (event.get_function_responses() or [])
         if response.name == _ADK_TOOL_NAME
     ]
-    assert function_responses, (
-        "no function_response event reached the Runner for the ADK tool"
-    )
+    [result] = function_responses
+    assert result.response == {"status": "ok", "recorded": _TOOL_MARKER}
 
     # -- a final text event ------------------------------------------------
     final_texts = [

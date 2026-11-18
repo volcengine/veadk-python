@@ -132,6 +132,7 @@ from veadk.runtime.codex.translate import (
     is_codex_final_text_event,
     is_mcp_item_for_server,
     notification_to_events,
+    tool_completion_preview,
 )
 from veadk.runtime.codex.workspace import (
     bind_workspace,
@@ -1317,6 +1318,11 @@ class CodexRuntime(BaseRuntime):
                         run_status = "transferred"
                         break
                     merge_target = event
+                    # Keep a durable event for tool-only turn bookkeeping, but
+                    # let the live stream mark the tool complete immediately.
+                    preview = tool_completion_preview(event)
+                    if preview is not None:
+                        yield preview
                 turn_scope.close()
                 # With a deadline the watchdog owns the pump: past the deadline
                 # it cancels a pump that will not stop, so awaiting the pump

@@ -398,6 +398,8 @@ flowchart LR
 
 ### Codex 可观测性
 
+在 ADK 实时事件流中，工具完成时可以先收到仅含状态的 `FunctionResponse`（`partial=true`、`will_continue=false`）。客户端可按工具调用 ID 更新状态，并从同一 ID 的持久化事件中读取完整工具结果和执行 UI 操作。
+
 Codex 原生生命周期和 ADK Function/MCP 工具调用都会转换为 ADK Event。运行日志使用稳定的 `codex_*` 事件名，并包含 `invocation_id`、`call_id`、`tool`、`status`、`duration_ms` 等可归因字段。日志不会记录工具参数、工具结果、API Token、凭证或后端地址；Token Usage 通过 `codex_event_type=token_usage` 事件及对应日志提供。
 
 此外：
