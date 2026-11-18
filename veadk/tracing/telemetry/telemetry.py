@@ -245,7 +245,9 @@ def set_common_attributes_on_model_span(
         invocation_span: Span = get_value("invocation_span_instance")  # type: ignore
         agent_run_span: Span = get_value("agent_run_span_instance")  # type: ignore
 
-        if invocation_span and invocation_span.name.startswith("invocation"):
+        if invocation_span and invocation_span.name.startswith(
+            ("invocation", "invoke_workflow")
+        ):
             _set_agent_input_attribute(invocation_span, invocation_context)
             _set_agent_output_attribute(invocation_span, llm_response)
             for attr_name, attr_extractor in common_attributes.items():
@@ -306,7 +308,7 @@ def set_common_attributes_on_tool_span(current_span: _Span) -> None:
     for attr_name in common_attributes.keys():
         if (
             invocation_span
-            and invocation_span.name.startswith("invocation")
+            and invocation_span.name.startswith(("invocation", "invoke_workflow"))
             and invocation_span.attributes
             and attr_name in invocation_span.attributes
         ):
