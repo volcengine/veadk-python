@@ -1320,9 +1320,10 @@ class CodexRuntime(BaseRuntime):
                     merge_target = event
                     # Keep a durable event for tool-only turn bookkeeping, but
                     # let the live stream mark the tool complete immediately.
-                    preview = tool_completion_preview(event)
-                    if preview is not None:
-                        yield preview
+                    if not tool_pending:
+                        preview = tool_completion_preview(event)
+                        if preview is not None:
+                            yield preview
                 turn_scope.close()
                 # With a deadline the watchdog owns the pump: past the deadline
                 # it cancels a pump that will not stop, so awaiting the pump

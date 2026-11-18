@@ -489,9 +489,12 @@ async def test_tool_call_executes_once_and_result_reaches_model(
     )
     assert _final_texts(turn.events) == [answer], _final_texts(turn.events)
     calls = [c for e in turn.events for c in e.get_function_calls()]
-    responses = [r for e in turn.events for r in e.get_function_responses()]
+    responses = [
+        r for e in turn.events if not e.partial for r in e.get_function_responses()
+    ]
     assert [c.name for c in calls] == ["lookup_code"], calls
     assert [r.name for r in responses] == ["lookup_code"], responses
+    assert responses[0].response["code"] == result
 
 
 @pytest.mark.asyncio
