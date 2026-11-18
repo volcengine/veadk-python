@@ -152,20 +152,25 @@ async def test_real_adk_cached_loads_keep_identity_and_count_each_response(
     context = SimpleNamespace(invocation_id="turn", agent_name="agent", state={})
     monkeypatch.setattr(telemetry, "_upload_tool_call_metrics", lambda *a: None)
     for _ in range(2):
-        result = await tool.run_async(args={"skill_name": "demo"}, tool_context=context)
-        event = Event(
-            content=types.Content(
-                parts=[
-                    types.Part(
-                        function_response=types.FunctionResponse(
-                            name="load_skill", response=result
-                        )
-                    )
-                ]
+        with trace.get_tracer("test").start_as_current_span(
+            "execute_tool load_skill", attributes={"test.original": "preserved"}
+        ) as parent:
+            result = await tool.run_async(
+                args={"skill_name": "demo"}, tool_context=context
             )
-        )
-        with trace.get_tracer("test").start_as_current_span("execute_tool load_skill"):
+            event = Event(
+                content=types.Content(
+                    parts=[
+                        types.Part(
+                            function_response=types.FunctionResponse(
+                                name="load_skill", response=result
+                            )
+                        )
+                    ]
+                )
+            )
             telemetry.trace_tool_call(tool, {"skill_name": "demo"}, event)
+            assert trace.get_current_span() is parent
     assert remote[1] == ["s-demo"]
     assert points(observation[0], "gen_ai_skill_load_count") == [
         (
@@ -183,6 +188,28 @@ async def test_real_adk_cached_loads_keep_identity_and_count_each_response(
     loads = [
         s for s in observation[1].get_finished_spans() if s.name == "load_skill demo"
     ]
+    parents = {
+        s.context.span_id: s
+        for s in observation[1].get_finished_spans()
+        if s.name == "execute_tool load_skill"
+    }
+    assert len(parents) == 2
+    assert len({s.parent.span_id for s in loads}) == 2
+    for child in loads:
+        parent = parents[child.parent.span_id]
+        assert child.context.trace_id == parent.context.trace_id
+        assert (
+            parent.start_time <= child.start_time <= child.end_time <= parent.end_time
+        )
+        assert parent.attributes["test.original"] == "preserved"
+    downloads = [
+        s
+        for s in observation[1].get_finished_spans()
+        if s.name == "download_skill demo"
+    ]
+    assert len(downloads) == 1
+    assert downloads[0].parent.span_id in parents
+    assert any(s.parent == downloads[0].parent for s in loads)
     assert len(loads) == 2
     assert all(
         s.attributes["skill.id"] == "s-demo"
@@ -215,6 +242,7 @@ def test_failed_or_incomplete_load_never_counts(
     )
     skill_telemetry.record_adk_load(LoadSkillTool(toolset), event)
     assert not points(observation[0], "gen_ai_skill_load_count")
+    assert not observation[1].get_finished_spans()
 
 
 def test_unknown_local_identity_and_legacy_version():
@@ -259,6 +287,7 @@ async def test_cancelled_registry_wait_does_not_load(
             tool_context=SimpleNamespace(invocation_id="turn"),
         )
     assert not points(observation[0], "gen_ai_skill_load_count")
+    assert not observation[1].get_finished_spans()
     await toolset.close()
 
 
@@ -297,6 +326,7 @@ def test_non_load_tool_cannot_count_forged_response(observation, remote):
     )
     skill_telemetry.record_adk_load(SimpleNamespace(name="load_skill_resource"), event)
     assert not points(observation[0], "gen_ai_skill_load_count")
+    assert not observation[1].get_finished_spans()
 
 
 def test_default_proxy_instruments_are_bounded_and_support_late_provider():
