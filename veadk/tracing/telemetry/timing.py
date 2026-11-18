@@ -227,24 +227,24 @@ class ModelTiming:
         output_type = ark_output_type(event)
         self.observe(output_type)
         try:
-            event_type = _field(event, "type", "")
+            event_type = response_field(event, "type", "")
             if event_type == "response.reasoning_summary_text.delta" or (
                 event_type.endswith(".delta")
-                and _field(event, "delta")
+                and response_field(event, "delta")
                 and not output_type
             ):
                 self.disable_tpot()
             if event_type in {"response.incomplete", "response.failed", "error"}:
                 self.disable_tpot()
             if event_type == "response.completed":
-                response = _field(event, "response")
+                response = response_field(event, "response")
                 tokens = (
                     output_tokens_for_tpot(
-                        _field(response, "usage"),
+                        response_field(response, "usage"),
                         "output_tokens",
                         "reasoning" in self._output_types,
                     )
-                    if _field(response, "status") == "completed"
+                    if response_field(response, "status") == "completed"
                     else None
                 )
                 self.complete(tokens)
@@ -297,7 +297,8 @@ class ModelTiming:
         self.span.end()
 
 
-def _field(value: Any, name: str, default=None):
+def response_field(value: Any, name: str, default=None):
+    """Read an SDK response field from a mapping or attribute-based object."""
     return (
         value.get(name, default)
         if isinstance(value, Mapping)
@@ -307,39 +308,42 @@ def _field(value: Any, name: str, default=None):
 
 def output_tokens_for_tpot(usage: Any, field: str, reasoning_seen: bool) -> int | None:
     """Require an output count whose known components match the observed stream."""
-    tokens = _field(usage, field)
+    tokens = response_field(usage, field)
     if type(tokens) is not int or tokens <= 1:
         return None
-    details = _field(usage, f"{field}_details")
-    reasoning = _field(details, "reasoning_tokens", 0)
+    details = response_field(usage, f"{field}_details")
+    reasoning = response_field(details, "reasoning_tokens", 0)
     if reasoning is not None and (
         type(reasoning) is not int
         or not 0 <= reasoning <= tokens
         or (reasoning > 0 and not reasoning_seen)
     ):
         return None
-    if _field(details, "audio_tokens", 0):
+    if response_field(details, "audio_tokens", 0):
         return None
     return tokens
 
 
 def litellm_output_type(chunk: Any) -> str | None:
     """Recognize generated deltas before ADK buffers tool/reasoning content."""
-    for choice in _field(chunk, "choices", []) or []:
-        delta = _field(choice, "delta")
-        if _field(delta, "content"):
+    for choice in response_field(chunk, "choices", []) or []:
+        delta = response_field(choice, "delta")
+        if response_field(delta, "content"):
             return "text"
-        if _field(delta, "reasoning_content") or _field(delta, "reasoning"):
+        if response_field(delta, "reasoning_content") or response_field(
+            delta, "reasoning"
+        ):
             return "reasoning"
-        for block in _field(delta, "thinking_blocks", []) or []:
-            if _field(block, "thinking"):
+        for block in response_field(delta, "thinking_blocks", []) or []:
+            if response_field(block, "thinking"):
                 return "reasoning"
         functions = [
-            _field(tool, "function") for tool in _field(delta, "tool_calls", []) or []
+            response_field(tool, "function")
+            for tool in response_field(delta, "tool_calls", []) or []
         ]
-        functions.append(_field(delta, "function_call"))
+        functions.append(response_field(delta, "function_call"))
         if any(
-            _field(function, "name") or _field(function, "arguments")
+            response_field(function, "name") or response_field(function, "arguments")
             for function in functions
         ):
             return "tool_call"
@@ -347,11 +351,11 @@ def litellm_output_type(chunk: Any) -> str | None:
 
 
 def ark_output_type(event: Any) -> str | None:
-    if not _field(event, "delta"):
+    if not response_field(event, "delta"):
         return None
     return {
         "response.output_text.delta": "text",
         "response.reasoning_summary_text.delta": "reasoning",
         "response.reasoning_text.delta": "reasoning",
         "response.function_call_arguments.delta": "tool_call",
-    }.get(_field(event, "type"))
+    }.get(response_field(event, "type"))
