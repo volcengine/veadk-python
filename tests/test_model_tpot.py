@@ -12,7 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Contract tests for SDK-receipt TPOT and existing model behavior."""
+"""Contract tests for SDK-receipt TPOT and existing model behavior.
+
+Required when upgrading LiteLLM or changing its allowed version range:
+    uv run --extra dev pytest tests/test_model_tpot.py
+
+Run against the target version and newly allowed range boundaries. Dependency
+resolution alone cannot detect changes to SDK-retained chunks and finish state,
+which can silently omit TPOT. Unit Tests CI includes this file for dependency
+changes; keep it in that selection.
+"""
 
 from types import SimpleNamespace as NS
 
