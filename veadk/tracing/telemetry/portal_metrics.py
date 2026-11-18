@@ -276,6 +276,19 @@ class PortalMetricRecorder:
             # Telemetry must not replace model output or expose backend details.
             logger.warning("Failed to record model TTFT metric")
 
+    def record_model_tpot(self, duration: float, *, model: str) -> None:
+        """Record one successful SDK stream's mean seconds per output token."""
+        try:
+            self.streaming_time_per_output_token.record(
+                duration,
+                attributes={
+                    "gen_ai.request.model": model,
+                    "gen_ai.operation.name": "chat",
+                },
+            )
+        except Exception:
+            logger.warning("Failed to record model TPOT metric")
+
     def record_call_llm(
         self,
         invocation_context: InvocationContext,
@@ -363,13 +376,6 @@ class PortalMetricRecorder:
             # if self.streaming_time_to_generate:
             #     self.streaming_time_to_generate.record(
             #         time_to_generate, attributes=attributes
-            #     )
-
-            # TODO: Get streaming time per output token
-            # time_per_output_token = 0.01
-            # if self.streaming_time_per_output_token:
-            #     self.streaming_time_per_output_token.record(
-            #         time_per_output_token, attributes=attributes
             #     )
 
             # add span name attribute

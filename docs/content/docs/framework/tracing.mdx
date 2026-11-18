@@ -206,4 +206,25 @@ VeADK 使用 OpenTelemetry Span 原生起止时间表达执行边界。VeADK Age
 
 失败模型请求设置原生 Span Status 为 `ERROR`，`error.type` 为 `llm_error`、`timeout` 或 `cancelled`。请求 Span 使用 `request_error`、`timeout` 或 `cancelled`；HTTP 5xx 响应使用 `http_error`。主动关闭生成器不算错误。已观测的 TTFT 在中断后保留，本埋点不添加异常正文。
 
-本埋点不再导出自定义 `veadk.request.*`、`veadk.model.*` 属性或自定义首 Token 事件。开始时间和首输出值仅作为内部计算状态。此变更替代此前自定义计时字段，不保留兼容别名。客户端渲染计时和 TPOT Histogram 上报不在本功能范围内。
+本埋点不再导出自定义 `veadk.request.*`、`veadk.model.*` 属性或自定义首 Token 事件。开始时间和首输出值仅作为内部计算状态。此变更替代此前自定义计时字段，不保留兼容别名。客户端渲染计时不在本功能范围内。
+
+## 流式 TPOT
+
+成功的 SDK 流式请求在 `model_request` 上增加 `gen_ai.chat_completions.streaming_time_per_output_token` 浮点秒值，并向同名 Histogram（单位 `s`）记录一次。指标维度沿用 `gen_ai.request.model`、`gen_ai.operation.name=chat`；不复制到父 Span，也不依赖 Trace 采样。
+
+`TPOT = 首个到最后一个有效输出增量的接收间隔 / (输出 Token 总数 - 1)`。
+
+间隔使用单调时钟，排除首输出前等待、尾部 usage 包及连接清理；保留首末增量之间的网络、SDK 调度和消费等待。这是 SDK 接收侧的近似值，不是模型服务端纯解码耗时。一个增量可包含多个 Token，不能用 chunk 数或字符数作分母。
+
+| 场景 | 处理 |
+| --- | --- |
+| 流完整结束、清理成功、单候选、至少两个有效增量、有效整数输出 Token 总数大于 1 | 记录一次；实际测得 0 秒有效。 |
+| LiteLLM 的 `openai` Provider 路径 | 读取 SDK 保留的上游 usage 与结束原因，避免使用 LiteLLM 补算的 usage 或 `stop`。取最终累计 `completion_tokens`，不累加 usage 包。 |
+| Ark Responses | 读取 `response.completed` 的 `usage.output_tokens`；非空文本、完整推理或工具参数增量参与计时。 |
+| 非流式、无输出、仅一个增量、缺失或非法 usage | 省略 TPOT，不补 0，也不以响应总耗时代替。 |
+| 异常、超时、取消、主动关闭、截断、过滤或缺少正常终态 | 省略 TPOT；已记录的 TTFT 保留。 |
+| 多候选、缓存回放、未知 Provider / SDK 包装器、计数范围不匹配 | 省略 TPOT。隐藏推理、推理摘要及音频输出不能与可见文本区间混算。 |
+
+Chat 的输出总数已经包含推理 Token，不再叠加推理分项；只有观察到完整推理增量时才纳入对应计数。Ark 的 `response.reasoning_summary_text.delta` 是摘要，本期省略此类请求的 TPOT。工具调用的参数生成属于本次 SDK 请求；随后由 Agent 执行工具的耗时不计入。
+
+并发请求与 VeADK 重试分别计量；SDK 内部隐藏重试仍属于同一可观测调用。Histogram 的 `sum / count` 是按请求平均的 TPOT，不是按 Token 加权平均。新增采集或导出失败不改变模型输出和原有异常传播。LiteLLM 的上游元数据读取依赖受契约测试保护的 SDK 内部结构；结构不兼容时省略 TPOT。

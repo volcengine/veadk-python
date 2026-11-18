@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import math
 import time
 from collections.abc import AsyncGenerator, Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -152,6 +153,14 @@ class ModelTiming:
         self.streaming = streaming
         self.model = str(model)
         self.first_token_time: int | None = None
+        self._first_output_ns: int | None = None
+        self._last_output_ns: int | None = None
+        self._output_count = 0
+        self._output_tokens: int | None = None
+        self._output_types: set[str] = set()
+        self._completed = False
+        self._tpot_disabled = False
+        self._ended = False
         self.start_time = time.time_ns()
         self.span = trace.get_tracer(__name__).start_span(
             "model_request",
@@ -168,7 +177,10 @@ class ModelTiming:
         return self
 
     def observe(self, output_type: str | None) -> None:
-        if not self.streaming or self.first_token_time is not None or not output_type:
+        if self._ended or not self.streaming or not output_type:
+            return
+        self._observe_tpot(output_type)
+        if self.first_token_time is not None:
             return
         self.first_token_time = time.time_ns()
         duration = (self.first_token_time - self.start_time) / 1e9
@@ -183,14 +195,105 @@ class ModelTiming:
             duration, model=self.model
         )
 
+    def _observe_tpot(self, output_type: str) -> None:
+        try:
+            if self._completed:
+                self.disable_tpot()
+            now = time.monotonic_ns()
+            if self._first_output_ns is None:
+                self._first_output_ns = now
+            if self._last_output_ns is not None and now < self._last_output_ns:
+                self.disable_tpot()
+            self._last_output_ns = now
+            self._output_count += 1
+            self._output_types.add(output_type)
+        except Exception:
+            self.disable_tpot()
+            logger.warning("Skipping TPOT because output timing is unavailable")
+
+    def disable_tpot(self) -> None:
+        """Omit an unreliable sample without changing TTFT or model behavior."""
+        self._tpot_disabled = True
+
+    def complete(self, output_tokens: int | None) -> None:
+        """Latch trusted usage; emission still requires a clean context exit."""
+        if self._completed or self._ended:
+            self.disable_tpot()
+        self._completed = True
+        self._output_tokens = output_tokens
+
+    def observe_ark(self, event: Any) -> None:
+        """Inspect raw Responses metadata without interrupting model output."""
+        output_type = ark_output_type(event)
+        self.observe(output_type)
+        try:
+            event_type = _field(event, "type", "")
+            if event_type == "response.reasoning_summary_text.delta" or (
+                event_type.endswith(".delta")
+                and _field(event, "delta")
+                and not output_type
+            ):
+                self.disable_tpot()
+            if event_type in {"response.incomplete", "response.failed", "error"}:
+                self.disable_tpot()
+            if event_type == "response.completed":
+                response = _field(event, "response")
+                tokens = (
+                    output_tokens_for_tpot(
+                        _field(response, "usage"),
+                        "output_tokens",
+                        "reasoning" in self._output_types,
+                    )
+                    if _field(response, "status") == "completed"
+                    else None
+                )
+                self.complete(tokens)
+        except Exception:
+            self.disable_tpot()
+            logger.warning("Skipping TPOT because Responses metadata is unavailable")
+
+    def _record_tpot(self) -> None:
+        try:
+            tokens = self._output_tokens
+            if (
+                not self.streaming
+                or self._tpot_disabled
+                or not self._completed
+                or self._output_count < 2
+                or type(tokens) is not int
+                or tokens <= 1
+                or self._first_output_ns is None
+                or self._last_output_ns is None
+            ):
+                return
+            duration = (
+                (self._last_output_ns - self._first_output_ns) / 1e9 / (tokens - 1)
+            )
+            if duration < 0 or not math.isfinite(duration):
+                return
+            if self.span.is_recording():
+                self.span.set_attribute(
+                    portal_metrics.Meters.LLM_STREAMING_TIME_PER_OUTPUT_TOKEN, duration
+                )
+            portal_metrics.portal_metric_recorder.record_model_tpot(
+                duration, model=self.model
+            )
+        except Exception:
+            logger.warning("Failed to record model TPOT")
+
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
+        if self._ended:
+            return
+        self._ended = True
         if exc_value is not None:
             _record_error(self.span, exc_value, "llm_error")
+        if exc_type is None and exc_value is None:
+            self._record_tpot()
         self.span.end()
 
 
@@ -200,6 +303,24 @@ def _field(value: Any, name: str, default=None):
         if isinstance(value, Mapping)
         else getattr(value, name, default)
     )
+
+
+def output_tokens_for_tpot(usage: Any, field: str, reasoning_seen: bool) -> int | None:
+    """Require an output count whose known components match the observed stream."""
+    tokens = _field(usage, field)
+    if type(tokens) is not int or tokens <= 1:
+        return None
+    details = _field(usage, f"{field}_details")
+    reasoning = _field(details, "reasoning_tokens", 0)
+    if reasoning is not None and (
+        type(reasoning) is not int
+        or not 0 <= reasoning <= tokens
+        or (reasoning > 0 and not reasoning_seen)
+    ):
+        return None
+    if _field(details, "audio_tokens", 0):
+        return None
+    return tokens
 
 
 def litellm_output_type(chunk: Any) -> str | None:

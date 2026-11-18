@@ -208,4 +208,25 @@ The same value is recorded once in the `gen_ai.chat_completions.streaming_time_t
 
 Failed model requests set native Span Status to `ERROR` and `error.type` to `llm_error`, `timeout`, or `cancelled`. Request spans use `request_error`, `timeout`, or `cancelled`; HTTP 5xx responses use `http_error`. Explicit generator closure is not an error. Already observed TTFT survives interruption, and exception text is not added by this instrumentation.
 
-The instrumentation does not export custom `veadk.request.*` or `veadk.model.*` attributes or a custom first-token event. Start and first-output values remain internal calculation state. This replaces the previous custom timing fields without compatibility aliases. Client-render timing and TPOT histogram reporting remain outside this feature.
+The instrumentation does not export custom `veadk.request.*` or `veadk.model.*` attributes or a custom first-token event. Start and first-output values remain internal calculation state. This replaces the previous custom timing fields without compatibility aliases. Client-render timing remains outside this feature.
+
+## Streaming TPOT
+
+A successful SDK stream adds floating-point seconds in `gen_ai.chat_completions.streaming_time_per_output_token` to `model_request` and records one sample in the same-name Histogram (unit `s`). Dimensions remain `gen_ai.request.model` and `gen_ai.operation.name=chat`. The value is not copied to parent spans, and metrics do not depend on trace sampling.
+
+`TPOT = receipt interval from the first to the last effective output delta / (total output tokens - 1)`.
+
+The interval uses a monotonic clock and excludes waiting before the first output, trailing usage packets, and connection cleanup. Network, SDK scheduling, and consumer delays between the first and last deltas remain included. This is an SDK-receipt approximation, not pure server decoding time. A delta may contain several tokens; neither chunk counts nor character counts are valid denominators.
+
+| Scenario | Behavior |
+| --- | --- |
+| Fully consumed stream, successful cleanup, single candidate, at least two effective deltas, and a valid integer output-token total greater than 1 | Record once; a genuinely measured zero is valid. |
+| LiteLLM `openai` provider path | Read upstream usage and finish reason retained by the SDK, excluding LiteLLM-synthesized usage or `stop`. Use the final cumulative `completion_tokens`; do not sum usage packets. |
+| Ark Responses | Read `usage.output_tokens` from `response.completed`; nonempty text, full reasoning, or tool-argument deltas provide timing. |
+| Non-streaming, no output, a single delta, missing or invalid usage | Omit TPOT without substituting zero or total response duration. |
+| Error, timeout, cancellation, explicit close, truncation, filtering, or missing normal terminal state | Omit TPOT; retain any previously recorded TTFT. |
+| Multiple candidates, cached response replay, unknown provider/SDK wrapper, or mismatched token scope | Omit TPOT. Hidden reasoning, reasoning summaries, and audio output must not be combined with a visible-text interval. |
+
+Chat output totals already include reasoning tokens; do not add the reasoning breakdown again. Include those counts only when full reasoning deltas were observed. Ark's `response.reasoning_summary_text.delta` represents a summary, so TPOT for such requests is currently omitted. Generating tool-call arguments belongs to the SDK request; subsequent Agent tool execution does not.
+
+Concurrent requests and VeADK retries are measured separately; hidden SDK retries remain within the observed call. Histogram `sum / count` is a per-request mean TPOT, not a token-weighted mean. Failures in the new collection or export path do not change model output or existing exception propagation. Reading LiteLLM upstream metadata depends on SDK internals protected by contract tests; incompatible structures omit TPOT.

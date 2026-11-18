@@ -15,13 +15,62 @@
 """Capture LiteLLM SDK receipt timestamps before response aggregation."""
 
 from google.adk.models.lite_llm import LiteLLMClient
+from litellm import CustomStreamWrapper
 
-from veadk.tracing.telemetry.timing import ModelTiming, litellm_output_type
+from veadk.tracing.telemetry.timing import (
+    ModelTiming,
+    _field,
+    litellm_output_type,
+    output_tokens_for_tpot,
+)
+from veadk.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def _stream_output_tokens(response) -> int | None:
+    """Read upstream metadata, excluding LiteLLM's synthesized usage and stop.
+
+    This SDK-internal compatibility seam is tested against supported versions.
+    Unknown providers/wrappers deliberately omit TPOT instead of estimating it.
+    """
+    if (
+        not isinstance(response, CustomStreamWrapper)
+        or response.custom_llm_provider != "openai"
+    ):
+        return None
+    if response.received_finish_reason not in {"stop", "tool_calls", "function_call"}:
+        return None
+    usage = None
+    reasoning_seen = False
+    for chunk in response.chunks:
+        if _field(chunk, "usage") is not None:
+            usage = _field(chunk, "usage")
+        choices = _field(chunk, "choices", []) or []
+        if len(choices) > 1:
+            return None
+        for choice in choices:
+            if _field(choice, "index") != 0:
+                return None
+            delta = _field(choice, "delta")
+            if any(
+                _field(delta, name)
+                for name in ("audio", "refusal", "reasoning_content_encrypted")
+            ):
+                return None
+            if _field(delta, "content") and not isinstance(
+                _field(delta, "content"), str
+            ):
+                return None
+            reasoning_seen |= bool(_field(delta, "reasoning_content"))
+    return output_tokens_for_tpot(usage, "completion_tokens", reasoning_seen)
 
 
 class TimedLiteLLMClient(LiteLLMClient):
     async def acompletion(self, model, messages, tools, **kwargs):
         timing = ModelTiming(streaming=bool(kwargs.get("stream")), model=model)
+        if kwargs.get("n", 1) != 1:
+            timing.disable_tpot()
         try:
             response = await super().acompletion(model, messages, tools, **kwargs)
         except BaseException as error:
@@ -72,6 +121,12 @@ class _TimedStream:
                 type(close_error), close_error, close_error.__traceback__
             )
             raise
+        if error is None:
+            try:
+                self._timing.complete(_stream_output_tokens(self._response))
+            except Exception:
+                self._timing.disable_tpot()
+                logger.warning("Skipping TPOT because stream metadata is unavailable")
         self._timing.__exit__(
             type(error) if error is not None else None,
             error,
