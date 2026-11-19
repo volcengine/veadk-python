@@ -12,74 +12,180 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Record the model provider's response id on the LLM trace span.
+"""Capture provider response IDs before ADK converts or aggregates responses.
 
-Google ADK drops the litellm response's ``id`` when it builds its
-``LlmResponse``, so the tracer never sees it. For Volcengine Ark that id equals
-the ``x-request-id`` response header — the most useful identifier for
-correlating with the provider's logs.
-
-A pure litellm callback can read the id but cannot attach it to the span:
-litellm runs its success callbacks detached from the OpenTelemetry context, so
-``get_current_span()`` there is non-recording. We therefore wrap
-``LiteLLMClient.acompletion`` (the in-context point where the raw response is
-available, inside ADK's ``generate_content`` span) and set the standard
-GenAI attribute ``gen_ai.response.id`` on the current span.
-
-The patch is applied lazily — only when a VeADK OpenTelemetry tracer is created
-(see :mod:`veadk.tracing.telemetry.opentelemetry_tracer`), in the same spirit as
-``patch_google_adk_telemetry``. With no tracer, nothing is patched and existing
-code paths are untouched; when patched but not recording, it is a no-op.
+Registration is lazy and idempotent. Each SDK request captures its owning
+``call_llm`` span once; advancing a stream never looks up the consumer's span.
+LiteLLM-generated IDs are marked on SDK objects without changing their values
+or serialized fields. HTTP request IDs are never used as response IDs.
 """
 
 from __future__ import annotations
 
+import functools
+import inspect
+from contextvars import ContextVar
+
 from opentelemetry import trace
+from opentelemetry.sdk.trace import Span as SDKSpan
 
-from veadk.utils.logger import get_logger
+from veadk.tracing.telemetry.timing import response_field
 
-logger = get_logger(__name__)
-
-# OpenTelemetry GenAI semantic convention: unique id of the model response.
 GEN_AI_RESPONSE_ID = "gen_ai.response.id"
-
 _patched = False
+_active_recorder: ContextVar[ResponseIdRecorder | None] = ContextVar(
+    "veadk_response_id_recorder", default=None
+)
+_GENERATED_ID = "_veadk_generated_response_id"
+_WRAPPED = "_veadk_response_id_wrapped"
 
 
-def _set_response_id_on_current_span(response_obj: object) -> None:
-    response_id = getattr(response_obj, "id", None)
-    if not response_id:
+def _clear_previous_attempt(span: trace.Span | None) -> None:
+    # OTel has no public attribute removal API. Use the SDK's locked attribute
+    # map only to discard a provisional ID when a new attempt starts. Failed
+    # attempts retain their ID on their own model_request span. This seam is
+    # covered by fallback-without-ID tests against the supported OTel SDK.
+    if isinstance(span, SDKSpan) and span.is_recording():
+        with span._lock:
+            if span.is_recording() and span._attributes is not None:
+                span._attributes.pop(GEN_AI_RESPONSE_ID, None)
+
+
+class ResponseIdRecorder:
+    """One SDK attempt, isolated from other requests and stream consumers."""
+
+    def __init__(self, *, attempt: trace.Span | None = None):
+        current = trace.get_current_span()
+        self.owner = (
+            current
+            if _patched and getattr(current, "name", None) == "call_llm"
+            else None
+        )
+        self.attempt = attempt if self.owner is not None else None
+        self.response_id: str | None = None
+        self._token = None
+        _clear_previous_attempt(self.owner)
+
+    def __enter__(self):
+        self._token = _active_recorder.set(self)
+        return self
+
+    def __exit__(self, *args):
+        _active_recorder.reset(self._token)
+
+    def observe(self, response: object, *, field: str = "id") -> None:
+        if self.owner is None or self.response_id is not None:
+            return
+        value = response_field(response, field)
+        if not isinstance(value, str) or not value.strip():
+            return
+        if value == getattr(response, _GENERATED_ID, None):
+            return
+        self.response_id = value
+        for span in (self.owner, self.attempt):
+            if span is not None and span.is_recording():
+                span.set_attribute(GEN_AI_RESPONSE_ID, value)
+
+
+class _ResponseIdStream:
+    """Transparent async iterator; ID collection never buffers or reorders."""
+
+    def __init__(self, response, recorder, *, field="id"):
+        self._response = response
+        self._iterator = response.__aiter__()
+        self._recorder = recorder
+        self._field = field
+
+    def __getattr__(self, name):
+        return getattr(self._response, name)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        chunk = await anext(self._iterator)
+        self._recorder.observe(chunk, field=self._field)
+        return chunk
+
+    async def aclose(self):
+        close = getattr(self._response, "aclose", None)
+        if close is None:
+            close = getattr(self._iterator, "aclose", None)
+        if close is not None:
+            await close()
+
+
+def _mark_generated_ids(cls) -> None:
+    original = cls.__init__
+    if getattr(original, _WRAPPED, False):
         return
-    span = trace.get_current_span()
-    if span and span.is_recording():
-        span.set_attribute(GEN_AI_RESPONSE_ID, str(response_id))
+    # Both supported LiteLLM constructors generate an ID only when id is None.
+    # Compute the positional index once, preserving their original signatures.
+    id_index = list(inspect.signature(original).parameters).index("id") - 1
+
+    @functools.wraps(original)
+    def initialize(self, *args, **kwargs):
+        supplied_id = kwargs.get("id", args[id_index] if len(args) > id_index else None)
+        original(self, *args, **kwargs)
+        object.__setattr__(
+            self, _GENERATED_ID, self.id if supplied_id is None else None
+        )
+
+    setattr(initialize, _WRAPPED, True)
+    cls.__init__ = initialize
 
 
 def register() -> None:
-    """Wrap ``LiteLLMClient.acompletion`` once to record ``gen_ai.response.id``."""
+    """Register Chat and native Gemini capture once, only with VeADK tracing."""
     global _patched
     if _patched:
         return
+    from google.adk.models.lite_llm import LiteLLMClient
+    from google.genai.models import AsyncModels
+    from litellm import ModelResponse
+    from litellm.types.utils import ModelResponseStream
 
-    try:
-        from google.adk.models.lite_llm import LiteLLMClient
-    except Exception as e:  # pragma: no cover - litellm present whenever models run
-        logger.debug(f"Skip gen_ai.response.id patch: {e}")
-        return
-
+    _mark_generated_ids(ModelResponse)
+    _mark_generated_ids(ModelResponseStream)
     original = LiteLLMClient.acompletion
-    if getattr(original, "_veadk_response_id_wrapped", False):
-        _patched = True
-        return
+    if not getattr(original, _WRAPPED, False):
 
-    async def acompletion(self, model, messages, tools, **kwargs):
-        response = await original(self, model, messages, tools, **kwargs)
-        # Non-streaming returns a ModelResponse carrying ``id``; the streaming
-        # wrapper has no stable id here, so this is a no-op for it.
-        _set_response_id_on_current_span(response)
-        return response
+        @functools.wraps(original)
+        async def acompletion(self, *args, **kwargs):
+            active = _active_recorder.get()
+            recorder = active or ResponseIdRecorder()
+            response = await original(self, *args, **kwargs)
+            if recorder.owner is None:
+                return response
+            if kwargs.get("stream"):
+                # TimedLiteLLMClient already owns iteration and stream closing.
+                return response if active else _ResponseIdStream(response, recorder)
+            recorder.observe(response)
+            return response
 
-    acompletion._veadk_response_id_wrapped = True  # type: ignore[attr-defined]
-    LiteLLMClient.acompletion = acompletion  # type: ignore[method-assign]
+        setattr(acompletion, _WRAPPED, True)
+        LiteLLMClient.acompletion = acompletion
+
+    def wrap_gemini(method, streaming):
+        if getattr(method, _WRAPPED, False):
+            return method
+
+        @functools.wraps(method)
+        async def generate(self, *args, **kwargs):
+            recorder = ResponseIdRecorder()
+            response = await method(self, *args, **kwargs)
+            if recorder.owner is None:
+                return response
+            if streaming:
+                return _ResponseIdStream(response, recorder, field="response_id")
+            recorder.observe(response, field="response_id")
+            return response
+
+        setattr(generate, _WRAPPED, True)
+        return generate
+
+    AsyncModels.generate_content = wrap_gemini(AsyncModels.generate_content, False)
+    AsyncModels.generate_content_stream = wrap_gemini(
+        AsyncModels.generate_content_stream, True
+    )
     _patched = True
-    logger.debug("Wrapped LiteLLMClient.acompletion to record gen_ai.response.id")

@@ -127,9 +127,8 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         # provider conflicts
         self._init_global_tracer_provider()
 
-        # Record the model provider's response id (e.g. Ark's x-request-id) on
-        # the LLM span as `gen_ai.response.id`. Registered only when a tracer is
-        # used; a no-op otherwise.
+        # Capture provider response IDs for Chat, Ark Responses and Gemini.
+        # Request headers and SDK-generated IDs do not identify a response.
         from veadk.tracing.telemetry.litellm_response_id import (
             register as _register_response_id_callback,
         )
