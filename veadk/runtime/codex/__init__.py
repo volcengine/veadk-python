@@ -28,6 +28,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from veadk.runtime.codex.config import CodexRuntimeConfig
+from veadk.runtime.codex.provider_extension import CodexProviderEndpoint
 from veadk.runtime.codex.workspace import current_workspace
 
 if TYPE_CHECKING:
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
     from veadk.runtime.codex.turn_control import CodexTurnAdmissionTimeout
 
 __all__ = [
+    "CodexProviderEndpoint",
     "CodexRuntime",
     "CodexRuntimeConfig",
     "CodexTurnAdmissionTimeout",

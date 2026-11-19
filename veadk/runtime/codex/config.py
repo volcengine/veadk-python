@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -149,6 +149,26 @@ class CodexRuntimeConfig(BaseModel):
             "ephemeral, because the tools it runs never reach Codex's history."
         ),
     )
+    provider_factory: Any = Field(
+        default=None,
+        description=(
+            "Optional async context manager factory ``(agent, context)`` that "
+            "yields a ``CodexProviderEndpoint``. The runtime enters it once per "
+            "invocation and points Codex at that endpoint instead of the model "
+            "API base. Use it to observe or rewrite every model request from "
+            "the host. Requires the direct transport."
+        ),
+    )
+    shell_enabled: bool = Field(
+        default=True,
+        description=(
+            "Whether Codex's native shell/apply_patch tools are part of the "
+            "trusted surface. A provider endpoint can enforce ``False`` by "
+            "rejecting native tool calls; without a provider there is no "
+            "enforcement point, so that combination is rejected rather than "
+            "silently pretending to disable the tools."
+        ),
+    )
 
     @field_validator("workspace_root")
     @classmethod
@@ -156,6 +176,13 @@ class CodexRuntimeConfig(BaseModel):
         if not value:
             return None
         return str(Path(value).expanduser().resolve())
+
+    @field_validator("provider_factory")
+    @classmethod
+    def _check_provider_factory(cls, value: Any) -> Any:
+        if value is not None and not callable(value):
+            raise ValueError("provider_factory must be callable")
+        return value
 
     @model_validator(mode="after")
     def _check_sandbox_network_consistency(self) -> "CodexRuntimeConfig":
@@ -188,6 +215,17 @@ class CodexRuntimeConfig(BaseModel):
                 "network_access=True, which only applies to the "
                 "workspace_write sandbox. Set sandbox='workspace_write' if "
                 "the agent needs network access."
+            )
+        if not self.shell_enabled and self.provider_factory is None:
+            raise ValueError(
+                "CodexRuntimeConfig(shell_enabled=False) needs a "
+                "provider_factory: only the provider endpoint can reject "
+                "Codex's native shell tool calls."
+            )
+        if self.provider_factory is not None and self.model_transport == "shim":
+            raise ValueError(
+                "a provider_factory endpoint speaks the Responses API and "
+                "cannot be combined with model_transport='shim'"
             )
         return self
 

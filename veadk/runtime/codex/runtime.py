@@ -92,6 +92,8 @@ from veadk.runtime.codex.process_pool import tree_digest
 from veadk.runtime.codex.private_dirs import HOME_ROOT_PREFIX
 from veadk.runtime.codex.private_dirs import WORKSPACE_ROOT_PREFIX
 from veadk.runtime.codex.private_dirs import create_owned_root
+from veadk.runtime.codex.provider_extension import validate_provider_endpoint
+from veadk.runtime.codex.provider_extension import wrap_provider_executors
 from veadk.runtime.codex.proxy import get_shim
 from veadk.runtime.codex.proxy import shutdown_shims
 from veadk.runtime.codex.rollout_io import export_rollout
@@ -362,6 +364,31 @@ class CodexRuntime(BaseRuntime):
                     runtime_config.turn_timeout_seconds or 0
                 )
 
+        # A host-supplied provider endpoint owns all model traffic for this
+        # invocation. It is entered before the Codex home is written (the
+        # endpoint may contribute model context) and closed before the turn's
+        # other resources so no request outlives its tool executors.
+        provider_cm: Any = None
+        provider_endpoint: Any = None
+        provider_entered = False
+        provider_closed = False
+
+        async def _close_provider() -> None:
+            nonlocal provider_closed
+            # A factory that raises before yielding was never entered, so it
+            # has nothing to exit.
+            if not provider_entered or provider_closed:
+                return
+            provider_closed = True
+            try:
+                await provider_cm.__aexit__(None, None, None)
+            except Exception as error:  # noqa: BLE001
+                logger.warning(
+                    "codex_provider_close_failed invocation_id=%s error_type=%s",
+                    ctx.invocation_id,
+                    type(error).__name__,
+                )
+
         lock_stack = contextlib.AsyncExitStack()
         admission_timeout = (
             max(0.0, turn_deadline - loop.time()) if turn_deadline is not None else None
@@ -377,12 +404,36 @@ class CodexRuntime(BaseRuntime):
                 runtime_config.turn_timeout_seconds or 0
             ) from e
         try:
+            if runtime_config.provider_factory is not None:
+                factory = runtime_config.provider_factory
+                provider_cm = factory(agent, ctx)
+                enter = getattr(provider_cm, "__aenter__", None)
+                if not callable(enter):
+                    raise TypeError(
+                        "provider_factory must return an async context manager"
+                    )
+                provider_endpoint = await _await_setup(enter())
+                provider_entered = True
+                provider_endpoint = validate_provider_endpoint(provider_endpoint)
             # "direct": Codex calls a Responses-capable backend itself and
             # reaches ADK tools through the MCP bridge. "shim" executes them in
-            # the in-process Responses-to-chat adapter.
-            transport = resolve_transport(runtime_config, api_base)
+            # the in-process Responses-to-chat adapter. A provider endpoint is
+            # always direct: it is the host's Responses server.
+            transport = (
+                "direct"
+                if provider_endpoint is not None
+                else resolve_transport(runtime_config, api_base)
+            )
             if transport == "direct" and _model_extra_body(agent):
-                if runtime_config.model_transport == "auto":
+                if provider_endpoint is not None:
+                    if not provider_endpoint.handles_extra_body:
+                        logger.warning(
+                            "codex_provider_extra_body_ignored invocation_id=%s "
+                            "detail=the provider endpoint declares "
+                            "handles_extra_body=False",
+                            ctx.invocation_id,
+                        )
+                elif runtime_config.model_transport == "auto":
                     logger.info(
                         "codex_transport_fallback invocation_id=%s transport=shim "
                         "reason=extra_body_requires_shim",
@@ -405,8 +456,12 @@ class CodexRuntime(BaseRuntime):
             route: CodexModelRoute = (
                 shim_route(shim.url or "", "")
                 if shim is not None
-                else direct_route(
-                    api_base, api_key, extra_headers=_model_extra_headers(agent)
+                else (
+                    direct_route(provider_endpoint.api_base, provider_endpoint.api_key)
+                    if provider_endpoint is not None
+                    else direct_route(
+                        api_base, api_key, extra_headers=_model_extra_headers(agent)
+                    )
                 )
             )
             workspace, workspace_created = _prepare_workspace_state(runtime_config, ctx)
@@ -433,6 +488,7 @@ class CodexRuntime(BaseRuntime):
                     type(e).__name__,
                 )
         except BaseException:
+            await _close_provider()
             await lock_stack.aclose()
             raise
 
@@ -531,16 +587,20 @@ class CodexRuntime(BaseRuntime):
                 type(e).__name__,
             )
             try:
-                if tool_bundle is not None:
-                    await close_toolsets(tool_bundle.opened_toolsets)
+                await _close_provider()
             finally:
                 try:
-                    await asyncio.to_thread(shutil.rmtree, codex_home, True)
+                    if tool_bundle is not None:
+                        await close_toolsets(tool_bundle.opened_toolsets)
                 finally:
-                    # Admission now precedes every resource allocation. Release
-                    # its process-wide permit on every setup failure too; this
-                    # path has not installed the normal `_cleanup` helper yet.
-                    await lock_stack.aclose()
+                    try:
+                        await asyncio.to_thread(shutil.rmtree, codex_home, True)
+                    finally:
+                        # Admission now precedes every resource allocation.
+                        # Release its process-wide permit on every setup
+                        # failure too; this path has not installed the normal
+                        # `_cleanup` helper yet.
+                        await lock_stack.aclose()
             raise
 
         # ADK's `call_llm` span is opened by its own LLM flow, which this
@@ -579,8 +639,12 @@ class CodexRuntime(BaseRuntime):
                     try:
                         await close_toolsets(tool_bundle.opened_toolsets)
                     finally:
-                        await lock_stack.aclose()
+                        # The provider is entered before every other
+                        # invocation resource and leaves last, after Codex has
+                        # stopped issuing model requests.
+                        await _close_provider()
                 finally:
+                    await lock_stack.aclose()
                     # Workspaces survive turns; the private Codex home belongs
                     # to this invocation unless its warm process was parked.
                     if lease is None or not lease.detached:
@@ -685,9 +749,10 @@ class CodexRuntime(BaseRuntime):
             # *first* invocation in the process started it, so an ambient value
             # would be that invocation's - a silent cross-tenant leak. See
             # `veadk.runtime.codex.workspace`.
-            bound_executors = bind_workspace_to_executors(
-                tool_bundle.executors, workspace
-            )
+            executors = tool_bundle.executors
+            if provider_endpoint is not None:
+                executors = wrap_provider_executors(provider_endpoint, executors)
+            bound_executors = bind_workspace_to_executors(executors, workspace)
             # The MCP bridge registers below, once it is known whether a warm
             # process (whose token is fixed in its env) serves this turn.
             if shim is not None:
