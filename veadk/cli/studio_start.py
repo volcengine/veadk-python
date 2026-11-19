@@ -19,6 +19,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Callable
 from enum import Enum
+from functools import cache
 import importlib
 import importlib.machinery
 import importlib.util
@@ -252,6 +253,16 @@ def _install_lazy_genai_types() -> ModuleType:
 
     field_metadata: dict[str, Any] = {}
 
+    @cache
+    def _source_classes() -> dict[str, ast.ClassDef]:
+        source = Path(str(spec.origin)).read_text(encoding="utf-8")
+        return {
+            node.name: node
+            for node in ast.parse(source).body
+            if isinstance(node, ast.ClassDef)
+            and node.name in ("GenerateContentConfig", "FinishReason", "BlockedReason")
+        }
+
     def _generate_content_fields() -> dict[str, Any]:
         if loaded:
             return loaded[0].GenerateContentConfig.model_fields
@@ -261,12 +272,8 @@ def _install_lazy_genai_types() -> ModuleType:
 
         # ADK reads names and aliases for argument hints during import. Derive
         # them from the installed SDK without executing its generated models.
-        source = Path(str(spec.origin)).read_text(encoding="utf-8")
-        for node in ast.parse(source).body:
-            if (
-                not isinstance(node, ast.ClassDef)
-                or node.name != "GenerateContentConfig"
-            ):
+        for node in _source_classes().values():
+            if node.name != "GenerateContentConfig":
                 continue
             for field in node.body:
                 if not isinstance(field, ast.AnnAssign) or not isinstance(
@@ -290,6 +297,20 @@ def _install_lazy_genai_types() -> ModuleType:
     def _load_attribute(attribute: str) -> Any:
         if attribute.startswith("__"):
             raise AttributeError(f"module {name!r} has no attribute {attribute!r}")
+        if attribute in ("FinishReason", "BlockedReason"):
+            from google.genai._common import CaseInSensitiveEnum
+
+            # ADK 2.14 enumerates these during import; avoid loading all models.
+            members = {
+                target.id: ast.literal_eval(field.value)
+                for field in _source_classes()[attribute].body
+                if isinstance(field, ast.Assign)
+                for target in field.targets
+                if isinstance(target, ast.Name)
+            }
+            enum = CaseInSensitiveEnum(attribute, members, module=name)
+            setattr(proxy, attribute, enum)
+            return enum
         value = _deferred_genai_type(attribute, name, _load_real_module)
         if attribute == "GenerateContentConfig":
             value._deferred_model_fields = staticmethod(_generate_content_fields)
@@ -470,8 +491,17 @@ def _install_studio_adk_imports() -> None:
     )
     _install_lazy_module(
         "google.adk.cli.cli_eval",
-        {"EVAL_SESSION_ID_PREFIX": "___eval___session___"},
+        {
+            "EVAL_SESSION_ID_PREFIX": _literal_assignment(
+                "google.adk.cli.cli_eval", "EVAL_SESSION_ID_PREFIX"
+            ),
+            "_LEGACY_EVAL_SESSION_ID_PREFIX": "___eval___session___",
+        },
     )
+    importlib.import_module("google.adk.cli.utils")
+    _install_lazy_module("google.adk.cli.utils.evals", {})
+    importlib.import_module("google.adk.artifacts")
+    _install_lazy_module("google.adk.artifacts.artifact_util", {})
     _install_lazy_module(
         "google.adk.cli.cli_deploy",
         {

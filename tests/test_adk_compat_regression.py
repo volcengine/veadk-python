@@ -48,26 +48,38 @@ from veadk.tracing.telemetry.attributes.extractors.tool_attributes_extractors im
 from veadk.tracing.telemetry.attributes.extractors.types import ToolAttributesParams
 
 
-def test_adk_native_telemetry_is_suppressed_only_inside_veadk_context(monkeypatch):
+@pytest.mark.parametrize("config_style", ["absent", "positional", "keyword"])
+def test_adk_native_telemetry_is_suppressed_only_inside_veadk_context(
+    monkeypatch, config_style
+):
     """Capability patch leaves plain ADK runs unchanged and is idempotent."""
     from google.adk.telemetry import tracing as adk_tracing
 
-    monkeypatch.setattr(
-        adk_tracing, "_should_emit_native_telemetry", lambda agent: True
-    )
+    calls = []
+
+    def gate(agent, *args, **kwargs):
+        calls.append((agent, args, kwargs))
+        return True
+
+    monkeypatch.setattr(adk_tracing, "_should_emit_native_telemetry", gate)
 
     patch_google_adk_telemetry()
-    wrapped = adk_tracing._should_emit_native_telemetry
+    wrapped = getattr(adk_tracing, "_should_emit_native_telemetry")
     patch_google_adk_telemetry()
 
     assert adk_tracing._should_emit_native_telemetry is wrapped
-    assert wrapped(object()) is True
+    agent, config = object(), object()
+    args = (config,) if config_style == "positional" else ()
+    kwargs = {"telemetry_config": config} if config_style == "keyword" else {}
+    assert wrapped(agent, *args, **kwargs) is True
+    assert calls == [(agent, args, kwargs)]
 
     token = context_api.attach(
         context_api.set_value("suppress_language_model_instrumentation", True)
     )
     try:
-        assert wrapped(object()) is False
+        assert wrapped(agent, *args, **kwargs) is False
+        assert len(calls) == 1
     finally:
         context_api.detach(token)
 

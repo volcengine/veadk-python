@@ -27,6 +27,7 @@ from opentelemetry.context import (
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider, export
 from typing_extensions import override
 
+from veadk.tracing.telemetry.adk_compat import _opening_adk_scope
 from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.utils.logger import get_logger
 
@@ -196,11 +197,13 @@ class _InMemorySpanProcessor(export.SimpleSpanProcessor):
             span: The span being started
             parent_context: Parent OpenTelemetry context
         """
-        if span.name.startswith("invocation"):
+        if span.name.startswith(("invocation", "invoke_workflow")):
             span.set_attribute("era.span_type", "root")
             span.set_attribute("gen_ai.operation.name", "chain")
             span.set_attribute("gen_ai.span.kind", "workflow")
             span.set_attribute("gen_ai.usage.total_tokens", 0)
+            if _opening_adk_scope.get():
+                return
             ctx = set_value("invocation_span_instance", span, context=parent_context)
             # suppress instrumentation for llm to avoid auto instrument from apmplus, such as openai
             ctx = set_value(
@@ -214,6 +217,8 @@ class _InMemorySpanProcessor(export.SimpleSpanProcessor):
             span.set_attribute("gen_ai.operation.name", "agent")
             span.set_attribute("gen_ai.span.kind", "agent")
 
+            if _opening_adk_scope.get():
+                return
             ctx = set_value("agent_run_span_instance", span, context=parent_context)
             # ADK telemetry schema v2 may omit the legacy ``invocation`` span.
             # Carry the suppression flag on the agent span as well so native

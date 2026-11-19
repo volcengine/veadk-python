@@ -987,6 +987,97 @@ with tempfile.TemporaryDirectory() as agents_dir:
     )
 
 
+def test_studio_deferred_genai_enums_match_installed_sdk() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+import veadk.cli.studio_start
+from google.genai import types
+
+enums = {name: getattr(types, name) for name in ("FinishReason", "BlockedReason")}
+members = {
+    name: [(member.name, member.value) for member in enum]
+    for name, enum in enums.items()
+}
+assert not types._veadk_real_module_loaded()
+assert enums["FinishReason"]("stop").value == "STOP"
+assert enums["BlockedReason"]("safety").value == "SAFETY"
+
+types.Content(parts=[types.Part(text="hello")])
+real = sys.modules["google.genai.types"]
+for name, enum in enums.items():
+    actual = getattr(real, name)
+    assert members[name] == [(member.name, member.value) for member in actual]
+    assert all(actual(member) == member for member in enum)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_studio_deferred_eval_prefix_matches_installed_adk() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+import veadk.cli.studio_start
+from google.adk.cli import cli_eval
+
+prefix = cli_eval.EVAL_SESSION_ID_PREFIX
+legacy = cli_eval._LEGACY_EVAL_SESSION_ID_PREFIX
+assert "google.adk.evaluation" not in sys.modules
+real = cli_eval._load_real_module()
+assert prefix == real.EVAL_SESSION_ID_PREFIX
+assert legacy == getattr(real, "_LEGACY_EVAL_SESSION_ID_PREFIX", prefix)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_studio_deferred_adk_utilities_work_on_first_use() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import asyncio
+
+import veadk.cli.studio_start
+from google.adk.cli.utils import evals
+from google.adk.sessions.session import Session
+from google.genai import types
+
+assert not types._veadk_real_module_loaded()
+
+async def run():
+    from google.adk.artifacts.in_memory_artifact_service import InMemoryArtifactService
+
+    service = InMemoryArtifactService()
+    part = types.Part(inline_data=types.Blob(data=b"test", mime_type="text/plain"))
+    args = dict(app_name="app", user_id="user", session_id="session", filename="a.txt")
+    version = await service.save_artifact(**args, artifact=part)
+    assert await service.load_artifact(**args, version=version) == part
+
+asyncio.run(run())
+session = Session(id="session", app_name="app", user_id="user")
+assert evals.convert_session_to_eval_invocations(session) == []
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_studio_fast_api_defers_genai_models_until_first_request() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """
@@ -1051,12 +1142,6 @@ with tempfile.TemporaryDirectory() as agents_dir:
     }
 
     from google.adk.telemetry import _experimental_semconv
-    from google.adk.telemetry import tracing
-
-    assert isinstance(
-        tracing._instrumented_with_opentelemetry_instrumentation_google_genai(),
-        bool,
-    )
     transformers = getattr(_experimental_semconv, "transformers", None)
     if transformers is None:
         from google.genai import models as genai_models_module

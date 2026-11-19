@@ -16,15 +16,11 @@ import asyncio
 import contextvars
 import functools
 import sys
-from contextlib import asynccontextmanager
-from typing import Callable
 
 from packaging.version import Version
 
-from veadk.tracing.telemetry.telemetry import (
-    trace_call_llm,
-    trace_send_data,
-    trace_tool_call,
+from veadk.tracing.telemetry.adk_compat import (
+    patch_google_adk_telemetry as patch_google_adk_telemetry,
 )
 from veadk.utils.adk_compat import get_adk_version
 from veadk.utils.logger import get_logger
@@ -32,7 +28,6 @@ from veadk.version import VERSION
 
 logger = get_logger(__name__)
 
-_SUPPRESS_LANGUAGE_MODEL_INSTRUMENTATION = "suppress_language_model_instrumentation"
 _PARALLEL_RUN_CODE_CALL_COUNT = contextvars.ContextVar(
     "veadk_parallel_run_code_call_count", default=1
 )
@@ -187,71 +182,6 @@ def _iter_loaded_attrs(mod):
     # below mutates the namespace mid-loop.
     for name, value in tuple(namespace.items()):
         yield name, value
-
-
-def patch_google_adk_telemetry() -> None:
-    trace_functions = {
-        "trace_tool_call": trace_tool_call,
-        "trace_call_llm": trace_call_llm,
-        "trace_send_data": trace_send_data,
-    }
-
-    for mod_name, mod in tuple(sys.modules.items()):
-        if mod_name.startswith("google.adk"):
-            for var_name, var in _iter_loaded_attrs(mod):
-                if var_name in trace_functions and isinstance(var, Callable):
-                    setattr(mod, var_name, trace_functions[var_name])
-                    logger.debug(
-                        f"Patch {mod_name} {var_name} with {trace_functions[var_name]}"
-                    )
-
-    # Supported ADK releases emit a nested ``generate_content`` span in
-    # addition to ``call_llm``. Newer releases also record the standard GenAI
-    # token metrics from the same path. VeADK owns both while its invocation
-    # context is active, so suppress them through the capability exposed by
-    # each ADK generation. Keep native telemetry unchanged outside VeADK.
-    try:
-        from google.adk.telemetry import tracing as adk_tracing
-        from opentelemetry import context as context_api
-
-        telemetry_gate = getattr(adk_tracing, "_should_emit_native_telemetry", None)
-        if callable(telemetry_gate) and not getattr(
-            telemetry_gate, "_veadk_suppression_wrapped", False
-        ):
-
-            def should_emit_native_telemetry(agent):
-                if context_api.get_value(_SUPPRESS_LANGUAGE_MODEL_INSTRUMENTATION):
-                    return False
-                return telemetry_gate(agent)
-
-            should_emit_native_telemetry._veadk_suppression_wrapped = True
-            adk_tracing._should_emit_native_telemetry = should_emit_native_telemetry
-            logger.debug("Patch ADK native telemetry suppression for VeADK runs.")
-        elif not callable(telemetry_gate):
-            # ADK 1.34-2.1 has no native-telemetry gate. Its LLM flow enters
-            # this context manager directly, so suppress that span only while
-            # VeADK owns the surrounding call_llm telemetry.
-            use_inference_span = getattr(adk_tracing, "use_inference_span", None)
-            if callable(use_inference_span) and not getattr(
-                use_inference_span, "_veadk_suppression_wrapped", False
-            ):
-
-                @asynccontextmanager
-                async def veadk_use_inference_span(*args, **kwargs):
-                    if context_api.get_value(_SUPPRESS_LANGUAGE_MODEL_INSTRUMENTATION):
-                        yield None
-                        return
-                    async with use_inference_span(*args, **kwargs) as span:
-                        yield span
-
-                veadk_use_inference_span._veadk_suppression_wrapped = True
-                adk_tracing.use_inference_span = veadk_use_inference_span
-                logger.debug(
-                    "Patch legacy ADK inference span suppression for VeADK runs."
-                )
-    except (ImportError, AttributeError) as e:
-        # Older ADK releases do not expose native inference telemetry.
-        logger.debug(f"Skip ADK native telemetry suppression patch: {e}")
 
 
 def patch_tracer() -> None:
