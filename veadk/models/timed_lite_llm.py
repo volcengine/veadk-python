@@ -102,14 +102,18 @@ class _TimedStream:
         if self._closed:
             raise StopAsyncIteration
         try:
-            chunk = await anext(self._iterator)
+            with self._recorder:
+                chunk = await anext(self._iterator)
         except StopAsyncIteration:
             await self._finish(None)
             raise
         except BaseException as error:
             await self._finish(error)
             raise
-        self._recorder.observe(chunk)
+        # Native LiteLLM streams record at the raw boundary while advancing.
+        # Normalized IDs may be synthesized or lose provenance after copying.
+        if not isinstance(self._response, CustomStreamWrapper):
+            self._recorder.observe(chunk)
         self._timing.observe(litellm_output_type(chunk))
         return chunk
 

@@ -15,6 +15,7 @@
 """Response-ID contracts using real adapters and stubbed SDK transports."""
 
 import asyncio
+import json
 from types import SimpleNamespace as NS
 
 import httpx
@@ -25,7 +26,7 @@ from google.adk.models import lite_llm as adk_lite_llm
 from google.adk.runners import InMemoryRunner
 from google.genai import types
 from google.genai.models import AsyncModels
-from litellm import ModelResponse
+from litellm import CustomStreamWrapper, ModelResponse
 from litellm.types.utils import ModelResponseStream
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
@@ -60,13 +61,19 @@ def tracing(monkeypatch):
         (AsyncModels, "generate_content_stream"),
         (ModelResponse, "__init__"),
         (ModelResponseStream, "__init__"),
+        (CustomStreamWrapper, "chunk_creator"),
+        (CustomStreamWrapper, "model_response_creator"),
     ):
         monkeypatch.setattr(cls, method, getattr(cls, method))
     monkeypatch.setattr(response_ids, "_patched", False)
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
 
-    async def reject_network(*args, **kwargs):
+    original_send = httpx.AsyncClient.send
+
+    async def reject_network(client, *args, **kwargs):
+        if isinstance(client._transport, httpx.MockTransport):
+            return await original_send(client, *args, **kwargs)
         raise AssertionError("Response-ID unit tests must not call external services")
 
     monkeypatch.setattr(httpx.AsyncClient, "send", reject_network)
@@ -452,8 +459,17 @@ def test_litellm_normalization_distinguishes_generated_ids(
             logging_obj=NS(model_call_details={"custom_llm_provider": "openai"}),
             _response_headers={"x-request-id": "request-id"},
         )
-        response = wrapper.model_response_creator()
-        wrapper.set_model_id(provider_id, response)
+        from openai.types.chat import ChatCompletionChunk
+
+        raw = ChatCompletionChunk(
+            id="fixture-placeholder",
+            created=1,
+            model="fixture",
+            object="chat.completion.chunk",
+            choices=[{"index": 0, "delta": {"content": "OK"}, "finish_reason": None}],
+        )
+        raw.id = provider_id
+        response = wrapper.chunk_creator(raw)
     else:
         response = convert_to_model_response_object(
             response_object={
@@ -729,3 +745,278 @@ async def test_litellm_retry_clears_failed_id_when_success_has_no_id(
     assert ID not in attempts[1].attributes
     assert len(responses) > 0
     assert calls == closed == [True, True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_id,retry,capture_content,use_timing",
+    [
+        (None, False, False, True),
+        (None, False, True, True),
+        (None, True, False, True),
+        ("e5e81c15-50a7-42c6-82a0-4bd154b1f72b", False, False, True),
+        ("chatcmpl-real-provider-id", False, False, True),
+        (None, False, False, False),
+        ("e5e81c15-50a7-42c6-82a0-4bd154b1f72b", False, False, False),
+    ],
+    ids=[
+        "chat_missing_stream_0",
+        "chat_missing_stream_1",
+        "chat_retry_noid_stream_0",
+        "real_uuid",
+        "real_chatcmpl",
+        "adk_litellm_missing",
+        "adk_litellm_uuid",
+    ],
+)
+@pytest.mark.parametrize("terminal", ["finish_usage", "usage_only", "synthetic_stop"])
+async def test_real_chat_conversion_preserves_id_source(
+    monkeypatch, tracing, provider_id, retry, capture_content, use_timing, terminal
+):
+    """F-001 / REQ-004/006: consume real SDK conversion through the final chunk."""
+    from openai import AsyncOpenAI
+
+    _, exporter = tracing
+    monkeypatch.setattr(settings.opentelemetry_config, "trace_content", capture_content)
+    requests = []
+    responses = []
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        if retry and len(requests) == 1:
+            return httpx.Response(
+                429,
+                headers={"retry-after": "0"},
+                json={
+                    "error": {
+                        "message": "quota fixture",
+                        "type": "rate_limit_error",
+                        "code": "rate_limit_exceeded",
+                    }
+                },
+            )
+        events = [
+            {
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "fixture",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "OK"},
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            {
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "fixture",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            },
+        ]
+        if provider_id is not None:
+            events[0]["id"] = provider_id
+        if terminal == "usage_only":
+            events[1]["choices"] = []
+        elif terminal == "synthetic_stop":
+            events.pop()
+        payload = (
+            "".join("data: " + json.dumps(e) + "\n\n" for e in events)
+            + "data: [DONE]\n\n"
+        )
+        response = httpx.Response(
+            200,
+            headers={
+                "content-type": "text/event-stream",
+                "x-request-id": "different-request-id",
+            },
+            content=payload.encode(),
+        )
+        responses.append(response)
+        return response
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    client = AsyncOpenAI(
+        api_key="test-key",
+        base_url="https://model.test/v1",
+        http_client=http_client,
+        max_retries=0,
+    )
+    model_class = RetryingLiteLlm if use_timing else adk_lite_llm.LiteLlm
+    model = model_class(model="openai/fixture", client=client, num_retries=0)
+    tracer = OpentelemetryTracer()
+    patch_tracer()
+    runner = InMemoryRunner(
+        app_name="response-id-test",
+        agent=Agent(
+            name="chat_conversion_agent",
+            model=model,
+            model_api_key="test-key",
+            tracers=[tracer],
+        ),
+    )
+    try:
+        await runner.session_service.create_session(
+            app_name=runner.app_name,
+            user_id="test-user",
+            session_id="conversion-session",
+        )
+        events = [
+            e
+            async for e in runner.run_async(
+                user_id="test-user",
+                session_id="conversion-session",
+                new_message=types.UserContent(parts=[types.Part(text="hello")]),
+                run_config=RunConfig(streaming_mode=StreamingMode.SSE),
+            )
+        ]
+    finally:
+        await runner.close()
+        await client.close()
+    spans = exporter.get_finished_spans()
+    owners = [s for s in spans if s.name == "call_llm"]
+    attempts = [s for s in spans if s.name == "model_request"]
+    assert len(owners) == 1
+    assert len(attempts) == ((2 if retry else 1) if use_timing else 0)
+    assert len(requests) == (2 if retry else 1)
+    assert any(p.text == "OK" for e in events if e.content for p in e.content.parts)
+    assert owners[0].attributes.get(ID) == provider_id
+    if attempts:
+        assert attempts[-1].attributes.get(ID) == provider_id
+    if provider_id is None:
+        assert all(ID not in s.attributes for s in owners + attempts)
+    if retry:
+        assert attempts[0].status.status_code.name == "ERROR"
+    assert all(r.is_closed for r in responses)
+
+
+@pytest.mark.asyncio
+async def test_raw_chat_id_is_recorded_before_output_and_cancellation(
+    monkeypatch, tracing
+):
+    """REQ-002/003: a dropped role-only chunk still carries provider provenance."""
+    from openai import AsyncOpenAI
+
+    tracer, exporter = tracing
+    blocked = asyncio.Event()
+    release = asyncio.Event()
+    closed = []
+
+    class Body(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            raw = {
+                "id": "early-raw-id",
+                "created": 1,
+                "model": "fixture",
+                "object": "chat.completion.chunk",
+                "choices": [
+                    {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+                ],
+            }
+            yield ("data: " + json.dumps(raw) + "\n\n").encode()
+            blocked.set()
+            await release.wait()
+
+        async def aclose(self):
+            closed.append(True)
+
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, stream=Body()
+            )
+        )
+    )
+    client = AsyncOpenAI(
+        api_key="test-key",
+        base_url="https://model.test/v1",
+        http_client=http_client,
+        max_retries=0,
+    )
+    model = RetryingLiteLlm(model="openai/fixture", client=client, num_retries=0)
+    response_ids.register()
+    request = LlmRequest(
+        model=model.model,
+        contents=[types.UserContent(parts=[types.Part(text="hello")])],
+    )
+    try:
+        with tracer.start_as_current_span("call_llm") as owner:
+            generator = model.generate_content_async(request, stream=True)
+            pending = asyncio.create_task(anext(generator))
+            try:
+                await asyncio.wait_for(blocked.wait(), timeout=5)
+                assert not pending.done()
+                assert owner.attributes[ID] == "early-raw-id"
+            finally:
+                pending.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await pending
+                await generator.aclose()
+    finally:
+        await client.close()
+    attempts = [s for s in exporter.get_finished_spans() if s.name == "model_request"]
+    assert len(attempts) == 1
+    assert attempts[0].attributes[ID] == owner.attributes[ID] == "early-raw-id"
+    assert attempts[0].attributes["error.type"] == "cancelled"
+    assert closed == [True]
+
+
+@pytest.mark.parametrize(
+    "provider_id",
+    [None, "e5e81c15-50a7-42c6-82a0-4bd154b1f72b", "chatcmpl-real-provider-id"],
+)
+def test_sdk_parser_and_rebuild_keep_stream_provenance(tracing, provider_id):
+    """F-001: intermediate SDK synthesis is not a raw provider ID."""
+    from litellm.llms.openai.chat.gpt_transformation import (
+        OpenAIChatCompletionStreamingHandler,
+    )
+
+    response_ids.register()
+    wrapper = CustomStreamWrapper(
+        completion_stream=iter([]),
+        model="openai/test",
+        custom_llm_provider="openai",
+        logging_obj=NS(model_call_details={"custom_llm_provider": "openai"}),
+    )
+    # The official parser can itself produce ModelResponseStream.id before the
+    # raw chunk reaches CustomStreamWrapper; preserve that negative provenance.
+    parser = OpenAIChatCompletionStreamingHandler.__new__(
+        OpenAIChatCompletionStreamingHandler
+    )
+    raw = parser.chunk_parser(
+        {
+            "id": provider_id,
+            "created": 1,
+            "model": "fixture",
+            "choices": [
+                {"index": 0, "delta": {"content": "OK"}, "finish_reason": None}
+            ],
+        }
+    )
+    wrapper.chunk_creator(raw)
+    tail = parser.chunk_parser(
+        {
+            "created": 1,
+            "model": "fixture",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+    normalized = wrapper.chunk_creator(tail)
+    serialized = normalized.model_dump()
+    assert response_ids._PROVIDER_ID not in serialized
+    assert response_ids._GENERATED_ID not in serialized
+    rebuilt = wrapper.model_response_creator(
+        chunk=serialized, hidden_params=normalized._hidden_params
+    )
+    tracer, _ = tracing
+    for response in (normalized, rebuilt, rebuilt.model_copy(deep=True)):
+        with tracer.start_as_current_span("call_llm") as owner:
+            response_ids.ResponseIdRecorder().observe(response)
+        assert owner.attributes.get(ID) == provider_id
