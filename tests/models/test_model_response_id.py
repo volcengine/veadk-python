@@ -491,6 +491,87 @@ def test_litellm_normalization_distinguishes_generated_ids(
     assert owner.attributes.get(ID) == (provider_id or None)
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_ark_chat_prefers_x_request_id_over_body_id(tracing, stream):
+    """REQ-009: Ark chat correlation follows the response header request ID."""
+    from litellm import CustomStreamWrapper
+    from litellm.utils import convert_to_model_response_object
+
+    response_ids.register()
+    headers = {"x-request-id": "ark-header-request-id"}
+    api_base = "https://ark.cn-beijing.volces.com/api/v3/"
+    if stream:
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="openai/test",
+            custom_llm_provider="openai",
+            logging_obj=NS(
+                model_call_details={
+                    "custom_llm_provider": "openai",
+                    "litellm_params": {"api_base": api_base},
+                }
+            ),
+            _response_headers=headers,
+        )
+        from openai.types.chat import ChatCompletionChunk
+
+        raw = ChatCompletionChunk(
+            id="body-id",
+            created=1,
+            model="fixture",
+            object="chat.completion.chunk",
+            choices=[{"index": 0, "delta": {"content": "OK"}, "finish_reason": None}],
+        )
+        response = wrapper.chunk_creator(raw)
+    else:
+        response = convert_to_model_response_object(
+            response_object={
+                "id": "body-id",
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "OK"},
+                        "index": 0,
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+            model_response_object=ModelResponse(),
+            hidden_params={"headers": headers, "api_base": api_base},
+        )
+    tracer, _ = tracing
+    with tracer.start_as_current_span("call_llm") as owner:
+        response_ids.ResponseIdRecorder().observe(response)
+    assert owner.attributes[ID] == "ark-header-request-id"
+
+
+def test_non_ark_chat_keeps_body_id_when_x_request_id_exists(tracing):
+    """REQ-009: generic OpenAI-compatible services keep response-body IDs."""
+    from litellm.utils import convert_to_model_response_object
+
+    response_ids.register()
+    response = convert_to_model_response_object(
+        response_object={
+            "id": "body-id",
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "OK"},
+                    "index": 0,
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+        model_response_object=ModelResponse(),
+        hidden_params={
+            "headers": {"x-request-id": "non-ark-header-request-id"},
+            "api_base": "https://model.test/v1",
+        },
+    )
+    tracer, _ = tracing
+    with tracer.start_as_current_span("call_llm") as owner:
+        response_ids.ResponseIdRecorder().observe(response)
+    assert owner.attributes[ID] == "body-id"
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 def test_no_tracer_or_parent_span_is_not_annotated(monkeypatch, tracing, enabled):
     """REQ-007: collection neither creates spans nor annotates invocation."""

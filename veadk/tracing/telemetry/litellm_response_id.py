@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import functools
 import inspect
+from collections.abc import Mapping
 from contextvars import ContextVar
+from urllib.parse import urlsplit
 
 from opentelemetry import trace
 from opentelemetry.sdk.trace import Span as SDKSpan
@@ -39,6 +41,74 @@ _active_recorder: ContextVar[ResponseIdRecorder | None] = ContextVar(
 _GENERATED_ID = "_veadk_generated_response_id"
 _PROVIDER_ID = "_veadk_provider_response_id"
 _WRAPPED = "_veadk_response_id_wrapped"
+_ARK_HOST_SUFFIXES = ("volces.com", "bytepluses.com")
+
+
+def _mapping_value(mapping: object, key: str) -> object:
+    if not isinstance(mapping, Mapping):
+        return None
+    value = mapping.get(key)
+    if value is not None:
+        return value
+    lower_key = key.lower()
+    for candidate, candidate_value in mapping.items():
+        if str(candidate).lower() == lower_key:
+            return candidate_value
+    return None
+
+
+def _hidden_params(response: object) -> dict:
+    params = getattr(response, "_hidden_params", None)
+    return params if isinstance(params, dict) else {}
+
+
+def _is_ark_api_base(api_base: object) -> bool:
+    if not isinstance(api_base, str) or not api_base.strip():
+        return False
+    try:
+        parsed = urlsplit(api_base)
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    if not any(
+        host == suffix or host.endswith(f".{suffix}") for suffix in _ARK_HOST_SUFFIXES
+    ):
+        return False
+    return parsed.path.rstrip("/").endswith("/api/v3")
+
+
+def _ark_request_id(response: object) -> str | None:
+    headers = getattr(response, "_response_headers", None)
+    candidates = [headers]
+    hidden = _hidden_params(response)
+    candidates.append(hidden.get("headers"))
+    candidates.append(hidden.get("additional_headers"))
+    for mapping in candidates:
+        value = _mapping_value(mapping, "x-request-id") or _mapping_value(
+            mapping, "llm_provider-x-request-id"
+        )
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _ark_api_base(response: object) -> str | None:
+    hidden = _hidden_params(response)
+    value = hidden.get("api_base")
+    return value if isinstance(value, str) else None
+
+
+def _provider_response_id(response: object, *, field: str = "id") -> str | None:
+    if field == "id" and _is_ark_api_base(_ark_api_base(response)):
+        request_id = _ark_request_id(response)
+        if request_id:
+            return request_id
+    value = (
+        getattr(response, _PROVIDER_ID, response_field(response, field))
+        if field == "id"
+        else response_field(response, field)
+    )
+    return value if isinstance(value, str) else None
 
 
 def _clear_previous_attempt(span: trace.Span | None) -> None:
@@ -77,11 +147,7 @@ class ResponseIdRecorder:
     def observe(self, response: object, *, field: str = "id") -> None:
         if self.owner is None or self.response_id is not None:
             return
-        value = (
-            getattr(response, _PROVIDER_ID, response_field(response, field))
-            if field == "id"
-            else response_field(response, field)
-        )
+        value = _provider_response_id(response, field=field)
         if not isinstance(value, str) or not value.strip():
             return
         if value == getattr(response, _GENERATED_ID, None):
@@ -160,7 +226,7 @@ def _mark_stream_ids(cls) -> None:
 
     def annotate(stream, response):
         if response is not None:
-            provider_id = getattr(stream, _PROVIDER_ID, None)
+            provider_id = _provider_response_id(stream)
             object.__setattr__(response, _PROVIDER_ID, provider_id)
             object.__setattr__(
                 response, _GENERATED_ID, None if provider_id else response.id
@@ -172,7 +238,7 @@ def _mark_stream_ids(cls) -> None:
         # This argument is the SDK's raw incoming chunk, before conversion.
         # Keep one ID per stream; do not use normalized constructor arguments
         # or response_id, which the SDK may overwrite with synthesized IDs.
-        provider_id = _raw_stream_id(chunk)
+        provider_id = _provider_response_id(self) or _raw_stream_id(chunk)
         if provider_id is not None:
             if getattr(self, _PROVIDER_ID, None) is None:
                 setattr(self, _PROVIDER_ID, provider_id)
