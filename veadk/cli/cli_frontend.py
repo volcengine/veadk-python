@@ -11552,6 +11552,47 @@ def _run_frontend_server(
     _rt_conn_cache: dict[tuple[str, str], tuple[str, str, str, str, float]] = {}
     _a2a_task_by_session: OrderedDict[tuple[str, str, str, str], str] = OrderedDict()
     _a2a_task_cache_limit = 1_000
+    _runtime_a2a_stream_client: httpx.AsyncClient | None = None
+
+    def _shared_runtime_a2a_stream_client() -> httpx.AsyncClient:
+        nonlocal _runtime_a2a_stream_client
+        if _runtime_a2a_stream_client is None or getattr(
+            _runtime_a2a_stream_client,
+            "is_closed",
+            False,
+        ):
+            _runtime_a2a_stream_client = httpx.AsyncClient(
+                timeout=None,
+                limits=httpx.Limits(
+                    max_connections=100,
+                    max_keepalive_connections=20,
+                    keepalive_expiry=30,
+                ),
+            )
+        return _runtime_a2a_stream_client
+
+    async def _close_runtime_a2a_stream_client() -> None:
+        nonlocal _runtime_a2a_stream_client
+        client, _runtime_a2a_stream_client = _runtime_a2a_stream_client, None
+        close = getattr(client, "aclose", None)
+        if close is not None:
+            await close()
+
+    runtime_router = getattr(app, "router", None)
+    add_runtime_shutdown = getattr(runtime_router, "add_event_handler", None)
+    if callable(add_runtime_shutdown):
+        add_runtime_shutdown("shutdown", _close_runtime_a2a_stream_client)
+    runtime_a2a_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def _runtime_a2a_stream_client_lifespan(current_app: Any):
+        async with runtime_a2a_lifespan(current_app):
+            try:
+                yield
+            finally:
+                await _close_runtime_a2a_stream_client()
+
+    app.router.lifespan_context = _runtime_a2a_stream_client_lifespan
 
     def _remember_a2a_task(
         *,
@@ -11906,7 +11947,7 @@ def _run_frontend_server(
             )
             + "\n\n"
         ).encode("utf-8")
-        client = httpx.AsyncClient(timeout=None)
+        client = _shared_runtime_a2a_stream_client()
         upstream = None
         try:
             request = client.build_request(
@@ -12010,6 +12051,16 @@ def _run_frontend_server(
                         yield (
                             "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
                         ).encode("utf-8")
+                    incomplete_error = decoder.stream_incomplete_error()
+                    if incomplete_error:
+                        yield (
+                            "data: "
+                            + json.dumps(
+                                {"error": incomplete_error},
+                                ensure_ascii=False,
+                            )
+                            + "\n\n"
+                        ).encode("utf-8")
                     return
             body = await _runtime_proxy_buffer(upstream)
             if upstream.status_code >= 400:
@@ -12080,7 +12131,6 @@ def _run_frontend_server(
         finally:
             if upstream is not None:
                 await upstream.aclose()
-            await client.aclose()
 
     def _resolve_runtime_conn(
         runtime_id: str,
