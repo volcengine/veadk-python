@@ -702,13 +702,14 @@ class CodexRuntime(BaseRuntime):
             # Keep privileged instructions out of the user transcript. The SDK
             # exposes a native developer-instruction channel for them.
             #
-            # `base_instructions` is deliberately NOT used: Codex *replaces*
-            # its built-in system prompt when it is set (models-manager
-            # overwrites `instructions_template` and nulls
-            # `instructions_variables`; nothing concatenates), which would
-            # delete ~20KB of shipped guidance covering AGENTS.md, planning,
-            # `update_plan`, `apply_patch` and shell-tool usage. Codex's own
-            # docs call the equivalent config key strongly discouraged.
+            # The agent's own text never goes into `base_instructions`: Codex
+            # *replaces* its built-in system prompt when it is set
+            # (models-manager overwrites `instructions_template` and nulls
+            # `instructions_variables`; nothing concatenates), which deletes
+            # ~20KB of shipped guidance covering AGENTS.md, planning,
+            # `update_plan`, `apply_patch` and shell-tool usage. Only an
+            # explicit `CodexRuntimeConfig.base_instructions` replaces it, for
+            # agents that need none of that guidance.
             # `developer_instructions` is purely additive - Codex renders it as
             # its own `developer` message alongside AGENTS.md, skills and
             # environment context - so the agent identity block is folded in
@@ -784,7 +785,9 @@ class CodexRuntime(BaseRuntime):
                 await _await_setup(
                     lock_stack.enter_async_context(_SESSION_LOCKS.hold(pool_key))
                 )
-                thread_instruction_hash = instruction_hash(developer_instructions)
+                thread_instruction_hash = _thread_instruction_hash(
+                    developer_instructions, runtime_config.base_instructions
+                )
             # CodexConfig.env is copied into only this subprocess. Never mutate
             # process-wide CODEX_HOME or credential variables. The route's own
             # credentials go in *after* the masking, which would otherwise
@@ -932,15 +935,28 @@ class CodexRuntime(BaseRuntime):
                 runtime_config.network_access,
                 len(tool_bundle.executors),
             )
-            logger.info(
-                "codex_base_instructions_preserved invocation_id=%s "
-                "identity_chars=%d developer_chars=%d "
-                "detail=Codex keeps its built-in system prompt; the agent "
-                "identity and instruction are sent as developer instructions.",
-                ctx.invocation_id,
-                len(runtime_call.base_instructions or ""),
-                len(developer_instructions),
-            )
+            if runtime_config.base_instructions is None:
+                logger.info(
+                    "codex_base_instructions_preserved invocation_id=%s "
+                    "identity_chars=%d developer_chars=%d "
+                    "detail=Codex keeps its built-in system prompt; the agent "
+                    "identity and instruction are sent as developer instructions.",
+                    ctx.invocation_id,
+                    len(runtime_call.base_instructions or ""),
+                    len(developer_instructions),
+                )
+            else:
+                logger.info(
+                    "codex_base_instructions_replaced invocation_id=%s "
+                    "base_chars=%d identity_chars=%d developer_chars=%d "
+                    "detail=Codex's built-in system prompt is replaced by the "
+                    "configured base instructions; the agent identity and "
+                    "instruction are sent as developer instructions.",
+                    ctx.invocation_id,
+                    len(runtime_config.base_instructions),
+                    len(runtime_call.base_instructions or ""),
+                    len(developer_instructions),
+                )
             _annotate_span(
                 call_llm_span,
                 {
@@ -1055,6 +1071,11 @@ class CodexRuntime(BaseRuntime):
                             model=model,
                             model_provider=route.provider_id,
                             developer_instructions=developer_instructions or None,
+                            **(
+                                {"base_instructions": runtime_config.base_instructions}
+                                if runtime_config.base_instructions is not None
+                                else {}
+                            ),
                             cwd=workspace,
                             ephemeral=not persistent,
                             approval_mode=_approval_mode(runtime_config),
@@ -1846,6 +1867,21 @@ async def _resume_with_retry(
             )
             await asyncio.sleep(_RESUME_BACKOFF_SECONDS[attempt])
     raise AssertionError("unreachable")
+
+
+def _thread_instruction_hash(
+    developer_instructions: str, base_instructions: str | None
+) -> str:
+    """Identity of the instructions a persistent thread was started with.
+
+    A resumed thread keeps both its developer and base instructions, so a
+    change to either has to start a new thread. Without configured base
+    instructions the hash equals the developer-only hash stored threads were
+    recorded with, so enabling nothing restarts no thread.
+    """
+    if base_instructions is None:
+        return instruction_hash(developer_instructions)
+    return instruction_hash(f"{base_instructions}\0{developer_instructions}")
 
 
 def _thread_binding(
