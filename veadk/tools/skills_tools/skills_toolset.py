@@ -70,6 +70,7 @@ class SkillsToolset(BaseToolset):
         super().__init__()
 
         self.skills_mode = skills_mode
+        self._aio_paths = []
 
         self._refresh_state = None
         self._tools = self.build_tools(skills)
@@ -126,7 +127,11 @@ class SkillsToolset(BaseToolset):
                 return []
 
             case "aio_sandbox":
-                return []
+                from veadk.tools.skills_tools.aio_sandbox import build_aio_tools
+
+                if readonly_context is None:
+                    raise ValueError("aio_sandbox tools require a Session context")
+                return await build_aio_tools(readonly_context, self._aio_paths)
 
             case _:
                 logger.warning(

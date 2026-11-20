@@ -154,6 +154,13 @@ def initialize_skills(agent):
     if agent.skills_mode not in {"local", "skills_sandbox", "aio_sandbox"}:
         raise ValueError(f"Unsupported skill mode {agent.skills_mode}")
     toolset = SkillsToolset({}, agent.skills_mode)
+    if agent.skills_mode == "aio_sandbox":
+        from veadk.tools.skills_tools.aio_sandbox import validate_paths
+
+        validate_paths(agent.skills)
+        toolset._aio_paths = list(agent.skills)
+        agent.tools.append(toolset)
+        return
     toolset._refresh_state = _RefreshState(base_instruction=agent.instruction)
     sources, issues = _load_sources(agent.skills, toolset)
     _apply(agent, toolset, _flatten(sources), sources, issues)
