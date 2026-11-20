@@ -38,10 +38,16 @@ class MysqlSTMBackend(BaseShortTermMemoryBackend):
     def model_post_init(self, context: Any) -> None:
         encoded_username = quote_plus(self.mysql_config.user)
         encoded_password = quote_plus(self.mysql_config.password)
+        # An empty charset leaves the choice to the driver.
+        query = (
+            f"?charset={quote_plus(self.mysql_config.charset)}"
+            if self.mysql_config.charset
+            else ""
+        )
         if should_use_async_db_drivers():
-            self._db_url = f"mysql+aiomysql://{encoded_username}:{encoded_password}@{self.mysql_config.host}/{self.mysql_config.database}"
+            self._db_url = f"mysql+aiomysql://{encoded_username}:{encoded_password}@{self.mysql_config.host}/{self.mysql_config.database}{query}"
         else:
-            self._db_url = f"mysql+pymysql://{encoded_username}:{encoded_password}@{self.mysql_config.host}/{self.mysql_config.database}"
+            self._db_url = f"mysql+pymysql://{encoded_username}:{encoded_password}@{self.mysql_config.host}/{self.mysql_config.database}{query}"
 
     @cached_property
     @override
