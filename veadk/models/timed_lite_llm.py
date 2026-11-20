@@ -17,6 +17,7 @@
 from google.adk.models.lite_llm import LiteLLMClient
 from litellm import CustomStreamWrapper
 
+from veadk.tracing.telemetry.litellm_response_id import ResponseIdRecorder
 from veadk.tracing.telemetry.timing import (
     ModelTiming,
     response_field,
@@ -71,24 +72,27 @@ class TimedLiteLLMClient(LiteLLMClient):
         timing = ModelTiming(streaming=bool(kwargs.get("stream")), model=model)
         if kwargs.get("n", 1) != 1:
             timing.disable_tpot()
+        recorder = ResponseIdRecorder(attempt=timing.span)
         try:
-            response = await super().acompletion(model, messages, tools, **kwargs)
+            with recorder:
+                response = await super().acompletion(model, messages, tools, **kwargs)
         except BaseException as error:
             timing.__exit__(type(error), error, error.__traceback__)
             raise
         if not timing.streaming:
             timing.__exit__(None, None, None)
             return response
-        return _TimedStream(response, timing)
+        return _TimedStream(response, timing, recorder)
 
 
 class _TimedStream:
     """End an attempt even when a returned stream is closed before iteration."""
 
-    def __init__(self, response, timing):
+    def __init__(self, response, timing, recorder):
         self._response = response
         self._iterator = response.__aiter__()
         self._timing = timing
+        self._recorder = recorder
         self._closed = False
 
     def __aiter__(self):
@@ -98,13 +102,18 @@ class _TimedStream:
         if self._closed:
             raise StopAsyncIteration
         try:
-            chunk = await anext(self._iterator)
+            with self._recorder:
+                chunk = await anext(self._iterator)
         except StopAsyncIteration:
             await self._finish(None)
             raise
         except BaseException as error:
             await self._finish(error)
             raise
+        # Native LiteLLM streams record at the raw boundary while advancing.
+        # Normalized IDs may be synthesized or lose provenance after copying.
+        if not isinstance(self._response, CustomStreamWrapper):
+            self._recorder.observe(chunk)
         self._timing.observe(litellm_output_type(chunk))
         return chunk
 

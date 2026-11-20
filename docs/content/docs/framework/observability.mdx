@@ -14,6 +14,10 @@ VeADK 的可观测能力遵循 [OpenTelemetry](https://opentelemetry.io/docs/spe
 - **多 Agent 协调**：在多 Agent 协作场景中分析各 Agent 的调用关系与数据流向；
 - **内容采集控制**：可通过 `observability.opentelemetry.trace_content` 关闭 Agent、LLM 与工具输入输出内容采集，仅保留非内容 Trace 信息。
 
+启用 Tracing 且模型返回响应 ID 时，VeADK 会将其原值记录到对应 `call_llm` span 的 `gen_ai.response.id` 属性中，覆盖 Chat、Ark Responses 和原生 ADK Gemini 文本调用的流式与非流式模式。你可以用该 ID 关联模型提供方的响应日志。关闭内容采集后仍会记录响应 ID；流式调用提前取得的 ID 在断流或取消后也会保留。
+
+提供方未返回可取得的响应 ID 时，该属性会省略，不会用 HTTP request ID、SDK 自动生成的 ID、tool call ID 或历史响应 ID 替代。失败尝试的 ID 保留在其对应的 `model_request` span 中，重试或 fallback 后的 `call_llm` 记录实际交付响应的 ID。
+
 ## 支持的平台
 
 VeADK 通过不同的数据导出器（Exporter），将 Tracing 数据上报至多个火山引擎及第三方平台：

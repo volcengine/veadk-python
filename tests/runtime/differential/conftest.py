@@ -309,10 +309,13 @@ class ParityRunner:
         tracer = None
         if capture_spans:
             from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
+            from veadk.utils.patches import patch_tracer
 
             # Attaches to the active provider (creating one only if none
-            # exists), so the memoized proxy tracers keep resolving correctly.
+            # exists), then refreshes ADK module-level tracers in case an
+            # earlier test bound them to an isolated provider.
             tracer = OpentelemetryTracer(exporters=[])
+            patch_tracer()
             kwargs.setdefault("tracers", [tracer])
 
         if arm == "codex":
