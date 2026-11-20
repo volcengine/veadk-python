@@ -20,9 +20,11 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from ble_cache import patch_blesh
 from editor_routing import patch_editor
 
 studio = Path("/opt/studio-sandbox")
+patch_blesh(studio / "ble/share/blesh/ble.sh")
 editor = (studio / "base-code-server").resolve(strict=True).parent.parent
 patch_editor(editor)
 seed = Path("/opt/gem/vscode/User/settings.json")
