@@ -127,6 +127,8 @@ def record_adk_load(tool, event):
             ):
                 continue
             portal_metrics.portal_metric_recorder.record_skill_load(identity)
-            span = trace.get_current_span()
-            span.update_name(f"load_skill {identity['skill_name']}")
-            span.set_attributes(_span_attributes(identity, "runtime"))
+            span = trace.get_tracer("veadk.skills").start_span(
+                f"load_skill {identity['skill_name']}",
+                attributes=_span_attributes(identity, "runtime"),
+            )
+            span.end()
