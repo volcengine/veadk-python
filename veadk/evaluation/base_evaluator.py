@@ -270,11 +270,11 @@ class BaseEvaluator:
                 trace_groups[trace_id] = []
             trace_groups[trace_id].append(span)
 
-        # Convert to evalset format
-        eval_cases, conversation = [], []
-        app_name, user_id = "", ""
-        creation_timestamp = 0
+        # Convert each trace to an isolated eval case.
+        eval_cases = []
         for trace_id, spans in trace_groups.items():
+            spans = sorted(spans, key=lambda span: span["start_time"])
+            conversation = []
             tool_uses = []
 
             # Extract tool_uses from spans with name starting with "execute_tool"
@@ -308,6 +308,9 @@ class BaseEvaluator:
             # Extract conversation data from call_llm spans
             user_input = ""
             final_output = ""
+            app_name = ""
+            user_id = ""
+            creation_timestamp = 0
 
             # Find the first call_llm span for user input and the last one for final output
             call_llm_spans = [span for span in spans if span["name"] == "call_llm"]
@@ -347,17 +350,22 @@ class BaseEvaluator:
                     }
                 )
 
-        eval_cases.append(
-            {
-                "eval_id": f"veadk_eval_{formatted_timestamp()}",
-                "conversation": conversation,
-                "session_input": {
-                    "app_name": app_name,
-                    "user_id": user_id,
-                    "state": {},
-                },
-                "creation_timestamp": creation_timestamp,
-            }
+                eval_cases.append(
+                    {
+                        "eval_id": (f"veadk_eval_{formatted_timestamp()}_{trace_id}"),
+                        "conversation": conversation,
+                        "session_input": {
+                            "app_name": app_name,
+                            "user_id": user_id,
+                            "state": {},
+                        },
+                        "creation_timestamp": creation_timestamp,
+                    }
+                )
+
+        eval_set_creation_timestamp = min(
+            (eval_case["creation_timestamp"] for eval_case in eval_cases),
+            default=0,
         )
 
         evalset = EvalSet(
@@ -365,7 +373,7 @@ class BaseEvaluator:
             name="default",
             description=None,
             eval_cases=eval_cases,
-            creation_timestamp=creation_timestamp,
+            creation_timestamp=eval_set_creation_timestamp,
         )
 
         return evalset
