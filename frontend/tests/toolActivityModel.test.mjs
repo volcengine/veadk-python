@@ -768,6 +768,39 @@ test("keeps user-role function responses in assistant streaming", () => {
   assert.equal(projection.turn.blocks[0].done, true);
 });
 
+test("shows live tool completion and updates the same block with the durable result", () => {
+  const projector = createAssistantEventProjector("tool-completion");
+  const call = { id: "tool-1", name: "search" };
+  projector.project({
+    id: "tool-call",
+    author: "default",
+    content: { role: "model", parts: [{ functionCall: call }] },
+  });
+  const live = projector.project({
+    id: "tool-completed",
+    author: "default",
+    partial: true,
+    content: {
+      role: "user",
+      parts: [{ functionResponse: { ...call, response: {}, willContinue: false } }],
+    },
+  });
+  assert.equal(live.turn.blocks.length, 1);
+  assert.equal(live.turn.blocks[0].status, "completed");
+  assert.equal(live.turn.blocks[0].done, true);
+  assert.equal(live.completed, false);
+
+  const response = { result: "found" };
+  const durable = projector.project({
+    id: "tool-result",
+    author: "default",
+    content: { role: "user", parts: [{ functionResponse: { ...call, response } }] },
+  });
+  assert.equal(durable.turn.blocks.length, 1);
+  assert.equal(durable.turn.blocks[0].status, "completed");
+  assert.deepEqual(durable.turn.blocks[0].response, response);
+});
+
 test("bounds duplicate event tracking for long-running projector instances", () => {
   const projector = createAssistantEventProjector("bounded-dedupe");
   for (let index = 0; index < 2_100; index += 1) {

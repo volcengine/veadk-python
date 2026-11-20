@@ -34,6 +34,8 @@ from typing import TYPE_CHECKING, Any
 from google.adk.events.event import Event
 from google.genai import types
 
+from veadk.utils.adk_compat import get_event_function_responses
+
 if TYPE_CHECKING:
     from google.adk.agents.invocation_context import InvocationContext
     from google.adk.models.llm_request import LlmRequest
@@ -583,6 +585,77 @@ def _event(author: str, invocation_id: str, role: str, part: types.Part) -> Even
         invocation_id=invocation_id,
         author=author,
         content=types.Content(role=role, parts=[part]),
+    )
+
+
+def tool_completion_preview(event: Event) -> Event | None:
+    """Build the live status notification for a buffered tool result.
+
+    Args:
+        event: The durable event held for possible end-of-turn bookkeeping.
+
+    Returns:
+        A partial ADK event with matching tool call IDs, or None when the
+        event has no completed tool result to announce.
+    """
+    if (
+        event.long_running_tool_ids
+        or event.actions.requested_auth_configs
+        or event.actions.requested_tool_confirmations
+    ):
+        return None
+
+    parts = []
+    for result in get_event_function_responses(event):
+        if not result.id or result.will_continue is True:
+            continue
+        response = result.response or {}
+        status = response.get("status")
+        if isinstance(status, str) and status.lower() in {
+            "pending",
+            "running",
+            "started",
+            "working",
+            "in_progress",
+            "input_required",
+            "authentication_required",
+            "confirmation_required",
+        }:
+            continue
+        # Full payloads can carry UI actions. The durable event delivers those
+        # once, together with any state changes and artifacts.
+        summary = {}
+        if response.get("ok") is False or response.get("success") is False:
+            summary["ok"] = False
+        if isinstance(status, str) and status.lower() in {
+            "failed",
+            "error",
+            "canceled",
+            "cancelled",
+            "denied",
+            "timeout",
+        }:
+            summary["status"] = status
+        parts.append(
+            types.Part(
+                function_response=types.FunctionResponse(
+                    id=result.id,
+                    name=result.name,
+                    response=summary,
+                    will_continue=False,
+                )
+            )
+        )
+
+    if not parts:
+        return None
+    return Event(
+        invocation_id=event.invocation_id,
+        author=event.author,
+        branch=event.branch,
+        isolation_scope=event.isolation_scope,
+        partial=True,
+        content=types.Content(role="user", parts=parts),
     )
 
 

@@ -344,6 +344,14 @@ export interface AdkFileData {
   display_name?: string;
 }
 
+export interface AdkFunctionResponse {
+  id?: string;
+  name?: string;
+  response?: Record<string, unknown>;
+  willContinue?: boolean;
+  will_continue?: boolean;
+}
+
 export interface AdkPart {
   text?: string;
   thought?: boolean;
@@ -354,10 +362,10 @@ export interface AdkPart {
   partMetadata?: Record<string, unknown>;
   part_metadata?: Record<string, unknown>;
   functionCall?: { id?: string; name?: string; args?: Record<string, unknown> };
-  functionResponse?: { id?: string; name?: string; response?: Record<string, unknown> };
+  functionResponse?: AdkFunctionResponse;
   // snake_case fallbacks (defensive)
   function_call?: { id?: string; name?: string; args?: Record<string, unknown> };
-  function_response?: { id?: string; name?: string; response?: Record<string, unknown> };
+  function_response?: AdkFunctionResponse;
 }
 
 /** A file attached in the composer or reconstructed from message history. */

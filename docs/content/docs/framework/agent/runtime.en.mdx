@@ -430,6 +430,8 @@ flowchart LR
 
 ### Codex observability
 
+In the live ADK stream, a finished tool can first emit a status-only `FunctionResponse` with `partial=true` and `will_continue=false`. Use the function-call ID to update the tool's status. Apply the full result and any UI actions from the durable response for that same call ID.
+
 Codex-native lifecycle notifications and ADK Function/MCP tool calls are converted into ADK Events. Runtime logs use stable `codex_*` event names and attribution fields such as `invocation_id`, `call_id`, `tool`, `status`, and `duration_ms`. Tool arguments, tool results, API tokens, credentials, and backend addresses are not logged. Token usage is exposed through `codex_event_type=token_usage` events and the corresponding log entry.
 
 On top of that:
