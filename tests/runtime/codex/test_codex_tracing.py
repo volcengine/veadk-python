@@ -57,6 +57,7 @@ async def test_codex_run_emits_call_llm_span_with_session_id(monkeypatch) -> Non
     from veadk import Agent
     from veadk.runtime import get_runtime
     from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
+    from veadk.utils.patches import patch_tracer
 
     fake_codex_sdk.install_openai_codex_stub()
     get_runtime.cache_clear()
@@ -79,6 +80,7 @@ async def test_codex_run_emits_call_llm_span_with_session_id(monkeypatch) -> Non
     monkeypatch.setattr(runtime_module, "AsyncCodex", fake_codex_sdk.ShimDrivingCodex)
 
     tracer = OpentelemetryTracer(exporters=[])
+    patch_tracer()
     agent = Agent(
         name="traced_codex_agent",
         description="A traced codex agent.",
@@ -109,9 +111,10 @@ async def test_codex_run_emits_call_llm_span_with_session_id(monkeypatch) -> Non
         assert events, "the codex run produced no events at all"
 
         exporter = tracer._inmemory_exporter._exporter
-        call_llm_spans = [s for s in exporter._spans if s.name == "call_llm"]
+        session_spans = exporter.get_finished_spans(session_id)
+        call_llm_spans = [s for s in session_spans if s.name == "call_llm"]
         assert call_llm_spans, (
-            f"no call_llm span: {sorted({s.name for s in exporter._spans})}"
+            f"no call_llm span: {sorted({s.name for s in session_spans})}"
         )
         attributes = dict(call_llm_spans[0].attributes or {})
         assert attributes.get("gen_ai.session.id") == session_id, attributes
@@ -131,7 +134,7 @@ async def test_codex_run_emits_call_llm_span_with_session_id(monkeypatch) -> Non
 
         # The property the exporter's session index -- and therefore every
         # trace dump and every evaluation built from one -- actually depends on.
-        assert exporter.get_finished_spans(session_id), (
+        assert session_spans, (
             "get_finished_spans() is empty, so OpentelemetryTracer.dump() would "
             "write [] and base_evaluator.build_eval_set would raise"
         )
