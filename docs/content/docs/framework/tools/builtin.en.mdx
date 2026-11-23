@@ -440,6 +440,8 @@ model:
 
 `text_to_speech` synthesizes text into speech and saves the audio locally.
 
+Success returns `saved_audio_path`. A speech-service error code returns `error` instead of reporting empty or partial audio as a successful result.
+
 <Callout type="warn" title="Requirements">
 1. Configure the API key for the agent's reasoning model.
 2. Configure the VeSpeech service App ID and API key.

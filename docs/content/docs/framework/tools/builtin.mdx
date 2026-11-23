@@ -437,6 +437,8 @@ model:
 
 `text_to_speech` 将文本合成为语音，并把音频保存到本地。
 
+成功时返回 `saved_audio_path`；语音服务返回错误码时返回 `error`，不会将空音频或部分音频报告为成功结果。
+
 <Callout type="warn" title="附加要求">
 1. 配置用于 Agent 推理模型的 API Key；
 2. 配置 VeSpeech 服务的 App ID 与 API Key。
