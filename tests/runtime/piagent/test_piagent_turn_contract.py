@@ -331,6 +331,7 @@ async def test_turn_emits_an_indexable_call_llm_span(tmp_path, monkeypatch) -> N
     from google.adk.sessions.in_memory_session_service import InMemorySessionService
 
     from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
+    from veadk.utils.patches import patch_tracer
 
     binary = _make_pi_emitting(
         tmp_path,
@@ -349,6 +350,7 @@ async def test_turn_emits_an_indexable_call_llm_span(tmp_path, monkeypatch) -> N
     # TracerProvider swap (ADK's module-level tracers memoize the first real
     # provider they resolve, so replacing it makes later spans vanish).
     tracer = OpentelemetryTracer(exporters=[])
+    patch_tracer()
     exporter = tracer._inmemory_exporter._exporter
 
     agent = _agent(tracers=[tracer])

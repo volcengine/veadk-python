@@ -61,7 +61,8 @@ from volcenginesdkarkruntime._exceptions import ArkBadRequestError
 
 from veadk.config import settings
 from veadk.consts import DEFAULT_VIDEO_MODEL_API_BASE
-from veadk.tracing.telemetry.timing import ModelTiming
+from veadk.tracing.telemetry.litellm_response_id import ResponseIdRecorder
+from veadk.tracing.telemetry.timing import ModelTiming, response_field
 from veadk.utils.adk_compat import (
     get_previous_interaction_id,
     llm_request_has_field,
@@ -875,11 +876,13 @@ class ArkLlm(Gemini):
             responses_args, enable_responses_cache=self.enable_responses_cache
         )
         with ModelTiming(streaming=stream, model=model) as timing:
+            recorder = ResponseIdRecorder(attempt=timing.span)
             if stream:
                 responses_args["stream"] = True
                 response = await self.llm_client.aresponses(**responses_args)
                 try:
                     async for part in response:
+                        recorder.observe(response_field(part, "response"))
                         timing.observe_ark(part)
                         llm_response = event_to_generate_content_response(
                             event=part, is_partial=True, model_version=model
@@ -892,6 +895,7 @@ class ArkLlm(Gemini):
                         await close()
             else:
                 raw_response = await self.llm_client.aresponses(**responses_args)
+                recorder.observe(raw_response)
                 llm_response = ark_response_to_generate_content_response(raw_response)
                 yield llm_response
 
