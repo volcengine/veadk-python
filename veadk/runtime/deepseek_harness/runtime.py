@@ -74,6 +74,7 @@ from veadk.runtime.piagent.tools_bridge import (
 )
 from veadk.consts import DEFAULT_MODEL_AGENT_NAME
 from veadk.utils.logger import get_logger
+from veadk.version import VERSION
 
 if TYPE_CHECKING:
     from google.adk.agents.invocation_context import InvocationContext
@@ -650,9 +651,13 @@ def _dsh_session_id(agent: Agent, ctx: InvocationContext) -> str:
 def _start_call_llm_span() -> Span | None:
     """Open the ADK-shaped ``call_llm`` span for one DSH invocation."""
     try:
-        from google.adk.telemetry.tracing import tracer
+        from opentelemetry import trace
 
-        return tracer.start_span("call_llm")
+        return trace.get_tracer(
+            instrumenting_module_name="veadk",
+            instrumenting_library_version=VERSION,
+            schema_url="https://opentelemetry.io/schemas/1.37.0",
+        ).start_span("call_llm")
     except Exception:  # noqa: BLE001
         logger.warning("deepseek_harness_trace_span_start_failed")
         return None
