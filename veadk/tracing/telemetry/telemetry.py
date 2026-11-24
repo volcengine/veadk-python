@@ -304,15 +304,16 @@ def set_common_attributes_on_tool_span(current_span: _Span) -> None:
     common_attributes = ATTRIBUTES.get("common", {})
 
     invocation_span: Span = get_value("invocation_span_instance")  # type: ignore
+    invocation_span_name = getattr(invocation_span, "name", "")
+    invocation_span_attributes = getattr(invocation_span, "attributes", None) or {}
 
     for attr_name in common_attributes.keys():
         if (
             invocation_span
-            and invocation_span.name.startswith(("invocation", "invoke_workflow"))
-            and invocation_span.attributes
-            and attr_name in invocation_span.attributes
+            and invocation_span_name.startswith(("invocation", "invoke_workflow"))
+            and attr_name in invocation_span_attributes
         ):
-            current_span.set_attribute(attr_name, invocation_span.attributes[attr_name])
+            current_span.set_attribute(attr_name, invocation_span_attributes[attr_name])
 
 
 def trace_tool_call(

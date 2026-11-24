@@ -26,6 +26,7 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
+from opentelemetry.context import set_value
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -33,6 +34,7 @@ from opentelemetry.util._once import Once
 
 from veadk import Agent
 from veadk.config import settings
+from veadk.tracing.telemetry.telemetry import set_common_attributes_on_tool_span
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 from veadk.utils.patches import patch_tracer
 
@@ -94,6 +96,19 @@ def _runner(model, tracer, tools=()):
         tracers=[tracer],
     )
     return InMemoryRunner(agent=agent, app_name="tracing-test")
+
+
+def test_tool_span_common_attributes_ignore_non_recording_parent_span():
+    context = trace_api.SpanContext(trace_id=1, span_id=1, is_remote=False)
+    parent = trace_api.NonRecordingSpan(context)
+    current = trace_api.NonRecordingSpan(context)
+    token = context_api.attach(
+        set_value("invocation_span_instance", parent, context=context_api.get_current())
+    )
+    try:
+        set_common_attributes_on_tool_span(current)
+    finally:
+        context_api.detach(token)
 
 
 async def _run(runner, session_id, stream=False):
