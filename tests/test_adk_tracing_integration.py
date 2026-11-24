@@ -19,8 +19,7 @@ import json
 from pathlib import Path
 
 import pytest
-from google.adk.agents._streaming_mode import StreamingMode
-from google.adk.agents.run_config import RunConfig
+from google.adk.agents.run_config import RunConfig, StreamingMode
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import InMemoryRunner

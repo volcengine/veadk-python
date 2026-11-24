@@ -44,8 +44,8 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from google.adk.agents import RunConfig
-from google.adk.agents._streaming_mode import StreamingMode
 from google.adk.agents.base_agent import BaseAgent
+from google.adk.agents.run_config import StreamingMode
 from google.adk.artifacts.in_memory_artifact_service import InMemoryArtifactService
 from google.adk.auth.credential_service.in_memory_credential_service import (
     InMemoryCredentialService,

@@ -33,9 +33,9 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from google.adk.agents import LoopAgent, ParallelAgent, RunConfig, SequentialAgent
-from google.adk.agents._streaming_mode import StreamingMode
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
+from google.adk.agents.run_config import StreamingMode
 from google.adk.apps.app import App
 from google.adk.cli.api_server import RunAgentRequest
 from google.adk.runners import Runner as AdkRunner
