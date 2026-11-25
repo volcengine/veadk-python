@@ -87,6 +87,8 @@ python agent.py
 
 定义 APMPlus 数据导出器，即可将智能体的 Trace 与 Metrics 数据接入火山引擎 APMPlus 平台。
 
+VeADK 的 APMPlus exporter 也会把这五个请求头的有效值写入每条 span 的同名标签。设置 `MODEL_AGENT_CLIENT_REQ_ID` 后，可在 APMPlus 按 `X-Client-Request-Id` 检索，再用 `ListSpan` 查看各条 span 的 `Tags`。标签区分大小写。
+
 ### 准备工作
 
 在 `config.yaml` 的 `observability` 字段中填写 apmplus 属性：

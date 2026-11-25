@@ -222,6 +222,64 @@ def test_http_export_headers(monkeypatch, exporter_cls, config, platform_headers
     }
 
 
+def test_apmplus_sends_header_tags_on_each_span(monkeypatch):
+    monkeypatch.setenv("MODEL_AGENT_CLIENT_REQ_ID", "agentkit/test-runtime")
+    monkeypatch.setenv("MODEL_AGENT_ENCRYPTED", "false")
+    monkeypatch.setattr(
+        apmplus_exporter_module, "ensure_apmplus_meter_provider", lambda **kwargs: None
+    )
+    exporter = APMPlusExporter(
+        config=APMPlusExporterConfig(
+            endpoint="http://localhost:4317", app_key="test", service_name="probe"
+        ),
+        headers={
+            "VEADK-SOURCE": "custom-source",
+            "user-agent": "custom-agent",
+            "X-Private": "private",
+        },
+    )
+    provider = trace_sdk.TracerProvider()
+    other = OTelInMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(other))
+    try:
+        exporter.register(provider)
+        with patch.object(exporter._exporter._client, "Export") as send:
+            tracer = provider.get_tracer("veadk")
+            with tracer.start_as_current_span("runner_request"):
+                with tracer.start_as_current_span(
+                    "model_request", attributes={"veadk-source": "old", "keep": "yes"}
+                ):
+                    pass
+            assert provider.force_flush()
+            payload = send.call_args.kwargs["request"]
+        spans = [
+            span
+            for resource in payload.resource_spans
+            for scope in resource.scope_spans
+            for span in scope.spans
+        ]
+        assert {span.name for span in spans} == {"runner_request", "model_request"}
+        expected = {
+            "veadk-source": "custom-source",
+            "veadk-version": VERSION,
+            "User-Agent": "custom-agent",
+            "X-Client-Request-Id": "agentkit/test-runtime",
+            "x-is-encrypted": "false",
+        }
+        for span in spans:
+            attrs = {attr.key: attr.value.string_value for attr in span.attributes}
+            assert len(attrs) == len(span.attributes)
+            assert attrs == (
+                expected | {"keep": "yes"} if span.name == "model_request" else expected
+            )
+        assert other.get_finished_spans()[0].attributes == {
+            "veadk-source": "old",
+            "keep": "yes",
+        }
+    finally:
+        provider.shutdown()
+
+
 def init_exporters():
     cozeloop_exporter = CozeloopExporter(
         config=CozeloopExporterConfig(

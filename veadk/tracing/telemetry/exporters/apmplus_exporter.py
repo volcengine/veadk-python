@@ -12,17 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Sequence
 from typing import Any
 
 from opentelemetry import metrics as metrics_api
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.metrics._internal import _ProxyMeterProvider
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+    ExportTraceServiceRequest,
+)
 from opentelemetry.sdk import metrics as metrics_sdk
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic import BaseModel, Field
+from requests.structures import CaseInsensitiveDict
 from typing_extensions import override
 
 from veadk.config import settings
@@ -40,6 +46,47 @@ def _grpc_header_options(headers: dict) -> dict[str, Any]:
         # gRPC constructs the wire User-Agent from channel options.
         options["channel_options"] = (("grpc.secondary_user_agent", user_agent),)
     return options
+
+
+class _APMPlusSpanExporter(OTLPSpanExporter):
+    """Include VeADK attribution in the span payload indexed by APMPlus."""
+
+    def __init__(self, endpoint: str, headers: dict):
+        super().__init__(
+            endpoint=endpoint, insecure=True, **_grpc_header_options(headers)
+        )
+        effective_headers = CaseInsensitiveDict(headers)
+        # Only these five public fields may become searchable span tags.
+        self._header_tags = {
+            key: effective_headers[key]
+            for key in (
+                "veadk-source",
+                "veadk-version",
+                "User-Agent",
+                "X-Client-Request-Id",
+                "x-is-encrypted",
+            )
+        }
+
+    @override
+    def _translate_data(
+        self, data: Sequence[ReadableSpan]
+    ) -> ExportTraceServiceRequest:
+        request = super()._translate_data(data)
+        for resource in request.resource_spans:
+            for scope in resource.scope_spans:
+                for span in scope.spans:
+                    existing = {
+                        attr.key: attr
+                        for attr in span.attributes
+                        if attr.key in self._header_tags
+                    }
+                    for key, value in self._header_tags.items():
+                        attr = existing.get(key)
+                        if attr is None:
+                            attr = span.attributes.add(key=key)
+                        attr.value.string_value = value
+        return request
 
 
 def ensure_apmplus_meter_provider(
@@ -159,11 +206,7 @@ class APMPlusExporter(BaseExporter):
         }
         self.resource_attributes |= resource_attributes
 
-        self._exporter = OTLPSpanExporter(
-            endpoint=self.config.endpoint,
-            insecure=True,
-            **_grpc_header_options(self.headers),
-        )
+        self._exporter = _APMPlusSpanExporter(self.config.endpoint, self.headers)
         self.processor = BatchSpanProcessor(self._exporter)
 
         ensure_apmplus_meter_provider(
