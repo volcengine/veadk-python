@@ -23,6 +23,10 @@ volcengine:
 
 The integration code is also nearly identical: construct the platform's exporter, pass it to `OpentelemetryTracer`, and attach the tracer to your agent.
 
+VeADK-managed CozeLoop, APMPlus, and TLS exporters send trace requests with the default headers `veadk-source`, `veadk-version`, `User-Agent`, `X-Client-Request-Id`, and `x-is-encrypted`. APMPlus also sends them with metric requests. Set `MODEL_AGENT_CLIENT_REQ_ID` and `MODEL_AGENT_ENCRYPTED` to configure the last two, respectively. APMPlus uses gRPC, whose `User-Agent` includes both the VeADK and transport identifiers.
+
+Each exporter's `headers` argument can override defaults or add headers. Platform authentication and routing fields take precedence. Custom model request headers apply only to model calls. Host-managed exporters use the host configuration.
+
 ## CozeLoop Platform
 
 After connecting a VeADK agent to CozeLoop, you can observe its traces with CozeLoop's Trace feature, or evaluate the agent with its evaluation feature.

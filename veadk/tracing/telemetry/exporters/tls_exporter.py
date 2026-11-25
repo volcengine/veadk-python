@@ -107,11 +107,11 @@ class TLSExporter(BaseExporter):
             "x-tls-otel-sk": self.config.secret_key,
             "x-tls-otel-region": self.config.region,
         }
-        self.headers |= headers
+        self._set_request_headers(headers)
 
         self._exporter = OTLPSpanExporter(
             endpoint=self.config.endpoint,
-            headers=headers,
+            headers=self.headers,
             timeout=10,
         )
 

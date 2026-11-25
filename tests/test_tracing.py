@@ -17,6 +17,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from opentelemetry import context as context_api
@@ -53,6 +54,7 @@ from veadk.tracing.telemetry.exporters.tls_exporter import (
     TLSExporterConfig,
 )
 from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
+from veadk.version import VERSION
 
 APP_NAME = "app"
 USER_ID = "testuser"
@@ -167,6 +169,57 @@ def test_provider_registration_is_atomic_and_provider_scoped(monkeypatch):
     finally:
         first.shutdown()
         second.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("exporter_cls", "config", "platform_headers"),
+    [
+        (
+            CozeloopExporter,
+            CozeloopExporterConfig(
+                endpoint="http://localhost", space_id="space", token="test"
+            ),
+            {"cozeloop-workspace-id": "space", "authorization": "Bearer test"},
+        ),
+        (
+            TLSExporter,
+            TLSExporterConfig(
+                endpoint="http://localhost",
+                region="region",
+                topic_id="topic",
+                access_key="ak",
+                secret_key="sk",
+            ),
+            {
+                "x-tls-otel-region": "region",
+                "x-tls-otel-tracetopic": "topic",
+                "x-tls-otel-ak": "ak",
+                "x-tls-otel-sk": "sk",
+            },
+        ),
+    ],
+)
+def test_http_export_headers(monkeypatch, exporter_cls, config, platform_headers):
+    monkeypatch.setenv("MODEL_AGENT_CLIENT_REQ_ID", "agentkit/test")
+    monkeypatch.setenv("MODEL_AGENT_ENCRYPTED", "false")
+    overrides = {"VEADK-Source": "custom", "X-Extra": "extra"}
+    overrides.update({name.upper(): "wrong" for name in platform_headers})
+    with patch(f"{exporter_cls.__module__}.OTLPSpanExporter") as transport:
+        exporter = exporter_cls(config=config, headers=overrides)
+        exporter.processor.shutdown()
+    headers = {
+        name.lower(): value
+        for name, value in transport.call_args.kwargs["headers"].items()
+    }
+    assert headers == {
+        "veadk-source": "custom",
+        "veadk-version": VERSION,
+        "user-agent": f"VeADK/{VERSION}",
+        "x-client-request-id": "agentkit/test",
+        "x-is-encrypted": "false",
+        "x-extra": "extra",
+        **platform_headers,
+    }
 
 
 def init_exporters():

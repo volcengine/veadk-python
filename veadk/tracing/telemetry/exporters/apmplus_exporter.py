@@ -32,6 +32,16 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _grpc_header_options(headers: dict) -> dict[str, Any]:
+    metadata = {key.lower(): value for key, value in headers.items()}
+    user_agent = metadata.pop("user-agent", None)
+    options: dict[str, Any] = {"headers": metadata}
+    if user_agent:
+        # gRPC constructs the wire User-Agent from channel options.
+        options["channel_options"] = (("grpc.secondary_user_agent", user_agent),)
+    return options
+
+
 def ensure_apmplus_meter_provider(
     endpoint: str,
     headers: dict,
@@ -44,8 +54,8 @@ def ensure_apmplus_meter_provider(
 
     exporter = OTLPMetricExporter(
         endpoint=endpoint,
-        headers=headers,
         insecure=True,
+        **_grpc_header_options(headers),
     )
     metric_reader = PeriodicExportingMetricReader(exporter)
     provider = metrics_sdk.MeterProvider(
@@ -142,7 +152,7 @@ class APMPlusExporter(BaseExporter):
         headers = {
             "x-byteapm-appkey": self.config.app_key,
         }
-        self.headers |= headers
+        self._set_request_headers(headers)
 
         resource_attributes = {
             "service.name": self.config.service_name,
@@ -150,7 +160,9 @@ class APMPlusExporter(BaseExporter):
         self.resource_attributes |= resource_attributes
 
         self._exporter = OTLPSpanExporter(
-            endpoint=self.config.endpoint, insecure=True, headers=self.headers
+            endpoint=self.config.endpoint,
+            insecure=True,
+            **_grpc_header_options(self.headers),
         )
         self.processor = BatchSpanProcessor(self._exporter)
 

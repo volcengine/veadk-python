@@ -14,6 +14,7 @@
 
 import time
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from google.adk.agents.run_config import RunConfig, StreamingMode
@@ -26,6 +27,7 @@ from opentelemetry.sdk import metrics as metrics_sdk
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.util._once import Once
 
+from veadk.consts import default_request_headers
 from veadk.tools.skills_tools.skills_tool import SkillsTool
 from veadk.tracing.telemetry import portal_metrics, telemetry
 from veadk.tracing.telemetry.exporters import (
@@ -37,6 +39,7 @@ from veadk.tracing.telemetry.exporters.apmplus_exporter import (
     ensure_apmplus_meter_provider,
 )
 from veadk.tracing.telemetry.portal_metrics import PortalMetricRecorder
+from veadk.version import VERSION
 
 
 class FakePortalMetricRecorder:
@@ -273,6 +276,43 @@ def test_apmplus_installs_global_provider_when_none_exists(
     }
 
 
+def test_apmplus_trace_and_metric_export_headers(
+    fresh_global_meter_provider, monkeypatch
+):
+    monkeypatch.delenv("MODEL_AGENT_CLIENT_REQ_ID", raising=False)
+    monkeypatch.delenv("MODEL_AGENT_ENCRYPTED", raising=False)
+    reader = InMemoryMetricReader()
+    monkeypatch.setattr(
+        apmplus_exporter_module,
+        "PeriodicExportingMetricReader",
+        lambda exporter: reader,
+    )
+    with (
+        patch.object(apmplus_exporter_module, "OTLPSpanExporter") as span_transport,
+        patch.object(apmplus_exporter_module, "OTLPMetricExporter") as metric_transport,
+    ):
+        exporter = APMPlusExporter(
+            config=APMPlusExporterConfig(
+                endpoint="http://localhost", app_key="test", service_name="service"
+            ),
+            headers={"X-ByteAPM-AppKey": "wrong", "X-Extra": "extra"},
+        )
+        exporter.processor.shutdown()
+    for transport in (span_transport, metric_transport):
+        assert transport.call_args.kwargs["headers"] == {
+            "veadk-source": "veadk",
+            "veadk-version": VERSION,
+            "x-is-encrypted": "true",
+            "x-client-request-id": f"veadk/{VERSION}",
+            "x-extra": "extra",
+            "x-byteapm-appkey": "test",
+        }
+        assert (
+            "grpc.secondary_user_agent",
+            f"VeADK/{VERSION}",
+        ) in transport.call_args.kwargs["channel_options"]
+
+
 def test_apmplus_exporter_only_bootstraps_meter_provider(monkeypatch):
     bootstrap_calls = []
     monkeypatch.setattr(
@@ -292,7 +332,10 @@ def test_apmplus_exporter_only_bootstraps_meter_provider(monkeypatch):
     assert bootstrap_calls == [
         {
             "endpoint": "http://localhost:4319",
-            "headers": {"x-byteapm-appkey": "test-app-key"},
+            "headers": {
+                **default_request_headers(),
+                "x-byteapm-appkey": "test-app-key",
+            },
             "resource_attributes": {"service.name": "test-service"},
         }
     ]

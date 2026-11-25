@@ -22,15 +22,22 @@ DEFAULT_AGENT_NAME = "veAgent"
 DEFAULT_MODEL_AGENT_NAME = "doubao-seed-2-1-pro-260628"
 DEFAULT_MODEL_AGENT_PROVIDER = "openai"
 DEFAULT_MODEL_AGENT_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/"
-DEFAULT_MODEL_EXTRA_CONFIG = {
-    "extra_headers": {
+
+
+def default_request_headers() -> dict[str, str]:
+    """Build the VeADK headers shared by model and telemetry requests."""
+    return {
         "x-is-encrypted": os.getenv("MODEL_AGENT_ENCRYPTED") or "true",
         "veadk-source": "veadk",
         "veadk-version": VERSION,
         "User-Agent": f"VeADK/{VERSION}",
         "X-Client-Request-Id": os.getenv("MODEL_AGENT_CLIENT_REQ_ID")
         or f"veadk/{VERSION}",
-    },
+    }
+
+
+DEFAULT_MODEL_EXTRA_CONFIG = {
+    "extra_headers": default_request_headers(),
     "extra_body": {
         "caching": {
             "type": os.getenv("MODEL_AGENT_CACHING") or "enabled",

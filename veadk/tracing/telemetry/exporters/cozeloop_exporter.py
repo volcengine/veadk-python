@@ -97,7 +97,7 @@ class CozeloopExporter(BaseExporter):
             "cozeloop-workspace-id": self.config.space_id,
             "authorization": f"Bearer {self.config.token}",
         }
-        self.headers |= headers
+        self._set_request_headers(headers)
 
         self._exporter = OTLPSpanExporter(
             endpoint=self.config.endpoint,
