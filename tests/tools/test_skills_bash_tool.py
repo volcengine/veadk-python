@@ -169,6 +169,27 @@ async def test_process_lookup_race_preserves_timeout(execution, monkeypatch):
     process.wait.assert_awaited_once()
 
 
+async def test_dispatch_probe_logs_tool_boundaries(execution, monkeypatch):
+    run, _ = execution
+    messages: list[str] = []
+
+    def capture(message: str, *args, **kwargs) -> None:
+        messages.append(message)
+
+    monkeypatch.setattr(bash_module.logger, "info", capture)
+
+    assert await run("printf probe") == "probe"
+    assert messages[0].startswith("[tool-dispatch] bash_tool enter")
+    assert any("bash_tool path resolve begin" in m for m in messages)
+    assert any("bash_tool subprocess begin" in m for m in messages)
+    assert any(
+        "bash_tool subprocess end" in m
+        and "returncode=0" in m
+        and "stdout_chars=5" in m
+        for m in messages
+    )
+
+
 @pytest.mark.parametrize(
     "command,expected",
     [

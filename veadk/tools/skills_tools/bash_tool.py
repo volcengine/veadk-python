@@ -118,11 +118,20 @@ async def bash_tool(
         The output of the bash command or error message.
     """
 
+    session_id = getattr(getattr(tool_context, "session", None), "id", "")
+    logger.info(
+        f"[tool-dispatch] bash_tool enter session_id={session_id} "
+        f"command_chars={len(command)} timeout={timeout}"
+    )
+
     if not command:
         return "Error: No command provided"
 
     try:
         # Get session working directory (initialized by SkillsPlugin)
+        logger.info(
+            f"[tool-dispatch] bash_tool path resolve begin session_id={session_id}"
+        )
         working_dir = get_session_path(session_id=tool_context.session.id)
         logger.info(f"Session working directory: {working_dir}")
 
@@ -148,13 +157,26 @@ async def bash_tool(
         # Execute with local bash shell
         local_bash_command = f"{command}"
 
+        logger.info(
+            f"[tool-dispatch] bash_tool subprocess begin session_id={session_id} "
+            f"command_chars={len(command)} timeout={timeout}"
+        )
         try:
             returncode, stdout, stderr = await _run_command(
                 local_bash_command, working_dir, env, timeout
             )
         except asyncio.TimeoutError:
+            logger.warning(
+                f"[tool-dispatch] bash_tool subprocess timeout "
+                f"session_id={session_id} timeout={timeout}"
+            )
             return f"Error: Command timed out after {timeout}s"
 
+        logger.info(
+            f"[tool-dispatch] bash_tool subprocess end session_id={session_id} "
+            f"returncode={returncode} stdout_chars={len(stdout or b'')} "
+            f"stderr_chars={len(stderr or b'')}"
+        )
         stdout_str = stdout.decode("utf-8", errors="replace") if stdout else ""
         stderr_str = stderr.decode("utf-8", errors="replace") if stderr else ""
 

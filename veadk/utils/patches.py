@@ -245,31 +245,46 @@ def patch_adk_sync_tool_thread_pool() -> None:
 
         @functools.wraps(original_call_tool_async)
         async def veadk_call_tool_async(tool, args, tool_context):
-            max_workers = _resolve_tool_thread_pool_max_workers(tool, tool_context)
-            _set_parallel_run_code_context(tool, tool_context, max_workers)
+            tool_name = getattr(tool, "name", type(tool).__name__)
+            logger.info(f"[tool-dispatch] call_tool enter tool={tool_name}")
+            try:
+                max_workers = _resolve_tool_thread_pool_max_workers(tool, tool_context)
+                _set_parallel_run_code_context(tool, tool_context, max_workers)
 
-            invocation_context = getattr(tool_context, "_invocation_context", None)
-            run_config = getattr(invocation_context, "run_config", None)
-            uses_native_pool = native_thread_pool and (
-                getattr(run_config, "tool_thread_pool_config", None) is not None
-            )
-            sync_function_tool = isinstance(tool, FunctionTool) and (
-                adk_functions._is_sync_tool(tool)
-            )
-            # Async tools such as AgentTool must keep their caller's event loop.
-            if max_workers is not None and not uses_native_pool and sync_function_tool:
-                return await call_tool_in_thread_pool(
-                    tool,
+                invocation_context = getattr(tool_context, "_invocation_context", None)
+                run_config = getattr(invocation_context, "run_config", None)
+                uses_native_pool = native_thread_pool and (
+                    getattr(run_config, "tool_thread_pool_config", None) is not None
+                )
+                sync_function_tool = isinstance(tool, FunctionTool) and (
+                    adk_functions._is_sync_tool(tool)
+                )
+                logger.info(
+                    f"[tool-dispatch] call_tool config tool={tool_name} "
+                    f"max_workers={max_workers} "
+                    f"uses_native_pool={uses_native_pool} "
+                    f"sync_function_tool={sync_function_tool}"
+                )
+                # Async tools such as AgentTool must keep their caller's event loop.
+                if (
+                    max_workers is not None
+                    and not uses_native_pool
+                    and sync_function_tool
+                ):
+                    return await call_tool_in_thread_pool(
+                        tool,
+                        args=args,
+                        tool_context=tool_context,
+                        max_workers=max_workers,
+                    )
+
+                return await original_call_tool_async(
+                    tool=tool,
                     args=args,
                     tool_context=tool_context,
-                    max_workers=max_workers,
                 )
-
-            return await original_call_tool_async(
-                tool=tool,
-                args=args,
-                tool_context=tool_context,
-            )
+            finally:
+                logger.info(f"[tool-dispatch] call_tool exit tool={tool_name}")
 
         @functools.wraps(original_handle_function_call_list_async)
         async def veadk_handle_function_call_list_async(
@@ -287,6 +302,17 @@ def patch_adk_sync_tool_thread_pool() -> None:
                     and (not filters or function_call.id in filters)
                 ]
             )
+            tool_names = ",".join(
+                getattr(function_call, "name", "") for function_call in function_calls
+            )
+            invocation_id = getattr(invocation_context, "invocation_id", "")
+            session = getattr(invocation_context, "session", None)
+            session_id = getattr(session, "id", "")
+            logger.info(
+                f"[tool-dispatch] function_calls enter count={len(function_calls)} "
+                f"tools={tool_names} invocation_id={invocation_id} "
+                f"session_id={session_id}"
+            )
             token = _PARALLEL_RUN_CODE_CALL_COUNT.set(run_code_call_count)
             try:
                 return await original_handle_function_call_list_async(
@@ -298,6 +324,11 @@ def patch_adk_sync_tool_thread_pool() -> None:
                 )
             finally:
                 _PARALLEL_RUN_CODE_CALL_COUNT.reset(token)
+                logger.info(
+                    f"[tool-dispatch] function_calls exit count={len(function_calls)} "
+                    f"tools={tool_names} invocation_id={invocation_id} "
+                    f"session_id={session_id}"
+                )
 
         setattr(call_module, call_name, veadk_call_tool_async)
         adk_functions.handle_function_call_list_async = (
