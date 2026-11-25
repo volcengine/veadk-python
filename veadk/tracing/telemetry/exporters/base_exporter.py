@@ -18,6 +18,9 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter
 from pydantic import BaseModel, ConfigDict, Field
+from requests.structures import CaseInsensitiveDict
+
+from veadk.consts import default_request_headers
 
 
 class BaseExporter(BaseModel):
@@ -37,6 +40,13 @@ class BaseExporter(BaseModel):
     _exporter: SpanExporter | None = None
     _registered_provider: TracerProvider | None = None
     processor: SpanProcessor | None = None
+
+    def _set_request_headers(self, platform_headers: dict[str, str]) -> None:
+        """Merge VeADK defaults, exporter overrides, and required platform headers."""
+        headers = CaseInsensitiveDict(default_request_headers())
+        headers.update(self.headers)
+        headers.update(platform_headers)
+        self.headers = dict(headers)
 
     def register(self, provider: TracerProvider) -> bool:
         """Register this exporter's processor with a tracer provider once.

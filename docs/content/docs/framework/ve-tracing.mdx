@@ -23,6 +23,10 @@ volcengine:
 
 接入代码也基本一致：构造对应平台的 Exporter，交给 `OpentelemetryTracer`，再挂载到 Agent 上。
 
+VeADK 创建的 CozeLoop、APMPlus 和 TLS exporter 会在 Trace 上报请求中默认携带以下五个请求头，`veadk-source`、`veadk-version`、`User-Agent`、`X-Client-Request-Id` 和 `x-is-encrypted`。APMPlus 的 Metric 上报也携带这组请求头。通过环境变量 `MODEL_AGENT_CLIENT_REQ_ID` 和 `MODEL_AGENT_ENCRYPTED` 可分别设置后两项。APMPlus 使用 gRPC，`User-Agent` 包含 VeADK 和底层传输标识。
+
+每个 exporter 的 `headers` 参数可以覆盖默认值或添加请求头，平台配置中的鉴权和路由字段优先。Agent 的模型请求自定义头仅用于模型调用。宿主自行创建的 exporter 使用宿主配置。
+
 ## CozeLoop 平台
 
 将 VeADK 开发的智能体接入扣子罗盘后，你可以通过扣子罗盘的 Trace 功能观测调用链路，或通过其评测功能对 Agent 进行评测。
