@@ -17,18 +17,36 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import time
 
 from google.adk.tools import ToolContext
 from veadk.tools.skills_tools.session_path import get_session_path
-from veadk.utils.logger import get_logger
+from veadk.utils.logger import get_logger, safe_info, safe_warning
 
 logger = get_logger(__name__)
 _PROCESS_CLEANUP_TIMEOUT = 5.0
 
 
+def _elapsed_ms(start: float) -> float:
+    return round((time.monotonic() - start) * 1000.0, 3)
+
+
+def _safe_len(value) -> int:
+    return (
+        len(value)
+        if isinstance(value, (str, bytes, bytearray, list, tuple, dict, set))
+        else 0
+    )
+
+
 async def _run_command(command, working_dir, env, timeout):
     process = None
     completed = False
+    start = time.monotonic()
+    safe_info(
+        logger,
+        f"[tool-dispatch] _run_command spawn begin cwd={working_dir} timeout={timeout}",
+    )
     spawning = asyncio.create_task(
         asyncio.create_subprocess_shell(
             command,
@@ -46,12 +64,35 @@ async def _run_command(command, working_dir, env, timeout):
             # Cancellation can arrive after fork but before the Process is
             # returned. Retain ownership so that its children are cleaned up.
             process = await spawning
+            safe_warning(
+                logger,
+                f"[tool-dispatch] _run_command spawn cancelled "
+                f"pid={getattr(process, 'pid', None)} "
+                f"elapsed_ms={_elapsed_ms(start)}",
+            )
             raise
+        safe_info(
+            logger,
+            f"[tool-dispatch] _run_command spawned pid={process.pid} "
+            f"elapsed_ms={_elapsed_ms(start)}",
+        )
+        communicate_start = time.monotonic()
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
         completed = True
+        safe_info(
+            logger,
+            f"[tool-dispatch] _run_command communicate end pid={process.pid} "
+            f"returncode={process.returncode} "
+            f"elapsed_ms={_elapsed_ms(communicate_start)}",
+        )
         return process.returncode, stdout, stderr
     finally:
         if process is not None and not completed:
+            safe_warning(
+                logger,
+                f"[tool-dispatch] _run_command cleanup kill pid={process.pid} "
+                f"elapsed_ms={_elapsed_ms(start)}",
+            )
             try:
                 if os.name == "posix":
                     # Do this even if the shell has exited: its descendants
@@ -119,9 +160,10 @@ async def bash_tool(
     """
 
     session_id = getattr(getattr(tool_context, "session", None), "id", "")
-    logger.info(
+    safe_info(
+        logger,
         f"[tool-dispatch] bash_tool enter session_id={session_id} "
-        f"command_chars={len(command)} timeout={timeout}"
+        f"command_chars={_safe_len(command)} timeout={timeout}",
     )
 
     if not command:
@@ -129,8 +171,9 @@ async def bash_tool(
 
     try:
         # Get session working directory (initialized by SkillsPlugin)
-        logger.info(
-            f"[tool-dispatch] bash_tool path resolve begin session_id={session_id}"
+        safe_info(
+            logger,
+            f"[tool-dispatch] bash_tool path resolve begin session_id={session_id}",
         )
         working_dir = get_session_path(session_id=tool_context.session.id)
         logger.info(f"Session working directory: {working_dir}")
@@ -157,25 +200,28 @@ async def bash_tool(
         # Execute with local bash shell
         local_bash_command = f"{command}"
 
-        logger.info(
+        safe_info(
+            logger,
             f"[tool-dispatch] bash_tool subprocess begin session_id={session_id} "
-            f"command_chars={len(command)} timeout={timeout}"
+            f"command_chars={_safe_len(command)} timeout={timeout}",
         )
         try:
             returncode, stdout, stderr = await _run_command(
                 local_bash_command, working_dir, env, timeout
             )
         except asyncio.TimeoutError:
-            logger.warning(
+            safe_warning(
+                logger,
                 f"[tool-dispatch] bash_tool subprocess timeout "
-                f"session_id={session_id} timeout={timeout}"
+                f"session_id={session_id} timeout={timeout}",
             )
             return f"Error: Command timed out after {timeout}s"
 
-        logger.info(
+        safe_info(
+            logger,
             f"[tool-dispatch] bash_tool subprocess end session_id={session_id} "
             f"returncode={returncode} stdout_chars={len(stdout or b'')} "
-            f"stderr_chars={len(stderr or b'')}"
+            f"stderr_chars={len(stderr or b'')}",
         )
         stdout_str = stdout.decode("utf-8", errors="replace") if stdout else ""
         stderr_str = stderr.decode("utf-8", errors="replace") if stderr else ""

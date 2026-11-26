@@ -14,6 +14,7 @@
 
 import functools
 import os
+import time
 from types import MethodType
 from typing import Union
 
@@ -39,10 +40,18 @@ from veadk.utils.adk_compat import (
     get_event_function_calls,
     get_event_function_responses,
 )
-from veadk.utils.logger import get_logger
+from veadk.utils.logger import (
+    get_logger,
+    safe_info,
+)
 from veadk.utils.misc import formatted_timestamp, read_file_to_bytes
 
 logger = get_logger(__name__)
+
+
+def _elapsed_ms(start: float) -> float:
+    return round((time.monotonic() - start) * 1000.0, 3)
+
 
 RunnerMessage = Union[
     str,  # single turn text-based prompt
@@ -176,7 +185,7 @@ def intercept_new_message(process_func):
                     flush_thinking(event_metadata)
                     for function_response in function_responses:
                         logger.debug(
-                            f"Function response: {function_response} {event_metadata}"
+                            f"Function response: {function_response} {event_metadata}",
                         )
                 elif event.content is not None and event.content.parts:
                     for part in event.content.parts:
@@ -186,7 +195,7 @@ def intercept_new_message(process_func):
                             else:
                                 flush_thinking(event_metadata)
                                 logger.debug(
-                                    f"Event output: {part.text} {event_metadata}"
+                                    f"Event output: {part.text} {event_metadata}",
                                 )
 
             # flush trailing thinking for a pure-reasoning turn with no answer
@@ -315,7 +324,7 @@ async def _upload_image_to_tos(
                 logger.error(
                     "TOS upload did not succeed; continuing without a traced "
                     f"attachment URL | bucket={ve_tos.bucket_name}, "
-                    f"object_key={object_key}"
+                    f"object_key={object_key}",
                 )
                 return
             tos_url = ve_tos.build_tos_signed_url(object_key=object_key)
@@ -323,7 +332,7 @@ async def _upload_image_to_tos(
     except Exception as e:
         logger.exception(
             "Upload inline data to TOS failed"
-            f" | app_name={app_name}, user_id={user_id}, session_id={session_id}, error={e}"
+            f" | app_name={app_name}, user_id={user_id}, session_id={session_id}, error={e}",
         )
 
 
@@ -431,18 +440,18 @@ class Runner(ADKRunner):
         if session_service:
             if short_term_memory:
                 logger.warning(
-                    "Short term memory is enabled, but session service is also provided. We will use session service from runner argument."
+                    "Short term memory is enabled, but session service is also provided. We will use session service from runner argument.",
                 )
 
         if not session_service:
             if short_term_memory:
                 session_service = short_term_memory.session_service
                 logger.debug(
-                    f"Use session service {session_service} from short term memory."
+                    f"Use session service {session_service} from short term memory.",
                 )
             else:
                 logger.warning(
-                    "No short term memory or session service provided, use an in-memory one instead."
+                    "No short term memory or session service provided, use an in-memory one instead.",
                 )
                 short_term_memory = ShortTermMemory()
                 self.short_term_memory = short_term_memory
@@ -452,7 +461,7 @@ class Runner(ADKRunner):
             if hasattr(agent, "long_term_memory") and agent.long_term_memory:  # type: ignore
                 self.long_term_memory = agent.long_term_memory  # type: ignore
                 logger.warning(
-                    "Long term memory in agent is enabled, but memory service is also provided. We will use memory service from runner argument."
+                    "Long term memory in agent is enabled, but memory service is also provided. We will use memory service from runner argument.",
                 )
 
         if not memory_service:
@@ -548,6 +557,13 @@ class Runner(ADKRunner):
             AssertionError: If a media MIME type is not among ``image/*`` or ``video/*``.
             Exception: Exceptions from the underlying ADK/Agent execution may propagate.
         """
+        start = time.monotonic()
+        message_count = len(messages) if isinstance(messages, list) else 1
+        safe_info(
+            logger,
+            f"[turn-dispatch] run begin session_id={session_id} "
+            f"messages={message_count}",
+        )
         if upload_inline_data_to_tos:
             _upload_inline_data_to_tos = self.upload_inline_data_to_tos
             self.upload_inline_data_to_tos = upload_inline_data_to_tos
@@ -578,7 +594,7 @@ class Runner(ADKRunner):
                 f"Failed to create session with app_name={self.app_name}, user_id={user_id}, session_id={session_id}, "
             )
             logger.debug(
-                f"Auto create session: {session.id}, user_id: {session.user_id}, app_name: {self.app_name}"
+                f"Auto create session: {session.id}, user_id: {session.user_id}, app_name: {self.app_name}",
             )
 
         final_output = ""
@@ -613,13 +629,27 @@ class Runner(ADKRunner):
 
         # try to save tracing file
         if save_tracing_data:
+            trace_start = time.monotonic()
+            safe_info(
+                logger, f"[turn-dispatch] trace save begin session_id={session_id}"
+            )
             self.save_tracing_file(session_id)
+            safe_info(
+                logger,
+                f"[turn-dispatch] trace save end session_id={session_id} "
+                f"elapsed_ms={_elapsed_ms(trace_start)}",
+            )
 
         self._print_trace_id()
 
         if upload_inline_data_to_tos:
             self.upload_inline_data_to_tos = _upload_inline_data_to_tos  # type: ignore
 
+        safe_info(
+            logger,
+            f"[turn-dispatch] run end session_id={session_id} "
+            f"output_chars={len(final_output)} elapsed_ms={_elapsed_ms(start)}",
+        )
         return final_output
 
     def get_trace_id(self) -> str:
@@ -720,9 +750,7 @@ class Runner(ADKRunner):
             self.agent, (Agent, SequentialAgent, ParallelAgent, LoopAgent)
         ):
             logger.warning(
-                (
-                    "The agent is not an instance of Agent, SequentialAgent, ParallelAgent or LoopAgent, cannot save tracing file."
-                )
+                "The agent is not an instance of Agent, SequentialAgent, ParallelAgent or LoopAgent, cannot save tracing file."
             )
             return ""
 
@@ -872,7 +900,7 @@ class Runner(ADKRunner):
 
         if not session:
             logger.error(
-                f"Session {session_id} (app_name={app_name}, user_id={user_id}) not found in session service, cannot save to long-term memory."
+                f"Session {session_id} (app_name={app_name}, user_id={user_id}) not found in session service, cannot save to long-term memory.",
             )
             return
 

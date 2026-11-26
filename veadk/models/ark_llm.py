@@ -67,9 +67,21 @@ from veadk.utils.adk_compat import (
     get_previous_interaction_id,
     llm_request_has_field,
 )
-from veadk.utils.logger import get_logger
+from veadk.utils.logger import (
+    get_logger,
+    safe_info,
+    safe_warning,
+)
 
 logger = get_logger(__name__)
+
+
+def _safe_len(value: Any) -> int:
+    return len(value) if isinstance(value, (str, bytes, list, tuple, dict, set)) else 0
+
+
+def _elapsed_ms(start: float) -> float:
+    return round((time.monotonic() - start) * 1000.0, 3)
 
 
 _ARK_TEXT_FIELD_TYPES = {"json_object", "json_schema"}
@@ -532,7 +544,7 @@ def request_reorganization_by_ark(
     # After enabling caching, output_schema(text) cannot be used. Caching must be disabled.
     if _is_caching_enabled(request_data) and request_data.get("text") is not None:
         logger.warning(
-            "Caching is enabled, but text is provided. Ark does not support caching with text. Caching will be disabled."
+            "Caching is enabled, but text is provided. Ark does not support caching with text. Caching will be disabled.",
         )
         _remove_caching(request_data)
 
@@ -596,7 +608,7 @@ def record_logs(raw_response: ArkTypeResponse):
             logger.info(
                 f"Ark response: Received Response from model `{raw_response.model}` with id `{raw_response.id}`. "
                 f"Status: `{raw_response.status}`. "
-                f"{error_message}"
+                f"{error_message}",
             )
     except Exception:
         logger.exception("Failed to record Ark response logs")
@@ -703,12 +715,44 @@ class ArkLlmClient:
             api_key = settings.model.api_key
 
         # 2. Call openai responses
+        model = kwargs.get("model")
+        client_start = time.monotonic()
+        safe_info(
+            logger,
+            f"[llm-dispatch] client create begin model={model} api_base={api_base}",
+        )
         client = AsyncArk(
             base_url=api_base,
             api_key=api_key,
         )
+        safe_info(
+            logger,
+            f"[llm-dispatch] client create end model={model} "
+            f"elapsed_ms={_elapsed_ms(client_start)}",
+        )
 
-        raw_response = await client.responses.create(**kwargs)
+        request_start = time.monotonic()
+        safe_info(
+            logger,
+            f"[llm-dispatch] responses.create begin model={model} "
+            f"stream={kwargs.get('stream')}",
+        )
+        try:
+            raw_response = await client.responses.create(**kwargs)
+        except BaseException as error:
+            safe_warning(
+                logger,
+                f"[llm-dispatch] responses.create error model={model} "
+                f"elapsed_ms={_elapsed_ms(request_start)} "
+                f"error={type(error).__name__}",
+            )
+            raise
+        safe_info(
+            logger,
+            f"[llm-dispatch] responses.create end model={model} "
+            f"elapsed_ms={_elapsed_ms(request_start)} "
+            f"response_type={type(raw_response).__name__}",
+        )
         return raw_response
 
 
@@ -753,6 +797,13 @@ class ArkLlm(Gemini):
         Yields:
           LlmResponse: The model response.
         """
+        start = time.monotonic()
+        content_count = _safe_len(getattr(llm_request, "contents", None))
+        safe_info(
+            logger,
+            f"[llm-dispatch] generate_content enter model={self.model} "
+            f"stream={stream} contents={content_count}",
+        )
         self._maybe_append_user_content(llm_request)
         # logger.debug(_build_request_log(llm_request))
 
@@ -788,10 +839,28 @@ class ArkLlm(Gemini):
 
         if generation_params:
             responses_args.update(generation_params)
-        async for llm_response in self._generate_content_with_fallbacks(
-            responses_args, stream=stream
-        ):
-            yield llm_response
+        input_items = _safe_len(input_param)
+        tool_count = _safe_len(tools)
+        safe_info(
+            logger,
+            f"[llm-dispatch] request built model={self.model} stream={stream} "
+            f"input_items={input_items} tools={tool_count} "
+            f"elapsed_ms={_elapsed_ms(start)}",
+        )
+        responses = 0
+        try:
+            async for llm_response in self._generate_content_with_fallbacks(
+                responses_args, stream=stream
+            ):
+                responses += 1
+                yield llm_response
+        finally:
+            safe_info(
+                logger,
+                f"[llm-dispatch] generate_content exit model={self.model} "
+                f"stream={stream} responses={responses} "
+                f"elapsed_ms={_elapsed_ms(start)}",
+            )
 
     async def _generate_content_with_fallbacks(
         self, responses_args: dict, stream: bool = False
@@ -819,14 +888,14 @@ class ArkLlm(Gemini):
             except Exception as error:
                 if yielded_response:
                     logger.exception(
-                        f"Ark Responses API streaming request failed after model `{model}` emitted output; fallback is unsafe"
+                        f"Ark Responses API streaming request failed after model `{model}` emitted output; fallback is unsafe",
                     )
                     raise
 
                 failure = error
                 if self._is_previous_response_not_found(error):
                     logger.warning(
-                        f"Interaction expired for model `{model}` (PreviousResponseNotFound). Retrying without previous_response_id. Error: {error}"
+                        f"Interaction expired for model `{model}` (PreviousResponseNotFound). Retrying without previous_response_id. Error: {error}",
                     )
                     responses_args = copy.deepcopy(responses_args)
                     responses_args.pop("previous_response_id", None)
@@ -843,7 +912,7 @@ class ArkLlm(Gemini):
                     except Exception as retry_error:
                         if retry_yielded_response:
                             logger.exception(
-                                f"Ark Responses API streaming retry failed after model `{model}` emitted output; fallback is unsafe"
+                                f"Ark Responses API streaming retry failed after model `{model}` emitted output; fallback is unsafe",
                             )
                             raise
                         failure = retry_error
@@ -851,12 +920,12 @@ class ArkLlm(Gemini):
                 if index + 1 < len(models):
                     next_model = models[index + 1]
                     logger.warning(
-                        f"Ark Responses API request with model `{model}` failed. Falling back to `{next_model}`. Error: {failure}"
+                        f"Ark Responses API request with model `{model}` failed. Falling back to `{next_model}`. Error: {failure}",
                     )
                     continue
 
                 logger.error(
-                    f"Ark Responses API request failed for all configured models. Last model: `{model}`. Error: {failure}"
+                    f"Ark Responses API request failed for all configured models. Last model: `{model}`. Error: {failure}",
                 )
                 raise failure.with_traceback(failure.__traceback__)
 
@@ -872,16 +941,43 @@ class ArkLlm(Gemini):
         self, responses_args: dict, stream: bool = False
     ):
         model = responses_args["model"]
+        prepare_start = time.monotonic()
+        input_items = _safe_len(responses_args.get("input"))
+        tool_count = _safe_len(responses_args.get("tools"))
+        safe_info(
+            logger,
+            f"[llm-dispatch] aresponses prepare begin model={model} stream={stream} "
+            f"input_items={input_items} tools={tool_count}",
+        )
         responses_args = request_reorganization_by_ark(
             responses_args, enable_responses_cache=self.enable_responses_cache
+        )
+        safe_info(
+            logger,
+            f"[llm-dispatch] aresponses prepare end model={model} "
+            f"elapsed_ms={_elapsed_ms(prepare_start)}",
         )
         with ModelTiming(streaming=stream, model=model) as timing:
             recorder = ResponseIdRecorder(attempt=timing.span)
             if stream:
                 responses_args["stream"] = True
+                request_start = time.monotonic()
                 response = await self.llm_client.aresponses(**responses_args)
+                safe_info(
+                    logger,
+                    f"[llm-dispatch] aresponses response model={model} stream=True "
+                    f"elapsed_ms={_elapsed_ms(request_start)}",
+                )
+                parts = 0
                 try:
                     async for part in response:
+                        if parts == 0:
+                            safe_info(
+                                logger,
+                                f"[llm-dispatch] aresponses first event model={model} "
+                                f"elapsed_ms={_elapsed_ms(request_start)}",
+                            )
+                        parts += 1
                         recorder.observe(response_field(part, "response"))
                         timing.observe_ark(part)
                         llm_response = event_to_generate_content_response(
@@ -890,11 +986,22 @@ class ArkLlm(Gemini):
                         if llm_response:
                             yield llm_response
                 finally:
+                    safe_info(
+                        logger,
+                        f"[llm-dispatch] aresponses stream end model={model} "
+                        f"parts={parts} elapsed_ms={_elapsed_ms(request_start)}",
+                    )
                     close = getattr(response, "close", None)
                     if close is not None:
                         await close()
             else:
+                request_start = time.monotonic()
                 raw_response = await self.llm_client.aresponses(**responses_args)
+                safe_info(
+                    logger,
+                    f"[llm-dispatch] aresponses response model={model} stream=False "
+                    f"elapsed_ms={_elapsed_ms(request_start)}",
+                )
                 recorder.observe(raw_response)
                 llm_response = ark_response_to_generate_content_response(raw_response)
                 yield llm_response

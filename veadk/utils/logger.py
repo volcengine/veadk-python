@@ -109,3 +109,21 @@ def get_logger(name: str) -> logging.Logger:
     if name == _LOGGER_NAME or name.startswith(f"{_LOGGER_NAME}."):
         return logging.getLogger(name)
     return logging.getLogger(f"{_LOGGER_NAME}.{name}")
+
+
+def _safe_emit(log_method, *args, **kwargs) -> None:
+    try:
+        log_method(*args, **kwargs)
+    except Exception:
+        # Diagnostics must never change control flow.
+        return
+
+
+def safe_info(logger: logging.Logger, message: object, *args, **kwargs) -> None:
+    """Emit an INFO log without letting logging failures escape."""
+    _safe_emit(logger.info, message, *args, **kwargs)
+
+
+def safe_warning(logger: logging.Logger, message: object, *args, **kwargs) -> None:
+    """Emit a WARNING log without letting logging failures escape."""
+    _safe_emit(logger.warning, message, *args, **kwargs)

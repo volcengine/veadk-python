@@ -214,3 +214,24 @@ async def test_spawn_failure_is_returned_as_tool_error(execution, monkeypatch):
         AsyncMock(side_effect=OSError("spawn failed")),
     )
     assert await run("test") == "Error executing command 'test': spawn failed"
+
+
+async def test_logging_failure_does_not_break_tool_execution(execution, monkeypatch):
+    run, _ = execution
+    original_info = bash_module.logger.info
+    original_warning = bash_module.logger.warning
+
+    def fail_info(message, *args, **kwargs):
+        if "[tool-dispatch]" in str(message):
+            raise RuntimeError("log backend down")
+        return original_info(message, *args, **kwargs)
+
+    def fail_warning(message, *args, **kwargs):
+        if "[tool-dispatch]" in str(message):
+            raise RuntimeError("log backend down")
+        return original_warning(message, *args, **kwargs)
+
+    monkeypatch.setattr(bash_module.logger, "info", fail_info)
+    monkeypatch.setattr(bash_module.logger, "warning", fail_warning)
+
+    assert await run("printf probe") == "probe"

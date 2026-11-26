@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import math
+import time
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -29,12 +30,20 @@ from pydantic import Field
 from typing_extensions import override
 
 from veadk.models.timed_lite_llm import TimedLiteLLMClient
-from veadk.utils.logger import get_logger
+from veadk.utils.logger import get_logger, safe_info
 
 logger = get_logger(__name__)
 
 _DEFAULT_RETRY_DELAY_SECONDS = 0.5
 _MAX_RETRY_DELAY_SECONDS = 2.0
+
+
+def _safe_len(value) -> int:
+    return len(value) if isinstance(value, (str, bytes, list, tuple, dict, set)) else 0
+
+
+def _elapsed_ms(start: float) -> float:
+    return round((time.monotonic() - start) * 1000.0, 3)
 
 
 def _status_code(error: BaseException) -> int | None:
@@ -116,34 +125,52 @@ class RetryingLiteLlm(LiteLlm):
         llm_request: LlmRequest,
         stream: bool = False,
     ) -> AsyncGenerator[LlmResponse, None]:
-        retry_request = _copy_retry_request(llm_request)
-        emitted = False
+        start = time.monotonic()
+        content_count = _safe_len(getattr(llm_request, "contents", None))
+        safe_info(
+            logger,
+            f"[llm-dispatch] model generate enter model={self.model} "
+            f"stream={stream} contents={content_count}",
+        )
+        responses = 0
         try:
+            retry_request = _copy_retry_request(llm_request)
+            emitted = False
+            try:
+                self._refresh_fallbacks()
+                async for response in super().generate_content_async(
+                    llm_request,
+                    stream=stream,
+                ):
+                    emitted = True
+                    responses += 1
+                    yield response
+                return
+            except Exception as error:
+                if emitted or _status_code(error) != 429:
+                    raise
+                delay = _retry_delay_seconds(error)
+                logger.info(
+                    "Retrying one pre-output LiteLLM request after HTTP 429 "
+                    "delay_seconds=%s",
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
             self._refresh_fallbacks()
             async for response in super().generate_content_async(
-                llm_request,
+                retry_request,
                 stream=stream,
             ):
-                emitted = True
+                responses += 1
                 yield response
-            return
-        except Exception as error:
-            if emitted or _status_code(error) != 429:
-                raise
-            delay = _retry_delay_seconds(error)
-            logger.info(
-                "Retrying one pre-output LiteLLM request after HTTP 429 "
-                "delay_seconds=%s",
-                delay,
+        finally:
+            safe_info(
+                logger,
+                f"[llm-dispatch] model generate exit model={self.model} "
+                f"stream={stream} responses={responses} "
+                f"elapsed_ms={_elapsed_ms(start)}",
             )
-            await asyncio.sleep(delay)
-
-        self._refresh_fallbacks()
-        async for response in super().generate_content_async(
-            retry_request,
-            stream=stream,
-        ):
-            yield response
 
 
 __all__ = ["RetryingLiteLlm"]
