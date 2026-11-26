@@ -169,6 +169,27 @@ async def test_process_lookup_race_preserves_timeout(execution, monkeypatch):
     process.wait.assert_awaited_once()
 
 
+async def test_dispatch_probe_logs_tool_boundaries(execution, monkeypatch):
+    run, _ = execution
+    messages: list[str] = []
+
+    def capture(message: str, *args, **kwargs) -> None:
+        messages.append(message)
+
+    monkeypatch.setattr(bash_module.logger, "info", capture)
+
+    assert await run("printf probe") == "probe"
+    assert messages[0].startswith("[tool-dispatch] bash_tool enter")
+    assert any("bash_tool path resolve begin" in m for m in messages)
+    assert any("bash_tool subprocess begin" in m for m in messages)
+    assert any(
+        "bash_tool subprocess end" in m
+        and "returncode=0" in m
+        and "stdout_chars=5" in m
+        for m in messages
+    )
+
+
 @pytest.mark.parametrize(
     "command,expected",
     [
@@ -193,3 +214,24 @@ async def test_spawn_failure_is_returned_as_tool_error(execution, monkeypatch):
         AsyncMock(side_effect=OSError("spawn failed")),
     )
     assert await run("test") == "Error executing command 'test': spawn failed"
+
+
+async def test_logging_failure_does_not_break_tool_execution(execution, monkeypatch):
+    run, _ = execution
+    original_info = bash_module.logger.info
+    original_warning = bash_module.logger.warning
+
+    def fail_info(message, *args, **kwargs):
+        if "[tool-dispatch]" in str(message):
+            raise RuntimeError("log backend down")
+        return original_info(message, *args, **kwargs)
+
+    def fail_warning(message, *args, **kwargs):
+        if "[tool-dispatch]" in str(message):
+            raise RuntimeError("log backend down")
+        return original_warning(message, *args, **kwargs)
+
+    monkeypatch.setattr(bash_module.logger, "info", fail_info)
+    monkeypatch.setattr(bash_module.logger, "warning", fail_warning)
+
+    assert await run("printf probe") == "probe"

@@ -16,15 +16,40 @@ import datetime
 import hashlib
 import hmac
 import json
+import time
 from typing import Literal
 from urllib.parse import quote
 
 import requests
 
+from veadk.utils.logger import get_logger, safe_info, safe_warning
+
+logger = get_logger(__name__)
+
 # Bounded default (connect, read) timeout in seconds for Volcengine API calls, so a
 # hung endpoint cannot block the caller forever. Callers with slow control-plane
 # operations (deploys, large uploads) can override via the ``timeout`` parameter.
 DEFAULT_REQUEST_TIMEOUT: tuple[float, float] = (10, 60)
+
+
+def _elapsed_ms(start: float) -> float:
+    return round((time.monotonic() - start) * 1000.0, 3)
+
+
+def _safe_len(value) -> int:
+    return (
+        len(value)
+        if isinstance(value, (str, bytes, bytearray, list, tuple, dict, set))
+        else 0
+    )
+
+
+def _safe_body_chars(request_body) -> int:
+    try:
+        return len(json.dumps(request_body, default=str))
+    except Exception:
+        return -1
+
 
 Service = ""
 Version = ""
@@ -324,6 +349,12 @@ def request(
         del header["X-Security-Token"]
     # header = {**header, **{"X-Security-Token": SessionToken}}
     # 第六步：将 Signature 签名写入 HTTP Header 中，并发送 HTTP 请求。
+    send_start = time.monotonic()
+    safe_info(
+        logger,
+        f"[http-dispatch] send begin action={action} host={Host} method={method} "
+        f"body_chars={_safe_len(request_param.get('body'))} timeout={timeout}",
+    )
     r = requests.request(
         method=method,
         url=f"{scheme}://{request_param['host']}{request_param['path']}",
@@ -331,6 +362,13 @@ def request(
         params=request_param["query"],
         data=request_param["body"],
         timeout=timeout,
+    )
+    safe_info(
+        logger,
+        f"[http-dispatch] send end action={action} host={Host} "
+        f"status={getattr(r, 'status_code', 'unknown')} "
+        f"response_chars={_safe_len(getattr(r, 'content', None))} "
+        f"elapsed_ms={_elapsed_ms(send_start)}",
     )
     try:
         return r.json()
@@ -370,9 +408,15 @@ def ve_request(
     AK = ak
     SK = sk
     now = datetime.datetime.utcnow()
+    start = time.monotonic()
+    body_chars = _safe_body_chars(request_body)
+    safe_info(
+        logger,
+        f"[http-dispatch] request begin action={action} host={host} "
+        f"service={service} body_chars={body_chars} timeout={timeout}",
+    )
     # Body的格式需要配合Content-Type，API使用的类型请阅读具体的官方文档，如:json格式需要json.dumps(obj)
     # response_body = request("GET", now, {"Limit": "2"}, {}, AK, SK, "ListUsers", None)
-    import json
 
     try:
         request_header = dict(header)
@@ -390,6 +434,16 @@ def ve_request(
             Scheme,
             timeout=timeout,
         )
+        safe_info(
+            logger,
+            f"[http-dispatch] request end action={action} host={host} "
+            f"elapsed_ms={_elapsed_ms(start)}",
+        )
         return response_body
     except Exception as e:
+        safe_warning(
+            logger,
+            f"[http-dispatch] request error action={action} host={host} "
+            f"elapsed_ms={_elapsed_ms(start)} error={type(e).__name__}",
+        )
         raise e

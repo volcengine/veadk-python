@@ -31,7 +31,7 @@ from opentelemetry.trace import Span, SpanKind, StatusCode
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from veadk.tracing.telemetry import portal_metrics
-from veadk.utils.logger import get_logger
+from veadk.utils.logger import get_logger, safe_info
 
 logger = get_logger(__name__)
 _REQUEST_SPAN: ContextVar[Span | None] = ContextVar("veadk_request_span", default=None)
@@ -162,6 +162,7 @@ class ModelTiming:
         self._tpot_disabled = False
         self._ended = False
         self.start_time = time.time_ns()
+        self._log_start_monotonic = time.monotonic()
         self.span = trace.get_tracer(__name__).start_span(
             "model_request",
             kind=SpanKind.CLIENT,
@@ -187,6 +188,11 @@ class ModelTiming:
         if duration < 0:
             logger.warning("Skipping TTFT because the wall clock moved backwards")
             return
+        safe_info(
+            logger,
+            f"[llm-dispatch] first output model={self.model} "
+            f"ttft_ms={round(duration * 1000.0, 3)} output_type={output_type}",
+        )
         if self.span.is_recording():
             self.span.set_attribute(
                 portal_metrics.Meters.LLM_STREAMING_TIME_TO_FIRST_TOKEN, duration
@@ -294,6 +300,14 @@ class ModelTiming:
             _record_error(self.span, exc_value, "llm_error")
         if exc_type is None and exc_value is None:
             self._record_tpot()
+        error_type = type(exc_value).__name__ if exc_value is not None else "none"
+        elapsed_ms = round((time.monotonic() - self._log_start_monotonic) * 1000.0, 3)
+        safe_info(
+            logger,
+            f"[llm-dispatch] model request end model={self.model} "
+            f"streaming={self.streaming} outputs={self._output_count} "
+            f"elapsed_ms={elapsed_ms} error={error_type}",
+        )
         self.span.end()
 
 

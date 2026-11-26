@@ -34,6 +34,7 @@ from google.genai import types
 
 from veadk import Agent
 from veadk.tools.builtin_tools import run_code as run_code_module
+from veadk.utils import patches as patches_module
 from veadk.utils.patches import patch_adk_sync_tool_thread_pool
 
 
@@ -131,6 +132,29 @@ async def _run_two_sync_tool_calls(
 
     start_gap = abs(starts["b"] - starts["a"])
     return start_gap, elapsed, parallel_call_counts, windows
+
+
+@pytest.mark.asyncio
+async def test_dispatch_probe_logs_function_and_tool_boundaries(monkeypatch) -> None:
+    messages: list[str] = []
+
+    def capture(message: str, *args, **kwargs) -> None:
+        messages.append(message)
+
+    monkeypatch.setattr(patches_module.logger, "info", capture)
+    patch_adk_sync_tool_thread_pool()
+
+    await _run_two_sync_tool_calls(RunConfig(max_llm_calls=5))
+
+    assert messages[0].startswith(
+        "[tool-dispatch] function_calls enter count=2 tools=blocking_tool,blocking_tool"
+    )
+    assert messages[-1].startswith(
+        "[tool-dispatch] function_calls exit count=2 tools=blocking_tool,blocking_tool"
+    )
+    assert sum(m.startswith("[tool-dispatch] call_tool enter") for m in messages) == 2
+    assert sum(m.startswith("[tool-dispatch] call_tool exit") for m in messages) == 2
+    assert any("[tool-dispatch] call_tool config" in m for m in messages)
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import time
 
 from google.adk.tools import ToolContext
 
@@ -22,12 +23,20 @@ from veadk.tools.builtin_tools._agentkit import (
     invoke_agentkit_run_code,
     resolve_agentkit_tool_id,
 )
-from veadk.utils.logger import get_logger
+from veadk.utils.logger import get_logger, safe_info
 
 logger = get_logger(__name__)
 
 _MAX_TIMEOUT = 300
 _ISOLATE_PARALLEL_CALLS_ENV = "VEADK_RUN_CODE_ISOLATE_PARALLEL_CALLS"
+
+
+def _safe_len(value) -> int:
+    return (
+        len(value)
+        if isinstance(value, (str, bytes, bytearray, list, tuple, dict, set))
+        else 0
+    )
 
 
 def _validate_timeout(name: str, value: int) -> None:
@@ -92,6 +101,12 @@ def run_code(
 
     _validate_timeout("timeout", timeout)
     _validate_timeout("hard_timeout", hard_timeout)
+    start = time.monotonic()
+    safe_info(
+        logger,
+        f"[tool-dispatch] run_code enter language={language} timeout={timeout} "
+        f"hard_timeout={hard_timeout} code_chars={_safe_len(code)}",
+    )
 
     tool_id = resolve_agentkit_tool_id("AGENTKIT_TOOL_ID_SCRIPT")
     service, region, host, _ = get_agentkit_endpoint_config()
@@ -102,7 +117,7 @@ def run_code(
     logger.debug(f"tool_user_session_id: {tool_user_session_id}")
 
     logger.debug(
-        f"Running code in language: {language}, session_id={session_id}, code={code}, tool_id={tool_id}, host={host}, service={service}, region={region}, timeout={timeout}"
+        f"Running code in language: {language}, session_id={session_id}, code={code}, tool_id={tool_id}, host={host}, service={service}, region={region}, timeout={timeout}",
     )
 
     tool_state = tool_context.state if tool_context else None
@@ -130,6 +145,11 @@ def run_code(
             tool_state=tool_state,
             ttl=ttl,
         )
+    safe_info(
+        logger,
+        f"[tool-dispatch] run_code remote call end language={language} "
+        f"elapsed_ms={round((time.monotonic() - start) * 1000.0, 3)}",
+    )
     logger.debug(f"Invoke run code response: {res}")
 
     try:

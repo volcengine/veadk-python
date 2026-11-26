@@ -14,6 +14,8 @@
 
 """Capture LiteLLM SDK receipt timestamps before response aggregation."""
 
+import time
+
 from google.adk.models.lite_llm import LiteLLMClient
 from litellm import CustomStreamWrapper
 
@@ -24,9 +26,17 @@ from veadk.tracing.telemetry.timing import (
     litellm_output_type,
     output_tokens_for_tpot,
 )
-from veadk.utils.logger import get_logger
+from veadk.utils.logger import get_logger, safe_info, safe_warning
 
 logger = get_logger(__name__)
+
+
+def _safe_len(value) -> int:
+    return len(value) if isinstance(value, (str, bytes, list, tuple, dict, set)) else 0
+
+
+def _elapsed_ms(start: float) -> float:
+    return round((time.monotonic() - start) * 1000.0, 3)
 
 
 def _stream_output_tokens(response) -> int | None:
@@ -69,7 +79,16 @@ def _stream_output_tokens(response) -> int | None:
 
 class TimedLiteLLMClient(LiteLLMClient):
     async def acompletion(self, model, messages, tools, **kwargs):
-        timing = ModelTiming(streaming=bool(kwargs.get("stream")), model=model)
+        streaming = bool(kwargs.get("stream"))
+        message_count = _safe_len(messages)
+        tool_count = _safe_len(tools)
+        start = time.monotonic()
+        safe_info(
+            logger,
+            f"[llm-dispatch] acompletion enter model={model} stream={streaming} "
+            f"messages={message_count} tools={tool_count}",
+        )
+        timing = ModelTiming(streaming=streaming, model=model)
         if kwargs.get("n", 1) != 1:
             timing.disable_tpot()
         recorder = ResponseIdRecorder(attempt=timing.span)
@@ -77,8 +96,19 @@ class TimedLiteLLMClient(LiteLLMClient):
             with recorder:
                 response = await super().acompletion(model, messages, tools, **kwargs)
         except BaseException as error:
+            safe_warning(
+                logger,
+                f"[llm-dispatch] acompletion error model={model} "
+                f"stream={streaming} elapsed_ms={_elapsed_ms(start)} "
+                f"error={type(error).__name__}",
+            )
             timing.__exit__(type(error), error, error.__traceback__)
             raise
+        safe_info(
+            logger,
+            f"[llm-dispatch] acompletion exit model={model} stream={streaming} "
+            f"elapsed_ms={_elapsed_ms(start)}",
+        )
         if not timing.streaming:
             timing.__exit__(None, None, None)
             return response
