@@ -163,7 +163,7 @@ short_term_memory:
   # user: root
   # password: ""
   # database: harness
-  # charset: utf8
+  # charset: utf8mb4
   # -- postgresql --  env DATABASE_POSTGRESQL_*  flags: --short-term-memory-host / -port / -user / -password / -database
   # host: 1.2.3.4
   # port: 5432

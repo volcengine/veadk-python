@@ -20,7 +20,7 @@ database:
     user:
     password:
     database:
-    charset: utf8
+    charset: utf8mb4
 ```
 
 | Field | Env var | Default | Description |
@@ -29,7 +29,7 @@ database:
 | `user` | `DATABASE_MYSQL_USER` | `""` | Username. |
 | `password` | `DATABASE_MYSQL_PASSWORD` | `""` | Password. |
 | `database` | `DATABASE_MYSQL_DATABASE` | `""` | Database name. |
-| `charset` | `DATABASE_MYSQL_CHARSET` | `utf8` | Character set. |
+| `charset` | `DATABASE_MYSQL_CHARSET` | `utf8mb4` | Character set, passed to the driver as `?charset=`. An empty string leaves it to the driver. |
 
 ## Usage
 

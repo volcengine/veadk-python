@@ -143,7 +143,7 @@ database:
     user: 
     password: 
     database: 
-    charset: utf8
+    charset: utf8mb4
   # [optional]
   postgresql:
     host: # host or ip 
