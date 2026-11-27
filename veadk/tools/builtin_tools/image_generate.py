@@ -209,7 +209,9 @@ async def handle_single_task(
                 for i, image_data in enumerate(data_list):
                     image_name = f"task_{idx}_image_{i}"
                     if "error" in image_data:
-                        logger.error(f"Image {image_name} error: {image_data.error}")
+                        logger.error(
+                            f"Image {image_name} error: {image_data.get('error')}"
+                        )
                         error_list.append(image_name)
                         error_detail_list.append(
                             {
