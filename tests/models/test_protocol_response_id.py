@@ -77,8 +77,11 @@ def mock_http(monkeypatch):
         transport = httpx.MockTransport(handler)
 
         async def send(client, request, **kwargs):
-            if not str(request.url).startswith("https://mock.local"):
-                raise AssertionError(f"unexpected network call: {request.url}")
+            # Compare the parsed scheme and host instead of matching a URL
+            # substring, so the guard cannot be bypassed by a lookalike host.
+            url = request.url
+            if url.scheme != "https" or url.host != "mock.local":
+                raise AssertionError(f"unexpected network call: {url}")
             return await transport.handle_async_request(request)
 
         monkeypatch.setattr(httpx.AsyncClient, "send", send)
@@ -96,6 +99,24 @@ def restore_litellm_seams(monkeypatch):
     ):
         monkeypatch.setattr(owner, name, getattr(owner, name))
     yield
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://mock.local.evil.com/v1/chat/completions",
+        "http://mock.local/v1/chat/completions",
+        "https://evil.com/?next=https://mock.local",
+    ],
+)
+async def test_mock_http_rejects_non_mock_hosts(mock_http, url):
+    """The network guard compares the parsed host, not a URL substring."""
+
+    mock_http(lambda request: httpx.Response(200))
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(AssertionError, match="unexpected network call"):
+            await client.send(httpx.Request("GET", url))
 
 
 def _ark_response(response_id):
