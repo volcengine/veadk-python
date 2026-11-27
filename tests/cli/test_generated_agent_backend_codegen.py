@@ -15,10 +15,12 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import importlib.util
 import ipaddress
 import py_compile
 import socket
+import threading
 
 import pytest
 from pydantic import ValidationError
@@ -341,6 +343,36 @@ def test_quick_mode_compat_does_not_duplicate_native_task_context(
 
     assert captured["collection_id"] == "existing-collection"
     assert captured["agents"][0].nodes[0].instruction == instruction
+
+
+def test_quick_mode_compat_toolset_survives_request_deepcopy(tmp_path) -> None:
+    project = generate_project_from_draft(
+        AgentDraft(name="quick-agent", dynamicAgentDelegation=True)
+    )
+    compat_py = next(
+        file.content
+        for file in project.files
+        if file.path == "agents/quick_agent/quick_mode_compat.py"
+    )
+    compat_path = tmp_path / "quick_mode_compat.py"
+    compat_path.write_text(compat_py, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location(
+        "quick_mode_compat_deepcopy_test",
+        compat_path,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    toolset = module.CreateAgentToolset(resource_sources=[])
+    # Stand-in for an OpenTelemetry span processor lock held via bootstrap agents.
+    toolset._runtime_lock = threading.RLock()
+    # Mirrors LlmRequest.tools_dict, which holds bound methods of the toolset.
+    request_like = {"tools_dict": {"create_agents": toolset.create_agents}}
+
+    copied = copy.deepcopy(request_like)
+
+    assert copied["tools_dict"]["create_agents"].__self__ is toolset
 
 
 def test_quick_mode_compat_rejects_resources_without_collection(
