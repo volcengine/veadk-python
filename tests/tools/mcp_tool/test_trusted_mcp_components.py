@@ -213,7 +213,11 @@ class TestTrustedMcpComponents(unittest.TestCase):
                 existing_session = mock.MagicMock()
                 existing_exit_stack = mock.MagicMock()
                 manager._sessions = {
-                    "session-key": (existing_session, existing_exit_stack)
+                    "session-key": (
+                        existing_session,
+                        existing_exit_stack,
+                        asyncio.get_running_loop(),
+                    )
                 }
 
                 # Call create_session
