@@ -2059,6 +2059,102 @@ def test_deepseek_harness_reuses_codex_tools_and_has_its_own_surface() -> None:
     assert "tool-studio-snapshot" in gateway.tool_ids
 
 
+def test_deepseek_harness_assets_remain_accessible_after_reopening(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls: list[str] = []
+
+    class _Client:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def request(self, method: str, url: str, **_: object) -> httpx.Response:
+            requested_urls.append(url)
+            return httpx.Response(
+                200,
+                content=b"/* sandbox asset */",
+                headers={"content-type": "application/javascript"},
+            )
+
+    monkeypatch.setattr("veadk.cli.frontend_agent_proxy.httpx.AsyncClient", _Client)
+    gateway = _FakeGateway()
+    headers = {"X-Test-User": "alice"}
+    with TestClient(_agent_app(gateway)) as client:
+        created = client.post("/web/deepseek-harness/sessions", headers=headers)
+        session_id = created.json()["sessionId"]
+        open_path = f"/web/deepseek-harness/sessions/{session_id}/open"
+        first = client.post(open_path, headers=headers).json()["webuiUrl"]
+        second = client.post(open_path, headers=headers).json()["webuiUrl"]
+        # Resources requested by the first tab must survive opening a second tab.
+        prefix = first.removesuffix("/deepseek-harness/")
+        for path in ("deepseek-harness-auth-query.js", "assets/app.js"):
+            response = client.get(f"{prefix}/{path}")
+            assert response.status_code == 200
+            assert response.content == b"/* sandbox asset */"
+        assert first == second
+        assert all("Authorization=secret" in url for url in requested_urls)
+        deleted = client.delete(
+            f"/web/deepseek-harness/sessions/{session_id}", headers=headers
+        )
+        assert deleted.status_code == 200
+        assert client.get(f"{prefix}/deepseek-harness-auth-query.js").status_code == 403
+        assert len(requested_urls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["deepseek-harness", "openclaw", "hermes"])
+async def test_managed_agent_concurrent_opens_preserve_capability_and_expiry(
+    kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gateway = _FakeGateway()
+    service = SandboxAgentSessionService(gateway, kind=kind, tool_id="tool-studio")
+    now = 100.0
+    monkeypatch.setattr(frontend_sandbox.time, "monotonic", lambda: now)
+    original_get = gateway.get_session
+
+    async def _get(tool_id: str, session_id: str) -> SandboxCloudSession:
+        await asyncio.sleep(0)
+        return await original_get(tool_id, session_id)
+
+    monkeypatch.setattr(gateway, "get_session", _get)
+    opened = await asyncio.gather(
+        *(service.open("remote-existing", "alice") for _ in range(3))
+    )
+    token = opened[0][1]
+    assert all(result[1] == token for result in opened)
+    assert service.resolve_proxy_target("remote-existing", token).endpoint
+    with pytest.raises(PermissionError):
+        service.resolve_proxy_target("remote-existing", "invalid-token")
+    with pytest.raises(SandboxSessionNotFoundError):
+        await service.open("remote-existing", "bob")
+    admin_token = (await service.open("remote-existing", "admin", is_admin=True))[1]
+    assert admin_token != token
+    assert service.resolve_proxy_target("remote-existing", token).endpoint
+
+    # Refresh endpoint credentials, but do not extend the original capability TTL.
+    now += frontend_sandbox.STUDIO_SANDBOX_TTL_SECONDS - 1
+    gateway.sessions["remote-existing"] = replace(
+        gateway.sessions["remote-existing"],
+        endpoint="https://sandbox.example/existing?Authorization=refreshed",
+    )
+    assert (await service.open("remote-existing", "alice"))[1] == token
+    assert service.resolve_proxy_target("remote-existing", token).endpoint.endswith(
+        "Authorization=refreshed"
+    )
+    now += 1
+    with pytest.raises(KeyError):
+        service.resolve_proxy_target("remote-existing", token)
+    replacement = (await service.open("remote-existing", "alice"))[1]
+    assert replacement != token
+    with pytest.raises(PermissionError):
+        service.resolve_proxy_target("remote-existing", token)
+    gateway.sessions["remote-existing"] = replace(
+        gateway.sessions["remote-existing"], status="Starting"
+    )
+    with pytest.raises(frontend_sandbox.SandboxSessionUnavailableError):
+        await service.open("remote-existing", "alice")
+
+
 @pytest.mark.parametrize("kind", ["openclaw", "hermes"])
 def test_managed_agent_routes_select_and_resolve_both_tool_variants(
     kind: str,
