@@ -122,6 +122,87 @@ TRACE_SET_DATA = [
 ]
 
 
+MULTI_TRACE_SET_DATA = [
+    # Trace A (app_a / user_a). Spans are deliberately NOT ordered by
+    # start_time: the second call_llm span comes first in the file to
+    # exercise the start_time sorting fix (issue #1021).
+    {
+        "name": "call_llm",
+        "span_id": 2001,
+        "trace_id": 11111111111111111111111111111111,
+        "start_time": 1758158957171713000,
+        "end_time": 1758158964035230000,
+        "attributes": {
+            "gen_ai.app.name": "app_a",
+            "gen_ai.user.id": "user_a",
+            "gen_ai.prompt.0.content": "follow-up A",
+            "gen_ai.completion.0.content": "response A",
+        },
+        "parent_span_id": 1000,
+    },
+    {
+        "name": "execute_tool get_city_weather",
+        "span_id": 2002,
+        "trace_id": 11111111111111111111111111111111,
+        "start_time": 1758158957162250000,
+        "end_time": 1758158957162426000,
+        "attributes": {
+            "gen_ai.tool.name": "get_city_weather",
+            "gen_ai.tool.input": '{"name": "get_city_weather", "parameters": {"city": "Beijing"}}',
+            "gen_ai.tool.output": '{"id": "call_w4bj25flpvs74zgyyiquqh5s", "name": "get_city_weather", "response": {"result": "Sunny, 25°C"}}',
+        },
+        "parent_span_id": 1000,
+    },
+    {
+        "name": "call_llm",
+        "span_id": 1001,
+        "trace_id": 11111111111111111111111111111111,
+        "start_time": 1758158945807630000,
+        "end_time": 1758158957171304000,
+        "attributes": {
+            "gen_ai.app.name": "app_a",
+            "gen_ai.user.id": "user_a",
+            "gen_ai.prompt.0.role": "user",
+            "gen_ai.prompt.0.content": "hello A",
+        },
+        "parent_span_id": 1000,
+    },
+    {
+        "name": "invocation",
+        "span_id": 1000,
+        "trace_id": 11111111111111111111111111111111,
+        "start_time": 1758158945807233000,
+        "end_time": 1758158964035304000,
+        "attributes": {},
+        "parent_span_id": None,
+    },
+    # Trace B (app_b / user_b): single call_llm span, no tool uses.
+    {
+        "name": "call_llm",
+        "span_id": 3001,
+        "trace_id": 22222222222222222222222222222222,
+        "start_time": 1758159045807630000,
+        "end_time": 1758159047171304000,
+        "attributes": {
+            "gen_ai.app.name": "app_b",
+            "gen_ai.user.id": "user_b",
+            "gen_ai.prompt.0.content": "hello B",
+            "gen_ai.completion.0.content": "response B",
+        },
+        "parent_span_id": 3000,
+    },
+    {
+        "name": "invocation",
+        "span_id": 3000,
+        "trace_id": 22222222222222222222222222222222,
+        "start_time": 1758159045807233000,
+        "end_time": 1758159047171304000,
+        "attributes": {},
+        "parent_span_id": None,
+    },
+]
+
+
 def test_evaluator():
     base_evaluator = BaseEvaluator(agent=None, name="test_evaluator")
 
@@ -158,5 +239,48 @@ def test_tracing_file_to_evalset():
         base_evaluator.invocation_list[0].invocations[0].expected_output
         == "The weather in Beijing is sunny with a temperature of 25°C."
     )
+
+    os.remove(tracing_file_path)
+
+
+def test_tracing_file_multiple_traces_to_evalset():
+    """Regression test for #1021: multi-trace files must not collapse into one
+    eval case.
+
+    Each trace_id must produce one isolated EvalCase, spans must be ordered by
+    start_time within a trace, and conversation/tool uses/session metadata must
+    never cross trace boundaries.
+    """
+    base_evaluator = BaseEvaluator(agent=None, name="test_evaluator")
+
+    tracing_file_path = "./tracing_for_test_evaluator_multiple_traces.json"
+    with open(tracing_file_path, "w") as f:
+        json.dump(MULTI_TRACE_SET_DATA, f)
+
+    base_evaluator.build_eval_set(file_path=tracing_file_path)
+
+    # Two traces -> two isolated eval cases
+    assert len(base_evaluator.invocation_list) == 2
+    assert len(base_evaluator.agent_information_list) == 2
+
+    # First case: trace A metadata and conversation, spans were out of order
+    first_case = base_evaluator.invocation_list[0]
+    assert base_evaluator.agent_information_list[0]["app_name"] == "app_a"
+    assert base_evaluator.agent_information_list[0]["user_id"] == "user_a"
+    assert len(first_case.invocations) == 1
+    assert first_case.invocations[0].input == "hello A"
+    assert first_case.invocations[0].expected_output == "response A"
+    assert first_case.invocations[0].expected_tool == [
+        {"name": "get_city_weather", "args": {"city": "Beijing"}}
+    ]
+
+    # Second case: trace B metadata and conversation
+    second_case = base_evaluator.invocation_list[1]
+    assert base_evaluator.agent_information_list[1]["app_name"] == "app_b"
+    assert base_evaluator.agent_information_list[1]["user_id"] == "user_b"
+    assert len(second_case.invocations) == 1
+    assert second_case.invocations[0].input == "hello B"
+    assert second_case.invocations[0].expected_output == "response B"
+    assert second_case.invocations[0].expected_tool == []
 
     os.remove(tracing_file_path)

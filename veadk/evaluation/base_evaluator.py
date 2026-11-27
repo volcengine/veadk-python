@@ -262,7 +262,9 @@ class BaseEvaluator:
         except Exception as e:
             raise ValueError(f"Error reading file {tracing_json_path}: {e}")
 
-        # Group spans by trace_id
+        # Group spans by trace_id and sort each trace's spans by start_time so
+        # the first/last `call_llm` spans reliably map to the user input and
+        # final output within that trace.
         trace_groups = {}
         for span in tracing_data:
             trace_id = span["trace_id"]
@@ -270,12 +272,16 @@ class BaseEvaluator:
                 trace_groups[trace_id] = []
             trace_groups[trace_id].append(span)
 
-        # Convert to evalset format
-        eval_cases, conversation = [], []
-        app_name, user_id = "", ""
-        creation_timestamp = 0
+        # Convert to evalset format. Each trace_id becomes one isolated
+        # EvalCase so conversation, tool uses, and session metadata never cross
+        # trace boundaries.
+        eval_cases = []
         for trace_id, spans in trace_groups.items():
+            spans = sorted(spans, key=lambda span: span.get("start_time", 0))
             tool_uses = []
+            conversation = []
+            app_name, user_id = "", ""
+            creation_timestamp = 0
 
             # Extract tool_uses from spans with name starting with "execute_tool"
             for span in spans:
@@ -347,17 +353,22 @@ class BaseEvaluator:
                     }
                 )
 
-        eval_cases.append(
-            {
-                "eval_id": f"veadk_eval_{formatted_timestamp()}",
-                "conversation": conversation,
-                "session_input": {
-                    "app_name": app_name,
-                    "user_id": user_id,
-                    "state": {},
-                },
-                "creation_timestamp": creation_timestamp,
-            }
+            eval_cases.append(
+                {
+                    "eval_id": f"veadk_eval_{formatted_timestamp()}",
+                    "conversation": conversation,
+                    "session_input": {
+                        "app_name": app_name,
+                        "user_id": user_id,
+                        "state": {},
+                    },
+                    "creation_timestamp": creation_timestamp,
+                }
+            )
+
+        # The EvalSet timestamp is the earliest generated case timestamp.
+        creation_timestamp = min(
+            (case["creation_timestamp"] for case in eval_cases), default=0
         )
 
         evalset = EvalSet(
