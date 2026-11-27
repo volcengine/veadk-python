@@ -35,7 +35,15 @@ class InMemoryLTMBackend(BaseLongTermMemoryBackend):
             api_key=self.embedding_config.api_key,
             api_base=self.embedding_config.api_base,
         )
-        self._vector_index = VectorStoreIndex([], embed_model=self._embed_model)
+        # One index per user, so memories never leak across users.
+        self._vector_indexes: dict[str, VectorStoreIndex] = {}
+
+    def _get_vector_index(self, user_id: str) -> VectorStoreIndex:
+        if user_id not in self._vector_indexes:
+            self._vector_indexes[user_id] = VectorStoreIndex(
+                [], embed_model=self._embed_model
+            )
+        return self._vector_indexes[user_id]
 
     def precheck_index_naming(self):
         # no checking
@@ -43,17 +51,21 @@ class InMemoryLTMBackend(BaseLongTermMemoryBackend):
 
     @override
     def save_memory(self, user_id: str, event_strings: list[str], **kwargs) -> bool:
+        vector_index = self._get_vector_index(user_id)
         for event_string in event_strings:
             document = Document(text=event_string)
             nodes = self._split_documents([document])
-            self._vector_index.insert_nodes(nodes)
+            vector_index.insert_nodes(nodes)
         return True
 
     @override
     def search_memory(
         self, user_id: str, query: str, top_k: int, **kwargs
     ) -> list[str]:
-        _retriever = self._vector_index.as_retriever(similarity_top_k=top_k)
+        vector_index = self._vector_indexes.get(user_id)
+        if vector_index is None:
+            return []
+        _retriever = vector_index.as_retriever(similarity_top_k=top_k)
         retrieved_nodes = _retriever.retrieve(query)
         return [node.text for node in retrieved_nodes]
 
