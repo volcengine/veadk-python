@@ -38,6 +38,7 @@ class Client:
     def __init__(self):
         self.spaces = []
         self.created = []
+        self.list_requests = []
         self.fail_list = False
         self.race = False
         self.omit_tags = False
@@ -46,6 +47,7 @@ class Client:
     def list_skill_spaces(self, request):
         if self.fail_list:
             raise RuntimeError("list unavailable")
+        self.list_requests.append(request)
         items = [
             space
             for space in self.spaces
@@ -87,6 +89,28 @@ class Client:
 
     def get_skill_space(self, request):
         return next(space for space in self.spaces if space.id == request.id)
+
+
+def personal_space(
+    space_id: str,
+    display_name: str,
+    author: str | None,
+    *,
+    project: str = "default",
+):
+    tags = [SimpleNamespace(key="display_name", value=display_name)]
+    if author is not None:
+        tags.append(SimpleNamespace(key="author", value=author))
+    return SimpleNamespace(
+        id=space_id,
+        name=f"studio_space_{space_id}",
+        description="",
+        project_name=project,
+        status="Running",
+        tags=tags,
+        relations=[],
+        update_time_stamp="",
+    )
 
 
 @pytest.mark.parametrize("region", ["cn-beijing", "cn-shanghai", "ap-southeast-1"])
@@ -246,6 +270,59 @@ def test_shared_endpoint_uses_trusted_identity_and_preserves_personal_filter():
             http.get("/web/skill-management/spaces?region=cn-beijing").json()["items"]
             == []
         )
+
+
+def test_personal_space_list_locally_filters_when_cloud_ignores_tag_filters():
+    client = Client()
+    client.ignore_tag_filters = True
+    repository = AgentKitSkillRepository(lambda _: client)
+    repository.ensure_shared_space(region="cn-beijing")
+    repository.ensure_review_space(region="cn-beijing")
+    client.spaces.extend(
+        [
+            personal_space("own", "Mine", "member"),
+            personal_space("other", "Other", "someone-else"),
+            personal_space("legacy", "Legacy", None),
+        ]
+    )
+
+    result = repository.list_spaces(
+        region="cn-beijing",
+        page=1,
+        page_size=20,
+        project_name=None,
+        author="member",
+    )
+
+    assert [item["displayName"] for item in result["items"]] == ["Mine"]
+    assert result["totalCount"] == 1
+    assert result["scannedCount"] == 1
+    request = client.list_requests[-1]
+    assert request.tag_filters[0].key == "author"
+    assert request.tag_filters[0].values == ["member"]
+
+
+def test_personal_space_list_scans_past_unowned_native_pages():
+    client = Client()
+    client.ignore_tag_filters = True
+    client.spaces = [
+        personal_space(f"other-{index}", f"Other {index}", "someone-else")
+        for index in range(100)
+    ] + [personal_space("own", "Mine", "member")]
+    repository = AgentKitSkillRepository(lambda _: client)
+
+    result = repository.list_spaces(
+        region="cn-beijing",
+        page=1,
+        page_size=20,
+        project_name=None,
+        author="member",
+    )
+
+    assert [item["displayName"] for item in result["items"]] == ["Mine"]
+    assert result["totalCount"] == 1
+    assert result["scannedCount"] == 1
+    assert [request.page_number for request in client.list_requests] == [1, 2]
 
 
 def test_shared_skill_cannot_be_deleted_through_another_space_id():
