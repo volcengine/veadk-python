@@ -108,6 +108,7 @@ python3 -m unittest discover -s tests -v
 配置 `MODEL_AGENT_API_KEY`、`MODEL_AGENT_NAME` 和 `MODEL_AGENT_BASE_URL` 后，基础镜像生成 Codex 模型配置，无需交互登录；凭据只在启动时传入，不写入镜像
 
 Bash 使用上游 ble.sh v0.4.0-devel3 提供输入高亮，采用固定 SHA256 的官方发布包，不切换 Shell
+全量和增量镜像构建都会应用 Readline 缓存并发修复：不同终端使用独立临时文件，再保存为共享缓存，避免首次并发启动时出现 `.part` 文件丢失错误
 
 本地 Apple Silicon 在 QEMU 中运行 x64 Codex 0.139.0 时，可能因不支持 TCGETS2 终端接口报 `os error 38`
 本地预览容器可通过基础镜像已有的 `CODEX_REAL_BIN` 覆盖为相同版本 Linux ARM64 musl 程序
