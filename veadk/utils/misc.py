@@ -174,8 +174,13 @@ def set_envs(config_yaml_path: str, env_from_dotenv: dict = None) -> tuple[dict,
             )
             veadk_environments[k] = os.environ[k]
             continue
-        veadk_environments[k] = str(config_upper_map.get(k))
-        os.environ[k] = str(config_upper_map.get(k))
+        value = config_upper_map.get(k)
+        if value is None:
+            # A key left blank in config.yaml (e.g. `api_key:`) is unset, not
+            # the string "None", so code defaults and fallbacks still apply.
+            continue
+        veadk_environments[k] = str(value)
+        os.environ[k] = str(value)
 
     provider = (os.getenv("CLOUD_PROVIDER") or "").lower()
     if provider == "byteplus":
