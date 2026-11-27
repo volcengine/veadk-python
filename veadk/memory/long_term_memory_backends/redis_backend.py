@@ -73,6 +73,7 @@ class RedisLTMBackend(BaseLongTermMemoryBackend):
             host=self.redis_config.host,
             port=self.redis_config.port,
             db=self.redis_config.db,
+            username=self.redis_config.username,
             password=self.redis_config.password,
         )
 
