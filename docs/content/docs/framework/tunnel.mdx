@@ -109,7 +109,7 @@ asyncio.run(main())
 
 ## 部署到 AgentKit
 
-`mount_tunnel` 加的是普通路由，云端服务可像其它 Agent 一样用 `veadk agentkit launch` 部署（参见 [部署](/cn/docs/framework/deploy)）。注意两点：
+`mount_tunnel` 加的是普通路由，云端服务可像其它 Agent 一样用 `veadk agentkit launch` 部署（参见 [部署](/cn/docs/framework/agentkit)）。注意两点：
 
 - 隧道依赖经过网关的 **WebSocket**，已在 AgentKit（`key_auth`）网关上验证可用。
 - 网关的 `key_auth` 会占用 `Authorization` 头。此时让连接器把**网关凭证**放在 `extra_headers`，隧道 `token` 走 `?token=`：
