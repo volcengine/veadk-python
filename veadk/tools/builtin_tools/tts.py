@@ -180,8 +180,10 @@ def handle_server_response(
                 )
                 break
             if data.get("code", 0) > 0:
-                logger.debug(f"tts response error:{data}")
-                break
+                raise RuntimeError(
+                    f"TTS service error (code {data['code']}): "
+                    f"{data.get('message', 'unknown error')}"
+                )
 
         # save audio data to file
         save_output_to_file(audio_data, audio_save_path)
