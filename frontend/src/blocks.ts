@@ -10,6 +10,7 @@
 
 import type {
   AdkEvent,
+  AdkFunctionResponse,
   AdkPart,
   AgentNodeType,
   AgentSkill,
@@ -395,23 +396,22 @@ function toolNamesMatch(left: string, right: string): boolean {
 }
 
 function toolResponseState(
-  response: unknown,
+  toolResult: AdkFunctionResponse,
   partial = false,
 ): { done: boolean; status: "running" | "completed" | "failed" } {
-  const responseStatus =
-    response && typeof response === "object"
-      ? String((response as Record<string, unknown>).status ?? "").toLowerCase()
-      : "";
+  const { response } = toolResult;
+  const responseStatus = String(response?.status ?? "").toLowerCase();
   const failed =
-    ["failed", "error", "cancelled", "denied", "timeout"].includes(
+    ["failed", "error", "canceled", "cancelled", "denied", "timeout"].includes(
       responseStatus,
-    ) || (response as Record<string, unknown> | undefined)?.ok === false;
-  const running = ["running", "started", "working"].includes(
-    responseStatus,
-  );
+    ) || response?.ok === false || response?.success === false;
+  const willContinue = toolResult.willContinue ?? toolResult.will_continue;
+  const running =
+    (partial && willContinue !== false) ||
+    ["running", "started", "working"].includes(responseStatus);
   return {
-    done: failed || !(partial || running),
-    status: failed ? "failed" : partial || running ? "running" : "completed",
+    done: failed || !running,
+    status: failed ? "failed" : running ? "running" : "completed",
   };
 }
 
@@ -852,10 +852,7 @@ export function applyEvent(acc: Acc, ev: AdkEvent, options: { mpaA2a?: boolean }
           const previousAnswer = isCodexTool
             ? codexDirectAnswer(b.response)
             : "";
-          const responseState = toolResponseState(
-            fr.response,
-            ev.partial === true,
-          );
+          const responseState = toolResponseState(fr, ev.partial === true);
           b.done = responseState.done;
           b.response = fr.response;
           b.status = responseState.status;
@@ -883,10 +880,7 @@ export function applyEvent(acc: Acc, ev: AdkEvent, options: { mpaA2a?: boolean }
         fr.name !== REQUEST_EUC &&
         fr.name !== A2UI_TOOL
       ) {
-        const responseState = toolResponseState(
-          fr.response,
-          ev.partial === true,
-        );
+        const responseState = toolResponseState(fr, ev.partial === true);
         blocks.push({
           kind: "tool",
           name: fr.name ?? "",

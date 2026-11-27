@@ -35,12 +35,14 @@ import contextvars
 import shutil
 import sys
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 from google.adk.agents.invocation_context import LlmCallsLimitExceededError
 from google.adk.agents.run_config import RunConfig
+from google.adk.events.event import Event
 from google.adk.runners import Runner
 from google.adk.sessions.in_memory_session_service import InMemorySessionService
 from google.genai import types
@@ -104,6 +106,7 @@ async def _run_turn(
     agent_kwargs: dict | None = None,
     run_config: RunConfig | None = None,
     codex_class: type | None = None,
+    on_event: Callable[[Event], None] | None = None,
 ):
     """Run one Codex invocation offline; return (events, session, backend, error)."""
     from veadk import Agent
@@ -162,6 +165,8 @@ async def _run_turn(
                 **({"run_config": run_config} if run_config is not None else {}),
             ):
                 events.append(event)
+                if on_event is not None:
+                    on_event(event)
         except BaseException as e:  # noqa: BLE001 - the error IS the observable
             error = e
 
@@ -296,6 +301,63 @@ async def test_budget_error_survives_a_failing_turn(monkeypatch) -> None:
         "the recorded max_llm_calls error was dropped when the turn failed; "
         f"the caller saw {type(error).__name__}: {error!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_tool_completion_is_visible_while_the_next_model_response_is_blocked(
+    monkeypatch,
+) -> None:
+    next_request = asyncio.Event()
+    release_model = asyncio.Event()
+    tool_completed = asyncio.Event()
+    original = ScriptedBackend.as_aresponses
+
+    def gated_responses(backend):
+        respond = original(backend)
+
+        async def respond_with_gate(**kwargs):
+            if backend.calls:
+                next_request.set()
+                await release_model.wait()
+            return await respond(**kwargs)
+
+        return respond_with_gate
+
+    def observe_event(event):
+        if event.partial and event.get_function_responses():
+            tool_completed.set()
+
+    monkeypatch.setattr(ScriptedBackend, "as_aresponses", gated_responses)
+    turn = asyncio.create_task(
+        _run_turn(
+            monkeypatch,
+            plan=(
+                Round(tool_calls=(("record_fact", {"fact": "blue"}),), usage=(11, 5)),
+                Round(text="The sky is blue.", usage=(7, 3)),
+            ),
+            agent_kwargs={"tools": [record_fact]},
+            on_event=observe_event,
+        )
+    )
+    try:
+        await asyncio.wait_for(next_request.wait(), 30)
+        await asyncio.wait_for(tool_completed.wait(), 5)
+    finally:
+        release_model.set()
+        events, session, _backend, error = await asyncio.wait_for(turn, 5)
+    assert error is None, error
+
+    [preview] = [e for e in events if e.partial and e.get_function_responses()]
+    [durable] = [e for e in session.events if e.get_function_responses()]
+    [live_response] = preview.get_function_responses()
+    [stored_response] = durable.get_function_responses()
+    assert live_response.id == stored_response.id
+    assert live_response.will_continue is False
+    assert live_response.response == {}
+    assert stored_response.response == {"stored": "blue"}
+    assert preview.usage_metadata is None
+    assert not preview.actions.state_delta
+    assert sum(e.is_final_response() for e in events) == 1
 
 
 # ------------------------------------------------- a tool-only turn still counts
@@ -1088,6 +1150,9 @@ async def test_direct_transport_stops_the_turn_when_a_tool_needs_confirmation(
 
     assert error is None, error
     assert _SENSITIVE_RUNS == [], "the tool ran before the user confirmed it"
+    assert not any(
+        event.partial and event.get_function_responses() for event in events
+    ), "a tool waiting for confirmation was reported as complete"
     calls = [
         part.function_call.name
         for event in events
