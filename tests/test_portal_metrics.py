@@ -288,7 +288,10 @@ def test_apmplus_trace_and_metric_export_headers(
         lambda exporter: reader,
     )
     with (
-        patch.object(apmplus_exporter_module, "OTLPSpanExporter") as span_transport,
+        patch.object(
+            apmplus_exporter_module.OTLPSpanExporter, "__init__", return_value=None
+        ) as span_transport,
+        patch.object(apmplus_exporter_module.OTLPSpanExporter, "shutdown"),
         patch.object(apmplus_exporter_module, "OTLPMetricExporter") as metric_transport,
     ):
         exporter = APMPlusExporter(

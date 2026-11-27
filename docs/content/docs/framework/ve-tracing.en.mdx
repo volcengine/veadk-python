@@ -87,6 +87,8 @@ python agent.py
 
 Define an APMPlus data exporter to connect your agent's trace and metrics data to the Volcengine APMPlus platform.
 
+The VeADK APMPlus exporter also writes the effective values of the five headers above to identically named tags on every span. Set `MODEL_AGENT_CLIENT_REQ_ID` to search APMPlus by `X-Client-Request-Id`. The `ListSpan` API returns these case-sensitive names in each span’s `Tags`.
+
 ### Preparation
 
 Fill in the apmplus attributes under the `observability` field of `config.yaml`:
