@@ -20,6 +20,10 @@ from google.adk.models.lite_llm import LiteLLMClient
 from litellm import CustomStreamWrapper
 
 from veadk.tracing.telemetry.litellm_response_id import ResponseIdRecorder
+from veadk.tracing.telemetry.protocol_response_id import (
+    ProtocolResponseCapture,
+    register_litellm_protocol_patches,
+)
 from veadk.tracing.telemetry.timing import (
     ModelTiming,
     response_field,
@@ -79,6 +83,7 @@ def _stream_output_tokens(response) -> int | None:
 
 class TimedLiteLLMClient(LiteLLMClient):
     async def acompletion(self, model, messages, tools, **kwargs):
+        register_litellm_protocol_patches()
         streaming = bool(kwargs.get("stream"))
         message_count = _safe_len(messages)
         tool_count = _safe_len(tools)
@@ -92,8 +97,11 @@ class TimedLiteLLMClient(LiteLLMClient):
         if kwargs.get("n", 1) != 1:
             timing.disable_tpot()
         recorder = ResponseIdRecorder(attempt=timing.span)
+        capture = ProtocolResponseCapture(
+            model=model, stream=streaming, attempt_span=timing.span
+        )
         try:
-            with recorder:
+            with recorder, capture:
                 response = await super().acompletion(model, messages, tools, **kwargs)
         except BaseException as error:
             safe_warning(
@@ -110,19 +118,21 @@ class TimedLiteLLMClient(LiteLLMClient):
             f"elapsed_ms={_elapsed_ms(start)}",
         )
         if not timing.streaming:
+            capture.observe(response)
             timing.__exit__(None, None, None)
             return response
-        return _TimedStream(response, timing, recorder)
+        return _TimedStream(response, timing, recorder, capture)
 
 
 class _TimedStream:
     """End an attempt even when a returned stream is closed before iteration."""
 
-    def __init__(self, response, timing, recorder):
+    def __init__(self, response, timing, recorder, capture):
         self._response = response
         self._iterator = response.__aiter__()
         self._timing = timing
         self._recorder = recorder
+        self._capture = capture
         self._closed = False
 
     def __aiter__(self):
@@ -132,7 +142,7 @@ class _TimedStream:
         if self._closed:
             raise StopAsyncIteration
         try:
-            with self._recorder:
+            with self._recorder, self._capture:
                 chunk = await anext(self._iterator)
         except StopAsyncIteration:
             await self._finish(None)
@@ -144,6 +154,7 @@ class _TimedStream:
         # Normalized IDs may be synthesized or lose provenance after copying.
         if not isinstance(self._response, CustomStreamWrapper):
             self._recorder.observe(chunk)
+        self._capture.observe(chunk)
         self._timing.observe(litellm_output_type(chunk))
         return chunk
 

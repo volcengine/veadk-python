@@ -36,6 +36,7 @@ from veadk.models.ark_llm import ArkLlm, ArkLlmClient
 from veadk.models.retrying_lite_llm import RetryingLiteLlm
 from veadk.models.timed_lite_llm import TimedLiteLLMClient
 from veadk.tracing.telemetry import timing
+from veadk.tracing.telemetry.protocol_response_id import RESPONSE_ID_ATTRIBUTE
 
 
 @pytest.fixture
@@ -109,7 +110,9 @@ async def test_default_litellm_adapter_records_before_adk_aggregation(
     if stream:
         assert attempt.attributes[ttft] >= 0
         assert attempt.start_time + attempt.attributes[ttft] * 1e9 <= attempt.end_time
-    assert not owner.attributes
+    # Timing data stays on the attempt span; the additive protocol response ID
+    # is the only attribute the owner span may receive.
+    assert set(owner.attributes) <= {RESPONSE_ID_ATTRIBUTE}
     assert not owner.events
     assert (
         len([s for s in exporter.get_finished_spans() if s.name == "model_request"])
@@ -373,8 +376,12 @@ async def test_veadk_retry_exports_distinct_sdk_attempts(monkeypatch, spans):
     assert ttft not in attempts[0].attributes
     assert attempts[1].status.status_code is StatusCode.UNSET
     assert ttft in attempts[1].attributes
-    assert not owner.attributes
+    assert set(owner.attributes) <= {RESPONSE_ID_ATTRIBUTE}
     assert all(s.parent.span_id == owner.context.span_id for s in attempts)
     assert all(
-        not any(key.startswith("veadk.") for key in s.attributes) for s in attempts
+        not any(
+            key.startswith("veadk.") and key != RESPONSE_ID_ATTRIBUTE
+            for key in s.attributes
+        )
+        for s in attempts
     )
