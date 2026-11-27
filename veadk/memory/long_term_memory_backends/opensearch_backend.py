@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
 import re
 
 from llama_index.core import Document, VectorStoreIndex
@@ -72,6 +73,32 @@ class OpensearchLTMBackend(BaseLongTermMemoryBackend):
                 f"The index name {index} does not conform to the naming rules of OpenSearch"
             )
 
+    def _user_scoped_index(self, user_id: str) -> str:
+        """Build an OpenSearch index name unique to ``(self.index, user_id)``.
+
+        ``f"{self.index}_{user_id}"`` is ambiguous: ``index="app"`` with
+        ``user_id="u1_x"`` and ``index="app_u1"`` with ``user_id="x"`` both
+        become ``app_u1_x`` and therefore share memories. Each part is
+        sanitized for OpenSearch naming and tagged with a short digest of the
+        raw value so pairs that sanitize alike still stay distinct.
+        """
+
+        def part(value: str, *, fallback: str) -> str:
+            raw = str(value or "").strip()
+            normalized = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")
+            if not normalized:
+                normalized = fallback
+            digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+            return f"{normalized[:48]}_{digest}"
+
+        name = (
+            "veadk-ltm-"
+            f"{part(self.index, fallback='app')}-"
+            f"{part(user_id, fallback='user')}"
+        )
+        # OpenSearch index names are capped at 255 bytes.
+        return name[:255]
+
     def _create_vector_index(self, index: str) -> VectorStoreIndex:
         logger.info(f"Create OpenSearch vector index with index={index}")
 
@@ -102,7 +129,7 @@ class OpensearchLTMBackend(BaseLongTermMemoryBackend):
 
     @override
     def save_memory(self, user_id: str, event_strings: list[str], **kwargs) -> bool:
-        index = f"{self.index}_{user_id}"
+        index = self._user_scoped_index(user_id)
         vector_index = self._create_vector_index(index)
 
         for event_string in event_strings:
@@ -115,7 +142,7 @@ class OpensearchLTMBackend(BaseLongTermMemoryBackend):
     def search_memory(
         self, user_id: str, query: str, top_k: int, **kwargs
     ) -> list[str]:
-        index = f"{self.index}_{user_id}"
+        index = self._user_scoped_index(user_id)
 
         vector_index = self._create_vector_index(index)
 
