@@ -225,6 +225,12 @@ def _bundle(
             "veadk_python-1.2.3.dist-info/METADATA",
             "Metadata-Version: 2.1\nName: veadk-python\nVersion: 1.2.3\n",
         )
+        wheel.writestr(
+            "veadk/cli/agentkit_cli.py",
+            "AGENTKIT_CLI_ARTIFACTS = {'linux-x64': AgentKitCliArtifact("
+            "platform_key='linux-x64', filename='agentkit-linux-x64.tar.gz', "
+            f"sha256='{hashlib.sha256(b'pinned-cli').hexdigest()}')}}",
+        )
         if identity_roles_support:
             wheel.writestr(
                 "frontend/server/user_management/service.py",
@@ -525,6 +531,7 @@ def test_submit_thin_release_falls_back_to_legacy_full_bundle_end_to_end(
         def submit_application_code_bundle_update(self, **kwargs: Any) -> bool:
             package = Path(kwargs["path"])
             captured["full_selected"] = (package / "full-marker").read_text()
+            return True
 
     updater = StudioSelfUpdater(
         settings=_settings(),
