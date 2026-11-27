@@ -92,6 +92,20 @@ class CodexRuntimeConfig(BaseModel):
     )
     reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"] = "medium"
     personality: Literal["none", "friendly", "pragmatic"] = "pragmatic"
+    base_instructions: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Replaces Codex's built-in base system prompt (about 21KB of "
+            "coding-assistant guidance on apply_patch, shell use and planning) "
+            "for threads this runtime starts, on both transports. None keeps "
+            "the built-in prompt. The agent identity and instruction are still "
+            "sent as developer instructions. `personality` is rendered into "
+            "the replaced template, so it no longer applies. A persistent "
+            "thread keeps the text it started with, so changing it starts a "
+            "new thread."
+        ),
+    )
     max_tool_iterations: int = Field(
         default=32,
         ge=1,
